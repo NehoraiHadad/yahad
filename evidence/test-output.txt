@@ -1,0 +1,35 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> yachad-family-chat@0.1.0 test
+> node --import tsx --test --test-concurrency=1 tests/*.test.ts
+
+✔ real adapter normalizes supported types and strips untrusted embedded previews/quotes from raw (2.007304ms)
+✔ encrypted auth store restores Buffer credentials, Signal keys, null deletes and app-state proto (19.753257ms)
+✔ real adapter lifecycle with injected socket: QR, restart reconnect, logout, no network (564.241098ms)
+✔ authenticated encrypted backup + restore of SQLite, encrypted media and WA auth; tamper/wrong password/retention/lock (1438.384678ms)
+✔ untrusted media URLs and paths cannot make server-side requests (1.754953ms)
+✔ third-party console payloads never reach production logging (218.975971ms)
+✔ real adapter maps actual media bytes, captions, Opus duration and thumbnail in memory (stub transport) (180.824435ms)
+✔ documented setup CLI creates real separate accounts and a protected random key without printing passwords (458.001122ms)
+✔ authentication, separate roles, secure headers and CSRF (282.695746ms)
+✔ login uses salted passwords, expiring HttpOnly sessions and throttles (532.366868ms)
+✔ family isolation with identical group/message/media IDs, all direct actions scoped (202.619705ms)
+✔ filter BEFORE media download and storage; external quote content removed (185.190957ms)
+✔ send, idempotency, scoped replies, real media bytes, edit, delete and reactions (254.614082ms)
+✔ multipart upload is sniffed, authorized, bounded, converted voice and persists media (289.482787ms)
+✔ revocation removes messages, media and active key; in-flight download cannot resurrect (207.114526ms)
+✔ one child revocation preserves another child grant within the same family (215.458869ms)
+✔ pagination stable on identical timestamps, search and cross-group reply protections (315.711773ms)
+✔ SSE reauthorizes per family/group and closes on session revocation (212.233747ms)
+✔ ciphertext storage survives restart, auth is encrypted and disconnect purge scoped (231.442711ms)
+✔ parent-controlled sender signature is enforced on server, isolated, and retained on edits (215.09305ms)
+✔ terminal pairing state survives service restart, clears invalid auth and stops auto boot (219.593173ms)
+✔ missing connector receipts stay unknown and an out-of-order pending echo cannot regress read (241.450892ms)
+ℹ tests 22
+ℹ suites 0
+ℹ pass 22
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 8002.498259

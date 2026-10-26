@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily retention cleanup of encrypted update backups
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+Unit=yachad-update-backup-expiry.service
+
+[Install]
+WantedBy=timers.target

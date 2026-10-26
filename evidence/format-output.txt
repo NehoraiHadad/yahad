@@ -1,0 +1,29 @@
+src/config.ts 80ms
+src/connectors/baileys.ts 72ms
+src/connectors/mock.ts 19ms
+src/connectors/types.ts 16ms
+src/crypto.ts 9ms
+src/lock.ts 2ms
+src/logging.ts 3ms
+src/main.ts 6ms
+src/media.ts 8ms
+src/server.ts 85ms
+src/service.ts 31ms
+src/store.ts 29ms
+web/api.ts 4ms
+web/index.html 20ms
+web/main.tsx 171ms
+web/style.css 163ms
+scripts/backup-lib.ts 15ms
+scripts/backup.ts 3ms
+scripts/demo.ts 4ms
+scripts/preview.ts 5ms
+scripts/prompt.ts 2ms
+scripts/setup.ts 3ms
+tests/connector-backup.test.ts 30ms
+tests/security.test.ts 39ms
+.prettierrc.json 19ms
+package-lock.json 20ms (unchanged)
+package.json 1ms (unchanged)
+tsconfig.json 1ms
+vite.config.ts 2ms

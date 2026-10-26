@@ -1,0 +1,21 @@
+[Unit]
+Description=Check and install signed Yachad releases
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/yachad-updater/updater.py run
+ExecStopPost=/usr/bin/python3 /usr/local/lib/yachad-updater/updater.py recover
+TimeoutStartSec=30min
+TimeoutStopSec=3min
+UMask=0077
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/yachad-updates /var/lib/yachad-update-build /opt/yachad /var/lib/yachad /var/backups/yachad-updates
+NoNewPrivileges=true
+LimitCORE=0
+StandardOutput=journal
+StandardError=journal
+

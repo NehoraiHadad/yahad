@@ -1,0 +1,13 @@
+[Unit]
+Description=Expire encrypted pre-update backups older than seven days
+
+[Service]
+Type=oneshot
+User=yachad
+Group=yachad
+ExecStart=/usr/bin/find /var/backups/yachad-updates -maxdepth 1 -type f -name yachad-*.backup -mmin +10080 -delete
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/backups/yachad-updates
+UMask=0077

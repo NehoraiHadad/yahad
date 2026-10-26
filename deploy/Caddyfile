@@ -1,0 +1,15 @@
+{
+    admin off
+    auto_https disable_redirects
+    skip_install_trust
+}
+# YACHAD_LAN_IP MUST be set in the Caddy service environment; use a private LAN IPv4.
+https://{$YACHAD_LAN_IP} {
+    bind {$YACHAD_LAN_IP}
+    tls internal
+    respond /health/* 404
+    reverse_proxy 127.0.0.1:3000 {
+        flush_interval -1
+    }
+    # No access log: no session identifiers, group IDs, or media paths in logs.
+}

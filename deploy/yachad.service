@@ -1,0 +1,35 @@
+[Unit]
+Description=Yachad family chat
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=12
+
+[Service]
+Type=simple
+User=yachad
+Group=yachad
+WorkingDirectory=/opt/yachad/current
+Environment=NODE_ENV=production
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=/etc/yachad/yachad.env
+ExecStart=/usr/bin/env node --import tsx src/main.ts
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=45
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/yachad
+ReadOnlyPaths=/etc/yachad
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+LimitCORE=0
+# Tune only after measuring on the actual Pi; no unverified RAM/capacity promise.
+# MemoryHigh=512M
+# MemoryMax=768M
+
+[Install]
+WantedBy=multi-user.target

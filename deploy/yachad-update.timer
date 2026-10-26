@@ -1,0 +1,12 @@
+[Unit]
+Description=Consume parent update requests and check releases on schedule
+
+[Timer]
+OnBootSec=3min
+OnUnitInactiveSec=5min
+RandomizedDelaySec=20
+Persistent=true
+Unit=yachad-update.service
+
+[Install]
+WantedBy=timers.target

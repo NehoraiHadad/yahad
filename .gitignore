@@ -1,0 +1,17 @@
+node_modules/
+dist/
+data/
+.env
+*.backup
+*.key
+*.pem
+*.sqlite*
+.local/
+
+__pycache__/
+*.pyc
+*.backup
+update-request.json
+updates.json
+update-backup-passphrase
+release-signing.pub

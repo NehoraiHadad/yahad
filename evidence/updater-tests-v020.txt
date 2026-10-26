@@ -1,0 +1,17 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> yachad-family-chat@0.2.0 test:updater
+> python3 -m unittest discover -s tests -p 'test_updater.py' -v
+
+test_another_worker_cannot_acquire_the_same_lock (test_updater.UpdaterTests.test_another_worker_cannot_acquire_the_same_lock) ... ok
+test_backup_failure_never_activates_new_code (test_updater.UpdaterTests.test_backup_failure_never_activates_new_code) ... ok
+test_failed_health_restores_previous_code (test_updater.UpdaterTests.test_failed_health_restores_previous_code) ... ok
+test_interrupted_maintenance_recovers (test_updater.UpdaterTests.test_interrupted_maintenance_recovers) ... ok
+test_request_authentication_and_url_policy (test_updater.UpdaterTests.test_request_authentication_and_url_policy) ... ok
+test_signatures_hash_and_unsafe_archives (test_updater.UpdaterTests.test_signatures_hash_and_unsafe_archives) ... ok
+test_success_backup_precedes_activation (test_updater.UpdaterTests.test_success_backup_precedes_activation) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.219s
+
+OK

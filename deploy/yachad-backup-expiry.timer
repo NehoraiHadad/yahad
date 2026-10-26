@@ -1,0 +1,7 @@
+[Unit]
+Description=Daily retention enforcement for Yachad encrypted backups
+[Timer]
+OnCalendar=daily
+Persistent=true
+[Install]
+WantedBy=timers.target

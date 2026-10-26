@@ -1,0 +1,47 @@
+{
+  "name": "yachad-family-chat",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0 <25"
+  },
+  "scripts": {
+    "dev": "node --import tsx scripts/preview.ts",
+    "start": "node --import tsx src/main.ts",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts",
+    "setup": "node --import tsx scripts/setup.ts",
+    "demo": "node --import tsx scripts/demo.ts",
+    "backup": "node --import tsx scripts/backup.ts",
+    "inspect:host": "bash scripts/inspect-host.sh",
+    "test:updater": "python3 -m unittest discover -s tests -p 'test_updater.py' -v",
+    "release": "node scripts/release.mjs"
+  },
+  "dependencies": {
+    "@fastify/cookie": "11.0.2",
+    "@fastify/multipart": "9.4.0",
+    "@fastify/static": "10.1.7",
+    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "fastify": "5.12.7",
+    "file-type": "21.3.4",
+    "lucide-react": "0.468.0",
+    "pino": "9.14.0",
+    "proper-lockfile": "4.1.2",
+    "qrcode": "1.5.4",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "tsx": "4.20.6",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.0",
+    "@types/proper-lockfile": "4.1.4",
+    "@types/qrcode": "1.5.6",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "typescript": "5.9.3",
+    "vite": "7.3.7"
+  }
+}

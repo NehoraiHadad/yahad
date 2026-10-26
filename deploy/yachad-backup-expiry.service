@@ -1,0 +1,11 @@
+[Unit]
+Description=Expire encrypted Yachad backup archives after seven days
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/find /var/backups/yachad -maxdepth 1 -type f -name yachad-*.backup -mmin +10080 -delete
+User=root
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/backups/yachad
+ProtectHome=true
+PrivateTmp=true

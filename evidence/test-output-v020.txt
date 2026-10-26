@@ -1,0 +1,38 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> yachad-family-chat@0.2.0 test
+> node --import tsx --test --test-concurrency=1 tests/*.test.ts
+
+✔ real adapter normalizes supported types and strips untrusted embedded previews/quotes from raw (1.903292ms)
+✔ encrypted auth store restores Buffer credentials, Signal keys, null deletes and app-state proto (17.578221ms)
+✔ real adapter lifecycle with injected socket: QR, restart reconnect, logout, no network (562.41636ms)
+✔ authenticated encrypted backup + restore of SQLite, encrypted media and WA auth; tamper/wrong password/retention/lock (1415.456302ms)
+✔ untrusted media URLs and paths cannot make server-side requests (2.318865ms)
+✔ third-party console payloads never reach production logging (202.028719ms)
+✔ real adapter maps actual media bytes, captions, Opus duration and thumbnail in memory (stub transport) (193.720859ms)
+✔ documented setup CLI creates real separate accounts and a protected random key without printing passwords (499.50976ms)
+✔ diagnostics isolate families, sanitize failures, retain bounded encrypted history across restart (22.144475ms)
+✔ diagnostics survive persistence failure, reset cannot be resurrected by in-flight flush, opt-out writes nothing (3.527458ms)
+✔ parent-only diagnostics/export/reset and operator-only update queue enforce sessions, family isolation and CSRF (333.391283ms)
+✔ authentication, separate roles, secure headers and CSRF (361.824434ms)
+✔ login uses salted passwords, expiring HttpOnly sessions and throttles (578.099682ms)
+✔ family isolation with identical group/message/media IDs, all direct actions scoped (236.294031ms)
+✔ filter BEFORE media download and storage; external quote content removed (211.954445ms)
+✔ send, idempotency, scoped replies, real media bytes, edit, delete and reactions (239.206658ms)
+✔ multipart upload is sniffed, authorized, bounded, converted voice and persists media (322.746961ms)
+✔ revocation removes messages, media and active key; in-flight download cannot resurrect (211.588355ms)
+✔ one child revocation preserves another child grant within the same family (222.781715ms)
+✔ pagination stable on identical timestamps, search and cross-group reply protections (292.747919ms)
+✔ SSE reauthorizes per family/group and closes on session revocation (192.355473ms)
+✔ ciphertext storage survives restart, auth is encrypted and disconnect purge scoped (186.427759ms)
+✔ parent-controlled sender signature is enforced on server, isolated, and retained on edits (196.111145ms)
+✔ terminal pairing state survives service restart, clears invalid auth and stops auto boot (189.005779ms)
+✔ missing connector receipts stay unknown and an out-of-order pending echo cannot regress read (197.782443ms)
+ℹ tests 25
+ℹ suites 0
+ℹ pass 25
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 9573.492629
