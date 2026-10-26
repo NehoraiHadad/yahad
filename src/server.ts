@@ -8,6 +8,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { z } from 'zod';
 import QRCode from 'qrcode';
 import { hash, verifyPassword, passwordHash } from './crypto.js';
+import { timingSafeEqual, randomUUID } from 'node:crypto';
 import type { Config } from './config.js';
 import { Store, type Session } from './store.js';
 import { ChatService, AppError, deny } from './service.js';
@@ -27,7 +28,8 @@ declare module 'fastify' {
 }
 export async function createApp(
   config: Config,
-  options: { store?: Store; factory?: (h: ConnectorHooks) => Connector; boot?: boolean } = {},
+  options: { store?: Store; factory?: (h: ConnectorHooks) => Connector; boot?: boolean;
+    bootstrap?: { token: string; expiresAt: number } } = {},
 ) {
   const app = Fastify({
     logger: false,
@@ -89,7 +91,7 @@ export async function createApp(
     if (!req.url.startsWith('/api/')) return;
     const origin = req.headers.origin;
     if (origin && origin !== config.origin) throw new AppError(403, 'ORIGIN_DENIED');
-    if (req.url === '/api/login') return;
+    if (req.url === '/api/login' || req.url === '/api/setup') return;
     const s = store.session(req.cookies.sid || '');
     if (!s) throw new AppError(401, 'SIGN_IN_REQUIRED');
     req.session = s;
@@ -135,6 +137,27 @@ export async function createApp(
       throw new AppError(403, 'OWN_MESSAGE_ONLY');
     return m;
   };
+  let settingUp = false;
+  app.post('/api/setup', async (req) => {
+    const capability = req.headers['x-setup-token'];
+    const bootstrap = options.bootstrap;
+    if (req.headers.origin !== config.origin) throw new AppError(403, 'ORIGIN_DENIED');
+    if (!bootstrap || Date.now() > bootstrap.expiresAt || typeof capability !== 'string' ||
+        !timingSafeEqual(Buffer.from(hash(capability)), Buffer.from(hash(bootstrap.token))) ||
+        store.one('SELECT 1 FROM families LIMIT 1')) throw new AppError(403, 'SETUP_CLOSED');
+    if (settingUp) throw new AppError(409, 'SETUP_BUSY');
+    const data = z.object({ name: z.string().trim().min(1).max(80),
+      username: z.string().trim().toLowerCase().regex(/^[a-z0-9._-]{3,60}$/),
+      password: z.string().min(14).max(256), confirmation: z.string().max(256) }).strict().parse(req.body);
+    if (data.password !== data.confirmation) throw new AppError(400, 'PASSWORD_MISMATCH');
+    settingUp = true;
+    try {
+      await store.createFamily(data.name, data, undefined, true);
+      // Consume the capability only after durable creation; restarting never reopens setup.
+      options.bootstrap = undefined;
+      return { ok: true };
+    } finally { settingUp = false; }
+  });
   app.post('/api/login', async (req, reply) => {
     if (req.headers.origin !== config.origin) throw new AppError(403, 'ORIGIN_DENIED');
     const input = z
@@ -201,8 +224,9 @@ export async function createApp(
   });
   app.post('/api/password', async (req) => {
     const data = z
-      .object({ current: z.string().max(256), next: z.string().min(14).max(256) })
+      .object({ current: z.string().max(256), next: z.string().min(14).max(256), confirmation: z.string().max(256) })
       .parse(req.body);
+    if (data.next !== data.confirmation) throw new AppError(400, 'PASSWORD_MISMATCH');
     const s = req.session,
       row = store.one(
         'SELECT password FROM users WHERE family_id=? AND id=?',
@@ -582,15 +606,18 @@ export async function createApp(
     await service.connector(s.user.familyId).read(g, messages);
     return { ok: true };
   });
+  app.get<{ Params: { g: string } }>('/api/groups/:g/history', async req => {
+    group(req.session,req.params.g);
+    return service.historyStatus(req.session.user.familyId,req.params.g);
+  });
   app.post<{ Params: { g: string } }>('/api/groups/:g/history', async (req) => {
     const s = req.session,
       g = req.params.g;
     group(s, g);
-    capable(s, 'historyRequest');
-    const { oldestId } = z.object({ oldestId: z.string().max(180) }).parse(req.body);
-    const m = getMessage(s, g, oldestId);
-    await service.connector(s.user.familyId).history(g, m);
-    return { ok: true, history: 'partial' };
+    z.object({}).strict().parse(req.body || {});
+    const status=await service.requestHistory(s.user.familyId,g);
+    current(s,g);
+    return status;
   });
   app.get('/health/ready', async (_req, reply) => {
     try {
@@ -612,6 +639,8 @@ export async function createApp(
       state: service.states.get(f)?.state || 'idle',
       connector: config.connector,
       linked: !!store.one('SELECT linked FROM families WHERE id=?', f)?.linked,
+      disconnect: store.one('SELECT value FROM instance_metadata WHERE key=?', 'disconnect:' + f)?.value || null,
+      disconnectHistory: store.one('SELECT value FROM instance_metadata WHERE key=?', 'disconnect-history:' + f)?.value || null,
     };
   });
   app.get('/api/parent/updates', async req => {
@@ -696,8 +725,9 @@ export async function createApp(
   app.post('/api/parent/child-password', async (req) => {
     parent(req.session);
     const data = z
-      .object({ childId: z.uuid(), password: z.string().min(14).max(256) })
+      .object({ childId: z.uuid(), password: z.string().min(14).max(256), confirmation: z.string().max(256) })
       .parse(req.body);
+    if (data.password !== data.confirmation) throw new AppError(400, 'PASSWORD_MISMATCH');
     const f = req.session.user.familyId;
     if (
       !store.one(
@@ -714,11 +744,32 @@ export async function createApp(
     service.notify(f, undefined, 'session');
     return { ok: true };
   });
+  let addingChild = false;
+  app.post('/api/parent/children', async (req) => {
+    parent(req.session);
+    const data = z.object({ username: z.string().trim().toLowerCase().regex(/^[a-z0-9._-]{3,60}$/),
+      display: z.string().trim().min(1).max(40).refine(x => !/[\x00-\x1f\u202a-\u202e\u2066-\u2069]/.test(x)),
+      password: z.string().min(14).max(256), confirmation: z.string().max(256) }).strict().parse(req.body);
+    if (data.password !== data.confirmation) throw new AppError(400, 'PASSWORD_MISMATCH');
+    if (addingChild) throw new AppError(429, 'SLOW_DOWN');
+    addingChild = true;
+    try {
+      const pw = await passwordHash(data.password), f = req.session.user.familyId, id = randomUUID();
+      store.tx(() => {
+        if (store.one('SELECT 1 FROM users WHERE username=?', data.username)) throw new AppError(409, 'USERNAME_UNAVAILABLE');
+        if (store.one("SELECT count(*) AS n FROM users WHERE family_id=? AND role='child'", f).n >= 20)
+          throw new AppError(409, 'CHILD_LIMIT');
+        store.run('INSERT INTO users(id,family_id,username,display,role,password) VALUES(?,?,?,?,?,?)',
+          id, f, data.username, data.display, 'child', pw);
+      });
+      service.notify(f, undefined, 'identity');
+      return { ok: true, id };
+    } finally { addingChild = false; }
+  });
   app.post('/api/parent/disconnect', async (req) => {
     parent(req.session);
     const { erase } = z.object({ erase: z.boolean() }).parse(req.body);
-    await service.disconnect(req.session.user.familyId, erase);
-    return { ok: true };
+    return { ok: true, ...await service.disconnect(req.session.user.familyId, erase) };
   });
   app.delete('/api/parent/family', async (req) => {
     const s = req.session;

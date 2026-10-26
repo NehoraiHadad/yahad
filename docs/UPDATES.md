@@ -1,5 +1,8 @@
 # עדכוני Releases מהבית
 
+> For 0.3.1 use [AUTOMATIC-UPDATES-SETUP.md](AUTOMATIC-UPDATES-SETUP.md), including boot recovery, all three required root helpers, exact live-store paths, trust provisioning and activation gates. The original 0.2.0 instructions below are not a complete 0.3.1 installation procedure.
+
+
 המנגנון מוכן בקוד, אך **לא פורסם Release חתום ולא הופעל על ה־Pi**. זה חלק מההתקנה הראשונית שנבצע אחרי זיהוי המכשיר. אין צורך לפתוח פורט נכנס: רק HTTPS יוצא ל־GitHub ול־npm. בהתקנת עדכון יש הורדת dependencies לפי lockfile; אין הבטחת עדכון ללא רשת או תאימות מלאה של ספק WhatsApp.
 
 ## התנהגות

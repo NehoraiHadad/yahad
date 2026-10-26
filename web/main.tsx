@@ -1,3 +1,9 @@
+import { HistoryPanel } from './HistoryPanel';
+import { DisconnectPanel } from './DisconnectPanel';
+import { GroupPicker } from './GroupPicker';
+import { FamilySetup, passphraseHelp } from './FamilySetup';
+let setupToken = new URLSearchParams(location.hash.slice(1)).get('setup') || '';
+if (setupToken) history.replaceState(null, '', location.pathname + location.search);
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
@@ -214,11 +220,13 @@ function App() {
   );
 }
 function Login({ onLogin }: { onLogin: () => Promise<void> }) {
+  const [setupDone, setSetupDone] = useState(false);
   const [username, setUsername] = useState(''),
     [password, setPassword] = useState(''),
     [show, setShow] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
+  if (setupToken && !setupDone) return <FamilySetup setupToken={setupToken} onDone={() => { setupToken = ''; setSetupDone(true); }} />;
   return (
     <main className="login-page">
       <div className="login-art">
@@ -747,20 +755,7 @@ function Chat({
                   הודעות קודמות
                 </button>
               )}
-              {!cursor && c.historyRequest && messages.length > 0 && (
-                <button
-                  className="older-button"
-                  onClick={() =>
-                    void action(() =>
-                      api('/groups/' + encodeURIComponent(current.id) + '/history', 'POST', {
-                        oldestId: messages[0].id,
-                      }),
-                    )
-                  }
-                >
-                  בקשת היסטוריה מ־WhatsApp
-                </button>
-              )}
+              {results === null && <HistoryPanel key={current.id} groupId={current.id} />}
               <div className="day-marker">
                 {results !== null ? `תוצאות חיפוש · ${results.length}` : 'השיחה שלנו'}
               </div>
@@ -1596,6 +1591,7 @@ function Parent({
     [busy, setBusy] = useState(false),
     [child, setChild] = useState(''),
     [settings, setSettings] = useState(false),
+    [addingChild, setAddingChild] = useState(false),
     [deleteOpen, setDeleteOpen] = useState(false),
     [password, setPassword] = useState(''),
     [confirmError, setConfirmError] = useState('');
@@ -1682,7 +1678,7 @@ function Parent({
               <span>01</span>
               <h2>מחברים את WhatsApp</h2>
               <span className={'state-pill ' + (data?.state === 'connected' ? 'connected' : '')}>
-                {stateLabels[data?.state] || 'טוענים…'}
+                {(data?.disconnect ? 'מנותק' : stateLabels[data?.state]) || 'טוענים…'}
               </span>
             </div>
             <p>חשבון ההורה משמש לשליחה ולקבלה. פרטי הקישור נשארים בשרת.</p>
@@ -1719,6 +1715,12 @@ function Parent({
                 {me.connector === 'mock' ? 'הפעלת המתאם המדומה' : 'קישור החשבון'}
               </button>
             )}
+            {data && <DisconnectPanel active={!!data.linked || data.state !== 'idle'} busy={busy}
+              mock={me.connector === 'mock'} result={data.disconnect} history={data.disconnectHistory} onDisconnect={async () => {
+                setBusy(true);
+                try { await api('/parent/disconnect', 'POST', { erase: false }); setQr(null); await load(); }
+                finally { setBusy(false); }
+              }} />}
             <div className="small-note">
               <AlertCircle size={14} />
               <p>
@@ -1740,10 +1742,11 @@ function Parent({
               </IconButton>
             </div>
             <p>רק הקבוצות המסומנות נגישות בחשבון הילדה.</p>
+            <button type="button" className="outline-button" onClick={() => setAddingChild(true)}>הוספת ילד או ילדה</button>
             {data?.children.length > 1 && (
               <label>
                 חשבון ילדה
-                <select value={child} onChange={(e) => setChild(e.target.value)}>
+                <select value={child} disabled={busy} onChange={(e) => setChild(e.target.value)}>
                   {data.children.map((x: any) => (
                     <option key={x.id} value={x.id}>
                       {x.username}
@@ -1752,45 +1755,8 @@ function Parent({
                 </select>
               </label>
             )}
-            <div className="approval-list">
-              {data?.groups.map((g: Group, i: number) => {
-                const checked = data.grants.some(
-                  (x: any) => x.user_id === child && x.group_id === g.id,
-                );
-                const Icon = groupIcons[i % 3];
-                return (
-                  <label key={g.id} className={'approval-row ' + (checked ? 'approved' : '')}>
-                    <div className={'avatar av-' + (i % 3)}>
-                      <Icon size={22} />
-                    </div>
-                    <div>
-                      <b>{g.title}</b>
-                      <small>{checked ? 'מופיעה בשיחות שלה' : 'נגישה להורה בלבד'}</small>
-                    </div>
-                    <input
-                      aria-label={'אישור ' + g.title}
-                      type="checkbox"
-                      checked={checked}
-                      disabled={busy || !child}
-                      onChange={() =>
-                        void act(
-                          '/parent/grant',
-                          { childId: child, groupId: g.id, allowed: !checked },
-                          'PUT',
-                        )
-                      }
-                    />
-                    <span className="custom-check">{checked && <Check size={17} />}</span>
-                  </label>
-                );
-              })}
-              {data && !data.groups.length && (
-                <div className="picker-empty">
-                  <ShieldCheck size={30} />
-                  <p>לאחר הקישור, הקבוצות יופיעו כאן.</p>
-                </div>
-              )}
-            </div>
+            <GroupPicker groups={data?.groups || []} grants={data?.grants || []} childId={child}
+              busy={busy} loading={!data} onToggle={(groupId, allowed) => void act('/parent/grant', { childId: child, groupId, allowed }, 'PUT')} />
             <div className="small-note">
               <ShieldCheck size={16} />
               <p>
@@ -1841,15 +1807,7 @@ function Parent({
           </p>
         </details>
         <div className="danger-zone">
-          <button
-            disabled={busy}
-            onClick={() => {
-              if (confirm('לנתק את החשבון? אפשר יהיה לקשר מחדש.'))
-                void act('/parent/disconnect', { erase: false });
-            }}
-          >
-            ניתוק החשבון
-          </button>
+
           <button
             disabled={busy}
             onClick={() => {
@@ -1866,6 +1824,7 @@ function Parent({
           <button onClick={() => setDeleteOpen(true)}>מחיקת המשפחה והחשבונות</button>
         </div>
       </div>
+      {addingChild && <FamilySetup onDone={() => { setAddingChild(false); void load(); }} onClose={() => setAddingChild(false)} />}
       {settings && (
         <AccountSettings
           children={data?.children}
@@ -1998,6 +1957,8 @@ function AccountSettings({
 }) {
   const [current, setCurrent] = useState(''),
     [next, setNext] = useState(''),
+    [confirmation, setConfirmation] = useState(''),
+    [show, setShow] = useState(false),
     [child, setChild] = useState(''),
     [busy, setBusy] = useState(false),
     [message, setMessage] = useState('');
@@ -2010,14 +1971,15 @@ function AccountSettings({
         aria-label="הגדרות חשבון"
         onSubmit={async (e) => {
           e.preventDefault();
+          if (next !== confirmation) { onError('הסיסמאות אינן זהות.'); return; }
           setBusy(true);
           try {
             if (child) {
-              await api('/parent/child-password', 'POST', { childId: child, password: next });
+              await api('/parent/child-password', 'POST', { childId: child, password: next, confirmation });
               setMessage('הסיסמה עודכנה וכל חיבורי החשבון נותקו.');
-              setNext('');
+              setNext(''); setConfirmation('');
             } else {
-              await api('/password', 'POST', { current, next });
+              await api('/password', 'POST', { current, next, confirmation });
               window.dispatchEvent(new Event('session-expired'));
             }
           } catch (e) {
@@ -2036,7 +1998,7 @@ function AccountSettings({
         {users && (
           <label>
             איזה חשבון מעדכנים?
-            <select value={child} onChange={(e) => setChild(e.target.value)}>
+            <select value={child} onChange={(e) => { setChild(e.target.value); setNext(''); setConfirmation(''); setMessage(''); }}>
               <option value="">החשבון שלי</option>
               {users.map((u) => (
                 <option key={u.id} value={u.id}>
@@ -2061,7 +2023,7 @@ function AccountSettings({
         <label>
           סיסמה חדשה · לפחות 14 תווים
           <input
-            type="password"
+            type={show ? "text" : "password"}
             autoComplete="new-password"
             required
             minLength={14}
@@ -2070,6 +2032,9 @@ function AccountSettings({
             onChange={(e) => setNext(e.target.value)}
           />
         </label>
+        <label>אישור הסיסמה החדשה<input type={show ? 'text' : 'password'} autoComplete="new-password" required minLength={14} maxLength={256} value={confirmation} onChange={e => setConfirmation(e.target.value)} /></label>
+        <label className="secret-toggle"><input type="checkbox" checked={show} onChange={e => setShow(e.target.checked)} /> הצגת הסיסמה</label>
+        <p className="muted">{passphraseHelp}</p>
         <p className="muted">
           שינוי סיסמה מנתק את כל החיבורים של החשבון. אפשר להשתמש במשפט סודי שקל לזכור.
         </p>

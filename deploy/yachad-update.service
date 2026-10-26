@@ -1,7 +1,8 @@
 [Unit]
 Description=Check and install signed Yachad releases
-After=network-online.target
+After=network-online.target yachad-update-recover.service
 Wants=network-online.target
+Requires=yachad-update-recover.service
 
 [Service]
 Type=oneshot

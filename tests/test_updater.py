@@ -37,7 +37,10 @@ class UpdaterTests(unittest.TestCase):
                 z.writestr(name,'test fixture')
             z.writestr('package.json',json.dumps({'version':'0.2.0'}))
             if extra:
-                z.writestr(*extra)
+                # Preserve malicious backslashes on Windows too.
+                info = zipfile.ZipInfo(extra[0])
+                info.filename = extra[0]
+                z.writestr(info, extra[1])
         archive = out.getvalue()
         manifest = json.dumps({'format':1,'version':'0.2.0','databaseSchema':1,'archive':u.ASSETS[2],
                                'bytes':len(archive),'sha256':hashlib.sha256(archive).hexdigest()}).encode()
@@ -111,6 +114,13 @@ class UpdaterTests(unittest.TestCase):
         class FakeWorker(u.Worker):
             def command(self,args,**kwargs):
                 effects.append((args,kwargs))
+                if '/usr/local/lib/yachad-updater/export-dependencies.py' in args:
+                    out = io.BytesIO()
+                    with zipfile.ZipFile(out, 'w') as archive:
+                        info = zipfile.ZipInfo('node_modules/fixture/package.json')
+                        info.external_attr = 0o100644 << 16
+                        archive.writestr(info, '{}')
+                    return out.getvalue()
                 if fail_backup and 'scripts/update-backup.ts' in args:
                     raise u.UpdateError('backup')
                 return b'OK'

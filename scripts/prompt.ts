@@ -1,42 +1,27 @@
-import { createInterface } from 'node:readline/promises';
+import { createInterface } from 'node:readline';
+import { Writable, type Readable } from 'node:stream';
 import { stdin, stdout } from 'node:process';
-/** Secrets are read from a TTY with echo disabled, or supplied locally by a file descriptor. */
-export async function ask(label: string, secret = false) {
-  if (secret && stdin.isTTY) {
-    stdout.write(label);
-    stdin.setRawMode(true);
-    stdin.resume();
-    let value = '';
-    return await new Promise<string>((resolve, reject) => {
-      const handler = (b: Buffer) => {
-        for (const c of b.toString()) {
-          if (c === '\u0003') {
-            cleanup();
-            reject(new Error('Cancelled'));
-            return;
-          }
-          if (c === '\r' || c === '\n') {
-            cleanup();
-            stdout.write('\n');
-            resolve(value);
-            return;
-          }
-          if (c === '\u007f') value = value.slice(0, -1);
-          else value += c;
-        }
-      };
-      const cleanup = () => {
-        stdin.off('data', handler);
-        stdin.setRawMode(false);
-        stdin.pause();
-      };
-      stdin.on('data', handler);
-    });
-  }
-  const rl = createInterface({ input: stdin, output: stdout });
-  try {
-    return await rl.question(label);
-  } finally {
-    rl.close();
-  }
+// Readline owns terminal editing/restoration, including Unicode and pasted input.
+// Keep editing output muted even at non-secret prompts: a multiline terminal
+// paste may contain later passwords before the next ask() has resumed.
+export function createPrompter(input: Readable, display: Writable, terminal: boolean) {
+  const output = new Writable({ write(_chunk, _encoding, done) { done(); } });
+  const reader = createInterface({ input, output, terminal });
+  const lines = reader[Symbol.asyncIterator]();
+  reader.on('SIGINT', () => reader.close());
+  return {
+    async ask(label: string, _secret = false) {
+      display.write(label);
+      const result = await lines.next();
+      if (terminal) display.write('\n');
+      if (result.done) throw new Error('Input closed');
+      return result.value;
+    },
+    close() { reader.close(); },
+  };
 }
+let prompt: ReturnType<typeof createPrompter> | undefined;
+export function ask(label: string, secret = false) {
+  return (prompt ||= createPrompter(stdin, stdout, !!stdin.isTTY)).ask(label, secret);
+}
+export function closePrompt() { prompt?.close(); }

@@ -163,7 +163,39 @@ test('real adapter lifecycle with injected socket: QR, restart reconnect, logout
   }
 });
 
-test('authenticated encrypted backup + restore of SQLite, encrypted media and WA auth; tamper/wrong password/retention/lock', async () => {
+test('provider unlink reports request transmission only, closes socket, ignores stale QR and never reconnects', async () => {
+  for (const fails of [false, true]) {
+    const { h, events } = hooks();
+    let socket: any, ended = 0, loggedOut = 0, created = 0;
+    const c = new BaileysConnector(h, (() => {
+      created++;
+      const listeners = new Map<string, Function[]>();
+      socket = { ev: { on(name: string, fn: Function) { listeners.set(name, [...(listeners.get(name) || []), fn]); } },
+        emit(name: string, data: unknown) { for (const fn of listeners.get(name) || []) fn(data); },
+        end() { ended++; }, logout: async () => { loggedOut++; if (fails) throw new Error('synthetic offline'); } };
+      return socket;
+    }) as any);
+    await c.start(); socket.emit('connection.update', { qr: 'SYNTHETIC_QR' });
+    const result = await c.stop(true);
+    assert.equal(result?.remoteRevoked, false); assert.equal(result?.unlinkRequested, !fails); assert.equal(loggedOut, 1); assert.equal(ended, 1);
+    socket.emit('connection.update', { qr: 'STALE_QR', connection: 'close', lastDisconnect: { error: { output: { statusCode: DisconnectReason.restartRequired } } } });
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(events.at(-1), 'idle'); assert.equal(created, 1);
+  }
+});
+
+test('provider unlink timeout still stops locally and reports remote revocation unconfirmed', async t => {
+  const { h } = hooks(); let ended = false;
+  const c = new BaileysConnector(h, (() => ({ ev: { on() {} }, logout: () => new Promise(() => {}), end() { ended = true; } })) as any);
+  await c.start();
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const pending = c.stop(true);
+  t.mock.timers.tick(8001);
+  assert.equal((await pending)?.remoteRevoked, false);
+  assert.equal(ended, true);
+});
+
+test('authenticated encrypted backup + restore of SQLite, encrypted media and WA auth; tamper/wrong password/retention/lock', { skip: process.platform === 'win32' ? 'Requires Linux private file modes; run on Linux before activation' : false }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'yachad-backup-'));
   const data = join(dir, 'data'),
     keyPath = join(dir, 'master.key'),
@@ -341,7 +373,7 @@ test('real adapter maps actual media bytes, captions, Opus duration and thumbnai
   assert.equal(calls[3].content.caption, 'Signature: document');
 });
 
-test('documented setup CLI creates real separate accounts and a protected random key without printing passwords', async () => {
+test('documented setup CLI creates real separate accounts and a protected random key without printing passwords', { skip: process.platform === 'win32' ? 'Requires Linux private file modes; run on Linux before activation' : false }, async () => {
   const { spawn } = await import('node:child_process');
   const directory = mkdtempSync(join(tmpdir(), 'yachad-setup-'));
   const parentPassword = randomBytes(24).toString('base64url');
@@ -352,6 +384,8 @@ test('documented setup CLI creates real separate accounts and a protected random
     ['Child username (unique): ', 'setup-child'],
     ['Parent password, 14+ characters: ', parentPassword],
     ['Child passphrase, 14+ characters: ', childPassword],
+    ['Confirm parent password: ', parentPassword],
+    ['Confirm child passphrase: ', childPassword],
   ];
   try {
     const child = spawn(process.execPath, ['--import', 'tsx', 'scripts/setup.ts'], {

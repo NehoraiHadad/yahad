@@ -3,6 +3,12 @@ export function setCsrf(value: string) {
   csrf = value;
 }
 const errors: Record<string, string> = {
+  HISTORY_WAIT: 'יש בקשות היסטוריה פעילות או שבוצעו לאחרונה. המתינו מעט לפני בקשה נוספת.',
+  DELETION_INCOMPLETE: 'מחיקת שיחות קודמת לא הושלמה. בדקו את המצב ואשרו בנפרד את השלמת המחיקה לפני חיבור מחדש.',
+  CONNECTION_BUSY: 'פעולת חיבור או ניתוק כבר מתבצעת. המתינו לסיום.',
+  PASSWORD_MISMATCH: 'הסיסמאות אינן זהות.',
+  USERNAME_UNAVAILABLE: 'שם המשתמש אינו פנוי. בחרו שם אחר.',
+  CHILD_LIMIT: 'אפשר ליצור עד 20 חשבונות ילדים במשפחה.',
   UPDATES_UNAVAILABLE: 'שירות העדכון אינו זמין או שהחשבון אינו מורשה לנהל אותו.',
   SIGN_IN_REQUIRED: 'החיבור הסתיים. צריך להיכנס שוב.',
   INVALID_CREDENTIALS: 'שם המשתמש או הסיסמה אינם נכונים.',

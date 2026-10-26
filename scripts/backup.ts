@@ -1,7 +1,7 @@
 import { loadEnvFile } from 'node:process';
 import { resolve } from 'node:path';
 import { loadConfig } from '../src/config.js';
-import { ask } from './prompt.js';
+import { ask, closePrompt } from './prompt.js';
 import { createBackup, restoreBackup } from './backup-lib.js';
 try {
   loadEnvFile('.env');
@@ -31,4 +31,4 @@ try {
     'Backup operation failed. Check passphrase, paths, permissions, and that the service is stopped. No backup contents logged.',
   );
   process.exitCode = 1;
-}
+} finally { closePrompt(); }

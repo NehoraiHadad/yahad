@@ -91,18 +91,21 @@ export class Store {
   async createFamily(
     name: string,
     parent: { username: string; password: string },
-    child: { username: string; password: string },
+    child?: { username: string; password: string },
+    firstRun = false,
   ) {
     const fid = randomUUID(),
       pid = randomUUID(),
       cid = randomUUID();
     const ph = await passwordHash(parent.password),
-      ch = await passwordHash(child.password);
+      ch = child ? await passwordHash(child.password) : undefined;
     this.tx(() => {
+      // Recheck after hashing, inside the transaction, to serialize first-run claims.
+      if (firstRun && this.one('SELECT 1 FROM families LIMIT 1')) throw new Error('Already configured');
       this.run('INSERT INTO families(id,name) VALUES(?,?)', fid, name);
       for (const u of [
         { ...parent, id: pid, role: 'parent', display: 'הורה', pw: ph },
-        { ...child, id: cid, role: 'child', display: 'אני', pw: ch },
+        ...(child ? [{ ...child, id: cid, role: 'child', display: 'אני', pw: ch! }] : []),
       ])
         this.run(
           'INSERT INTO users(id,family_id,username,display,role,password) VALUES(?,?,?,?,?,?)',

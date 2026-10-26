@@ -1,3 +1,4 @@
+import { IngestionQueue } from './ingestion.js';
 import makeWASocket, {
   BufferJSON,
   initAuthCreds,
@@ -240,6 +241,7 @@ export class BaileysConnector implements Connector {
     editWindowMs: 15 * 60_000,
   };
   sock?: WASocket;
+  ingestion?: IngestionQueue;
   stopping = false;
   timer?: ReturnType<typeof setTimeout>;
   attempt = 0;
@@ -248,6 +250,7 @@ export class BaileysConnector implements Connector {
   constructor(
     readonly hooks: ConnectorHooks,
     readonly socketFactory = makeWASocket,
+    private ingestionBudget = {active:0},
   ) {}
   async start() {
     if (this.sock) return;
@@ -255,6 +258,7 @@ export class BaileysConnector implements Connector {
     await this.connect();
   }
   async connect() {
+    this.ingestion?.dispose();
     const generation = ++this.generation;
     this.hooks.state(this.attempt ? 'reconnecting' : 'connecting');
     const auth = encryptedAuth(this.hooks);
@@ -263,6 +267,7 @@ export class BaileysConnector implements Connector {
       logger,
       markOnlineOnConnect: false,
       syncFullHistory: false,
+      shouldSyncHistoryMessage: () => true,
       generateHighQualityLinkPreview: false,
       shouldIgnoreJid: (jid) =>
         !jid.endsWith('@g.us') && !jid.endsWith('@s.whatsapp.net') && !jid.endsWith('@lid'),
@@ -321,58 +326,44 @@ export class BaileysConnector implements Connector {
         }, wait);
       }
     });
-    const ingest = async (raw: WAMessage) => {
-      if (!valid() || !raw.key.remoteJid || !this.hooks.allowed(raw.key.remoteJid)) return;
-      const m = normalizeIncoming(raw);
-      if (!m) return;
-      if (['image', 'video', 'document', 'sticker', 'audio'].includes(m.kind)) {
-        m.download = async () => {
-          if (!this.hooks.allowed(m.groupId)) throw new Error('Revoked');
-          validateMediaSource(raw);
-          const stream = await downloadMediaMessage(
-            raw,
-            'stream',
-            {},
-            { logger, reuploadRequest: sock.updateMediaMessage },
-          );
-          const chunks: Buffer[] = [];
-          let size = 0;
-          for await (const chunk of stream) {
-            size += chunk.length;
-            if (size > this.hooks.maxMedia || !this.hooks.allowed(m.groupId)) {
-              stream.destroy();
-              throw new Error('Media unavailable');
-            }
-            chunks.push(chunk);
+    const queue = new IngestionQueue(async m => { if (valid() && this.hooks.allowed(m.groupId)) await this.hooks.incoming(m); },
+      g => this.hooks.allowed(g), valid, notice => this.hooks.history?.(notice),undefined,this.ingestionBudget);
+    this.ingestion = queue;
+    const prepare = function* (this: BaileysConnector, messages: WAMessage[], history: boolean, requestId?: string): Generator<Incoming> {
+      for (const raw of messages) {
+        if (!valid() || !raw?.key?.remoteJid || !this.hooks.allowed(raw.key.remoteJid)) continue;
+        try {
+          const m = normalizeIncoming(raw);
+          if (!m) continue;
+          const retention = this.hooks.retentionToken?.(m.groupId);
+          m.guard = () => valid() && this.hooks.allowed(m.groupId) && (!this.hooks.retentionToken || this.hooks.retentionToken(m.groupId) === retention);
+          if (history) m.history = { requestId };
+          // Retain only sanitized raw data in media closures, never embedded quotes.
+          if (m.raw && Buffer.byteLength(m.raw) <= 256 * 1024 && ['image','video','document','sticker','audio'].includes(m.kind)) {
+            const safeRaw = parse(m.raw);
+            m.download = async () => {
+              if (!m.guard!()) throw new Error('Revoked');
+              validateMediaSource(safeRaw);
+              const stream = await downloadMediaMessage(safeRaw, 'stream', {}, { logger, reuploadRequest: sock.updateMediaMessage });
+              const chunks: Buffer[] = []; let size = 0;
+              for await (const chunk of stream) {
+                size += chunk.length;
+                if (size > this.hooks.maxMedia || !m.guard!()) { stream.destroy(); throw new Error('Media unavailable'); }
+                chunks.push(chunk);
+              }
+              return Buffer.concat(chunks);
+            };
           }
-          return Buffer.concat(chunks);
-        };
+          yield m;
+        } catch { this.hooks.history?.({groupId:raw.key.remoteJid,phase:'error',received:1,processed:0,history,requestId}); }
       }
-      await this.hooks.incoming(m);
-    };
-    // Sequential bounded processing; no unapproved messages enter the application store.
-    let tail = Promise.resolve(),
-      queued = 0;
-    const process = (messages: WAMessage[]) => {
-      for (const m of messages) {
-        if (!m.key.remoteJid || !this.hooks.allowed(m.key.remoteJid) || queued >= 512) continue;
-        queued++;
-        tail = tail
-          .then(async () => {
-            if (valid()) await ingest(m);
-          })
-          .catch(() => {})
-          .finally(() => {
-            queued--;
-          });
-      }
-    };
-    sock.ev.on('messages.upsert', (event) => {
-      if ((event as any).requestId) return;
-      void process(event.messages);
-    });
-    sock.ev.on('messaging-history.set', (event) => {
-      void process(event.messages);
+    }.bind(this);
+    const process = (messages: WAMessage[], history = false, requestId?: string) => queue.submit(prepare(messages, history, requestId), history, requestId);
+    sock.ev.on('messages.upsert', event => { if (!(event as any).requestId) process(event.messages); });
+    sock.ev.on('messaging-history.set', event => {
+      const id=typeof event.peerDataRequestSessionId==='string'&&event.peerDataRequestSessionId.length<=256?event.peerDataRequestSessionId:undefined;
+      if(valid()&&!event.messages.length&&id)this.hooks.historyEmpty?.(id);
+      process(event.messages,true,id);
     });
     sock.ev.on('messages.update', (events) => {
       for (const { key, update } of events) {
@@ -380,11 +371,11 @@ export class BaileysConnector implements Connector {
         if (update.message === null)
           this.hooks.update(key.remoteJid, key.id, { deleted: true, text: '' });
         else if (update.message)
-          void ingest({
+          void Promise.resolve(process([{
             key,
             message: update.message,
             messageTimestamp: update.messageTimestamp,
-          } as WAMessage).catch(() => {});
+          } as WAMessage])).catch(() => {});
         if (update.status !== undefined)
           this.hooks.update(key.remoteJid, key.id, { status: receipt(update.status) });
       }
@@ -487,23 +478,48 @@ export class BaileysConnector implements Connector {
     const keys = m.filter((x) => !x.fromMe && x.raw).map((x) => this.key(x));
     if (keys.length) await this.require().readMessages(keys);
   }
+  historyAnchor(g: string, m: StoredMessage) {
+    if (m.groupId !== g || m.deleted || m.kind === 'unsupported' || ['pending','failed'].includes(m.status) || !m.raw || !Number.isFinite(m.time) || m.time <= 0) return false;
+    try {
+      const parsed=parse(m.raw);
+      if(typeof parsed?.key?.fromMe!=='boolean')return false;
+      const raw = proto.WebMessageInfo.fromObject(parsed), key = raw.key;
+      const time = Number(raw.messageTimestamp) * 1000;
+      return !!key && key.remoteJid === g && key.id === m.id && typeof key.fromMe === 'boolean' && key.fromMe === m.fromMe && Number.isFinite(time) && time > 0 && Math.abs(time - m.time) < 1000;
+    } catch { return false; }
+  }
   async history(g: string, m: StoredMessage) {
-    await this.require().fetchMessageHistory(40, this.key(m), Math.floor(m.time / 1000));
+    if (!this.hooks.allowed(g) || !this.historyAnchor(g,m)) throw new Error('History anchor unavailable');
+    return this.require().fetchMessageHistory(40, this.key(m), Math.floor(m.time / 1000));
   }
   async approved(g: string) {
     await this.require().presenceSubscribe(g);
   }
   async stop(logout = false) {
+    this.ingestion?.dispose();
     this.stopping = true;
     ++this.generation;
     clearTimeout(this.timer);
     const sock = this.sock;
     this.sock = undefined;
     this.cache.clear();
+    let unlinkRequested = false;
     if (sock) {
-      if (logout) await sock.logout().catch(() => {});
-      sock.end(undefined);
+      try {
+        if (logout) {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            unlinkRequested = await Promise.race([
+              sock.logout().then(() => true, () => false),
+              new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), 8000); }),
+            ]);
+          } finally { clearTimeout(timer); }
+        }
+      } finally { sock.end(undefined); }
     }
     this.hooks.state('idle');
+    // This Baileys version awaits sendNode, not a server acknowledgment. A
+    // resolved logout is only a sent request; the phone must verify revocation.
+    if (logout) return { remoteRevoked: false, unlinkRequested };
   }
 }

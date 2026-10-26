@@ -6,6 +6,7 @@ key, operator and paths are root configuration, never supplied by a web request.
 """
 import fcntl
 import hashlib
+import io
 import json
 import os
 import pathlib
@@ -26,7 +27,7 @@ import zipfile
 
 CONFIG = pathlib.Path('/etc/yachad/updates.json')
 ASSETS = ('yachad-release.json', 'yachad-release.sig', 'yachad-app.zip')
-PHASES = {'stopping', 'backing_up', 'activating', 'checking_health'}
+PHASES = {'stopping', 'backing_up', 'activating', 'checking_health', 'rolling_back', 'recovery_required'}
 HOSTS = {'api.github.com', 'github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com'}
 
 
@@ -61,7 +62,11 @@ def atomic_json(path, data, group=None):
     if group is not None:
         os.chown(temporary, 0, group)
     temporary.replace(path)
-    fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    sync_directory(path.parent)
+
+
+def sync_directory(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
     try:
         os.fsync(fd)
     finally:
@@ -139,7 +144,7 @@ def extract(archive, target):
             for info in files:
                 name = pathlib.PurePosixPath(info.filename)
                 mode = info.external_attr >> 16
-                if (name.is_absolute() or '..' in name.parts or '\\' in info.filename or
+                if (info.orig_filename != info.filename or name.is_absolute() or '..' in name.parts or '\\' in info.filename or
                         ':' in info.filename or info.filename in seen or
                         any(part.startswith('.') and part != '.env.example' for part in name.parts) or
                         stat.S_ISLNK(mode) or (stat.S_IFMT(mode) and not stat.S_ISREG(mode) and not stat.S_ISDIR(mode))):
@@ -158,6 +163,33 @@ def extract(archive, target):
         raise UpdateError('archive') from None
 
 
+def extract_dependencies(content, target):
+    if len(content) > 128 * 1024 * 1024:
+        raise UpdateError('build')
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            files = archive.infolist()
+            if not files or len(files) > 30000 or sum(x.file_size for x in files) > 512 * 1024 * 1024:
+                raise UpdateError('build')
+            seen = set()
+            for info in files:
+                name = pathlib.PurePosixPath(info.filename)
+                mode = info.external_attr >> 16
+                if (info.orig_filename != info.filename or name.is_absolute() or '..' in name.parts or
+                        len(name.parts) < 2 or name.parts[0] != 'node_modules' or
+                        '\\' in info.filename or ':' in info.filename or info.filename in seen or
+                        not stat.S_ISREG(mode)):
+                    raise UpdateError('build')
+                seen.add(info.filename)
+                path = target.joinpath(*name.parts)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open('xb') as output, archive.open(info) as source:
+                    shutil.copyfileobj(source, output)
+                os.chmod(path, 0o750 if mode & 0o111 else 0o640)
+    except (zipfile.BadZipFile, OSError, RuntimeError):
+        raise UpdateError('build') from None
+
+
 class Worker:
     def __init__(self, config):
         self.c = config
@@ -169,8 +201,10 @@ class Worker:
     def load_status(self):
         try:
             return json.loads(self.status_path.read_bytes())
-        except (OSError, ValueError):
+        except FileNotFoundError:
             return {}
+        except (OSError, ValueError):
+            raise UpdateError('configuration') from None
 
     def save(self, **changes):
         self.status.update(changes)
@@ -183,8 +217,9 @@ class Worker:
     def command(self, args, *, user=None, cwd=None, input=None, timeout=300, code='internal'):
         if user:
             args = ['/usr/sbin/runuser', '-u', user, '--'] + args
-        env = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'HOME': self.c['buildDirectory'],
-               'NODE_ENV': 'production', 'npm_config_cache': str(pathlib.Path(self.c['buildDirectory']) / 'npm-cache')}
+        home = pathlib.Path(self.c['buildDirectory']) / 'home'
+        env = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'HOME': str(home),
+               'NODE_ENV': 'production', 'npm_config_cache': str(home / 'npm-cache')}
         try:
             child = subprocess.Popen(args, cwd=cwd, stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, start_new_session=True)
@@ -226,6 +261,7 @@ class Worker:
         temporary.unlink(missing_ok=True)
         temporary.symlink_to(target, target_is_directory=True)
         temporary.replace(link)
+        sync_directory(link.parent)
 
     def health(self, expected=None):
         deadline = time.monotonic() + self.c.get('healthTimeoutSeconds', 90)
@@ -248,19 +284,32 @@ class Worker:
             time.sleep(2)
         raise UpdateError('health')
 
-    def recover(self):
+    def recover(self, boot=False):
         if self.status.get('phase') not in PHASES:
-            return
+            return True
         try:
+            # Stop before checking schema: incompatible code must not continue writing.
+            # At boot, systemd orders this unit before the application starts.
+            if not boot:
+                self.command(['/usr/bin/systemctl', 'stop', self.c['service']])
             if self.schema() != 1:
                 raise UpdateError('incompatible')
-            self.command(['/usr/bin/systemctl', 'stop', self.c['service']])
+            previous = pathlib.Path(self.status['previousPath'])
+            previous_version = json.loads((previous / 'package.json').read_bytes())['version']
+            if previous_version != self.status.get('rollbackVersion', self.status.get('currentVersion')):
+                raise UpdateError('rollback')
+            self.save(phase='rolling_back', failedVersion=self.status.get('latestVersion'))
             self.switch(self.status['previousPath'])
+            if boot:
+                self.save(phase='rollback_pending_health', error=self.status.get('error') or 'health')
+                return True
             self.command(['/usr/bin/systemctl', 'start', self.c['service']])
-            self.health(self.status.get('currentVersion'))
-            self.save(phase='rolled_back', error=self.status.get('error') or 'health')
+            self.health(previous_version)
+            self.save(phase='rolled_back', currentVersion=previous_version, error=self.status.get('error') or 'health')
+            return True
         except Exception:
-            self.save(phase='failed', error='rollback')
+            self.save(phase='recovery_required', error='rollback')
+            return False
 
     def request(self):
         path = pathlib.Path(self.c['dataDirectory']) / 'update-request.json'
@@ -298,7 +347,11 @@ class Worker:
 
     def install(self, release, assets, token, current):
         work = pathlib.Path(tempfile.mkdtemp(prefix='release-', dir=self.state_dir))
-        build = pathlib.Path(self.c['buildDirectory']) / ('build-' + str(int(time.time())))
+        build_root = pathlib.Path(self.c['buildDirectory'])
+        info = build_root.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            raise UpdateError('configuration')
+        build = pathlib.Path(tempfile.mkdtemp(prefix='build-', dir=build_root))
         destination = None
         activated = False
         try:
@@ -317,23 +370,39 @@ class Worker:
                 raise UpdateError('storage')
             archive = work / ASSETS[2]
             archive.write_bytes(content[2])
-            build.mkdir(mode=0o700)
-            extract(archive, build)
-            package = json.loads((build / 'package.json').read_bytes())
+            source = work / 'source'
+            source.mkdir(mode=0o700)
+            extract(archive, source)
+            if (source / 'node_modules').exists():
+                raise UpdateError('archive')
+            package = json.loads((source / 'package.json').read_bytes())
             if package.get('version') != manifest['version']:
                 raise UpdateError('archive')
             user = pwd.getpwnam(self.c['builderUser'])
-            for p in [build, *build.rglob('*')]:
-                os.chown(p, user.pw_uid, user.pw_gid)
+            shutil.copytree(source, build, dirs_exist_ok=True)
+            # The root-owned parent cannot be renamed by the builder. Hand off
+            # the directory LAST, so metadata changes never race builder writes.
+            for p in build.rglob('*'):
+                os.chown(p, user.pw_uid, user.pw_gid, follow_symlinks=False)
                 os.chmod(p, 0o700 if p.is_dir() else 0o600)
+            os.chown(build, user.pw_uid, user.pw_gid)
             self.command([self.c['npm'], 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'],
                          user=self.c['builderUser'], cwd=build, timeout=1200, code='build')
             self.command([self.c['node'], '--import', 'tsx', 'scripts/update-smoke.ts'], user=self.c['builderUser'], cwd=build, timeout=90, code='build')
             destination = pathlib.Path(self.c['releasesDirectory']) / ('v' + manifest['version'])
             if destination.exists():
-                raise UpdateError('configuration')
-            # Copy rather than move: a builder must not retain an FD to the root-owned release tree.
-            shutil.copytree(build, destination, symlinks=True)
+                # A crashed preparation may leave an unpublished release. Preserve
+                # the current tree and every journalled rollback tree.
+                if (destination == self.current() or str(destination) == self.status.get('previousPath') or
+                        destination.is_symlink() or destination.stat().st_uid != 0 or not destination.is_dir()):
+                    raise UpdateError('configuration')
+                shutil.rmtree(destination)
+            # Export as builder: privileged code never traverses or opens files
+            # controlled by that account. Preserve the authenticated source.
+            dependencies = self.command(['/usr/bin/python3', '/usr/local/lib/yachad-updater/export-dependencies.py', str(build)],
+                                        user=self.c['builderUser'], timeout=300, code='build')
+            shutil.copytree(source, destination)
+            extract_dependencies(dependencies, destination)
             for p in [destination, *destination.rglob('*')]:
                 if p.is_symlink():
                     resolved = p.resolve(strict=True)
@@ -347,18 +416,22 @@ class Worker:
             passphrase = private_file(self.c['backupPassphraseFile']).strip()
             if not 18 <= len(passphrase) <= 1024:
                 raise UpdateError('configuration')
-            self.save(phase='stopping', previousPath=str(current), error=None)
+            # Persist the complete new tree before publishing the intent to switch.
+            self.command(['/usr/bin/sync', '-f', str(destination)], timeout=120, code='storage')
+            self.save(phase='stopping', previousPath=str(current), rollbackVersion=self.status['currentVersion'], error=None)
             self.command(['/usr/bin/systemctl', 'stop', self.c['service']])
             self.save(phase='backing_up')
-            self.command([self.c['node'], '--import', 'tsx', 'scripts/update-backup.ts', self.c['dataDirectory'],
+            self.command(['/usr/bin/python3', '/usr/local/lib/yachad-updater/data-lock.py', self.c['dataDirectory'],
+                          self.c['node'], '--import', 'tsx', 'scripts/update-backup.ts', self.c['dataDirectory'],
                           self.c['masterKeyFile'], self.c['backupDirectory']], user=self.c['appUser'],
                          cwd=current, input=passphrase, timeout=900, code='backup')
+            self.command(['/usr/bin/sync', '-f', self.c['backupDirectory']], timeout=120, code='backup')
             self.save(phase='activating')
             self.switch(destination)
             self.command(['/usr/bin/systemctl', 'start', self.c['service']])
             self.save(phase='checking_health')
             self.health(manifest['version'])
-            self.save(phase='healthy', currentVersion=manifest['version'], error=None)
+            self.save(phase='healthy', currentVersion=manifest['version'], failedVersion=None, error=None)
             activated = True
             self.prune_releases(destination, current)
         finally:
@@ -374,7 +447,18 @@ class Worker:
                 shutil.rmtree(p)
 
     def run(self):
-        self.recover()
+        was_recovering = self.status.get('phase') in PHASES
+        if not self.recover():
+            return
+        if was_recovering:
+            return
+        if self.status.get('phase') == 'rollback_pending_health':
+            try:
+                self.health(self.status.get('rollbackVersion', self.status.get('currentVersion')))
+                self.save(phase='rolled_back')
+            except Exception:
+                self.save(phase='recovery_required', error='rollback')
+            return
         if self.status.get('phase') == 'preparing':
             # A previous worker stopped before touching the active service.
             self.save(phase='failed', error='build', failedVersion=self.status.get('latestVersion'))
@@ -418,6 +502,11 @@ class Worker:
 def main():
     if os.geteuid() != 0:
         raise UpdateError('configuration')
+    # Installing the boot guard before configuring updates must leave a normal
+    # non-updating installation usable. Missing config is permitted only at boot.
+    boot = sys.argv[1:] == ['boot-recover']
+    if boot and not CONFIG.exists():
+        return
     config = json.loads(private_file(CONFIG))
     if config.get('mode') not in ('notify', 'auto') or type(config.get('enabled')) is not bool:
         raise UpdateError('configuration')
@@ -429,10 +518,13 @@ def main():
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
+            if boot:
+                raise UpdateError('configuration') from None
             return
         worker = Worker(config)
-        if sys.argv[1:] == ['recover']:
-            worker.recover()
+        if sys.argv[1:] in (['recover'], ['boot-recover']):
+            if not worker.recover(boot=boot):
+                raise UpdateError('rollback')
         else:
             worker.run()
 

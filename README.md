@@ -1,5 +1,10 @@
 # יחד — Yachad
 
+History ingestion/request fixes are documented in [HISTORY.md](docs/HISTORY.md). Automatic-update activation remains an owner step.
+
+For 0.3.1 see [the one-time automatic-update and family setup runbook](docs/AUTOMATIC-UPDATES-SETUP.md) before installing service helpers or enabling signed updates. Preserve existing live data/key paths. A GitHub push does not deploy the Pi.
+
+
 מערכת צ׳אט משפחתית אמיתית, בהרצה מקומית: Node.js 24 + Fastify + React + SQLite. אותו תהליך מגיש את הממשקים, מחזיק סשנים ומפעיל מתאם WhatsApp מתמשך. אין שירות ענן או מנוי נדרש. ברירת המחדל היא מתאם מדומה עם נתונים מקומיים. מתאם Baileys אמיתי נמצא באותו מקור, נעול לגרסה `7.0.0-rc14`, ומוגן באישור מקומי מפורש.
 
 זו גרסה ראשונה עובדת לבדיקה משפחתית. היא **אינה חיבור WhatsApp רשמי ואינה מוצר שעבר ביקורת אבטחה חיצונית**. חיבור אמיתי ופריסה פיזית טרם נבדקו. תוצאות מדויקות: [docs/VALIDATION.md](docs/VALIDATION.md).

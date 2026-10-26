@@ -13,7 +13,7 @@ WorkingDirectory=/opt/yachad/current
 Environment=NODE_ENV=production
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 EnvironmentFile=/etc/yachad/yachad.env
-ExecStart=/usr/bin/env node --import tsx src/main.ts
+ExecStart=/usr/bin/python3 /usr/local/lib/yachad-updater/data-lock.py ${DATA_DIR} /usr/bin/env node --import tsx src/main.ts
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=45
