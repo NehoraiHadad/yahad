@@ -1,0 +1,106 @@
+v24.19.0
+11.17.0
+
+added 196 packages in 12s
+
+> yachad-family-chat@0.3.2 typecheck
+> tsc --noEmit
+
+
+> yachad-family-chat@0.3.2 test
+> node --import tsx --test --test-concurrency=1 tests/*.test.ts
+
+Γ£ö real adapter normalizes supported types and strips untrusted embedded previews/quotes from raw (3.003203ms)
+Γ£ö encrypted auth store restores Buffer credentials, Signal keys, null deletes and app-state proto (33.532531ms)
+Γ£ö real adapter lifecycle with injected socket: QR, restart reconnect, logout, no network (576.694138ms)
+Γ£ö provider unlink reports request transmission only, closes socket, ignores stale QR and never reconnects (635.032299ms)
+Γ£ö provider unlink timeout still stops locally and reports remote revocation unconfirmed (20.73312ms)
+Γ£ö authenticated encrypted backup + restore of SQLite, encrypted media and WA auth; tamper/wrong password/retention/lock (3657.944717ms)
+Γ£ö untrusted media URLs and paths cannot make server-side requests (2.475802ms)
+Γ£ö third-party console payloads never reach production logging (289.013084ms)
+Γ£ö real adapter maps actual media bytes, captions, Opus duration and thumbnail in memory (stub transport) (381.899884ms)
+Γ£ö documented setup CLI creates real separate accounts and a protected random key without printing passwords (2667.036271ms)
+Γ£ö diagnostics isolate families, sanitize failures, retain bounded encrypted history across restart (42.667148ms)
+Γ£ö diagnostics survive persistence failure, reset cannot be resurrected by in-flight flush, opt-out writes nothing (10.223011ms)
+Γ£ö parent-only diagnostics/export/reset and operator-only update queue enforce sessions, family isolation and CSRF (1376.824668ms)
+Γ£ö group search preserves stable IDs, duplicates and granted state through filter and clear (35.932275ms)
+Γ£ö approval after connect stays honestly unavailable without an anchor; requests cannot target other groups or supply anchors (1395.630732ms)
+Γ£ö server chooses the oldest usable original outgoing/received anchor, skipping malformed/deleted/unsupported/pending rows (1232.125949ms)
+Γ£ö identical group IDs remain isolated between families and bounded anchor scans report their limit (2365.471288ms)
+Γ£ö submitted request is distinct from stored history; duplicates and unmatched events do not invent restoration (3340.391167ms)
+Γ£ö response before request ID resolution correlates only when the exact supported field matches (1073.621587ms)
+Γ£ö exact-ID empty responses are zero-stored partial replies, including early responses; unmatched empties are not replies (1204.005742ms)
+Γ£ö history failures and response/submission timeouts remain partial and retry is bounded (1947.437278ms)
+Γ£ö revoking permission while history submission waits prevents status/count disclosure (1150.78604ms)
+Γ£ö real adapter scheduling processes all 600 authorized history entries and explicitly reports oversized batches (238.186353ms)
+Γ£ö queue filters unapproved groups before normalization and invalidates old permissions after revoke/regrant (23.137066ms)
+Γ£ö anchor validation never invents keys and provider return value remains only a request ID (18.229973ms)
+Γ£ö byte limits and synchronous consumer errors are reported without storing payloads (1.591098ms)
+Γ£ö stalled consumers report failure, invalidate their work and hold bounded capacity until unwound (8.831687ms)
+Γ£ö 257 simultaneously receiving groups degrade to overload without throwing and expired slots are reclaimed (1140.889357ms)
+Γ£ö admitted processing cannot time out or enable a duplicate request while its batch is draining (1103.858142ms)
+Γ£ö reconnecting disposes old queued buffers and shares a bound on unresolved consumers across generations (124.282225ms)
+Γ£ö disposing active ingestion retires processing markers and reconnect clears obsolete status (1071.749319ms)
+Γ£ö underlying request slots belong to the connector and late old completions cannot free new slots (1363.939822ms)
+Γ£ö a replacement connector shares the family ingestion bound while a disposed transport is still hung (28.250627ms)
+Γ£ö history requests share a family rate bound even across different groups and empty replies (1629.371337ms)
+Γ£ö first-run requires local capability, same origin, confirmation, and single empty-store claim (968.836955ms)
+Γ£ö normal startup and expired bootstrap cannot claim an empty database (1060.428095ms)
+Γ£ö child creation is parent-only, CSRF protected, unique, and grants no groups (1063.063124ms)
+Γ£ö own and child password confirmation reject mismatch and reset revokes sessions (1083.788858ms)
+Γ£ö prompt preserves buffered Unicode lines and never echoes supplied secrets (284.916375ms)
+Γ£ö terminal multiline paste never echoes later secret lines before their prompt (5.943702ms)
+Γ£ö repeated parent grant actions are idempotent and preserve selections hidden by group filtering (1548.908821ms)
+Γ£ö intentional disconnect commits local revocation before provider wait, retains chats, blocks stale hooks and reboot reconnect (1539.760422ms)
+Γ£ö in-flight provider media cannot persist after a retaining disconnect (1102.433025ms)
+Γ£ö separately requested history deletion completes locally before unlink network wait and reports its outcome (1481.645942ms)
+Γ£ö a group refresh finishing after retaining disconnect cannot revoke grants or history (1112.468591ms)
+Γ£ö persisted incomplete deletion blocks reconnect until explicit deletion is completed (1616.777991ms)
+Γ£ö authentication, separate roles, secure headers and CSRF (1062.485883ms)
+Γ£ö login uses salted passwords, expiring HttpOnly sessions and throttles (1986.190328ms)
+Γ£ö family isolation with identical group/message/media IDs, all direct actions scoped (1329.968105ms)
+Γ£ö filter BEFORE media download and storage; external quote content removed (1131.395208ms)
+Γ£ö send, idempotency, scoped replies, real media bytes, edit, delete and reactions (1513.94463ms)
+Γ£ö multipart upload is sniffed, authorized, bounded, converted voice and persists media (1932.217351ms)
+Γ£ö revocation removes messages, media and active key; in-flight download cannot resurrect (1312.68759ms)
+Γ£ö one child revocation preserves another child grant within the same family (1137.315556ms)
+Γ£ö pagination stable on identical timestamps, search and cross-group reply protections (3134.524044ms)
+Γ£ö SSE reauthorizes per family/group and closes on session revocation (1054.485208ms)
+Γ£ö ciphertext storage survives restart, auth is encrypted and disconnect purge scoped (1247.146298ms)
+Γ£ö parent-controlled sender signature is enforced on server, isolated, and retained on edits (1310.155784ms)
+Γ£ö terminal pairing state survives service restart, clears invalid auth and stops auto boot (1288.248608ms)
+Γ£ö missing connector receipts stay unknown and an out-of-order pending echo cannot regress read (1173.01497ms)
+Γ£ö actual protobuf null defaults cannot misclassify static/animated stickers or other media as empty text (6.844305ms)
+Γ£ö sanitized directPath-only sticker uses supported lower-level transport after source validation (6.771704ms)
+Γ£ö incoming static and animated WebP are encrypted, served inline as WebP, and family-scoped (1424.355737ms)
+Γ£ö download failure or legacy empty text can be repaired on permitted same-ID redelivery without duplicating usable media (1073.151941ms)
+Γ£ö unsupported sticker bytes stay an explicit explanation and are not stored as media (973.627122ms)
+Γ£ö sticker download and repair cannot cross revoked or replaced grant epochs (1050.602429ms)
+Γ£ö mode control requires designated parent, session, CSRF and strict mode-only input (1288.030597ms)
+Γ£ö old worker, disabled root gate and stale status cannot be used to enable UI mode control (936.212546ms)
+Γ£ö queued and root-journal pending requests never optimistically change applied mode or overwrite requests (885.711424ms)
+Γ£ö root rejection is visible and a fresh request can be queued without changing effective mode (814.563159ms)
+Γä╣ tests 70
+Γä╣ suites 0
+Γä╣ pass 70
+Γä╣ fail 0
+Γä╣ cancelled 0
+Γä╣ skipped 0
+Γä╣ todo 0
+Γä╣ duration_ms 84536.952482
+
+> yachad-family-chat@0.3.2 build
+> vite build
+
+vite v7.3.7 building client environment for production...
+transforming...
+Γ£ô 1586 modules transformed.
+rendering chunks...
+computing gzip size...
+../dist/index.html                   0.61 kB Γöé gzip:  0.38 kB
+../dist/assets/index-DcmN7pK8.css   36.97 kB Γöé gzip:  8.75 kB
+../dist/assets/index-DDnY9nS5.js   276.01 kB Γöé gzip: 87.28 kB
+Γ£ô built in 3.61s
+
+removed 22 packages in 881ms
+SMOKE_OK

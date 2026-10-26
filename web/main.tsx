@@ -1,4 +1,5 @@
 import { HistoryPanel } from './HistoryPanel';
+import { MessageImage } from './MessageImage';
 import { DisconnectPanel } from './DisconnectPanel';
 import { GroupPicker } from './GroupPicker';
 import { FamilySetup, passphraseHelp } from './FamilySetup';
@@ -1033,13 +1034,7 @@ function Message({
         ) : (
           <>
             {url && (m.kind === 'image' || m.kind === 'sticker') && (
-              <a className="media-image" href={url} target="_blank" rel="noreferrer">
-                <img
-                  src={url}
-                  loading="lazy"
-                  alt={m.kind === 'sticker' ? 'מדבקה' : m.text || 'תמונה שנשלחה בשיחה'}
-                />
-              </a>
+              <MessageImage key={url} url={url} sticker={m.kind==='sticker'} alt={m.kind==='sticker'?'מדבקה':m.text||'תמונה שנשלחה בשיחה'}/>
             )}
             {url && m.kind === 'video' && (
               <video controls preload="metadata" playsInline src={url} />
@@ -1069,6 +1064,7 @@ function Message({
                 <AlertCircle size={15} /> המדיה לא נשמרה או שכבר אינה זמינה
               </p>
             )}
+            {!url&&!m.text&&(m.kind==='text'||m.kind==='unsupported')&&<p className="media-missing" role="status">תוכן ההודעה אינו זמין בתצוגה הזאת.</p>}
             {m.text && (
               <p className="message-text" dir="auto">
                 {m.text}

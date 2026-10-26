@@ -10,9 +10,10 @@ if (command === 'keygen') {
   writeFileSync(output, keys.privateKey, {mode:0o600,flag:'wx'});
   writeFileSync(output + '.pub', keys.publicKey, {mode:0o644,flag:'wx'});
   console.log('Signing key created locally. Keep the private PEM off the Pi and out of Git.');
-} else if (command === 'package') {
-  if (!output || !keyFile || !existsSync('dist/index.html')) throw new Error('Build first; provide output directory and private PEM path');
-  if (statSync(keyFile).mode & 0o077) throw new Error('Signing key must be private (0600)');
+} else if (command === 'package' || command === 'package-https') {
+  const signed = command === 'package';
+  if (!output || (signed && !keyFile) || (!signed && keyFile) || !existsSync('dist/index.html')) throw new Error('Build first; provide output directory and a private PEM only for signed packaging');
+  if (signed && statSync(keyFile).mode & 0o077) throw new Error('Signing key must be private (0600)');
   const version = JSON.parse(readFileSync('package.json','utf8')).version;
   if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Stable semantic version required');
   const dir=resolve(output); mkdirSync(dir,{recursive:true,mode:0o700});
@@ -34,6 +35,6 @@ with zipfile.ZipFile(sys.argv[1],'x',compression=zipfile.ZIP_DEFLATED) as out:
   const data=readFileSync(archive);
   const manifest=Buffer.from(JSON.stringify({format:1,version,databaseSchema:1,archive:'yachad-app.zip',bytes:data.length,sha256:createHash('sha256').update(data).digest('hex')})+'\n');
   writeFileSync(join(dir,'yachad-release.json'),manifest,{mode:0o600,flag:'wx'});
-  writeFileSync(join(dir,'yachad-release.sig'),sign(null,manifest,readFileSync(keyFile)),{mode:0o600,flag:'wx'});
-  console.log(`Release ${version} packaged and signed locally. Upload the three files to a matching v${version} release only after approval.`);
-} else throw new Error('Use: node scripts/release.mjs keygen PRIVATE_KEY | package OUT_DIR PRIVATE_KEY');
+  if (signed) writeFileSync(join(dir,'yachad-release.sig'),sign(null,manifest,readFileSync(keyFile)),{mode:0o600,flag:'wx'});
+  console.log(`Release ${version} packaged locally (${signed?'signed; three assets':'GitHub HTTPS trust; two assets'}). Upload to matching stable v${version} only after approval.`);
+} else throw new Error('Use: node scripts/release.mjs package-https OUT_DIR | package OUT_DIR PRIVATE_KEY | keygen PRIVATE_KEY');

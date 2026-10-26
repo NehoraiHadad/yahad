@@ -239,8 +239,12 @@ export class ChatService {
       this.update(f, g, input.id, { text: input.text, edited: true, raw: input.raw });
       return;
     }
+    const repairMissingMedia=existing&&!existing.mediaId&&['sticker','image','video','audio','document'].includes(input.kind)&&
+      (existing.kind===input.kind||(existing.kind==='text'&&!existing.text))&&!!(input.bytes||input.download);
+    const explainLegacyBlank=existing?.kind==='text'&&!existing.text&&input.kind==='unsupported'&&!!input.text;
     if (
       existing &&
+      !repairMissingMedia && !explainLegacyBlank &&
       existing.status !== 'pending' &&
       existing.status !== 'failed' &&
       (!input.fromMe || !!existing.raw)
@@ -307,6 +311,10 @@ export class ChatService {
           'video/webm',
         ];
         m.mime = (type?.mime || 'application/octet-stream').split(';')[0];
+        if(m.kind==='sticker'&&m.mime!=='image/webp'){
+          m.kind='unsupported';m.text='המדבקה אינה בקובץ WebP נתמך — אפשר לפתוח אותה ב־WhatsApp.';m.raw=undefined;m.mime=undefined;
+          this.store.putMessage(f,m);this.notify(f,g);return;
+        }
         if (m.kind !== 'document' && !safe.includes(m.mime)) {
           m.kind = 'document';
           m.filename = m.filename || 'attachment';

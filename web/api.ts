@@ -3,6 +3,7 @@ export function setCsrf(value: string) {
   csrf = value;
 }
 const errors: Record<string, string> = {
+  UPDATES_MODE_LOCKED: 'שליטה במצב העדכון טרם אושרה בהגדרה המקומית של רכיב העדכון.',
   HISTORY_WAIT: 'יש בקשות היסטוריה פעילות או שבוצעו לאחרונה. המתינו מעט לפני בקשה נוספת.',
   DELETION_INCOMPLETE: 'מחיקת שיחות קודמת לא הושלמה. בדקו את המצב ואשרו בנפרד את השלמת המחיקה לפני חיבור מחדש.',
   CONNECTION_BUSY: 'פעולת חיבור או ניתוק כבר מתבצעת. המתינו לסיום.',
