@@ -2,7 +2,7 @@
 
 History ingestion/request fixes are documented in [HISTORY.md](docs/HISTORY.md). Automatic-update activation remains an owner step.
 
-For the 0.3.2 candidate see [parent UI update control and worker compatibility](docs/UI-UPDATE-CONTROL.md), and [the one-time setup runbook](docs/AUTOMATIC-UPDATES-SETUP.md) before installing helpers or enabling updates. Preserve existing live data/key paths. A GitHub push does not deploy the Pi.
+For the 0.3.2 candidate see [GitHub HTTPS automatic updates and one-time owner setup](docs/GITHUB-UPDATES-SETUP.md) and [parent UI control](docs/UI-UPDATE-CONTROL.md). The new owner profile needs no signing key or GitHub token; existing signed installations retain their trust policy. Preserve live data/key paths. A GitHub push does not deploy the Pi.
 
 
 מערכת צ׳אט משפחתית אמיתית, בהרצה מקומית: Node.js 24 + Fastify + React + SQLite. אותו תהליך מגיש את הממשקים, מחזיק סשנים ומפעיל מתאם WhatsApp מתמשך. אין שירות ענן או מנוי נדרש. ברירת המחדל היא מתאם מדומה עם נתונים מקומיים. מתאם Baileys אמיתי נמצא באותו מקור, נעול לגרסה `7.0.0-rc14`, ומוגן באישור מקומי מפורש.

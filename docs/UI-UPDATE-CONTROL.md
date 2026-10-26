@@ -65,16 +65,18 @@ is added.
 
 The owner reports that updater helpers, config, trust file, backup-secret file,
 service and timer are all absent on the Pi. The one-time owner installer is being
-prepared separately, with signed root staging, no-overwrite checks, hidden
+prepared in `deploy/install-updater.py`, with fixed-repository HTTPS staging, no-overwrite checks, hidden
 passphrase/escrow and local confirmation before service actions. It must use the
-matching approved signed mode-capable release, then install the authenticated
+matching approved stable mode-capable release, then install the checked
 root helpers once. Publishing an app alone cannot solve the missing root worker.
 
 At this commit, 0.3.1 is the published signed release and this 0.3.2 candidate is
 not published or deployed. The desktop installer draft deliberately returns
-`DRAFT_ONLY` before any action until release pins are updated after approval.
+`DRAFT_ONLY` before any action pending stable publication/read-back and installer activation approval.
 Do not run an obsolete-worker bootstrap and assume the UI switch will work.
-Use the existing signing key/public fingerprint; no new credential is required.
+The new owner profile needs no release signing key/public fingerprint or token.
+Existing signature-pinned installations retain signature verification; see
+[GitHub trust and setup](GITHUB-UPDATES-SETUP.md) for the explicit policy.
 Preserve `/var/lib/yachad/live`, `/etc/yachad/whatsapp.key`, existing env/linked
 device state and Caddy CA. Do not rerun initial family setup.
 

@@ -17,17 +17,21 @@ effects in worker lifecycle cases are injected, not actual service operations.
 | Locked `npm ci --ignore-scripts --no-audit --no-fund` | passed |
 | TypeScript typecheck | passed |
 | Full app suite | **70 passed, 0 failed, 0 skipped** |
-| Full Linux Python updater suite | **34 passed, 0 failed, 0 skipped** |
+| Final Linux Python worker + owner-setup suite | **63 passed, 0 failed, 0 skipped** |
 | Production Vite build | passed, `index-DDnY9nS5.js` |
 | Production-only prune + update smoke | **SMOKE_OK** |
 | Windows Node 24.22.1 focused API suite | **4 passed, 0 failed, 0 skipped** |
 | Diff whitespace check | passed |
+| Two-asset HTTPS packaging + manifest/hash/safe extraction | **HTTPS_PACKAGE_OK**, no key/network |
 
 [Full app/build/smoke output](mode-control-app-0.3.2.txt) and
-[full Python output](mode-control-python-0.3.2.txt) preserve concrete receipts.
-The final Python run includes the local first-install version-pin guard. Root
-worker code did not change during the later sticker fix; the final application
-run above includes the sticker fix and all six new regressions.
+[final Python output](github-https-python-0.3.2.txt) preserve concrete receipts.
+Application sources are unchanged from tested commit `04b5436d`; the later
+owner-approved HTTPS trust change touches the root worker, release packaging,
+guarded installer, Python tests and docs. The application/build/smoke receipts
+remain applicable without unnecessary repetition. [HTTPS validation details](github-https-validation.md)
+distinguish the final 42 worker and 21 owner-setup tests from the prior 34-worker
+receipt retained for history.
 
 Four new API cases cover designated-parent/family/role/session/CSRF checks,
 strict mode-only input, old-worker compatibility, root-disabled/stale gates,
@@ -68,18 +72,18 @@ are recorded with delivery after commit.
 
 ## Owner installer draft and compatibility gate
 
-The separate desktop installer draft was exercised in **19 isolated Linux
-fixture tests**: real file modes under umask077, signed-asset verification, two
+The consolidated `deploy/install-updater.py` draft was exercised in **21 isolated Linux
+fixture tests**: real file modes under umask077, fixed-repository HTTPS verification, two
 preparation passes preserving synthetic live env/key/database, no overwrite,
 link/FIFO refusal, hidden escrow, default maintenance pause, uncertain stop,
 cleanup-failure restoration, immutable streamed backup export, effective service
 override rejection and acceptance gates. Service/account/network effects are
 mocked. The installer entry point deliberately returns DRAFT_ONLY before any
-action until retargeted to an approved signed UI-capable release. It is not
+action pending stable v0.3.2 publication/read-back and installer activation approval. It is not
 certified for active Pi installation. No actual owner backup secret was created.
 
 The new app with the published old 0.3.1 worker leaves the mode switch unavailable.
-Root helpers do not self-update with the app. The signed mode-capable worker and
+Root helpers do not self-update with the app. The matching mode-capable worker and
 one-time local policy/setup must be provisioned before UI control is promised.
 `installVersionPin` is root-only and optional; it protects the first manual target
 and is cleared locally only after acceptance before normal automatic updates.
@@ -94,8 +98,9 @@ systemd/interruption, off-device restore and live group/history/media acceptance
 remain pending. The WSL Node version above is within the supported Node24 range;
 it is not a claim of exact Pi24.22.1 native validation.
 
-Remaining activation gate: review/approve this candidate, publish a signed matching
-release using the existing signing key, verify read-back, then retarget/review
-the installer pins. The prepared local maintenance confirmation and acceptance
+Remaining activation gate: review/approve this candidate, publish matching stable
+v0.3.2 with manifest and archive, verify read-back, then approve/review installer
+activation. The new owner profile requires no signing key or token; existing
+signature-pinned installations keep their policy. Local maintenance and acceptance
 gates remain required. The requested final automatic outcome is already authorized;
 no redundant global auto-mode approval is introduced.

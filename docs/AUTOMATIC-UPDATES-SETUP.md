@@ -1,6 +1,6 @@
 # One-time owner setup for signed automatic updates (0.3.1)
 
-> 0.3.2 candidate: [UI-UPDATE-CONTROL.md](UI-UPDATE-CONTROL.md) adds parent auto/notify control. It requires the matching root worker plus the local `allowUiModeControl` gate; an app update alone does not replace privileged helpers. The consolidated installer remains a guarded draft until a matching signed release is approved and its asset pins are updated. Preserve the existing signing key and live paths.
+> Legacy signature-pinned installation reference. The current owner chose [GitHub HTTPS setup](GITHUB-UPDATES-SETUP.md) for this new installation, with no signing-key requirement. Do not apply the trust/keygen steps below to that profile or migrate an existing pinned installation silently. Parent UI control still requires the matching root worker and local gate.
 
 Read [HISTORY.md](HISTORY.md) for the 0.3.1 history limits and real-account acceptance gate before rollout.
 
@@ -147,6 +147,13 @@ disabled and sessions revoked, before relying on them. Never restore over live
 data or start a mock connector against the restored live store.
 
 ## 4. Configure exact paths and the designated parent
+
+For this **legacy signed profile**, explicitly change the copied example to
+`"releaseTrust":"signature"` and
+`"publicKeyFile":"/etc/yachad/release-signing.pub"` before enabling the worker.
+The current example defaults to the new GitHub HTTPS profile; leaving that mode
+beside an installed public pin is deliberately rejected. Do not change trust on
+an already configured installation or delete its key to work around the check.
 
 Find parent IDs from the correct live store, read-only:
 

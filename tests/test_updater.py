@@ -96,7 +96,7 @@ class UpdaterTests(unittest.TestCase):
                 u.main()
             self.assertFalse((self.root/'status.json').exists())
 
-    def lifecycle(self, fail_health=False, fail_backup=False):
+    def lifecycle(self, fail_health=False, fail_backup=False, https=False):
         username=pwd.getpwuid(os.getuid()).pw_name
         releases=self.root/'releases'; releases.mkdir()
         old=releases/'v0.1.0'; old.mkdir(); (old/'package.json').write_text('{"version":"0.1.0"}')
@@ -111,6 +111,8 @@ class UpdaterTests(unittest.TestCase):
            'publicKeyFile':str(self.pub),'currentLink':str(current),'releasesDirectory':str(releases),'minimumFreeMiB':0,
            'service':'yachad.service','node':'node','npm':'npm','tokenFile':None}
         effects=[]
+        if https:
+            c.update(repository=u.PUBLIC_REPOSITORY, releaseTrust='github-https', publicKeyFile=None)
         class FakeWorker(u.Worker):
             def command(self,args,**kwargs):
                 effects.append((args,kwargs))
@@ -132,8 +134,10 @@ class UpdaterTests(unittest.TestCase):
         m,s,a=self.package()
         remote=dict(zip(u.ASSETS,[m,s,a]))
         assets={name:{'url':name} for name in u.ASSETS}
-        with patch.object(worker,'release',return_value=({'tag_name':'v0.2.0'},assets)), patch.object(u,'download',side_effect=lambda url,*args:remote[url]):
+        with patch.object(worker,'release',return_value=({'tag_name':'v0.2.0'},assets)), patch.object(u,'download',side_effect=lambda url,*args:remote[url]) as fetched:
             worker.run()
+        if https:
+            self.assertNotIn('yachad-release.sig', [call.args[0] for call in fetched.call_args_list])
         if fail_health or fail_backup:
             self.assertEqual(current.resolve(),old)
             self.assertEqual(worker.status['phase'],'rolled_back')
@@ -154,6 +158,15 @@ class UpdaterTests(unittest.TestCase):
 
     @unittest.skipUnless(os.getuid()==0,'Root ownership lifecycle simulated in isolated temp tree only')
     def test_backup_failure_never_activates_new_code(self): self.lifecycle(fail_backup=True)
+
+    @unittest.skipUnless(os.getuid()==0,'Root ownership lifecycle simulated in isolated temp tree only')
+    def test_https_success_still_backs_up_without_fetching_signature(self): self.lifecycle(https=True)
+
+    @unittest.skipUnless(os.getuid()==0,'Root ownership lifecycle simulated in isolated temp tree only')
+    def test_https_failed_health_still_rolls_back(self): self.lifecycle(fail_health=True,https=True)
+
+    @unittest.skipUnless(os.getuid()==0,'Root ownership lifecycle simulated in isolated temp tree only')
+    def test_https_backup_failure_still_never_activates(self): self.lifecycle(fail_backup=True,https=True)
 
     @unittest.skipUnless(os.getuid()==0,'Root ownership recovery simulated in isolated temp tree only')
     def test_interrupted_maintenance_recovers(self):

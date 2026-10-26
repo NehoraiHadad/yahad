@@ -1,0 +1,2 @@
+Release 0.3.2 packaged locally (GitHub HTTPS trust; two assets). Upload to matching stable v0.3.2 only after approval.
+HTTPS_PACKAGE_OK: two assets, consistent bytes/hash, safely extracted; no key or network

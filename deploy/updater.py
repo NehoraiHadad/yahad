@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Root-owned, stdlib-only release worker. Never imports application code as root.
 
-All package code and npm run as an isolated builder account. Repository, signing
-key, operator and paths are root configuration, never supplied by a web request.
+All package code and npm run as an isolated builder account. Release trust,
+operator and paths are root configuration, never supplied by a web request.
 """
 import fcntl
 import hashlib
@@ -29,6 +29,7 @@ import math
 
 CONFIG = pathlib.Path('/etc/yachad/updates.json')
 ASSETS = ('yachad-release.json', 'yachad-release.sig', 'yachad-app.zip')
+PUBLIC_REPOSITORY = 'NehoraiHadad/yahad'
 PHASES = {'stopping', 'backing_up', 'activating', 'checking_health', 'rolling_back', 'recovery_required'}
 HOSTS = {'api.github.com', 'github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com'}
 
@@ -112,6 +113,40 @@ def download(url, maximum, token=None, accept='application/octet-stream'):
         raise UpdateError('network') from None
 
 
+def verify_manifest(manifest_bytes, archive):
+    if len(manifest_bytes) > 8192:
+        raise UpdateError('archive')
+    try:
+        manifest = json.loads(manifest_bytes)
+        version(manifest['version'])
+        if manifest.get('format') != 1 or manifest.get('databaseSchema') != 1 or manifest.get('archive') != ASSETS[2]:
+            raise UpdateError('incompatible')
+        if type(manifest.get('bytes')) is not int or not 1 <= manifest['bytes'] <= 64 * 1024 * 1024:
+            raise UpdateError('archive')
+        if len(archive) != manifest['bytes'] or hashlib.sha256(archive).hexdigest() != manifest.get('sha256'):
+            raise UpdateError('archive')
+        return manifest
+    except (KeyError, ValueError, TypeError, AttributeError):
+        raise UpdateError('archive') from None
+
+
+def release_policy(config, status=None):
+    # Missing policy means the existing signature contract, never an implicit downgrade.
+    trust = config.get('releaseTrust', 'signature')
+    if trust not in ('signature', 'github-https'):
+        raise UpdateError('configuration')
+    if trust == 'github-https':
+        if (config.get('repository') != PUBLIC_REPOSITORY or config.get('tokenFile') or config.get('publicKeyFile') or
+                (pathlib.Path('/etc/yachad/release-signing.pub').exists() or pathlib.Path('/etc/yachad/release-signing.pub').is_symlink()) or
+                (status and status.get('releaseTrust', 'signature') != trust)):
+            raise UpdateError('configuration')
+    return trust
+
+
+def release_assets(config, status=None):
+    return ASSETS if release_policy(config, status) == 'signature' else (ASSETS[0], ASSETS[2])
+
+
 def verify_release(manifest_bytes, signature, archive, public_key, directory):
     if len(manifest_bytes) > 8192 or len(signature) != 64:
         raise UpdateError('signature')
@@ -122,18 +157,7 @@ def verify_release(manifest_bytes, signature, archive, public_key, directory):
                             '-rawin', '-in', str(m), '-sigfile', str(sig)], capture_output=True, timeout=15)
     if check.returncode:
         raise UpdateError('signature')
-    try:
-        manifest = json.loads(manifest_bytes)
-        version(manifest['version'])
-        if manifest.get('format') != 1 or manifest.get('databaseSchema') != 1 or manifest.get('archive') != ASSETS[2]:
-            raise UpdateError('incompatible')
-        if not isinstance(manifest.get('bytes'), int) or not 1 <= manifest['bytes'] <= 64 * 1024 * 1024:
-            raise UpdateError('archive')
-        if len(archive) != manifest['bytes'] or hashlib.sha256(archive).hexdigest() != manifest.get('sha256'):
-            raise UpdateError('archive')
-        return manifest
-    except (KeyError, ValueError, TypeError):
-        raise UpdateError('archive') from None
+    return verify_manifest(manifest_bytes, archive)
 
 
 def extract(archive, target):
@@ -211,6 +235,7 @@ class Worker:
     def save(self, **changes):
         following = dict(self.status)
         following.update(changes)
+        following.setdefault('releaseTrust', self.c.get('releaseTrust', 'signature') if not self.status else 'signature')
         following.update(enabled=self.c['enabled'], mode=self.c['mode'], operator=self.c['operator'], updatedAt=int(time.time() * 1000))
         pending = following.get('modeChangePending')
         if isinstance(pending, dict) and pending.get('previousMode') in ('auto', 'notify'):
@@ -413,18 +438,23 @@ class Worker:
             self.save(modeChangePending=request, lastModeRequest={'id':request['id'], 'mode':request['mode'], 'state':'pending', 'error':'configuration'})
 
     def release(self, token):
+        required = release_assets(self.c, self.status)
         repo = self.c['repository']
         if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo):
             raise UpdateError('configuration')
         raw = download(f'https://api.github.com/repos/{repo}/releases/latest', 1024 * 1024, token, 'application/vnd.github+json')
         try:
             release = json.loads(raw)
-            if release.get('draft') or release.get('prerelease'):
+            if release.get('draft') is not False or release.get('prerelease') is not False:
                 raise UpdateError('incompatible')
             version(release['tag_name'])
             assets = {x['name']: x for x in release['assets']}
-            if not all(name in assets for name in ASSETS):
+            if len(assets) != len(release['assets']) or not all(name in assets for name in required):
                 raise UpdateError('archive')
+            if self.c.get('releaseTrust') == 'github-https':
+                for name in required:
+                    if not re.fullmatch(r'https://api\.github\.com/repos/NehoraiHadad/yahad/releases/assets/[0-9]+', assets[name]['url']):
+                        raise UpdateError('network')
             return release, assets
         except (KeyError, ValueError, TypeError):
             raise UpdateError('network') from None
@@ -439,13 +469,19 @@ class Worker:
         destination = None
         activated = False
         try:
-            content = [download(assets[name]['url'], limit, token) for name, limit in zip(ASSETS, [8192, 64, 64 * 1024 * 1024])]
-            key = pathlib.Path(self.c['publicKeyFile'])
-            if not key.is_file() or key.is_symlink() or key.stat().st_uid != 0 or key.stat().st_mode & 0o022:
-                raise UpdateError('configuration')
-            manifest = verify_release(*content, key, work)
+            trust = release_policy(self.c, self.status)
+            required = release_assets(self.c, self.status)
+            limits = {ASSETS[0]:8192, ASSETS[1]:64, ASSETS[2]:64 * 1024 * 1024}
+            content = {name:download(assets[name]['url'], limits[name], token) for name in required}
+            if trust == 'signature':
+                key = pathlib.Path(self.c['publicKeyFile'])
+                if not key.is_file() or key.is_symlink() or key.stat().st_uid != 0 or key.stat().st_mode & 0o022:
+                    raise UpdateError('configuration')
+                manifest = verify_release(content[ASSETS[0]], content[ASSETS[1]], content[ASSETS[2]], key, work)
+            else:
+                manifest = verify_manifest(content[ASSETS[0]], content[ASSETS[2]])
             if version(manifest['version']) != version(release['tag_name']):
-                raise UpdateError('signature')
+                raise UpdateError('incompatible')
             if self.schema() != manifest['databaseSchema']:
                 raise UpdateError('incompatible')
             free = shutil.disk_usage(self.c['releasesDirectory']).free
@@ -453,7 +489,7 @@ class Worker:
             if free < self.c.get('minimumFreeMiB', 512) * 1048576 + data_bytes:
                 raise UpdateError('storage')
             archive = work / ASSETS[2]
-            archive.write_bytes(content[2])
+            archive.write_bytes(content[ASSETS[2]])
             source = work / 'source'
             source.mkdir(mode=0o700)
             extract(archive, source)
