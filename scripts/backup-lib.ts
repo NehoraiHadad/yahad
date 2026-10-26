@@ -3,6 +3,7 @@ import {
   openSync,
   writeSync,
   closeSync,
+  fsyncSync,
   readFileSync,
   statSync,
   readdirSync,
@@ -72,8 +73,14 @@ export async function createBackup(
     add('END\n');
     writeSync(fd, cipher.final());
     writeSync(fd, cipher.getAuthTag());
+    fsyncSync(fd);
     closeSync(fd);
     fd = undefined;
+    // Commit the backup directory entry before activation may begin.
+    if (process.platform !== 'win32') {
+      const directoryFd = openSync(outDir, 'r');
+      try { fsyncSync(directoryFd); } finally { closeSync(directoryFd); }
+    }
     // Seven daily copies at most and nothing older than seven days. Run backup daily.
     const copies = readdirSync(outDir)
       .filter((x) => /^yachad-\d+\.backup$/.test(x))

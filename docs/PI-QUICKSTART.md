@@ -1,5 +1,8 @@
 # התקנה ראשונה — Raspberry Pi 4, ARM64, Debian 13
 
+> 0.3.0: follow [the owner setup runbook](AUTOMATIC-UPDATES-SETUP.md) for current update/service integration. Install the root-owned kernel-lock helper before installing `deploy/yachad.service`. Prefer `scripts/setup.ts --web` for a fresh empty store. Preserve existing data, master keys and Caddy CA; do not rerun setup on a configured household.
+
+
 המסלול הזה תואם לפלט שהמשתמש שלח ב־26.10.2026: **Raspberry Pi 4 Model B Rev 1.4, כ־4GB RAM, aarch64/64bit, Debian13 Trixie, כ־21GB פנויים מתוך מחיצה של 29GB**. זוהי עדות מהטרמינל שלו; לא בוצעה כאן התחברות מרחוק למכשיר. עדיין אין מדידת ביצועים או התקנת האפליקציה על ה־Pi. במכשיר אחר מריצים קודם `bash scripts/inspect-host.sh` ומתאימים הוראות.
 
 הכול נשאר ברשת הביתית. מתחילים ב־mock. לא מפעילים WhatsApp אמיתי, לא משנים ראוטר ולא פותחים פורטים החוצה במסגרת ההתקנה הזו.
@@ -86,6 +89,8 @@ sudo nano /etc/yachad/yachad.env
 ```bash
 cd /opt/yachad/current
 sudo -u yachad env SETUP_WRITE_ENV=false DATA_DIR=/var/lib/yachad MASTER_KEY_FILE=/etc/yachad/master.key APP_ORIGIN=https://ACTUAL_PRIVATE_LAN_IP COOKIE_SECURE=true node --import tsx scripts/setup.ts
+sudo install -d -o root -g root -m 0755 /usr/local/lib/yachad-updater
+sudo install -o root -g root -m 0644 deploy/data-lock.py /usr/local/lib/yachad-updater/
 sudo install -o root -g root -m 0644 deploy/yachad.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now yachad

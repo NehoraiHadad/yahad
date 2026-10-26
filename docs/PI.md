@@ -1,5 +1,8 @@
 # הפעלה ביתית על Raspberry Pi
 
+> 0.3.0: [the owner setup runbook](AUTOMATIC-UPDATES-SETUP.md) supersedes the update/service integration below. Install root-owned `deploy/data-lock.py` at `/usr/local/lib/yachad-updater/data-lock.py` before using the new app service. Use the browser bootstrap only for a new empty store; retain existing live data/master-key configuration and Caddy CA.
+
+
 **סטטוס: תהליך פריסה מוכן, לא בוצע על ה־Pi של המשתמש. אין גישה למכשיר. המשתמש זיהה Raspberry Pi 4 Model B; הזיכרון, מערכת ההפעלה והארכיטקטורה טרם אומתו בפקודות על המכשיר.** אין להריץ שלבי התקנה בלי גישה ואישור. אין להבטיח קיבולת על סמך תוצאות שרת הפיתוח.
 
 ## 1. זיהוי לפני התקנה

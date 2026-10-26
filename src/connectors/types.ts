@@ -93,7 +93,7 @@ export interface ConnectorHooks {
 export interface Connector {
   readonly capabilities: Capabilities;
   start(): Promise<void>;
-  stop(logout?: boolean): Promise<void>;
+  stop(logout?: boolean): Promise<void | { remoteRevoked: boolean; unlinkRequested?: boolean }>;
   groups(): Promise<ChatGroup[]>;
   send(message: Outgoing): Promise<Incoming>;
   react(group: string, message: StoredMessage, emoji: string): Promise<void>;

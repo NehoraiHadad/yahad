@@ -8,7 +8,7 @@ import type { User } from './store.js';
 const statusSchema = z.object({
   enabled: z.boolean(), mode: z.enum(['notify', 'auto']),
   operator: z.object({ familyId: z.string().max(100), userId: z.string().max(100) }),
-  phase: z.enum(['idle','available','preparing','stopping','backing_up','activating','checking_health','healthy','rolled_back','failed','incompatible']),
+  phase: z.enum(['idle','available','preparing','stopping','backing_up','activating','checking_health','healthy','rolled_back','failed','incompatible','rolling_back','recovery_required','rollback_pending_health']),
   currentVersion: z.string().max(40).nullable(), latestVersion: z.string().max(40).nullable(),
   checkedAt: z.number().nullable(), updatedAt: z.number(),
   error: z.enum(['configuration','network','signature','archive','build','backup','health','rollback','storage','incompatible','internal']).nullable(),

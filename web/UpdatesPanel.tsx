@@ -3,7 +3,7 @@ import { Download, RefreshCw } from 'lucide-react';
 import { api } from './api';
 import type { updateStatus } from '../src/updates';
 type Status = Awaited<ReturnType<typeof updateStatus>>;
-const phases: Record<string,string> = { idle:'אין עדכון ממתין', available:'גרסה חדשה זמינה', preparing:'מכינים את הגרסה',
+const phases: Record<string,string> = { rolling_back:'משחזרים את הגרסה הקודמת', recovery_required:'נדרשת בדיקת בעל המכשיר — העדכונים נעצרו', rollback_pending_health:'הגרסה הקודמת הוחזרה; ממתינים לבדיקת תקינות', idle:'אין עדכון ממתין', available:'גרסה חדשה זמינה', preparing:'מכינים את הגרסה',
   stopping:'עוצרים את השירות לעדכון', backing_up:'יוצרים גיבוי מוצפן', activating:'מחליפים גרסה', checking_health:'בודקים שהשירות עלה',
   healthy:'הגרסה עלתה בהצלחה', rolled_back:'הגרסה הקודמת הוחזרה', failed:'העדכון לא הושלם', incompatible:'העדכון דורש התקנה מתוכננת' };
 export function UpdatesPanel() {

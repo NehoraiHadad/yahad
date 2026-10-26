@@ -1,0 +1,20 @@
+[Unit]
+Description=Recover interrupted Yachad activation before the application starts
+Before=yachad.service
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/yachad-updater/updater.py boot-recover
+RemainAfterExit=yes
+UMask=0077
+TimeoutStartSec=3min
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/yachad-updates /opt/yachad
+NoNewPrivileges=true
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

@@ -500,10 +500,23 @@ export class BaileysConnector implements Connector {
     const sock = this.sock;
     this.sock = undefined;
     this.cache.clear();
+    let unlinkRequested = false;
     if (sock) {
-      if (logout) await sock.logout().catch(() => {});
-      sock.end(undefined);
+      try {
+        if (logout) {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            unlinkRequested = await Promise.race([
+              sock.logout().then(() => true, () => false),
+              new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), 8000); }),
+            ]);
+          } finally { clearTimeout(timer); }
+        }
+      } finally { sock.end(undefined); }
     }
     this.hooks.state('idle');
+    // This Baileys version awaits sendNode, not a server acknowledgment. A
+    // resolved logout is only a sent request; the phone must verify revocation.
+    if (logout) return { remoteRevoked: false, unlinkRequested };
   }
 }

@@ -111,6 +111,132 @@ async function fixture() {
   };
 }
 
+test('repeated parent grant actions are idempotent and preserve selections hidden by group filtering', async () => {
+  const f = await fixture();
+  try {
+    const second = '120363002@g.us';
+    for (let i = 0; i < 2; i++) assert.equal((await f.req(f.parent, '/api/parent/grant', 'PUT', {
+      childId: f.a.childId, groupId: second, allowed: true })).statusCode, 200);
+    let overview = (await f.req(f.parent, '/api/parent/overview')).json();
+    assert.equal(overview.grants.filter((x: any) => x.user_id === f.a.childId && x.group_id === second).length, 1);
+    assert.ok(overview.grants.some((x: any) => x.user_id === f.a.childId && x.group_id === group));
+    for (let i = 0; i < 2; i++) assert.equal((await f.req(f.parent, '/api/parent/grant', 'PUT', {
+      childId: f.a.childId, groupId: second, allowed: false })).statusCode, 200);
+    overview = (await f.req(f.parent, '/api/parent/overview')).json();
+    assert.equal(overview.grants.filter((x: any) => x.group_id === second).length, 0);
+    assert.ok(overview.grants.some((x: any) => x.user_id === f.a.childId && x.group_id === group));
+    assert.equal((await f.req(f.child, '/api/parent/grant', 'PUT', {
+      childId: f.a.childId, groupId: second, allowed: true })).statusCode, 403);
+  } finally { await f.close(); }
+});
+
+test('intentional disconnect commits local revocation before provider wait, retains chats, blocks stale hooks and reboot reconnect', async () => {
+  const f = await fixture();
+  let finish!: () => void;
+  try {
+    await f.ingest(f.a.familyId, 'retained-disconnect-message', 'retained text');
+    f.store.authSet(f.a.familyId, 'fixture', 'encrypted-local-auth');
+    const c = f.service.connector(f.a.familyId), hooks = (c as QuietMock).hooks;
+    hooks.state('qr', 'STALE_SYNTHETIC_QR');
+    assert.equal((await f.req(f.child, '/api/parent/disconnect', 'POST', { erase: false })).statusCode, 403);
+    assert.equal((await f.req(f.parent, '/api/parent/disconnect', 'POST', { erase: false }, { 'x-csrf-token': 'wrong' })).statusCode, 403);
+    let started!: () => void;
+    const waiting = new Promise<void>(resolve => { started = resolve; });
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    c.stop = async logout => { assert.equal(logout, true); started(); await gate; return { remoteRevoked: false }; };
+    const request = f.req(f.parent, '/api/parent/disconnect', 'POST', { erase: false });
+    await waiting;
+    assert.equal(f.store.one('SELECT linked FROM families WHERE id=?', f.a.familyId).linked, 0);
+    assert.equal(f.store.authGet(f.a.familyId, 'fixture'), undefined);
+    assert.deepEqual(f.service.states.get(f.a.familyId), { state: 'idle' });
+    hooks.state('connected'); hooks.authSet('late', 'must-not-return');
+    assert.equal(f.store.authGet(f.a.familyId, 'late'), undefined);
+    assert.equal((await f.req(f.parent, '/api/parent/connect', 'POST')).statusCode, 409);
+    const { ChatService } = await import('../src/service.js');
+    const restarted = new ChatService(f.store, h => new QuietMock(h));
+    await restarted.boot(); assert.equal(restarted.connectors.has(f.a.familyId), false); await restarted.close();
+    finish();
+    const result = await request;
+    assert.equal(result.statusCode, 200);
+    assert.equal(result.json().history, 'retained'); assert.equal(result.json().remoteRevoked, false);
+    assert.ok(f.store.getMessage(f.a.familyId, group, 'retained-disconnect-message'));
+    assert.ok(f.store.allowed(f.ca, group));
+    assert.equal((await f.req(f.parent, '/api/parent/qr')).json().qr, null);
+    assert.equal((await f.req(f.parent, '/api/parent/disconnect', 'POST', { erase: false })).statusCode, 200);
+    assert.equal((await f.req(f.parent, '/api/parent/connect', 'POST')).statusCode, 200);
+    assert.equal(f.service.states.get(f.a.familyId)?.state, 'connected');
+    assert.equal((await f.req(f.parent, '/api/parent/overview')).json().disconnect, null);
+  } finally { finish?.(); await f.close(); }
+});
+
+test('in-flight provider media cannot persist after a retaining disconnect', async () => {
+  const f = await fixture(); let release!: (bytes: Buffer) => void;
+  try {
+    const hooks = (f.service.connector(f.a.familyId) as QuietMock).hooks;
+    let started!: () => void;
+    const waiting = new Promise<void>(resolve => { started = resolve; });
+    const gate = new Promise<Buffer>(resolve => { release = resolve; });
+    const pending = hooks.incoming({ id: 'late-provider-media', groupId: group, sender: 'Synthetic', fromMe: false,
+      time: Date.now(), kind: 'image', text: 'late fixture', download: () => { started(); return gate; } });
+    await waiting;
+    assert.equal((await f.req(f.parent, '/api/parent/disconnect', 'POST', { erase: false })).statusCode, 200);
+    release(Buffer.from([137,80,78,71,13,10,26,10])); await pending;
+    assert.equal(f.store.getMessage(f.a.familyId, group, 'late-provider-media'), undefined);
+    assert.equal(f.store.one('SELECT count(*) AS n FROM media WHERE family_id=? AND message_id=?', f.a.familyId, 'late-provider-media').n, 0);
+    assert.ok(f.store.allowed(f.ca, group));
+  } finally { release?.(Buffer.alloc(0)); await f.close(); }
+});
+
+test('separately requested history deletion completes locally before unlink network wait and reports its outcome', async () => {
+  const f = await fixture(); let finish!: () => void;
+  try {
+    await f.ingest(f.a.familyId, 'delete-only-when-requested', 'synthetic');
+    const c = f.service.connector(f.a.familyId);
+    let started!: () => void;
+    const waiting = new Promise<void>(resolve => { started = resolve; });
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    c.stop = async () => { started(); await gate; return { remoteRevoked: true }; };
+    const pending = f.req(f.parent, '/api/parent/disconnect', 'POST', { erase: true });
+    await waiting;
+    assert.equal(f.store.getMessage(f.a.familyId, group, 'delete-only-when-requested'), undefined);
+    assert.equal((await f.req(f.parent, '/api/parent/overview')).json().disconnectHistory, 'deleted');
+    finish(); assert.equal((await pending).json().history, 'deleted');
+    assert.equal((await f.req(f.parent, '/api/parent/disconnect', 'POST', { erase: true })).json().history, 'deleted');
+  } finally { finish?.(); await f.close(); }
+});
+
+test('a group refresh finishing after retaining disconnect cannot revoke grants or history', async () => {
+  const f = await fixture(); let finish!: (groups: any[]) => void;
+  try {
+    await f.ingest(f.a.familyId, 'preserved-refresh-message', 'synthetic');
+    const c = f.service.connector(f.a.familyId);
+    let started!: () => void;
+    const waiting = new Promise<void>(resolve => { started = resolve; });
+    const gate = new Promise<any[]>(resolve => { finish = resolve; });
+    c.groups = () => { started(); return gate; };
+    const pending = f.req(f.parent, '/api/parent/sync-groups', 'POST');
+    await waiting;
+    assert.equal((await f.req(f.parent, '/api/parent/disconnect', 'POST', { erase: false })).statusCode, 200);
+    finish([]); assert.equal((await pending).statusCode, 200);
+    assert.ok(f.store.allowed(f.ca, group));
+    assert.ok(f.store.getMessage(f.a.familyId, group, 'preserved-refresh-message'));
+    assert.ok(f.store.groups(f.a.familyId).some(g => g.id === group));
+  } finally { finish?.([]); await f.close(); }
+});
+
+test('persisted incomplete deletion blocks reconnect until explicit deletion is completed', async () => {
+  const f = await fixture();
+  try {
+    await f.req(f.parent, '/api/parent/disconnect', 'POST', { erase: false });
+    f.store.run('INSERT OR REPLACE INTO instance_metadata VALUES(?,?)', 'disconnect-history:' + f.a.familyId, 'deleting');
+    const response = await f.req(f.parent, '/api/parent/connect', 'POST');
+    assert.equal(response.statusCode, 409); assert.equal(response.json().error, 'DELETION_INCOMPLETE');
+    assert.equal((await f.req(f.parent, '/api/parent/overview')).json().disconnectHistory, 'deleting');
+    assert.equal((await f.req(f.parent, '/api/parent/disconnect', 'POST', { erase: true })).statusCode, 200);
+    assert.equal((await f.req(f.parent, '/api/parent/connect', 'POST')).statusCode, 200);
+  } finally { await f.close(); }
+});
+
 test('authentication, separate roles, secure headers and CSRF', async () => {
   const f = await fixture();
   try {
@@ -227,7 +353,8 @@ test('family isolation with identical group/message/media IDs, all direct action
       (
         await f.req(f.parent, '/api/parent/child-password', 'POST', {
           childId: f.b.childId,
-          password: randomBytes(24).toString('hex'),
+          password: 'new-passphrase-for-child',
+          confirmation: 'new-passphrase-for-child',
         })
       ).statusCode,
       404,

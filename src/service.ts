@@ -27,6 +27,8 @@ export class ChatService {
   connectors = new Map<string, Connector>();
   states = new Map<string, { state: ConnectionState; qr?: string }>();
   listeners = new Set<(family: string, group: string | undefined, type: string) => void>();
+  private connectionOps = new Set<string>();
+  private generations = new Map<string, number>();
   constructor(
     readonly store: Store,
     readonly factory?: (h: ConnectorHooks) => Connector,
@@ -50,6 +52,13 @@ export class ChatService {
     return c;
   }
   async connect(f: string) {
+    if (this.connectionOps.has(f)) throw new AppError(409, 'CONNECTION_BUSY');
+    this.connectionOps.add(f);
+    try { await this.connectFamily(f); } finally { this.connectionOps.delete(f); }
+  }
+  private async connectFamily(f: string) {
+    if (this.store.one('SELECT value FROM instance_metadata WHERE key=?', 'disconnect-history:' + f)?.value === 'deleting')
+      throw new AppError(409, 'DELETION_INCOMPLETE');
     const resetAuth = this.states.get(f)?.state === 'needs_pairing';
     if (this.connectors.has(f)) {
       const state = this.states.get(f)?.state;
@@ -58,11 +67,17 @@ export class ChatService {
         this.connectors.delete(f);
       } else return;
     }
+    const generation = (this.generations.get(f) || 0) + 1;
+    this.generations.set(f, generation);
+    const active = () => this.generations.get(f) === generation;
+    this.store.run('DELETE FROM instance_metadata WHERE key=?', 'disconnect:' + f);
+    this.store.run('DELETE FROM instance_metadata WHERE key=?', 'disconnect-history:' + f);
     const hooks: ConnectorHooks = {
       maxMedia: this.store.config.maxMedia,
-      allowed: (g) => this.store.retained(f, g),
-      incoming: (m) => this.ingest(f, m),
+      allowed: (g) => active() && this.store.retained(f, g),
+      incoming: (m) => active() ? this.ingest(f, m, active) : Promise.resolve(),
       state: (state, qr) => {
+        if (!active()) return;
         this.states.set(f, { state, qr });
         this.store.run(
           'INSERT INTO family_connections VALUES(?,?,?) ON CONFLICT(family_id) DO UPDATE SET state=excluded.state,changed=excluded.changed',
@@ -78,17 +93,18 @@ export class ChatService {
         }
         this.notify(f, undefined, 'connection');
       },
-      update: (g, id, patch) => this.update(f, g, id, patch),
+      update: (g, id, patch) => { if (active()) this.update(f, g, id, patch); },
       typing: (g, active) => {
-        if (this.store.retained(f, g)) this.notify(f, g, active ? 'typing' : 'paused');
+        if (this.generations.get(f) === generation && this.store.retained(f, g)) this.notify(f, g, active ? 'typing' : 'paused');
       },
-      authGet: (key) => this.store.authGet(f, key),
-      authSet: (key, v) => this.store.authSet(f, key, v),
+      authGet: (key) => active() ? this.store.authGet(f, key) : undefined,
+      authSet: (key, v) => { if (active()) this.store.authSet(f, key, v); },
       authBatch: (data) =>
         this.store.tx(() => {
+          if (!active()) return;
           for (const [k, v] of Object.entries(data)) this.store.authSet(f, k, v);
         }, f),
-      getMessage: (g, id) => this.store.getMessage(f, g, id),
+      getMessage: (g, id) => active() ? this.store.getMessage(f, g, id) : undefined,
     };
     if (resetAuth) {
       this.store.run('DELETE FROM auth WHERE family_id=?', f);
@@ -110,7 +126,10 @@ export class ChatService {
     }
   }
   async syncGroups(f: string) {
-    const groups = await this.connector(f).groups();
+    const connector = this.connector(f), generation = this.generations.get(f);
+    const groups = await connector.groups();
+    // A refresh that finishes after unlink must not revoke retained groups.
+    if (this.connectors.get(f) !== connector || this.generations.get(f) !== generation) return;
     this.store.syncGroups(f, groups);
     const ids = new Set(groups.map((g) => g.id));
     for (const g of this.store.groups(f))
@@ -129,11 +148,11 @@ export class ChatService {
   async grant(f: string, u: string, g: string, on: boolean) {
     this.store.grant(f, u, g, on);
     this.notify(f, g, 'revoked');
-    if (on) await this.connector(f).approved?.(g);
+    if (on) await this.connectors.get(f)?.approved?.(g);
   }
-  async ingest(f: string, input: Incoming) {
+  async ingest(f: string, input: Incoming, active: () => boolean = () => true) {
     const g = input.groupId;
-    if (!this.store.retained(f, g)) return;
+    if (!active() || !this.store.retained(f, g)) return;
     if (input.reaction) {
       const target = this.store.getMessage(f, g, input.reaction.target);
       if (!target || target.deleted) return;
@@ -170,7 +189,7 @@ export class ChatService {
         /* Metadata remains, unavailable media is honest. */
       }
     }
-    if (!this.store.retained(f, g) || this.store.groupKey(f, g).toString('hex') !== key) return;
+    if (!active() || !this.store.retained(f, g) || this.store.groupKey(f, g).toString('hex') !== key) return;
     const m: StoredMessage = {
       id: input.id,
       groupId: g,
@@ -206,8 +225,9 @@ export class ChatService {
       const mediaId = randomUUID();
       try {
         const { fileTypeFromBuffer } = await import('file-type');
+        if (!active()) return;
         const type = await fileTypeFromBuffer(bytes);
-        if (!this.store.retained(f, g) || this.store.groupKey(f, g).toString('hex') !== key) return;
+        if (!active() || !this.store.retained(f, g) || this.store.groupKey(f, g).toString('hex') !== key) return;
         const safe = [
           'image/jpeg',
           'image/png',
@@ -291,14 +311,44 @@ export class ChatService {
     };
   }
   async disconnect(f: string, erase: boolean) {
+    if (this.connectionOps.has(f)) throw new AppError(409, 'CONNECTION_BUSY');
+    this.connectionOps.add(f);
+    try {
     const c = this.connectors.get(f);
-    await c?.stop(true);
+    const previousResult = this.store.one('SELECT value FROM instance_metadata WHERE key=?', 'disconnect:' + f)?.value;
+    const eraseLocal = () => {
+      this.store.run('INSERT OR REPLACE INTO instance_metadata VALUES(?,?)', 'disconnect-history:' + f, 'deleting');
+      this.store.eraseChats(f);
+      this.store.run('INSERT OR REPLACE INTO instance_metadata VALUES(?,?)', 'disconnect-history:' + f, 'deleted');
+    };
+    if (!c && !this.store.one('SELECT linked FROM families WHERE id=?', f)?.linked && previousResult) {
+      if (erase) { eraseLocal(); this.notify(f, undefined, 'reset'); }
+      return { remoteRevoked: previousResult === 'confirmed', history: erase ? 'deleted' as const : 'retained' as const };
+    }
+    this.generations.set(f, (this.generations.get(f) || 0) + 1);
     this.connectors.delete(f);
-    this.store.run('DELETE FROM auth WHERE family_id=?', f);
-    this.store.run('UPDATE families SET linked=0 WHERE id=?', f);
-    if (erase) this.store.eraseChats(f);
+    // Commit local revocation before waiting for the network: a crash/reboot
+    // must never auto-reconnect an intentionally disconnected family.
+    this.store.tx(() => {
+      this.store.run('DELETE FROM auth WHERE family_id=?', f);
+      this.store.run('UPDATE families SET linked=0 WHERE id=?', f);
+      this.store.run('INSERT INTO family_connections VALUES(?,?,?) ON CONFLICT(family_id) DO UPDATE SET state=excluded.state,changed=excluded.changed', f, 'idle', Date.now());
+      this.store.run('INSERT OR REPLACE INTO instance_metadata VALUES(?,?)', 'disconnect:' + f, 'unconfirmed');
+      this.store.run('INSERT OR REPLACE INTO instance_metadata VALUES(?,?)', 'disconnect-history:' + f, erase ? 'deleting' : 'retained');
+    });
     this.states.set(f, { state: 'idle' });
     this.notify(f, undefined, 'reset');
+    let remoteRevoked = false;
+    // Start stopping the socket immediately, but complete explicit local deletion
+    // before waiting on remote logout. Interrupted deletion stays visibly pending.
+    const stopped = Promise.resolve(c?.stop(true)).catch(() => undefined);
+    if (erase) eraseLocal();
+    remoteRevoked = (await stopped)?.remoteRevoked === true;
+    this.store.run('INSERT OR REPLACE INTO instance_metadata VALUES(?,?)', 'disconnect:' + f,
+      this.store.config.connector === 'mock' ? 'mock' : remoteRevoked ? 'confirmed' : 'unconfirmed');
+    this.notify(f, undefined, 'connection');
+    return { remoteRevoked, history: erase ? 'deleted' as const : 'retained' as const };
+    } finally { this.connectionOps.delete(f); }
   }
   async close() {
     for (const [family, connector] of this.connectors) {
