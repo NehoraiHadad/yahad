@@ -1,6 +1,6 @@
 # התקנה ראשונה — Raspberry Pi 4, ARM64, Debian 13
 
-> 0.3.0: follow [the owner setup runbook](AUTOMATIC-UPDATES-SETUP.md) for current update/service integration. Install the root-owned kernel-lock helper before installing `deploy/yachad.service`. Prefer `scripts/setup.ts --web` for a fresh empty store. Preserve existing data, master keys and Caddy CA; do not rerun setup on a configured household.
+> 0.3.1: follow [the owner setup runbook](AUTOMATIC-UPDATES-SETUP.md) for current update/service integration. Install the root-owned kernel-lock helper before installing `deploy/yachad.service`. Prefer `scripts/setup.ts --web` for a fresh empty store. Preserve existing data, master keys and Caddy CA; do not rerun setup on a configured household.
 
 
 המסלול הזה תואם לפלט שהמשתמש שלח ב־26.10.2026: **Raspberry Pi 4 Model B Rev 1.4, כ־4GB RAM, aarch64/64bit, Debian13 Trixie, כ־21GB פנויים מתוך מחיצה של 29GB**. זוהי עדות מהטרמינל שלו; לא בוצעה כאן התחברות מרחוק למכשיר. עדיין אין מדידת ביצועים או התקנת האפליקציה על ה־Pi. במכשיר אחר מריצים קודם `bash scripts/inspect-host.sh` ומתאימים הוראות.

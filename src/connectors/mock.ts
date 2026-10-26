@@ -170,5 +170,5 @@ export class MockConnector implements Connector {
   }
   async presence() {}
   async read() {}
-  async history() {}
+  async history(_group: string, _oldest: StoredMessage): Promise<string | void> {}
 }

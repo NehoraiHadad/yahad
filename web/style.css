@@ -2503,3 +2503,6 @@ a {
 .disconnect-panel p { font-size: 13px; line-height: 1.8; margin-bottom: 12px; }
 .disconnect-panel .outline-button { min-height: 44px; }
 .disconnect-warning { background: #fff3d8; color: #63542a; border-radius: 10px; padding: 12px; }
+.history-status { margin: 12px auto; padding: 12px 16px; max-width: 620px; background: #f5f7ef; border-radius: 12px; color: #425e51; font-size: 12px; line-height: 1.7; }
+.history-status p { margin: 5px 0; }
+.history-status button { min-height: 44px; }

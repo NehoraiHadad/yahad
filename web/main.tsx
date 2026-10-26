@@ -1,3 +1,4 @@
+import { HistoryPanel } from './HistoryPanel';
 import { DisconnectPanel } from './DisconnectPanel';
 import { GroupPicker } from './GroupPicker';
 import { FamilySetup, passphraseHelp } from './FamilySetup';
@@ -754,20 +755,7 @@ function Chat({
                   הודעות קודמות
                 </button>
               )}
-              {!cursor && c.historyRequest && messages.length > 0 && (
-                <button
-                  className="older-button"
-                  onClick={() =>
-                    void action(() =>
-                      api('/groups/' + encodeURIComponent(current.id) + '/history', 'POST', {
-                        oldestId: messages[0].id,
-                      }),
-                    )
-                  }
-                >
-                  בקשת היסטוריה מ־WhatsApp
-                </button>
-              )}
+              {results === null && <HistoryPanel key={current.id} groupId={current.id} />}
               <div className="day-marker">
                 {results !== null ? `תוצאות חיפוש · ${results.length}` : 'השיחה שלנו'}
               </div>

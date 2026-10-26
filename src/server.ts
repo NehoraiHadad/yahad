@@ -606,15 +606,18 @@ export async function createApp(
     await service.connector(s.user.familyId).read(g, messages);
     return { ok: true };
   });
+  app.get<{ Params: { g: string } }>('/api/groups/:g/history', async req => {
+    group(req.session,req.params.g);
+    return service.historyStatus(req.session.user.familyId,req.params.g);
+  });
   app.post<{ Params: { g: string } }>('/api/groups/:g/history', async (req) => {
     const s = req.session,
       g = req.params.g;
     group(s, g);
-    capable(s, 'historyRequest');
-    const { oldestId } = z.object({ oldestId: z.string().max(180) }).parse(req.body);
-    const m = getMessage(s, g, oldestId);
-    await service.connector(s.user.familyId).history(g, m);
-    return { ok: true, history: 'partial' };
+    z.object({}).strict().parse(req.body || {});
+    const status=await service.requestHistory(s.user.familyId,g);
+    current(s,g);
+    return status;
   });
   app.get('/health/ready', async (_req, reply) => {
     try {

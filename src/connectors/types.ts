@@ -21,6 +21,8 @@ export interface ChatGroup {
   title: string;
 }
 export interface Incoming {
+  guard?: () => boolean;
+  history?: { requestId?: string };
   id: string;
   groupId: string;
   sender: string;
@@ -79,6 +81,9 @@ export type ConnectionState =
   | 'needs_pairing'
   | 'conflict';
 export interface ConnectorHooks {
+  historyEmpty?: (requestId: string) => void;
+  retentionToken?: (group: string) => string | undefined;
+  history?: (notice: HistoryNotice) => void;
   allowed: (group: string) => boolean;
   incoming: (message: Incoming) => Promise<void>;
   state: (state: ConnectionState, qr?: string) => void;
@@ -101,6 +106,19 @@ export interface Connector {
   delete(group: string, message: StoredMessage): Promise<void>;
   presence(group: string, active: boolean): Promise<void>;
   read(group: string, messages: StoredMessage[]): Promise<void>;
-  history(group: string, oldest: StoredMessage): Promise<void>;
+  history(group: string, oldest: StoredMessage): Promise<string | void>;
+  historyAnchor?(group: string, message: StoredMessage): boolean;
   approved?(group: string): Promise<void>;
+}
+export interface HistoryNotice {
+  batchId?: string;
+  admitted?: number;
+  finished?: boolean;
+  final?: boolean;
+  groupId: string;
+  phase: 'start' | 'end' | 'overload' | 'error';
+  received: number;
+  processed: number;
+  history: boolean;
+  requestId?: string;
 }

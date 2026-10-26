@@ -1,0 +1,125 @@
+debconf: delaying package configuration, since apt-utils is not installed
+
+added 196 packages in 21s
+npm notice
+npm notice New major version of npm available! 11.19.1 -> 12.2.1
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.1
+npm notice To update run: npm install -g npm@12.2.1
+npm notice
+
+> yachad-family-chat@0.3.1 typecheck
+> tsc --noEmit
+
+
+> yachad-family-chat@0.3.1 test
+> node --import tsx --test --test-concurrency=1 tests/*.test.ts
+
+Γ£ö real adapter normalizes supported types and strips untrusted embedded previews/quotes from raw (3.228988ms)
+Γ£ö encrypted auth store restores Buffer credentials, Signal keys, null deletes and app-state proto (34.624771ms)
+Γ£ö real adapter lifecycle with injected socket: QR, restart reconnect, logout, no network (568.592547ms)
+Γ£ö provider unlink reports request transmission only, closes socket, ignores stale QR and never reconnects (664.033959ms)
+Γ£ö provider unlink timeout still stops locally and reports remote revocation unconfirmed (56.334577ms)
+Γ£ö authenticated encrypted backup + restore of SQLite, encrypted media and WA auth; tamper/wrong password/retention/lock (2747.500188ms)
+Γ£ö untrusted media URLs and paths cannot make server-side requests (2.690331ms)
+Γ£ö third-party console payloads never reach production logging (339.478404ms)
+Γ£ö real adapter maps actual media bytes, captions, Opus duration and thumbnail in memory (stub transport) (539.474462ms)
+Γ£ö documented setup CLI creates real separate accounts and a protected random key without printing passwords (2766.826034ms)
+Γ£ö diagnostics isolate families, sanitize failures, retain bounded encrypted history across restart (43.000858ms)
+Γ£ö diagnostics survive persistence failure, reset cannot be resurrected by in-flight flush, opt-out writes nothing (13.295735ms)
+Γ£ö parent-only diagnostics/export/reset and operator-only update queue enforce sessions, family isolation and CSRF (1116.817134ms)
+Γ£ö group search preserves stable IDs, duplicates and granted state through filter and clear (51.25269ms)
+Γ£ö approval after connect stays honestly unavailable without an anchor; requests cannot target other groups or supply anchors (664.19317ms)
+Γ£ö server chooses the oldest usable original outgoing/received anchor, skipping malformed/deleted/unsupported/pending rows (542.611235ms)
+Γ£ö identical group IDs remain isolated between families and bounded anchor scans report their limit (1083.112994ms)
+Γ£ö submitted request is distinct from stored history; duplicates and unmatched events do not invent restoration (410.975616ms)
+Γ£ö response before request ID resolution correlates only when the exact supported field matches (408.430034ms)
+Γ£ö exact-ID empty responses are zero-stored partial replies, including early responses; unmatched empties are not replies (418.824197ms)
+Γ£ö history failures and response/submission timeouts remain partial and retry is bounded (422.204492ms)
+Γ£ö revoking permission while history submission waits prevents status/count disclosure (456.925961ms)
+Γ£ö real adapter scheduling processes all 600 authorized history entries and explicitly reports oversized batches (262.654078ms)
+Γ£ö queue filters unapproved groups before normalization and invalidates old permissions after revoke/regrant (20.671517ms)
+Γ£ö anchor validation never invents keys and provider return value remains only a request ID (21.436452ms)
+Γ£ö byte limits and synchronous consumer errors are reported without storing payloads (1.94822ms)
+Γ£ö stalled consumers report failure, invalidate their work and hold bounded capacity until unwound (14.095797ms)
+Γ£ö 257 simultaneously receiving groups degrade to overload without throwing and expired slots are reclaimed (397.160066ms)
+Γ£ö admitted processing cannot time out or enable a duplicate request while its batch is draining (386.591507ms)
+Γ£ö reconnecting disposes old queued buffers and shares a bound on unresolved consumers across generations (119.495078ms)
+Γ£ö disposing active ingestion retires processing markers and reconnect clears obsolete status (415.780451ms)
+Γ£ö underlying request slots belong to the connector and late old completions cannot free new slots (532.901598ms)
+Γ£ö a replacement connector shares the family ingestion bound while a disposed transport is still hung (55.418714ms)
+Γ£ö history requests share a family rate bound even across different groups and empty replies (943.778095ms)
+Γ£ö first-run requires local capability, same origin, confirmation, and single empty-store claim (470.981981ms)
+Γ£ö normal startup and expired bootstrap cannot claim an empty database (258.152117ms)
+Γ£ö child creation is parent-only, CSRF protected, unique, and grants no groups (422.818349ms)
+Γ£ö own and child password confirmation reject mismatch and reset revokes sessions (470.878392ms)
+Γ£ö prompt preserves buffered Unicode lines and never echoes supplied secrets (432.90322ms)
+Γ£ö terminal multiline paste never echoes later secret lines before their prompt (14.590872ms)
+Γ£ö repeated parent grant actions are idempotent and preserve selections hidden by group filtering (797.526182ms)
+Γ£ö intentional disconnect commits local revocation before provider wait, retains chats, blocks stale hooks and reboot reconnect (560.258213ms)
+Γ£ö in-flight provider media cannot persist after a retaining disconnect (412.524278ms)
+Γ£ö separately requested history deletion completes locally before unlink network wait and reports its outcome (613.583176ms)
+Γ£ö a group refresh finishing after retaining disconnect cannot revoke grants or history (721.263191ms)
+Γ£ö persisted incomplete deletion blocks reconnect until explicit deletion is completed (568.609707ms)
+Γ£ö authentication, separate roles, secure headers and CSRF (642.098015ms)
+Γ£ö login uses salted passwords, expiring HttpOnly sessions and throttles (865.175183ms)
+Γ£ö family isolation with identical group/message/media IDs, all direct actions scoped (474.925477ms)
+Γ£ö filter BEFORE media download and storage; external quote content removed (409.431738ms)
+Γ£ö send, idempotency, scoped replies, real media bytes, edit, delete and reactions (610.546364ms)
+Γ£ö multipart upload is sniffed, authorized, bounded, converted voice and persists media (784.17136ms)
+Γ£ö revocation removes messages, media and active key; in-flight download cannot resurrect (478.620998ms)
+Γ£ö one child revocation preserves another child grant within the same family (450.971992ms)
+Γ£ö pagination stable on identical timestamps, search and cross-group reply protections (1088.133791ms)
+Γ£ö SSE reauthorizes per family/group and closes on session revocation (425.48193ms)
+Γ£ö ciphertext storage survives restart, auth is encrypted and disconnect purge scoped (491.096651ms)
+Γ£ö parent-controlled sender signature is enforced on server, isolated, and retained on edits (541.388925ms)
+Γ£ö terminal pairing state survives service restart, clears invalid auth and stops auto boot (459.170966ms)
+Γ£ö missing connector receipts stay unknown and an out-of-order pending echo cannot regress read (480.886837ms)
+Γä╣ tests 60
+Γä╣ suites 0
+Γä╣ pass 60
+Γä╣ fail 0
+Γä╣ cancelled 0
+Γä╣ skipped 0
+Γä╣ todo 0
+Γä╣ duration_ms 42001.977513
+test_kernel_lock_prevents_concurrent_process_and_releases_after_crash (test_data_lock.DataLockTests.test_kernel_lock_prevents_concurrent_process_and_releases_after_crash) ... ok
+test_node_service_retains_the_inherited_kernel_lock (test_data_lock.DataLockTests.test_node_service_retains_the_inherited_kernel_lock) ... ok
+test_symlink_guard_is_refused (test_data_lock.DataLockTests.test_symlink_guard_is_refused) ... ok
+test_export_is_unprivileged_and_contains_only_regular_dependencies (test_exporter.ExportTests.test_export_is_unprivileged_and_contains_only_regular_dependencies) ... ok
+test_parent_only_reset_revokes_sessions_and_preserves_other_data (test_recovery.RecoveryTests.test_parent_only_reset_revokes_sessions_and_preserves_other_data) ... ok
+test_another_worker_cannot_acquire_the_same_lock (test_updater.UpdaterTests.test_another_worker_cannot_acquire_the_same_lock) ... ok
+test_backup_failure_never_activates_new_code (test_updater.UpdaterTests.test_backup_failure_never_activates_new_code) ... ok
+test_failed_health_restores_previous_code (test_updater.UpdaterTests.test_failed_health_restores_previous_code) ... ok
+test_interrupted_maintenance_recovers (test_updater.UpdaterTests.test_interrupted_maintenance_recovers) ... ok
+test_request_authentication_and_url_policy (test_updater.UpdaterTests.test_request_authentication_and_url_policy) ... ok
+test_signatures_hash_and_unsafe_archives (test_updater.UpdaterTests.test_signatures_hash_and_unsafe_archives) ... ok
+test_success_backup_precedes_activation (test_updater.UpdaterTests.test_success_backup_precedes_activation) ... ok
+test_boot_switches_without_service_commands_and_defers_health (test_updater_logic.LogicTests.test_boot_switches_without_service_commands_and_defers_health) ... ok
+test_crash_at_each_maintenance_phase_can_recover (test_updater_logic.LogicTests.test_crash_at_each_maintenance_phase_can_recover) ... ok
+test_dependency_stream_cannot_replace_signed_source_or_escape (test_updater_logic.LogicTests.test_dependency_stream_cannot_replace_signed_source_or_escape) ... ok
+test_failed_rollback_health_blocks_even_disabled_updates (test_updater_logic.LogicTests.test_failed_rollback_health_blocks_even_disabled_updates) ... ok
+test_idle_recovery_has_no_side_effects (test_updater_logic.LogicTests.test_idle_recovery_has_no_side_effects) ... ok
+test_recovery_orders_stop_schema_switch_start_and_version_health (test_updater_logic.LogicTests.test_recovery_orders_stop_schema_switch_start_and_version_health) ... ok
+test_schema_change_stops_and_requires_owner_never_downgrades_database (test_updater_logic.LogicTests.test_schema_change_stops_and_requires_owner_never_downgrades_database) ... ok
+test_wrong_previous_version_is_never_started (test_updater_logic.LogicTests.test_wrong_previous_version_is_never_started) ... ok
+
+----------------------------------------------------------------------
+Ran 20 tests in 2.851s
+
+OK
+
+> yachad-family-chat@0.3.1 build
+> vite build
+
+vite v7.3.7 building client environment for production...
+transforming...
+Γ£ô 1585 modules transformed.
+rendering chunks...
+computing gzip size...
+../dist/index.html                   0.61 kB Γöé gzip:  0.38 kB
+../dist/assets/index-DcmN7pK8.css   36.97 kB Γöé gzip:  8.75 kB
+../dist/assets/index-CzmGmTWU.js   272.58 kB Γöé gzip: 86.35 kB
+Γ£ô built in 4.40s
+
+removed 22 packages in 879ms
+SMOKE_OK

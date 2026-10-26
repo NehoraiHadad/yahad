@@ -1,4 +1,6 @@
-# One-time owner setup for signed automatic updates (0.3.0)
+# One-time owner setup for signed automatic updates (0.3.1)
+
+Read [HISTORY.md](HISTORY.md) for the 0.3.1 history limits and real-account acceptance gate before rollout.
 
 This is an **owner-operated runbook**, not a record of work already done on the Pi.
 The development session did not connect to the Pi, deploy, enable a timer or
@@ -69,10 +71,10 @@ For every approved stable release, from the reviewed clean checkout:
 
 ```bash
 npm run typecheck && npm test && npm run build
-node scripts/release.mjs package /PRIVATE_OUTPUT/v0.3.0 /PRIVATE_PATH/release-signing.pem
+node scripts/release.mjs package /PRIVATE_OUTPUT/v0.3.1 /PRIVATE_PATH/release-signing.pem
 ```
 
-After owner approval, publish tag `v0.3.0` and a non-draft, non-prerelease GitHub
+After owner approval, publish tag `v0.3.1` and a non-draft, non-prerelease GitHub
 Release in `NehoraiHadad/yahad` with exactly these three matching assets:
 `yachad-release.json`, `yachad-release.sig`, `yachad-app.zip`. All future releases
 need a higher stable package version and a matching tag and manifest. Packaging is
