@@ -7,6 +7,7 @@ import makeWASocket, {
   DisconnectReason,
   normalizeMessageContent,
   downloadMediaMessage,
+  downloadContentFromMessage,
   generateMessageIDV2,
   getAudioDuration,
   type WASocket,
@@ -157,7 +158,9 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
       raw: undefined,
     };
   let body: any;
-  if (content.conversation !== undefined) {
+  if (content.lottieStickerMessage || content.stickerMessage?.isLottie)
+    return {...base, text:'מדבקה בפורמט שאינו נתמך כאן — אפשר לפתוח אותה ב־WhatsApp.',raw:undefined};
+  if (typeof content.conversation === 'string') {
     base.kind = 'text';
     base.text = content.conversation || '';
   } else if (content.extendedTextMessage) {
@@ -222,6 +225,16 @@ export function validateMediaSource(raw: WAMessage) {
   )
     throw new Error('Invalid media path');
   if (!body.directPath && !body.url) throw new Error('Missing media source');
+}
+export async function incomingMediaStream(raw:WAMessage,reuploadRequest:WASocket['updateMediaMessage'],
+  transport={message:downloadMediaMessage,direct:downloadContentFromMessage}) {
+  validateMediaSource(raw);
+  const sticker=normalizeMessageContent(raw.message)?.stickerMessage;
+  // Sanitized plain objects omit protobuf's inherited url property. The pinned
+  // high-level helper rejects those even though the supported directPath exists.
+  if(sticker?.directPath&&!sticker.url)
+    return transport.direct(sticker,'sticker',{});
+  return transport.message(raw,'stream',{}, {logger,reuploadRequest});
 }
 export class BaileysConnector implements Connector {
   readonly capabilities: Capabilities = {
@@ -343,8 +356,7 @@ export class BaileysConnector implements Connector {
             const safeRaw = parse(m.raw);
             m.download = async () => {
               if (!m.guard!()) throw new Error('Revoked');
-              validateMediaSource(safeRaw);
-              const stream = await downloadMediaMessage(safeRaw, 'stream', {}, { logger, reuploadRequest: sock.updateMediaMessage });
+              const stream = await incomingMediaStream(safeRaw,sock.updateMediaMessage);
               const chunks: Buffer[] = []; let size = 0;
               for await (const chunk of stream) {
                 size += chunk.length;

@@ -16,17 +16,18 @@ effects in worker lifecycle cases are injected, not actual service operations.
 | --- | --- |
 | Locked `npm ci --ignore-scripts --no-audit --no-fund` | passed |
 | TypeScript typecheck | passed |
-| Full app suite | **64 passed, 0 failed, 0 skipped** |
+| Full app suite | **70 passed, 0 failed, 0 skipped** |
 | Full Linux Python updater suite | **34 passed, 0 failed, 0 skipped** |
-| Production Vite build | passed, `index-BWCYZ2Fb.js` |
+| Production Vite build | passed, `index-DDnY9nS5.js` |
 | Production-only prune + update smoke | **SMOKE_OK** |
 | Windows Node 24.22.1 focused API suite | **4 passed, 0 failed, 0 skipped** |
 | Diff whitespace check | passed |
 
 [Full app/build/smoke output](mode-control-app-0.3.2.txt) and
 [full Python output](mode-control-python-0.3.2.txt) preserve concrete receipts.
-The final Python run includes the subsequent local first-install version-pin
-guard; no application source changed after the final application/build run.
+The final Python run includes the local first-install version-pin guard. Root
+worker code did not change during the later sticker fix; the final application
+run above includes the sticker fix and all six new regressions.
 
 Four new API cases cover designated-parent/family/role/session/CSRF checks,
 strict mode-only input, old-worker compatibility, root-disabled/stale gates,
@@ -53,6 +54,12 @@ closed local setup gate, pending write failure without false success, explicit
 rejection, current/available versions and lifecycle controls. Mobile viewport
 390x844 showed no horizontal overflow (`clientWidth=scrollWidth=375`, excluding
 scrollbar); viewport restored. No real provider or root config used in browser QA.
+
+The final production build was also checked in Chrome with a separate synthetic
+child/family and five fixture messages. Static WebP and generated animated WebP
+both decoded (`naturalWidth` 256 and 16 respectively). Missing media, an old
+empty-text record and a broken image URL each showed an explanation. No real
+chat text, names or screenshot were used. See [sticker diagnosis and scope](../docs/STICKER-RECEPTION.md).
 
 Two independent internal reviews covered root authority, mode-only persistence,
 replay/recovery and UI pending semantics. Operator-journal binding and atomic
