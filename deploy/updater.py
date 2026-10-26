@@ -24,6 +24,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+import uuid
+import math
 
 CONFIG = pathlib.Path('/etc/yachad/updates.json')
 ASSETS = ('yachad-release.json', 'yachad-release.sig', 'yachad-app.zip')
@@ -207,12 +209,18 @@ class Worker:
             raise UpdateError('configuration') from None
 
     def save(self, **changes):
-        self.status.update(changes)
-        self.status.update(enabled=self.c['enabled'], mode=self.c['mode'], operator=self.c['operator'], updatedAt=int(time.time() * 1000))
+        following = dict(self.status)
+        following.update(changes)
+        following.update(enabled=self.c['enabled'], mode=self.c['mode'], operator=self.c['operator'], updatedAt=int(time.time() * 1000))
+        pending = following.get('modeChangePending')
+        if isinstance(pending, dict) and pending.get('previousMode') in ('auto', 'notify'):
+            following['mode'] = pending['previousMode']
+        following['modeControlAllowed'] = self.c['enabled'] and self.c.get('allowUiModeControl') is True
         for field in ['currentVersion', 'latestVersion', 'checkedAt', 'error']:
-            self.status.setdefault(field, None)
-        self.status.setdefault('phase', 'idle')
-        atomic_json(self.status_path, self.status, self.group)
+            following.setdefault(field, None)
+        following.setdefault('phase', 'idle')
+        atomic_json(self.status_path, following, self.group)
+        self.status = following
 
     def command(self, args, *, user=None, cwd=None, input=None, timeout=300, code='internal'):
         if user:
@@ -311,22 +319,98 @@ class Worker:
             self.save(phase='recovery_required', error='rollback')
             return False
 
-    def request(self):
+    def read_request(self):
         path = pathlib.Path(self.c['dataDirectory']) / 'update-request.json'
+        fd = None
         try:
-            st = path.lstat()
-            if not stat.S_ISREG(st.st_mode) or st.st_size > 512:
-                path.unlink(missing_ok=True)
-                return None
-            data = json.loads(path.read_bytes())
-            path.unlink(missing_ok=True)
-            if (data.get('action') not in ('check', 'install') or
-                    data.get('familyId') != self.c['operator']['familyId'] or data.get('userId') != self.c['operator']['userId'] or
-                    not isinstance(data.get('createdAt'), (int, float)) or abs(time.time() * 1000 - data['createdAt']) > 600000):
-                return None
-            return data['action']
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != pwd.getpwnam(self.c['appUser']).pw_uid or st.st_mode & 0o077 or not 0 < st.st_size <= 512:
+                raise ValueError()
+            data = json.loads(os.read(fd, 513))
+            return data if isinstance(data, dict) else None
         except (OSError, ValueError, TypeError):
             return None
+        finally:
+            if fd is not None: os.close(fd)
+
+    def request(self):
+        path = pathlib.Path(self.c['dataDirectory']) / 'update-request.json'
+        data = self.read_request()
+        consume = True
+        try:
+            if not data: return None
+            if (data.get('action') not in ('check', 'install', 'set_mode') or
+                    data.get('familyId') != self.c['operator']['familyId'] or data.get('userId') != self.c['operator']['userId'] or
+                    type(data.get('createdAt')) not in (int, float) or not math.isfinite(data['createdAt'])):
+                return None
+            if data['action'] == 'set_mode':
+                try:
+                    if str(uuid.UUID(data.get('id', ''))) != data['id'] or data.get('mode') not in ('auto', 'notify'):
+                        return None
+                except (ValueError, TypeError, AttributeError): return None
+                if set(data) != {'id', 'action', 'mode', 'familyId', 'userId', 'createdAt'}: return None
+                consume = False
+                seen = self.mode_seen()
+                error = ('replayed' if any(x['id'] == data['id'] for x in seen) else
+                         'expired' if abs(time.time() * 1000 - data['createdAt']) > 600000 else
+                         'busy' if len(seen) >= 64 else None)
+                if error:
+                    self.finish_mode_request(data, 'rejected', error)
+                else:
+                    # Journal before removing the app-owned queue file. Root config
+                    # and the acknowledgement can then be reconciled after a crash.
+                    self.save(modeChangePending={'id':data['id'], 'mode':data['mode'], 'previousMode':self.c['mode'], 'operator':dict(self.c['operator'])},
+                              lastModeRequest={'id':data['id'], 'mode':data['mode'], 'state':'pending', 'error':None})
+                consume = True
+                return 'set_mode'
+            if abs(time.time() * 1000 - data['createdAt']) > 600000: return None
+            return data['action']
+        finally:
+            if consume: path.unlink(missing_ok=True)
+
+    def mode_seen(self):
+        now = time.time() * 1000
+        return [x for x in self.status.get('modeRequestSeen', []) if isinstance(x, dict) and
+                isinstance(x.get('id'), str) and type(x.get('at')) in (int, float) and math.isfinite(x['at']) and abs(now-x['at']) <= 1200000]
+
+    def finish_mode_request(self, request, state, error=None):
+        seen = [x for x in self.mode_seen() if x['id'] != request['id']]
+        if len(seen) < 64: seen.append({'id':request['id'], 'at':int(time.time()*1000)})
+        self.save(modeChangePending=None, modeRequestSeen=seen,
+                  lastModeRequest={'id':request['id'], 'mode':request['mode'], 'state':state, 'error':error})
+
+    def apply_mode_request(self):
+        request = self.status.get('modeChangePending')
+        if not request: return
+        if (not isinstance(request, dict) or request.get('mode') not in ('auto', 'notify') or
+                not isinstance(request.get('id'), str) or len(request['id']) != 36):
+            raise UpdateError('configuration')
+        try:
+            if str(uuid.UUID(request['id'])) != request['id']: raise ValueError()
+        except ValueError: raise UpdateError('configuration') from None
+        queued = self.read_request()
+        if queued and queued.get('id') == request['id']:
+            (pathlib.Path(self.c['dataDirectory']) / 'update-request.json').unlink(missing_ok=True)
+        if not self.c['enabled'] or self.c.get('allowUiModeControl') is not True:
+            self.finish_mode_request(request, 'rejected', 'local_setup')
+            return
+        if request.get('operator') != self.c['operator']:
+            self.finish_mode_request(request, 'rejected', 'operator_changed')
+            return
+        try:
+            fresh = json.loads(private_file(CONFIG))
+            if {k:v for k,v in fresh.items() if k != 'mode'} != {k:v for k,v in self.c.items() if k != 'mode'}:
+                raise UpdateError('configuration')
+            if fresh['mode'] != request['mode']:
+                fresh['mode'] = request['mode']
+                atomic_json(CONFIG, fresh)
+            self.c = fresh
+            self.finish_mode_request(request, 'applied')
+        except (OSError, ValueError, UpdateError):
+            # Keep root intent pending; a write may have committed before an fsync
+            # failure. Never claim rejection/applied until private config is read.
+            self.save(modeChangePending=request, lastModeRequest={'id':request['id'], 'mode':request['mode'], 'state':'pending', 'error':'configuration'})
 
     def release(self, token):
         repo = self.c['repository']
@@ -459,6 +543,9 @@ class Worker:
             except Exception:
                 self.save(phase='recovery_required', error='rollback')
             return
+        if self.status.get('modeChangePending'):
+            self.apply_mode_request()
+            return
         if self.status.get('phase') == 'preparing':
             # A previous worker stopped before touching the active service.
             self.save(phase='failed', error='build', failedVersion=self.status.get('latestVersion'))
@@ -466,6 +553,9 @@ class Worker:
             self.save(phase='idle', error=None)
             return
         action = self.request()
+        if action == 'set_mode':
+            self.apply_mode_request()
+            return
         if not action and self.status.get('checkedAt', 0) and time.time() * 1000 - self.status['checkedAt'] < self.c.get('checkHours', 6) * 3600000:
             self.save()
             return
@@ -479,6 +569,8 @@ class Worker:
             self.save(currentVersion=current_version, latestVersion=newest, checkedAt=int(time.time() * 1000), error=None,
                       phase='available' if version(newest) > version(current_version) else 'idle')
             if version(newest) > version(current_version) and (action == 'install' or self.c['mode'] == 'auto'):
+                if self.c.get('installVersionPin') is not None and version(newest) != version(self.c['installVersionPin']):
+                    raise UpdateError('incompatible')
                 # A failed version is not retried automatically forever; explicit install retries it.
                 if self.status.get('failedVersion') == newest and action != 'install':
                     self.save(phase='failed', error='health')
@@ -510,6 +602,10 @@ def main():
     config = json.loads(private_file(CONFIG))
     if config.get('mode') not in ('notify', 'auto') or type(config.get('enabled')) is not bool:
         raise UpdateError('configuration')
+    if type(config.get('allowUiModeControl', False)) is not bool:
+        raise UpdateError('configuration')
+    if config.get('installVersionPin') is not None:
+        version(config['installVersionPin'])
     state = pathlib.Path(config['stateDirectory'])
     st = state.lstat()
     if not stat.S_ISDIR(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o022:

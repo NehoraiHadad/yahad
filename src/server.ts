@@ -649,9 +649,13 @@ export async function createApp(
   });
   app.post('/api/parent/updates', async req => {
     parent(req.session);
-    const { action } = z.object({ action: z.enum(['check', 'install']) }).strict().parse(req.body);
-    const state = await requestUpdate(config, req.session.user, action);
+    const request = z.discriminatedUnion('action',[
+      z.object({action:z.enum(['check','install'])}).strict(),
+      z.object({action:z.literal('set_mode'),mode:z.enum(['notify','auto'])}).strict(),
+    ]).parse(req.body);
+    const state = await requestUpdate(config, req.session.user, request.action, 'mode' in request?request.mode:undefined);
     if (state === 'unavailable') throw new AppError(409, 'UPDATES_UNAVAILABLE');
+    if (state === 'mode_locked') throw new AppError(409, 'UPDATES_MODE_LOCKED');
     return { state };
   });
   app.get('/api/parent/diagnostics', async (req, reply) => {

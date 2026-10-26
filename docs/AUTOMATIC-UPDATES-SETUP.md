@@ -1,5 +1,7 @@
 # One-time owner setup for signed automatic updates (0.3.1)
 
+> 0.3.2 candidate: [UI-UPDATE-CONTROL.md](UI-UPDATE-CONTROL.md) adds parent auto/notify control. It requires the matching root worker plus the local `allowUiModeControl` gate; an app update alone does not replace privileged helpers. The consolidated installer remains a guarded draft until a matching signed release is approved and its asset pins are updated. Preserve the existing signing key and live paths.
+
 Read [HISTORY.md](HISTORY.md) for the 0.3.1 history limits and real-account acceptance gate before rollout.
 
 This is an **owner-operated runbook**, not a record of work already done on the Pi.

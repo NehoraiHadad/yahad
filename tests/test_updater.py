@@ -72,9 +72,9 @@ class UpdaterTests(unittest.TestCase):
         path=self.root/'update-request.json'
         base={'action':'install','familyId':'a','userId':'p','createdAt':int(time.time()*1000)}
         for change in [{'familyId':'b'},{'userId':'child'},{'action':'shell'},{'createdAt':0}]:
-            path.write_text(json.dumps({**base,**change}))
+            path.write_text(json.dumps({**base,**change})); path.chmod(0o600)
             self.assertIsNone(worker.request())
-        path.write_text(json.dumps(base)); self.assertEqual(worker.request(),'install')
+        path.write_text(json.dumps(base)); path.chmod(0o600); self.assertEqual(worker.request(),'install')
         for url in ['http://github.com/x','https://evil.example/x','https://github.com:8443/x','https://secret@api.github.com/x']:
             with self.assertRaises(u.UpdateError): u.safe_url(url)
         u.safe_url('https://release-assets.githubusercontent.com/asset')

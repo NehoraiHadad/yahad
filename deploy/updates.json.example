@@ -2,6 +2,8 @@
   "enabled": false,
   "repository": "NehoraiHadad/yahad",
   "mode": "notify",
+  "allowUiModeControl": false,
+  "installVersionPin": null,
   "operator": { "familyId": "REPLACE_WITH_FAMILY_UUID", "userId": "REPLACE_WITH_PARENT_UUID" },
   "checkHours": 6,
   "publicKeyFile": "/etc/yachad/release-signing.pub",
