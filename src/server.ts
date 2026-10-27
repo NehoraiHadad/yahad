@@ -91,7 +91,7 @@ export async function createApp(
     if (!req.url.startsWith('/api/')) return;
     const origin = req.headers.origin;
     if (origin && origin !== config.origin) throw new AppError(403, 'ORIGIN_DENIED');
-    if (req.url === '/api/login' || req.url === '/api/setup') return;
+    if (req.url === '/api/login' || req.url === '/api/setup' || req.url === '/api/setup/status') return;
     const s = store.session(req.cookies.sid || '');
     if (!s) throw new AppError(401, 'SIGN_IN_REQUIRED');
     req.session = s;
@@ -138,7 +138,11 @@ export async function createApp(
     return m;
   };
   let settingUp = false;
-  app.post('/api/setup', async (req) => {
+  app.get('/api/setup/status', async () => ({
+    state: store.one('SELECT 1 FROM families LIMIT 1') ? 'complete' :
+      options.bootstrap && Date.now() <= options.bootstrap.expiresAt ? 'ready' : 'closed',
+  }));
+  app.post('/api/setup', async (req, reply) => {
     const capability = req.headers['x-setup-token'];
     const bootstrap = options.bootstrap;
     if (req.headers.origin !== config.origin) throw new AppError(403, 'ORIGIN_DENIED');
@@ -152,9 +156,14 @@ export async function createApp(
     if (data.password !== data.confirmation) throw new AppError(400, 'PASSWORD_MISMATCH');
     settingUp = true;
     try {
-      await store.createFamily(data.name, data, undefined, true);
+      const family = await store.createFamily(data.name, data, undefined, true);
       // Consume the capability only after durable creation; restarting never reopens setup.
       options.bootstrap = undefined;
+      // The capability authorizes this first parent; continue directly into the
+      // authenticated UI without asking them to type the new passphrase again.
+      const session = store.createSession(store.user(store.one('SELECT * FROM users WHERE id=?', family.parentId)));
+      reply.setCookie('sid', session.sid, { httpOnly: true, sameSite: 'strict', secure: config.secureCookie,
+        path: '/', maxAge: Math.floor(config.sessionMs / 1000) });
       return { ok: true };
     } finally { settingUp = false; }
   });
@@ -245,6 +254,14 @@ export async function createApp(
     store.run('DELETE FROM sessions WHERE family_id=? AND user_id=?', s.user.familyId, s.user.id);
     service.notify(s.user.familyId, undefined, 'session');
     return { ok: true };
+  });
+  app.get<{ Params: { g: string } }>('/api/groups/:g/photo', async (req, reply) => {
+    const s = req.session;
+    const photo = await service.groupPhoto(s.user, req.params.g);
+    if (!store.session(s.sid)) throw new AppError(401, 'SIGN_IN_REQUIRED');
+    service.requirePhotoGroup(s.user, req.params.g);
+    if (!photo) throw deny();
+    return reply.type(photo.mime).send(photo.bytes);
   });
   app.get('/api/groups', async (req) => {
     const s = req.session,

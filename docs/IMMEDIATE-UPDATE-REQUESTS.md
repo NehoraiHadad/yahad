@@ -55,13 +55,11 @@ journals; the UI must report unconfirmed progress rather than infer success.
 
 ## Installation and compatibility
 
-This 0.3.4 application candidate includes the worker and request unit sources;
-it does not change or rerun the historical installer. Existing-installation
-integration must configure both watched paths and latch cleanup from the
-validated `DATA_DIR`, give the request service the same root-only mode-config
-exception and read-only secret paths as the scheduled service, and enable/verify
-the path only after the matching worker and integration have been reviewed.
-The separate owner-operated upgrade path must preserve existing configuration.
+The guided owner installer installs the request path/service, configures both
+watched paths and latch cleanup from the validated `DATA_DIR`, gives the request
+service the same root-only mode-config exception and read-only secret paths as
+the scheduled service, and enables/verifies the path only at successful
+installation completion. Windows/WSL verifies it alongside the timers.
 
 **An app ZIP does not install privileged helpers, units or drop-ins.** An existing
 Pi needs a one-time reviewed owner/root upgrade of the worker, request service/
@@ -69,7 +67,9 @@ path and matching drop-ins, then daemon reload and path enable/verification.
 Existing app/worker combinations keep the timer fallback. Do not install the
 new path against an old worker: it does not understand the request-only command
 and may treat a stale event as a scheduled run. Do not rerun the historical
-0.3.2 bootstrap; it is version-pinned and not this upgrade. The historical installer is not a generic overwrite/migration tool. Preserve live data, keys, trust policy,
+0.3.2 bootstrap; it is version-pinned and not this upgrade. The current guided
+installer intentionally refuses different existing managed helper bytes; it is
+not a generic overwrite/migration tool. Preserve live data, keys, trust policy,
 operator, applied mode and journal during owner review.
 
 ## Evidence and remaining acceptance
@@ -78,7 +78,7 @@ Synthetic tests cover complete atomic publication, concurrent clicks/private
 permissions, symlink collision preservation, a real local flock wait with queue
 replacement and policy reread, mode-to-check, stale/deleted events, malformed
 input, blocked recovery/configuration, bounded draining, truthful journals and
-unit contracts. They make no real GitHub/provider calls, start no services and
+installer wiring. They make no real GitHub/provider calls, start no services and
 use no live family data.
 
 Native-systemd timing/sandbox behavior still needs acceptance on a disposable

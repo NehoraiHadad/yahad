@@ -1,8 +1,17 @@
+import { LazyEmojiStickerPicker as EmojiStickerPicker } from './LazyEmojiStickerPicker';
+import { insertEmoji, rememberEmoji } from './emojiSelection';
+import { loadStickerFile } from './stickerFile';
+import './emoji-picker.css';
+import './groupAvatar.css';
+import { ChatCelebration, useChatCelebration } from './ChatCelebration';
+import './chatCelebration.css';
 import { HistoryPanel } from './HistoryPanel';
 import { MessageImage } from './MessageImage';
 import { DisconnectPanel } from './DisconnectPanel';
+import { GroupAvatar } from './GroupAvatar';
 import { GroupPicker } from './GroupPicker';
-import { FamilySetup, passphraseHelp } from './FamilySetup';
+import { AccountSettings } from './AccountSettings';
+import { FamilySetup } from './FamilySetup';
 let setupToken = new URLSearchParams(location.hash.slice(1)).get('setup') || '';
 if (setupToken) history.replaceState(null, '', location.pathname + location.search);
 import React, { useState, useEffect, useRef, useCallback } from 'react';
@@ -83,7 +92,7 @@ const newId = () => {
 const emojiChoices = ['💚', '❤️', '👍', '😂', '✨', '🌸', '🎉', '🙏'];
 const time = (n: number) =>
   new Intl.DateTimeFormat('he-IL', { hour: '2-digit', minute: '2-digit' }).format(n);
-const groupIcons = [Flower2, MessageCircleHeart, Sun];
+const profileIcons: Record<string, typeof Flower2> = { flower: Flower2, heart: MessageCircleHeart, sun: Sun };
 function IconButton({
   label,
   children,
@@ -222,14 +231,19 @@ function App() {
 }
 function Login({ onLogin }: { onLogin: () => Promise<void> }) {
   const [setupDone, setSetupDone] = useState(false);
+  const [setupState, setSetupState] = useState('');
+  useEffect(() => { void fetch('/api/setup/status').then(r => r.json()).then(x => setSetupState(x.state)).catch(() => {}); }, []);
   const [username, setUsername] = useState(''),
     [password, setPassword] = useState(''),
     [show, setShow] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
-  if (setupToken && !setupDone) return <FamilySetup setupToken={setupToken} onDone={() => { setupToken = ''; setSetupDone(true); }} />;
+  if (setupToken && !setupDone) return <FamilySetup setupToken={setupToken}
+    onDone={() => { setupToken = ''; setSetupDone(true); void onLogin(); }}
+    onClose={() => { setupToken = ''; setSetupDone(true); }} />;
   return (
     <main className="login-page">
+      {setupState === 'ready' && !setupToken && <p className="setup-link-notice" role="status">ההכנה עדיין פתוחה. חזרו לקישור הפרטי שהציג המתקין. רענון הדף מסיר את הקישור הפרטי להגנה על החשבון; אין צורך ליצור משפחה נוספת.</p>}
       <div className="login-art">
         <div className="brand">
           <MessageCircleHeart /> יחד<span>השיחות שלנו</span>
@@ -347,6 +361,8 @@ function Chat({
     [reply, setReply] = useState<PublicMessage | null>(null),
     [themeOpen, setThemeOpen] = useState(false),
     [theme, setTheme] = useState(() => localStorage.getItem('yachad-theme') || 'mint'),
+    [effects, setEffects] = useState(() => localStorage.getItem('yachad-effects') === 'on'),
+    [flair, setFlair] = useState(() => localStorage.getItem('yachad-flair') || 'flower'),
     [dark, setDark] = useState(() => localStorage.getItem('yachad-dark') === 'true'),
     [wallpaper, setWallpaper] = useState(() => localStorage.getItem('yachad-wallpaper') || 'dots'),
     [menu, setMenu] = useState<string | null>(null),
@@ -363,7 +379,9 @@ function Chat({
     nearBottom = useRef(true),
     requestGeneration = useRef(0),
     typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null),
-    seenIds = useRef(new Set<string>());
+    seenIds = useRef(new Set<string>()),
+    composerPending = useRef(false);
+  const composerBusyChanged = useCallback((value: boolean) => { composerPending.current = value; }, []);
   selectedRef.current = selected;
   const current = groups.find((g) => g.id === selected),
     c = me.capabilities;
@@ -539,7 +557,7 @@ function Chat({
     }
   };
   return (
-    <main className={`chat-app theme-${theme} ${dark ? 'dark' : ''} ${selected ? 'has-chat' : ''}`}>
+    <main className={`chat-app theme-${theme} ${effects ? 'playful' : ''} ${dark ? 'dark' : ''} ${selected ? 'has-chat' : ''}`}>
       <aside className="sidebar">
         <header className="side-top">
           <a className="brand" href="/" onClick={(e) => e.preventDefault()}>
@@ -578,16 +596,13 @@ function Chat({
             groups
               .filter((g) => g.title.includes(query))
               .map((g, i) => {
-                const Icon = groupIcons[i % 3];
                 return (
                   <button
                     key={g.id}
                     className={'group-row ' + (g.id === selected ? 'active' : '')}
                     onClick={() => setSelected(g.id)}
                   >
-                    <div className={'avatar av-' + (i % 3)}>
-                      <Icon size={26} />
-                    </div>
+                    <GroupAvatar groupId={g.id} title={g.title} retryKey={me.connection} className={'avatar av-' + (i % 3)} />
                     <div className="group-info">
                       <div className="group-heading">
                         <b>{g.title}</b>
@@ -626,7 +641,7 @@ function Chat({
             <span>רק הקבוצות שנבחרו בשבילך</span>
           </div>
           <div className="profile-row">
-            <div className="profile-avatar">✦</div>
+            <div className="profile-avatar" aria-hidden="true">{React.createElement(profileIcons[flair] || Flower2, { size: 24 })}</div>
             <div>
               <b>{me.user.role === 'parent' ? 'חשבון הורה' : 'המרחב שלי'}</b>
               <span>
@@ -658,9 +673,7 @@ function Chat({
               <IconButton className="back" label="חזרה לשיחות" onClick={() => setSelected(null)}>
                 <ArrowRight />
               </IconButton>
-              <div className="avatar av-0">
-                <Flower2 size={25} />
-              </div>
+              <GroupAvatar groupId={current.id} title={current.title} retryKey={me.connection} />
               <div className="chat-title">
                 <h2>{current.title}</h2>
                 <span>
@@ -788,6 +801,7 @@ function Chat({
                       menu={menu === m.id}
                       onMenu={() => setMenu(menu === m.id ? null : m.id)}
                       onReply={() => {
+                        if (composerPending.current) { onError('ממתינים לסיום הפעולה הנוכחית לפני מעבר לעריכה או מענה.'); return; }
                         setReply(m);
                         setMenu(null);
                       }}
@@ -802,6 +816,7 @@ function Chat({
                         );
                       }}
                       onEdit={() => {
+                        if (composerPending.current) { onError('ממתינים לסיום הפעולה הנוכחית לפני מעבר לעריכה או מענה.'); return; }
                         setEditing(m);
                         setMenu(null);
                       }}
@@ -859,8 +874,12 @@ function Chat({
             <Composer
               key={current.id}
               group={current.id}
+              messages={messages}
               caps={c}
+              onBusyChange={composerBusyChanged}
               maxMedia={me.maxMedia}
+              effects={effects}
+              flair={flair}
               enabled={online && me.connection === 'connected'}
               reply={reply}
               clearReply={() => setReply(null)}
@@ -937,6 +956,7 @@ function Chat({
                 <button
                   key={id}
                   className={`theme-option ${id} ${theme === id ? 'chosen' : ''}`}
+                  aria-pressed={theme === id}
                   onClick={() => setTheme(id)}
                 >
                   <span>{theme === id && <Check size={20} />}</span>
@@ -954,13 +974,17 @@ function Chat({
                 <button
                   key={id}
                   className={wallpaper === id ? 'active' : ''}
+                  aria-pressed={wallpaper === id}
                   onClick={() => setWallpaper(id)}
                 >
                   {title}
                 </button>
               ))}
             </div>
-            <button className="dark-toggle" onClick={() => setDark(!dark)}>
+            <div className="profile-flairs" role="group" aria-label="הסמל האישי שלי">{Object.entries(profileIcons).map(([id, Icon]) => <button key={id} type="button" aria-label={({flower:'פרח',heart:'לב',sun:'שמש'} as Record<string,string>)[id]} aria-pressed={flair === id} onClick={() => { setFlair(id); localStorage.setItem('yachad-flair',id); }}><Icon size={26}/></button>)}</div>
+            <label className="secret-toggle"><input type="checkbox" checked={effects} onChange={e => { setEffects(e.target.checked); localStorage.setItem('yachad-effects', e.target.checked ? 'on' : 'off'); }}/> קצת קסם בתנועה</label>
+            <p className="muted">תנועות עדינות בבחירת שיחה ובשליחה. הגדרת הפחתת תנועה במכשיר תמיד קודמת לבחירה הזאת.</p>
+            <button className="dark-toggle" aria-pressed={dark} onClick={() => setDark(!dark)}>
               {dark ? <Moon size={20} /> : <Sun size={20} />} מצב כהה{' '}
               <span className={'switch ' + (dark ? 'on' : '')} />
             </button>
@@ -970,7 +994,7 @@ function Chat({
           </section>
         </div>
       )}
-      {settingsOpen && <AccountSettings onClose={() => setSettingsOpen(false)} onError={onError} />}
+      {settingsOpen && <AccountSettings onClose={() => setSettingsOpen(false)} />}
     </main>
   );
 }
@@ -1158,8 +1182,11 @@ function Message({
 }
 function Composer({
   group,
+  messages,
   caps,
   maxMedia,
+  effects,
+  flair,
   enabled,
   reply,
   clearReply,
@@ -1167,42 +1194,56 @@ function Composer({
   clearEditing,
   onSent,
   onError,
+  onBusyChange,
 }: {
   group: string;
+  messages: PublicMessage[];
   caps: Partial<Capabilities>;
   maxMedia: number;
+  effects: boolean;
+  flair: string;
   enabled: boolean;
   reply: PublicMessage | null;
   clearReply: () => void;
   editing: PublicMessage | null;
   clearEditing: () => void;
   onSent: () => void;
+  onBusyChange: (busy: boolean) => void;
   onError: (x: string) => void;
 }) {
   const [text, setText] = useState(''),
     [busy, setBusy] = useState(false),
     [emojiOpen, setEmojiOpen] = useState(false),
+    [recentEmojis, setRecentEmojis] = useState<string[]>([]),
+    [favoriteStickerIds, setFavoriteStickerIds] = useState<string[]>([]),
     [attachOpen, setAttachOpen] = useState(false),
     [file, setFile] = useState<File | null>(null),
     [sticker, setSticker] = useState(false),
     [recording, setRecording] = useState(false),
     [voice, setVoice] = useState<Blob | null>(null),
     [seconds, setSeconds] = useState(0),
-    [preview, setPreview] = useState('');
+    [preview, setPreview] = useState(''),
+    [stickerPreview, setStickerPreview] = useState('');
   const input = useRef<HTMLTextAreaElement>(null),
     fileInput = useRef<HTMLInputElement>(null),
+    fileIsSticker = useRef(false),
     recorder = useRef<MediaRecorder | null>(null),
     mediaStream = useRef<MediaStream | null>(null),
     chunks = useRef<Blob[]>([]),
     id = useRef(newId()),
     typingAt = useRef(0),
     mounted = useRef(true),
-    cancelRecord = useRef(false);
+    cancelRecord = useRef(false),
+    stickerRequest = useRef<AbortController | null>(null),
+    submitting = useRef(false);
+  const { burst, celebrate } = useChatCelebration(effects, flair, group);
   const path = '/groups/' + encodeURIComponent(group);
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      onBusyChange(false);
+      stickerRequest.current?.abort();
       cancelRecord.current = true;
       recorder.current?.state === 'recording' && recorder.current.stop();
       mediaStream.current?.getTracks().forEach((t) => t.stop());
@@ -1216,6 +1257,7 @@ function Composer({
           : editing.text,
       );
       setFile(null);
+      setSticker(false);
       setVoice(null);
       input.current?.focus();
     }
@@ -1245,10 +1287,31 @@ function Composer({
     setPreview(url);
     return () => URL.revokeObjectURL(url);
   }, [voice]);
+  useEffect(() => {
+    if (!file || !sticker) { setStickerPreview(''); return; }
+    const url = URL.createObjectURL(file); setStickerPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file, sticker]);
+  useEffect(() => { stickerRequest.current?.abort(); }, [enabled, editing, caps.sticker]);
+  const availableStickers = [...new Map(messages.filter(m => m.groupId === group && m.kind === 'sticker' && !m.deleted && m.mediaId)
+    .map(m => [m.mediaId!, { id: m.mediaId!, url: `/api/groups/${encodeURIComponent(group)}/media/${encodeURIComponent(m.mediaId!)}`, label: m.text || `מדבקה מאת ${m.sender}` }])).values()];
+  const chooseSticker = async (mediaId: string) => {
+    if (!enabled || busy || editing || !caps.sticker || !availableStickers.some(s => s.id === mediaId)) return;
+    const controller = new AbortController();
+    stickerRequest.current?.abort(); stickerRequest.current = controller;
+    setEmojiOpen(false); setBusy(true); onBusyChange(true);
+    try {
+      const chosen = await loadStickerFile(availableStickers.find(s => s.id === mediaId)!, maxMedia, controller.signal);
+      if (!mounted.current || controller.signal.aborted) return;
+      setFile(chosen); setVoice(null); setSticker(true); id.current = newId();
+    } catch (e) {
+      if (mounted.current && !controller.signal.aborted) onError((e as Error).message);
+    } finally { if (mounted.current && stickerRequest.current === controller) { setBusy(false); onBusyChange(false); } }
+  };
   const send = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (busy || !enabled || recording || (!text.trim() && !file && !voice)) return;
-    setBusy(true);
+    if (submitting.current || busy || !enabled || recording || (!text.trim() && !file && !voice)) return;
+    submitting.current = true; setBusy(true); onBusyChange(true);
     try {
       if (editing) {
         await api(`${path}/messages/${encodeURIComponent(editing.id)}`, 'PATCH', { text });
@@ -1269,11 +1332,13 @@ function Composer({
       setVoice(null);
       setSticker(false);
       id.current = newId();
+      if (!editing) celebrate();
       onSent();
     } catch (e) {
       if (mounted.current) onError((e as Error).message);
     } finally {
-      if (mounted.current) setBusy(false);
+      submitting.current = false;
+      if (mounted.current) { setBusy(false); onBusyChange(false); }
     }
   };
   const stopRecording = () => {
@@ -1336,6 +1401,7 @@ function Composer({
   };
   return (
     <div className="composer-wrap">
+      <ChatCelebration burst={burst} />
       {reply && !editing && (
         <div className="reply-preview">
           <Reply size={18} />
@@ -1343,7 +1409,7 @@ function Composer({
             <b>בתשובה ל־{reply.sender}</b>
             <span>{reply.text || 'קובץ מצורף'}</span>
           </div>
-          <IconButton label="ביטול מענה" onClick={clearReply}>
+          <IconButton label="ביטול מענה" disabled={busy} onClick={clearReply}>
             <X size={17} />
           </IconButton>
         </div>
@@ -1354,6 +1420,7 @@ function Composer({
           <b>עריכת הודעה</b>
           <IconButton
             label="ביטול עריכה"
+            disabled={busy}
             onClick={() => {
               clearEditing();
               setText('');
@@ -1365,10 +1432,10 @@ function Composer({
       )}
       {file && (
         <div className="attachment-preview">
-          <Paperclip size={18} />
+          {stickerPreview ? <img src={stickerPreview} alt="תצוגה מקדימה של המדבקה לפני שליחה" width={72} height={72} style={{ objectFit: 'contain' }} /> : <Paperclip size={18} />}
           {file.name}
           <span>{(file.size / 1024 ** 2).toFixed(1)} MB</span>
-          <IconButton label="הסרת קובץ" onClick={() => setFile(null)}>
+          <IconButton label="הסרת קובץ" disabled={busy} onClick={() => { setFile(null); setSticker(false); }}>
             <X size={17} />
           </IconButton>
         </div>
@@ -1377,48 +1444,37 @@ function Composer({
         <div className="attachment-preview">
           <Mic size={18} />
           <audio controls src={preview} />
-          <IconButton label="מחיקת הקלטה" onClick={() => setVoice(null)}>
+          <IconButton label="מחיקת הקלטה" disabled={busy} onClick={() => setVoice(null)}>
             <Trash2 size={18} />
           </IconButton>
         </div>
       )}
-      {emojiOpen && (
-        <div className="composer-popover emojis">
-          {[
-            ...emojiChoices,
-            '😊',
-            '🌿',
-            '🎨',
-            '☀️',
-            '🦋',
-            '🍓',
-            '💫',
-            '🤗',
-            '🤍',
-            '🌈',
-            '👌',
-            '🥳',
-          ].map((e) => (
-            <button
-              key={e}
-              aria-label={'אימוג׳י ' + e}
-              onClick={() => {
-                setText((t) => t + e);
-                setEmojiOpen(false);
-                input.current?.focus();
-              }}
-            >
-              {e}
-            </button>
-          ))}
-        </div>
-      )}
+      {emojiOpen && <EmojiStickerPicker recentEmojis={recentEmojis}
+        favoriteStickerIds={favoriteStickerIds}
+        onFavoriteStickerToggle={id => setFavoriteStickerIds(previous => previous.includes(id) ? previous.filter(value => value !== id) : [...previous, id].slice(-100))}
+        onClose={() => setEmojiOpen(false)}
+        onEmoji={emoji => {
+          if (!enabled || busy || voice) return;
+          const inserted = insertEmoji(text, emoji, input.current?.selectionStart ?? null, input.current?.selectionEnd ?? null);
+          if (inserted.text.length > 12000) return;
+          setText(inserted.text); setRecentEmojis(previous => rememberEmoji(previous, emoji));
+          id.current = newId(); setEmojiOpen(false);
+          requestAnimationFrame(() => { input.current?.focus(); input.current?.setSelectionRange(inserted.caret, inserted.caret); });
+        }}
+        stickers={!editing && caps.sticker ? availableStickers : []}
+        onSticker={!editing && caps.sticker ? item => void chooseSticker(item.id) : undefined}
+        onUploadSticker={!editing && caps.sticker ? () => {
+          if (!enabled || busy) return;
+          fileIsSticker.current = true; if (fileInput.current) fileInput.current.accept = '.webp';
+          fileInput.current?.click(); setEmojiOpen(false);
+        } : undefined} />}
       {attachOpen && (
         <div className="composer-popover attach-menu">
           {(caps.image || caps.video || caps.document) && (
             <button
               onClick={() => {
-                setSticker(false);
+                fileIsSticker.current = false;
+                if (fileInput.current) fileInput.current.accept = '*/*';
                 fileInput.current?.click();
                 setAttachOpen(false);
               }}
@@ -1430,7 +1486,7 @@ function Composer({
           {caps.sticker && (
             <button
               onClick={() => {
-                setSticker(true);
+                fileIsSticker.current = true;
                 if (fileInput.current) fileInput.current.accept = '.webp';
                 fileInput.current?.click();
                 setAttachOpen(false);
@@ -1454,7 +1510,9 @@ function Composer({
             if (f.size > maxMedia) onError('הקובץ גדול מהמותר. בחרו קובץ קטן יותר.');
             else {
               setFile(f);
+              setSticker(fileIsSticker.current);
               setVoice(null);
+              id.current = newId();
             }
           }
           e.target.value = '';
@@ -1582,6 +1640,8 @@ function Parent({
   onError: (x: string) => void;
 }) {
   const [identity, setIdentity] = useState('');
+  const [groupPhotoRevision, setGroupPhotoRevision] = useState(0);
+  const [createdChild, setCreatedChild] = useState('');
   const [overviewStale, setOverviewStale] = useState(false);
   const [data, setData] = useState<any>(null),
     [qr, setQr] = useState<string | null>(null),
@@ -1622,6 +1682,7 @@ function Parent({
     setBusy(true);
     try {
       await api(path, method, body);
+      if (path === '/parent/sync-groups') setGroupPhotoRevision(value => value + 1);
       await load();
     } catch (e) {
       onError((e as Error).message);
@@ -1746,7 +1807,7 @@ function Parent({
             {data?.children.length > 1 && (
               <label>
                 חשבון ילדה
-                <select value={child} disabled={busy} onChange={(e) => setChild(e.target.value)}>
+                <select value={child} disabled={busy} onChange={(e) => { setChild(e.target.value); setCreatedChild(''); }}>
                   {data.children.map((x: any) => (
                     <option key={x.id} value={x.id}>
                       {x.username}
@@ -1755,7 +1816,9 @@ function Parent({
                 </select>
               </label>
             )}
-            <GroupPicker groups={data?.groups || []} grants={data?.grants || []} childId={child}
+            {createdChild === child && data?.children.some((x: any) => x.id === createdChild) && <p role="status" className="setup-success">החשבון נוצר ונבחר. סמנו את הקבוצות שיופיעו בו. אפשר להוסיף חשבון נוסף בהמשך.</p>}
+            {data?.children.length === 0 && <p className="setup-success">מתחילים בחשבון ילד. רק אחר כך מאשרים עבורו קבוצות — אין גישה אוטומטית לשיחות.</p>}
+            <GroupPicker photoRetryKey={`${data?.state || 'idle'}:${groupPhotoRevision}`} groups={data?.groups || []} grants={data?.grants || []} childId={child}
               busy={busy} loading={!data} onToggle={(groupId, allowed) => void act('/parent/grant', { childId: child, groupId, allowed }, 'PUT')} />
             <div className="small-note">
               <ShieldCheck size={16} />
@@ -1773,6 +1836,7 @@ function Parent({
             <p>פותחים את אותה כתובת מאובטחת, ונכנסים עם חשבון הילדה.</p>
           </div>
           <div className="child-login-details">
+            <span>כתובת הטאבלט <b dir="ltr">{location.origin}</b></span>
             שם משתמש{' '}
             <b dir="ltr">{data?.children.find((x: any) => x.id === child)?.username || '—'}</b>
           </div>
@@ -1824,12 +1888,11 @@ function Parent({
           <button onClick={() => setDeleteOpen(true)}>מחיקת המשפחה והחשבונות</button>
         </div>
       </div>
-      {addingChild && <FamilySetup onDone={() => { setAddingChild(false); void load(); }} onClose={() => setAddingChild(false)} />}
+      {addingChild && <FamilySetup existingUsernames={[me.user.username, ...(data?.children || []).map((x: any) => x.username)]} onDone={id => { setAddingChild(false); if (id) { setChild(id); setCreatedChild(id); } void load(); }} onClose={() => { setAddingChild(false); void load(); }} />}
       {settings && (
         <AccountSettings
           children={data?.children}
           onClose={() => setSettings(false)}
-          onError={onError}
         />
       )}
       {deleteOpen && (
@@ -1944,106 +2007,6 @@ function IdentitySettings({
         <Check size={17} />
       </button>
     </form>
-  );
-}
-function AccountSettings({
-  onClose,
-  onError,
-  children: users,
-}: {
-  onClose: () => void;
-  onError: (x: string) => void;
-  children?: { id: string; username: string }[];
-}) {
-  const [current, setCurrent] = useState(''),
-    [next, setNext] = useState(''),
-    [confirmation, setConfirmation] = useState(''),
-    [show, setShow] = useState(false),
-    [child, setChild] = useState(''),
-    [busy, setBusy] = useState(false),
-    [message, setMessage] = useState('');
-  return (
-    <div className="modal-backdrop">
-      <form
-        className="modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label="הגדרות חשבון"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          if (next !== confirmation) { onError('הסיסמאות אינן זהות.'); return; }
-          setBusy(true);
-          try {
-            if (child) {
-              await api('/parent/child-password', 'POST', { childId: child, password: next, confirmation });
-              setMessage('הסיסמה עודכנה וכל חיבורי החשבון נותקו.');
-              setNext(''); setConfirmation('');
-            } else {
-              await api('/password', 'POST', { current, next, confirmation });
-              window.dispatchEvent(new Event('session-expired'));
-            }
-          } catch (e) {
-            onError((e as Error).message);
-          } finally {
-            setBusy(false);
-          }
-        }}
-      >
-        <div className="modal-top">
-          <h2>הגדרות חשבון</h2>
-          <IconButton label="סגירה" onClick={onClose}>
-            <X />
-          </IconButton>
-        </div>
-        {users && (
-          <label>
-            איזה חשבון מעדכנים?
-            <select value={child} onChange={(e) => { setChild(e.target.value); setNext(''); setConfirmation(''); setMessage(''); }}>
-              <option value="">החשבון שלי</option>
-              {users.map((u) => (
-                <option key={u.id} value={u.id}>
-                  {u.username}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-        {!child && (
-          <label>
-            סיסמה נוכחית
-            <input
-              type="password"
-              autoComplete="current-password"
-              required
-              value={current}
-              onChange={(e) => setCurrent(e.target.value)}
-            />
-          </label>
-        )}
-        <label>
-          סיסמה חדשה · לפחות 14 תווים
-          <input
-            type={show ? "text" : "password"}
-            autoComplete="new-password"
-            required
-            minLength={14}
-            maxLength={256}
-            value={next}
-            onChange={(e) => setNext(e.target.value)}
-          />
-        </label>
-        <label>אישור הסיסמה החדשה<input type={show ? 'text' : 'password'} autoComplete="new-password" required minLength={14} maxLength={256} value={confirmation} onChange={e => setConfirmation(e.target.value)} /></label>
-        <label className="secret-toggle"><input type="checkbox" checked={show} onChange={e => setShow(e.target.checked)} /> הצגת הסיסמה</label>
-        <p className="muted">{passphraseHelp}</p>
-        <p className="muted">
-          שינוי סיסמה מנתק את כל החיבורים של החשבון. אפשר להשתמש במשפט סודי שקל לזכור.
-        </p>
-        {message && <p role="status">{message}</p>}
-        <button className="primary" disabled={busy}>
-          עדכון סיסמה <Check size={17} />
-        </button>
-      </form>
-    </div>
   );
 }
 class RenderBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {

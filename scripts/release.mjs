@@ -1,6 +1,6 @@
 // Offline release packaging. Never publishes or connects to GitHub.
 import { generateKeyPairSync, createHash, sign } from 'node:crypto';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync, readdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 const [command, output, keyFile] = process.argv.slice(2);
@@ -16,6 +16,12 @@ if (command === 'keygen') {
   if (signed && statSync(keyFile).mode & 0o077) throw new Error('Signing key must be private (0600)');
   const version = JSON.parse(readFileSync('package.json','utf8')).version;
   if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Stable semantic version required');
+  // Fail before creating output: privileged source identity is canonical LF.
+  for (const entry of readdirSync('deploy', {withFileTypes:true})) {
+    if (entry.isFile() && /\.(py|service|timer|path|conf|ps1)$/.test(entry.name) && readFileSync(join('deploy',entry.name)).includes(13)) {
+      throw new Error('Noncanonical deploy line endings: '+entry.name+'; use a canonical LF checkout, do not normalize an installed host');
+    }
+  }
   const dir=resolve(output); mkdirSync(dir,{recursive:true,mode:0o700});
   const archive=join(dir,'yachad-app.zip');
   if (existsSync(archive)) throw new Error('Use an empty release output directory');

@@ -1,3 +1,4 @@
+import { fetchGroupPhoto } from '../group-photos.js';
 import { IngestionQueue } from './ingestion.js';
 import makeWASocket, {
   BufferJSON,
@@ -446,6 +447,16 @@ export class BaileysConnector implements Connector {
   async groups() {
     const groups = await this.require().groupFetchAllParticipating();
     return Object.values(groups).map((g) => ({ id: g.id, title: g.subject }));
+  }
+  async groupPhoto(group: string) {
+    if (!/^[0-9-]+@g\.us$/.test(group)) return;
+    const sock = this.require();
+    try {
+      const url = await sock.profilePictureUrl(group, 'preview', 5000);
+      if (!url || this.sock !== sock) return;
+      const photo = await fetchGroupPhoto(url);
+      return this.sock === sock ? photo : undefined;
+    } catch { return; }
   }
   async send(m: Outgoing) {
     const sock = this.require();

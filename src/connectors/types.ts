@@ -100,6 +100,7 @@ export interface Connector {
   start(): Promise<void>;
   stop(logout?: boolean): Promise<void | { remoteRevoked: boolean; unlinkRequested?: boolean }>;
   groups(): Promise<ChatGroup[]>;
+  groupPhoto?(group: string): Promise<import("../group-photos.js").GroupPhoto | undefined>;
   send(message: Outgoing): Promise<Incoming>;
   react(group: string, message: StoredMessage, emoji: string): Promise<void>;
   edit(group: string, message: StoredMessage, text: string): Promise<void>;

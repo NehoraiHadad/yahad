@@ -8,7 +8,8 @@ import { createApp } from '../src/server.js';
 import type { Config } from '../src/config.js';
 if (process.env.NODE_ENV === 'production' || process.env.CONNECTOR === 'baileys')
   throw new Error('QA harness is mock-only and never for production');
-const dataDir = resolve('.local/qa-data');
+const firstRun = process.env.QA_FIRST_RUN === '1';
+const dataDir = resolve(firstRun ? '.local/qa-first-run' : '.local/qa-data');
 rmSync(dataDir, { force: true, recursive: true });
 const config: Config = {
   dataDir,
@@ -16,16 +17,18 @@ const config: Config = {
   connector: 'mock',
   realAllowed: false,
   host: '0.0.0.0',
-  port: 4173,
-  origin: 'http://localhost:4173',
+  port: firstRun ? 4174 : 4173,
+  origin: firstRun ? 'http://127.0.0.1:4174' : 'http://127.0.0.1:4173',
   secureCookie: false,
   maxMedia: 16 * 1024 ** 2,
   maxStorage: 256 * 1024 ** 2,
   childIdleMs: 15 * 60000,
   sessionMs: 12 * 3600000,
 };
-const { app, store, service } = await createApp(config);
+const setup = randomBytes(32).toString('base64url');
+const { app, store, service } = await createApp(config, firstRun ? { bootstrap: { token: setup, expiresAt: Date.now()+900000 } } : {});
 const secret = randomBytes(32).toString('hex');
+if (!firstRun) {
 const f = await store.createFamily(
   'משפחת דוגמה',
   { username: 'parent', password: secret },
@@ -35,7 +38,7 @@ await service.connect(f.familyId);
 for (const g of ['120363001@g.us', '120363002@g.us', '120363003@g.us'])
   await service.grant(f.familyId, f.childId, g, true);
 app.addHook('onRequest', async () => {
-  if (existsSync('.local/preview-origin')) {
+  if (!firstRun && existsSync('.local/preview-origin')) {
     config.origin = readFileSync('.local/preview-origin', 'utf8').trim();
     config.secureCookie = config.origin.startsWith('https:');
   }
@@ -67,7 +70,7 @@ app.get<{ Params: { size: string }; Querystring: { role?: string; reset?: string
       path: '/',
     });
     const mobile = req.params.size === 'mobile',
-      width = mobile ? 390 : 1024,
+      width = mobile ? 390 : req.params.size === 'desktop' ? 1280 : 1024,
       height = mobile ? 844 : 768;
     return reply
       .type('text/html')
@@ -76,6 +79,7 @@ app.get<{ Params: { size: string }; Querystring: { role?: string; reset?: string
       );
   },
 );
+} else app.get('/__qa/setup', async (_req, reply) => reply.redirect('/#setup='+setup));
 await app.listen({ host: config.host, port: config.port });
 console.log(
   'Disposable mock QA harness ready on port 4173. Entry: /__qa/frame/tablet or /__qa/frame/mobile',
