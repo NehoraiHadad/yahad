@@ -1,9 +1,11 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
+import {mkdtempSync,writeFileSync,readFileSync,rmSync,readdirSync,lstatSync,symlinkSync,watch} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {randomBytes,randomUUID} from 'node:crypto';
+import fsPromises from 'node:fs/promises';
+import {syncBuiltinESMExports} from 'node:module';
 import {createApp} from '../src/server.js';
 import type {Config} from '../src/config.js';
 async function fixture(){
@@ -57,5 +59,80 @@ test('root rejection is visible and a fresh request can be queued without changi
     f.set({lastModeRequest:{id:randomUUID(),mode:'auto',state:'rejected',error:'expired'}});
     const view=(await f.request(f.parent)).json();assert.equal(view.mode,'notify');assert.equal(view.lastModeRequest.error,'expired');
     assert.equal((await f.request(f.parent,'POST',{action:'set_mode',mode:'auto'})).json().state,'queued');
+  }finally{await f.close();}
+});
+test('request publication is complete/private and wakes without overwriting a competing request',async()=>{
+  const f=await fixture();let watcher:ReturnType<typeof watch>|undefined;let timer:ReturnType<typeof setTimeout>|undefined;
+  try{
+    const publication=new Promise<any>((resolve,reject)=>{
+      timer=setTimeout(()=>reject(new Error('No synthetic queue publication event')),2000);
+      watcher=watch(f.dir,(_event,name)=>{
+        if(name==='update-request.json'){
+          try{resolve(f.queue());}catch(error){reject(error);}
+        }
+      });
+    });
+    const results=await Promise.all([
+      f.request(f.parent,'POST',{action:'check'}),
+      f.request(f.parent,'POST',{action:'set_mode',mode:'auto'}),
+    ]);
+    assert.deepEqual(results.map(x=>x.json().state).sort(),['pending','queued']);
+    assert.deepEqual(await publication,f.queue());
+    const queue=join(f.dir,'update-request.json'),wake=join(f.dir,'update-request.wake');
+    assert.equal(lstatSync(queue).mode&0o777,0o600);assert.equal(lstatSync(wake).mode&0o777,0o600);
+    assert.equal(lstatSync(queue).ino,lstatSync(wake).ino);
+    assert.equal(lstatSync(queue).isSymbolicLink(),false);
+    assert.deepEqual(readdirSync(f.dir).filter(x=>x.startsWith('.update-request-')),[]);
+    const view=(await f.request(f.parent)).json();
+    assert.equal(view.queuedRequest.id,f.queue().id);assert.equal(view.queuedRequest.action,f.queue().action);
+    assert.equal(view.queuedRequest.familyId,undefined);assert.equal(view.queuedRequest.userId,undefined);
+  }finally{if(timer)clearTimeout(timer);watcher?.close();await f.close();}
+});
+test('queue collision preserves a symlink target and cleans temporary files',async()=>{
+  const f=await fixture();try{
+    const target=join(f.dir,'preserve-fixture');writeFileSync(target,'unchanged synthetic fixture');
+    symlinkSync(target,join(f.dir,'update-request.json'));
+    assert.equal((await f.request(f.parent,'POST',{action:'check'})).json().state,'pending');
+    assert.equal(readFileSync(target,'utf8'),'unchanged synthetic fixture');
+    assert.equal(lstatSync(join(f.dir,'update-request.json')).isSymbolicLink(),true);
+    assert.deepEqual(readdirSync(f.dir).filter(x=>x.startsWith('.update-request-')),[]);
+    assert.equal(readdirSync(f.dir).includes('update-request.wake'),false);
+  }finally{await f.close();}
+});
+test('root request journal exposes only actual stages and prevents concurrent submissions while running',async()=>{
+  const f=await fixture();try{
+    const id=randomUUID();f.set({phase:'downloading',lastRequest:{id,action:'install',state:'running',startedAt:Date.now(),finishedAt:null,error:null,privateDetail:'DO_NOT_EXPOSE'}});
+    const view=(await f.request(f.parent)).json();assert.equal(view.phase,'downloading');assert.equal(view.lastRequest.id,id);
+    assert.equal(view.lastRequest.privateDetail,undefined);
+    assert.equal((await f.request(f.parent,'POST',{action:'check'})).json().state,'pending');
+    f.set({phase:'failed',error:'network',lastRequest:{id,action:'install',state:'failed',startedAt:Date.now()-100,finishedAt:Date.now(),error:'network'}});
+    assert.equal((await f.request(f.parent)).json().lastRequest.state,'failed');
+    assert.equal((await f.request(f.parent,'POST',{action:'check'})).json().state,'queued');
+  }finally{await f.close();}
+});
+test('wake-link ENOSPC cannot report failure after an install request was published',async()=>{
+  const f=await fixture();const originalLink=fsPromises.link;let attempts=0;
+  try{
+    fsPromises.link=async(source,destination)=>{
+      attempts++;
+      if(String(destination)===join(f.dir,'update-request.wake'))
+        throw Object.assign(new Error('synthetic wake-only disk failure'),{code:'ENOSPC'});
+      return originalLink(source,destination);
+    };
+    syncBuiltinESMExports();
+    const result=await f.request(f.parent,'POST',{action:'install'});
+    assert.equal(result.statusCode,200);assert.equal(result.json().state,'queued');
+    assert.equal(attempts,2);assert.equal(f.queue().action,'install');
+    assert.equal(readdirSync(f.dir).includes('update-request.wake'),false);
+    assert.deepEqual(readdirSync(f.dir).filter(x=>x.startsWith('.update-request-')),[]);
+    assert.equal((await f.request(f.parent)).json().queuedRequest.action,'install');
+  }finally{fsPromises.link=originalLink;syncBuiltinESMExports();await f.close();}
+});
+test('expired authenticated work is visible as a matching terminal failure, not success or continuing work',async()=>{
+  const f=await fixture();try{
+    const id=randomUUID();f.set({lastRequest:{id,action:'install',state:'failed',startedAt:Date.now(),finishedAt:Date.now(),error:'expired'}});
+    const view=(await f.request(f.parent)).json();assert.equal(view.configured,true);
+    assert.equal(view.lastRequest.id,id);assert.equal(view.lastRequest.state,'failed');assert.equal(view.lastRequest.error,'expired');
+    assert.equal((await f.request(f.parent,'POST',{action:'check'})).json().state,'queued');
   }finally{await f.close();}
 });

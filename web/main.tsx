@@ -50,7 +50,7 @@ import {
   Eye,
   EyeOff,
 } from 'lucide-react';
-import { api, setCsrf } from './api';
+import { api, isTransientApiError, setCsrf } from './api';
 import './style.css';
 import { DiagnosticsPanel } from './DiagnosticsPanel';
 import { UpdatesPanel } from './UpdatesPanel';
@@ -1582,6 +1582,7 @@ function Parent({
   onError: (x: string) => void;
 }) {
   const [identity, setIdentity] = useState('');
+  const [overviewStale, setOverviewStale] = useState(false);
   const [data, setData] = useState<any>(null),
     [qr, setQr] = useState<string | null>(null),
     [busy, setBusy] = useState(false),
@@ -1591,7 +1592,7 @@ function Parent({
     [deleteOpen, setDeleteOpen] = useState(false),
     [password, setPassword] = useState(''),
     [confirmError, setConfirmError] = useState('');
-  const load = useCallback(async () => {
+  const load = useCallback(async (background = false) => {
     try {
       const d = await api('/parent/overview');
       setData(d);
@@ -1600,16 +1601,18 @@ function Parent({
         const q = await api('/parent/qr');
         setQr(q.qr);
       } else setQr(null);
+      setOverviewStale(false);
     } catch (e) {
-      onError((e as Error).message);
+      if (background && isTransientApiError(e)) setOverviewStale(true);
+      else onError((e as Error).message);
     }
   }, [onError]);
   useEffect(() => {
     void load();
     const source = new EventSource('/api/events');
-    source.addEventListener('refresh', () => void load());
+    source.addEventListener('refresh', () => void load(true));
     source.addEventListener('expired', () => window.dispatchEvent(new Event('session-expired')));
-    const timer = setInterval(() => void load(), 10000);
+    const timer = setInterval(() => void load(true), 10000);
     return () => {
       source.close();
       clearInterval(timer);
@@ -1659,6 +1662,7 @@ function Parent({
           <span>הבחירה שלכם.</span>
         </h1>
         <p className="parent-intro">מקשרים חשבון, בוחרים קבוצות, ונכנסים לשיחות בטאבלט.</p>
+        {overviewStale && <p className="diagnostics-caption" role="status">עדכון המסך ממתין לחיבור לשרת. ננסה שוב אוטומטית; המידע שכבר מוצג עשוי להיות לא מעודכן. זו אינה הודעת כשל של פעולה שביקשתם.</p>}
         {me.connector === 'mock' && (
           <div className="mock-notice">
             <Flower2 size={21} />

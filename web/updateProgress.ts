@@ -1,0 +1,138 @@
+import type { updateStatus } from '../src/updates';
+
+export type UpdateStatus = Awaited<ReturnType<typeof updateStatus>>;
+export type ConfiguredUpdate = Extract<UpdateStatus, { configured: true }>;
+export type UpdateAction = 'check' | 'install' | 'set_mode';
+export type LocalUpdateRequest = {
+  action: UpdateAction;
+  mode?: 'auto' | 'notify';
+  state: 'sending' | 'queued' | 'uncertain';
+  queuedId?: string;
+  previousRequestId?: string;
+  previousModeId?: string;
+};
+
+const activePhases = new Set(['checking', 'downloading', 'verifying', 'building', 'preparing',
+  'stopping', 'backing_up', 'activating', 'checking_health', 'rolling_back']);
+const failedPhases = new Set(['failed', 'rolled_back', 'incompatible', 'recovery_required', 'rollback_pending_health']);
+export const updatePhases: Record<string, string> = {
+  idle: 'אין עדכון ממתין', available: 'גרסה חדשה זמינה', checking: 'בודקים גרסה חדשה ב־GitHub',
+  downloading: 'מורידים את קובצי הגרסה', verifying: 'מאמתים את קובצי הגרסה',
+  building: 'מכינים ובודקים את האפליקציה החדשה', preparing: 'מכינים את העדכון',
+  stopping: 'עוצרים לרגע את האפליקציה', backing_up: 'שומרים גיבוי מוצפן',
+  activating: 'מפעילים את הגרסה החדשה', checking_health: 'בודקים שהאפליקציה תקינה',
+  healthy: 'העדכון הושלם בהצלחה', rolled_back: 'חזרנו לגרסה הקודמת', failed: 'הפעולה לא הושלמה',
+  incompatible: 'הגרסה אינה מתאימה למערכת', rolling_back: 'חוזרים לגרסה הקודמת',
+  recovery_required: 'נדרשת בדיקה מקומית לפני המשך עדכון',
+  rollback_pending_health: 'הגרסה הקודמת ממתינה לבדיקת תקינות',
+};
+
+export function updateActionLabel(action: UpdateAction, mode?: 'auto' | 'notify') {
+  if (action === 'install') return 'התקנת הגרסה הזמינה';
+  if (action === 'set_mode') return mode === 'auto' ? 'הפעלת עדכונים אוטומטיים' : 'מעבר להודעה בלבד';
+  return mode === 'auto' ? 'בדיקה ועדכון אוטומטי אם תימצא גרסה' : 'בדיקת גרסה חדשה';
+}
+
+/** Worker phases also describe scheduled work; only the relevant journal acknowledges a request. */
+export function observesRequest(data: UpdateStatus, request: LocalUpdateRequest) {
+  if (!data.configured) return false;
+  if (data.queuedRequest || data.queuedMode) return false;
+  if (request.action === 'set_mode') {
+    const journal = data.lastModeRequest;
+    if (!journal || journal.mode !== request.mode) return false;
+    return request.queuedId ? journal.id === request.queuedId : journal.id !== request.previousModeId;
+  }
+  const journal = data.lastRequest;
+  if (!journal || journal.action !== request.action) return false;
+  return request.queuedId ? journal.id === request.queuedId : journal.id !== request.previousRequestId;
+}
+
+export function reconcileUpdateRequest(data: UpdateStatus, local: LocalUpdateRequest | null) {
+  if (!data.configured) return local;
+  const queued = data.queuedRequest ?? (data.queuedMode ? { ...data.queuedMode, action: 'set_mode' as const } : null);
+  if (queued) return { action: queued.action, mode: queued.mode, state: 'queued' as const, queuedId: queued.id,
+    previousRequestId: local?.previousRequestId ?? data.lastRequest?.id,
+    previousModeId: local?.previousModeId ?? data.lastModeRequest?.id };
+  if (local && observesRequest(data, local)) return null;
+  // Older workers may consume a queue without any request journal. Do not
+  // recycle an old phase as acknowledgement of this particular request.
+  return local?.queuedId ? { ...local, state: 'uncertain' as const } : local;
+}
+
+export function updateProgress(data: ConfiguredUpdate, local: LocalUpdateRequest | null = null) {
+  // A timer-driven run may be newer than the retained manual-request journal.
+  const last = data.lastRequest && (data.lastRequest.state === 'running' || !data.checkedAt ||
+    (data.lastRequest.finishedAt !== null && data.checkedAt <= data.lastRequest.finishedAt)) ? data.lastRequest : null;
+  const queued = data.queuedRequest;
+  if (queued) return { kind: 'queued', active: true, title: 'הבקשה בתור — ממתינים לשירות העדכון',
+    action: updateActionLabel(queued.action, queued.mode ?? data.mode),
+    detail: 'השירות עדיין לא אישר שהתחיל לטפל בבקשה הזאת. המצב מתעדכן אוטומטית; אין צורך ללחוץ שוב.' } as const;
+  if (local) return { kind: local.state === 'queued' ? 'queued' : 'unknown', active: true,
+    title: local.state === 'sending' ? 'שולחים את הבקשה…' : local.state === 'queued' ? 'הבקשה נקלטה — ממתינים לדיווח מהשירות' : 'ממתינים לאישור מצב הבקשה',
+    action: updateActionLabel(local.action, local.mode ?? data.mode),
+    detail: local.state === 'sending' ? 'עדיין לא התקבל אישור מהשרת.' : local.state === 'queued'
+      ? 'זהו אישור קבלה, לא אישור שההתקנה התחילה. ההתקדמות תופיע כאן אוטומטית.'
+      : 'לא התקבל אישור חד־משמעי. בודקים שוב אוטומטית; אין להסיק שהפעולה נכשלה או לשלוח בקשה נוספת.' } as const;
+  if (data.queuedMode || data.lastModeRequest?.state === 'pending') return { kind: 'queued', active: true,
+    title: 'ממתינים להחלת שינוי המצב', action: updateActionLabel('set_mode', data.queuedMode?.mode ?? data.lastModeRequest?.mode),
+    detail: 'המצב הפעיל מוצג בנפרד ויתחלף רק לאחר אישור מהשירות. אין צורך ללחוץ שוב.' } as const;
+  if (last?.state === 'running' || activePhases.has(data.phase)) return { kind: 'running', active: true,
+    title: activePhases.has(data.phase) ? updatePhases[data.phase] : 'שירות העדכון מטפל בבקשה',
+    action: last?.state === 'running' ? updateActionLabel(last.action, data.mode) : undefined,
+    detail: 'זהו השלב האחרון שדווח בפועל. המצב מתעדכן אוטומטית, גם כשהחלונית סגורה; אין צורך ללחוץ שוב.' } as const;
+  if (last?.state === 'failed' || failedPhases.has(data.phase)) return { kind: 'failure', active: false,
+    title: last?.error === 'expired' ? 'תוקף הבקשה פג לפני הטיפול' : failedPhases.has(data.phase) ? updatePhases[data.phase] : 'הפעולה לא הושלמה',
+    action: last?.state === 'failed' ? updateActionLabel(last.action, data.mode) : undefined,
+    detail: last?.error === 'expired' ? 'הבקשה המתינה מעבר לתוקף שלה ולא בוצעה עבורה התקנה. אפשר לשלוח בקשה חדשה אם עדיין תרצו; הבקשה הזאת לא תישלח שוב אוטומטית.'
+      : data.phase === 'rolled_back' ? 'הגרסה החדשה לא התקבלה. שירות העדכון דיווח שחזר לגרסה הקודמת.'
+      : 'שירות העדכון דיווח על כשל. אין כאן אישור שהגרסה החדשה הותקנה.' } as const;
+  if (last?.state === 'succeeded') return { kind: 'success', active: false,
+    title: data.phase === 'healthy' ? updatePhases.healthy : data.phase === 'available' ? 'הבדיקה הסתיימה — נמצאה גרסה חדשה' : 'הבדיקה הסתיימה — אין עדכון ממתין',
+    action: updateActionLabel(last.action, data.mode),
+    detail: data.phase === 'healthy' ? 'שירות העדכון אישר שהגרסה החדשה פעילה ועברה בדיקת תקינות.'
+      : data.phase === 'available' ? 'הגרסה זמינה, אך לא התקבלה הודעה שהותקנה.' : 'זהו המצב שאישר שירות העדכון בסיום הפעולה.' } as const;
+  return { kind: data.error ? 'failure' : data.phase === 'healthy' ? 'success' : 'idle', active: false, title: updatePhases[data.phase] || 'מצב שירות העדכון',
+    action: undefined, detail: 'מצב השרת האחרון שדווח. בקשה שנשלחה אינה הוכחה שהחלה התקנה.' } as const;
+}
+
+export function updateActionsDisabled(data: ConfiguredUpdate | null, local: LocalUpdateRequest | null,
+  unavailable: boolean, busy: boolean) {
+  return !data || busy || unavailable || !data.enabled || data.stale || !!local || updateProgress(data).active;
+}
+
+export function updatePollDelay(failures: number, active: boolean) {
+  return failures ? Math.min(30_000, 3000 * 2 ** Math.min(failures - 1, 4)) : active ? 3000 : 15_000;
+}
+
+/** Serialized reads, capped reconnect backoff, and abort/ignore on cleanup. Never retries a POST. */
+export function createUpdatePoller<T>({ read, onValue, onError, active, schedule = setTimeout, cancel = clearTimeout }: {
+  read: (signal: AbortSignal) => Promise<T>;
+  onValue: (value: T) => void;
+  onError: (error: unknown) => void;
+  active: () => boolean;
+  schedule?: typeof setTimeout;
+  cancel?: typeof clearTimeout;
+}) {
+  let stopped = false, inFlight = false, again = false, failures = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let controller: AbortController | undefined;
+  async function tick() {
+    if (stopped || inFlight) return;
+    inFlight = true;
+    const current = new AbortController(); controller = current;
+    const timeout = schedule(() => current.abort(), 15_000);
+    try {
+      const value = await read(current.signal);
+      if (!stopped) { failures = 0; onValue(value); }
+    } catch (error) {
+      if (!stopped) { failures++; onError(error); }
+    } finally {
+      cancel(timeout); inFlight = false; controller = undefined;
+      if (!stopped) { timer = schedule(() => void tick(), again ? 0 : updatePollDelay(failures, active())); again = false; }
+    }
+  }
+  return {
+    refresh() { if (stopped) return; if (timer) cancel(timer); if (inFlight) again = true; else void tick(); },
+    stop() { stopped = true; if (timer) cancel(timer); controller?.abort(); },
+  };
+}

@@ -2,6 +2,17 @@ export let csrf = '';
 export function setCsrf(value: string) {
   csrf = value;
 }
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number, readonly code: string) {
+    super(message); this.name = 'ApiError';
+  }
+}
+export class ApiNetworkError extends Error {}
+/** Only background reads may quietly retry these failures; auth errors remain explicit. */
+export function isTransientApiError(error: unknown) {
+  return error instanceof ApiNetworkError || error instanceof ApiError &&
+    (error.status === 408 || error.status === 429 || error.status >= 500 && error.status < 600);
+}
 const errors: Record<string, string> = {
   UPDATES_MODE_LOCKED: 'שליטה במצב העדכון טרם אושרה בהגדרה המקומית של רכיב העדכון.',
   HISTORY_WAIT: 'יש בקשות היסטוריה פעילות או שבוצעו לאחרונה. המתינו מעט לפני בקשה נוספת.',
@@ -37,6 +48,9 @@ export async function api<T = any>(path: string, method = 'GET', body?: unknown)
     body: body ? (form ? body : JSON.stringify(body)) : undefined,
     credentials: 'same-origin',
     cache: 'no-store',
+  }).catch(error => {
+    if (error instanceof TypeError) throw new ApiNetworkError('החיבור לשרת אינו זמין כרגע.', { cause: error });
+    throw error;
   });
   if (!res.ok) {
     let error = 'REQUEST_FAILED';
@@ -44,7 +58,7 @@ export async function api<T = any>(path: string, method = 'GET', body?: unknown)
       error = (await res.json()).error;
     } catch {}
     if (res.status === 401 && path !== '/login') window.dispatchEvent(new Event('session-expired'));
-    throw new Error(errors[error] || 'הפעולה לא הושלמה. אפשר לנסות שוב.');
+    throw new ApiError(errors[error] || 'הפעולה לא הושלמה. אפשר לנסות שוב.', res.status, error);
   }
   return res.json();
 }

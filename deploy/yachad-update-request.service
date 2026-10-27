@@ -1,0 +1,27 @@
+[Unit]
+Description=Process queued Yachad parent update requests promptly
+After=network-online.target yachad-update-recover.service
+Wants=network-online.target
+Requires=yachad-update-recover.service
+StartLimitIntervalSec=10
+StartLimitBurst=30
+
+[Service]
+Type=oneshot
+# Root-installed literal path, overridden for the configured data directory.
+# rm unlinks the latch, never reads it or follows a final-component symlink.
+ExecStartPre=/usr/bin/rm -f -- /var/lib/yachad/update-request.wake
+ExecStart=/usr/bin/python3 /usr/local/lib/yachad-updater/updater.py requests
+ExecStopPost=/usr/bin/python3 /usr/local/lib/yachad-updater/updater.py recover
+# Allow the existing 30-minute worker to finish before this serialized request.
+TimeoutStartSec=65min
+TimeoutStopSec=3min
+UMask=0077
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/yachad-updates /var/lib/yachad-update-build /opt/yachad /var/lib/yachad /var/backups/yachad-updates
+NoNewPrivileges=true
+LimitCORE=0
+StandardOutput=journal
+StandardError=journal
