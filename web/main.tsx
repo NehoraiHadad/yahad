@@ -10,8 +10,12 @@ import { MessageImage } from './MessageImage';
 import { DisconnectPanel } from './DisconnectPanel';
 import { GroupAvatar } from './GroupAvatar';
 import { GroupPicker } from './GroupPicker';
+import { ParentChatFilter, filterParentGroups, type ChatFilter } from './ParentChatFilter';
+import { childLabel } from './childLabels';
+import { LatestRequest, isGroupDataRefresh } from './latestRequest';
 import { AccountSettings } from './AccountSettings';
 import { FamilySetup } from './FamilySetup';
+import { FamilyProgress, ChildGroupSummary, familyProgress, type FamilyOverview } from './FamilyProgress';
 let setupToken = new URLSearchParams(location.hash.slice(1)).get('setup') || '';
 if (setupToken) history.replaceState(null, '', location.pathname + location.search);
 import React, { useState, useEffect, useRef, useCallback } from 'react';
@@ -373,6 +377,14 @@ function Chat({
     [stickersOpen, setStickersOpen] = useState(false),
     [attachmentKind, setAttachmentKind] = useState('file'),
     [settingsOpen, setSettingsOpen] = useState(false);
+  const [chatFilter, setChatFilter] = useState<ChatFilter>({ mode: 'all', childId: '' });
+  const [filterOverview, setFilterOverview] = useState<FamilyOverview | null>(null);
+  const [filterVerified, setFilterVerified] = useState(false);
+  const filterRef = useRef(chatFilter), listGeneration = useRef(new LatestRequest()), groupDataGeneration = useRef(new LatestRequest());
+  filterRef.current = chatFilter;
+  const visibleGroups = me.user.role === 'parent'
+    ? filterParentGroups(groups, chatFilter, filterOverview, filterVerified) : groups;
+  const activeSelected = visibleGroups.some(group => group.id === selected) ? selected : null;
   const viewport = useRef<HTMLDivElement>(null),
     bottom = useRef<HTMLDivElement>(null),
     selectedRef = useRef(selected),
@@ -382,14 +394,40 @@ function Chat({
     seenIds = useRef(new Set<string>()),
     composerPending = useRef(false);
   const composerBusyChanged = useCallback((value: boolean) => { composerPending.current = value; }, []);
-  selectedRef.current = selected;
-  const current = groups.find((g) => g.id === selected),
+  selectedRef.current = activeSelected;
+  const current = visibleGroups.find((g) => g.id === selected),
     c = me.capabilities;
+  const invalidateFilter = () => {
+    setFilterVerified(false);
+    if (filterRef.current.mode === 'child') {
+      selectedRef.current = null;
+      requestGeneration.current++;
+    }
+  };
+  const changeFilter = (next: ChatFilter) => {
+    if (next.mode === filterRef.current.mode && next.childId === filterRef.current.childId) return;
+    filterRef.current = next;
+    selectedRef.current = null;
+    requestGeneration.current++;
+    setSelected(null);
+    setChatFilter(next);
+    // Never reuse a previously verified grant snapshot when entering a child view.
+    if (next.mode === 'child') void refreshList();
+  };
   const refreshList = useCallback(async () => {
+    const generation = listGeneration.current.begin();
+    groupDataGeneration.current.invalidate();
+    invalidateFilter();
     try {
-      const data = await api<Group[]>('/groups');
+      const [data, overview] = await Promise.all([
+        api<Group[]>('/groups'),
+        me.user.role === 'parent' ? api<FamilyOverview>('/parent/overview').catch(() => null) : Promise.resolve(null),
+      ]);
+      if (!listGeneration.current.isCurrent(generation)) return;
+      setFilterOverview(overview);
+      setFilterVerified(overview !== null);
       setGroups(data);
-      setNeedsRefresh(false);
+      setNeedsRefresh(me.user.role === 'parent' && overview === null);
       setListBusy(false);
       const g = selectedRef.current;
       if (g && !data.some((x) => x.id === g)) {
@@ -402,9 +440,20 @@ function Chat({
         setMenu(null);
       }
     } catch (e) {
+      if (!listGeneration.current.isCurrent(generation)) return;
       setListBusy(false);
       setNeedsRefresh(true);
     }
+  }, [me.user.id, me.user.role]);
+  // Message-only events cannot change grants. Keep the composer mounted so incoming
+  // messages and successful sends do not destroy a parent's unsent draft/attachment.
+  const refreshGroupData = useCallback(async () => {
+    const generation = groupDataGeneration.current.begin();
+    try {
+      const data = await api<Group[]>('/groups');
+      if (!groupDataGeneration.current.isCurrent(generation)) return;
+      setGroups(data);
+    } catch { /* Full permission refresh/reconnect owns recovery and its stale flag. */ }
   }, []);
   const refreshMessages = useCallback(
     async (g: string, initial = false) => {
@@ -451,8 +500,9 @@ function Chat({
       const g = selectedRef.current;
       if (g) void refreshMessages(g);
     });
-    source.addEventListener('refresh', () => {
-      void refreshList();
+    source.addEventListener('refresh', (event) => {
+      if (isGroupDataRefresh((event as MessageEvent).data)) void refreshGroupData();
+      else void refreshList();
       void api<Me>('/me')
         .then((m) => {
           setCsrf(m.csrf);
@@ -471,8 +521,16 @@ function Chat({
       }
     });
     source.addEventListener('paused', () => setTyping(false));
-    source.onerror = () => setOnline(false);
+    source.onerror = () => {
+      setOnline(false);
+      listGeneration.current.invalidate();
+      groupDataGeneration.current.invalidate();
+      invalidateFilter();
+    };
     return () => {
+      listGeneration.current.invalidate();
+      groupDataGeneration.current.invalidate();
+      requestGeneration.current++;
       source.close();
       if (typingTimer.current) clearTimeout(typingTimer.current);
     };
@@ -491,11 +549,11 @@ function Chat({
     setNewCount(0);
     setCursor(null);
     nearBottom.current = true;
-    if (selected) {
+    if (activeSelected) {
       setBusy(true);
-      void refreshMessages(selected, true);
+      void refreshMessages(activeSelected, true);
     }
-  }, [selected]);
+  }, [activeSelected]);
   useEffect(() => {
     localStorage.setItem('yachad-theme', theme);
     localStorage.setItem('yachad-dark', String(dark));
@@ -504,7 +562,7 @@ function Chat({
   const action = async (fn: () => Promise<unknown>) => {
     try {
       await fn();
-      if (selected) await refreshMessages(selected);
+      if (selectedRef.current) await refreshMessages(selectedRef.current);
     } catch (e) {
       onError((e as Error).message);
     }
@@ -557,7 +615,7 @@ function Chat({
     }
   };
   return (
-    <main className={`chat-app theme-${theme} ${effects ? 'playful' : ''} ${dark ? 'dark' : ''} ${selected ? 'has-chat' : ''}`}>
+    <main className={`chat-app theme-${theme} ${effects ? 'playful' : ''} ${dark ? 'dark' : ''} ${activeSelected ? 'has-chat' : ''}`}>
       <aside className="sidebar">
         <header className="side-top">
           <a className="brand" href="/" onClick={(e) => e.preventDefault()}>
@@ -575,8 +633,10 @@ function Chat({
               השיחות שלי<span className="tiny-flower">✳</span>
             </h1>
           </div>
-          <span className="count">{groups.length}</span>
+          <span className="count">{visibleGroups.length}</span>
         </div>
+        {me.user.role === 'parent' && <ParentChatFilter filter={chatFilter} overview={filterOverview}
+          verified={filterVerified} onChange={changeFilter} />}
         <label className="group-search">
           <Search size={18} />
           <input
@@ -593,7 +653,7 @@ function Chat({
               טוענים שיחות…
             </div>
           ) : (
-            groups
+            visibleGroups
               .filter((g) => g.title.includes(query))
               .map((g, i) => {
                 return (
@@ -624,11 +684,11 @@ function Chat({
                 );
               })
           )}
-          {!listBusy && !groups.length && (
+          {!listBusy && !visibleGroups.length && (
             <div className="empty-list">
               <ShieldCheck />
               <h3>עוד רגע, מתחילים</h3>
-              <p>הקבוצות שההורה יבחר יופיעו כאן.</p>
+              <p>{me.user.role === 'parent' && chatFilter.mode === 'child' ? !filterVerified ? 'מאמתים הרשאות לפני הצגת שיחות.' : !chatFilter.childId ? 'בחרו ילד או ילדה כדי להציג קבוצות מאושרות.' : 'אין קבוצות מאושרות זמינות לחשבון שנבחר.' : 'הקבוצות שההורה יבחר יופיעו כאן.'}</p>
               <button className="text-button" onClick={() => void refreshList()}>
                 רענון
               </button>
@@ -889,7 +949,7 @@ function Chat({
                 setReply(null);
                 setEditing(null);
                 nearBottom.current = true;
-                void refreshList();
+                void refreshGroupData();
                 void refreshMessages(current.id).then(() => {
                   bottom.current?.scrollIntoView({ behavior: 'smooth' });
                   nearBottom.current = true;
@@ -1643,7 +1703,7 @@ function Parent({
   const [groupPhotoRevision, setGroupPhotoRevision] = useState(0);
   const [createdChild, setCreatedChild] = useState('');
   const [overviewStale, setOverviewStale] = useState(false);
-  const [data, setData] = useState<any>(null),
+  const [data, setData] = useState<FamilyOverview | null>(null),
     [qr, setQr] = useState<string | null>(null),
     [busy, setBusy] = useState(false),
     [child, setChild] = useState(''),
@@ -1652,18 +1712,24 @@ function Parent({
     [deleteOpen, setDeleteOpen] = useState(false),
     [password, setPassword] = useState(''),
     [confirmError, setConfirmError] = useState('');
+  const acting = useRef(false), overviewRequest = useRef(0);
   const load = useCallback(async (background = false) => {
+    const request = ++overviewRequest.current;
     try {
-      const d = await api('/parent/overview');
+      const d = await api<FamilyOverview>('/parent/overview');
+      if (request !== overviewRequest.current) return;
       setData(d);
-      setChild((prev) => prev || d.children[0]?.id || '');
+      setChild((prev) => d.children.some(child => child.id === prev) ? prev : familyProgress(d).pendingChild?.id || d.children[0]?.id || '');
       if (d.state === 'qr') {
         const q = await api('/parent/qr');
+        if (request !== overviewRequest.current) return;
         setQr(q.qr);
       } else setQr(null);
       setOverviewStale(false);
     } catch (e) {
-      if (background && isTransientApiError(e)) setOverviewStale(true);
+      if (request !== overviewRequest.current) return;
+      setOverviewStale(true);
+      if (background && isTransientApiError(e)) return;
       else onError((e as Error).message);
     }
   }, [onError]);
@@ -1679,17 +1745,25 @@ function Parent({
     };
   }, []);
   const act = async (path: string, body?: unknown, method = 'POST') => {
-    setBusy(true);
+    if (acting.current) return;
+    acting.current = true; setBusy(true);
     try {
       await api(path, method, body);
       if (path === '/parent/sync-groups') setGroupPhotoRevision(value => value + 1);
+      // If an SSE/timer read supersedes this refresh, keep edits blocked until
+      // the newest read confirms the persisted state (even after busy clears).
+      setOverviewStale(true);
       await load();
     } catch (e) {
       onError((e as Error).message);
+      // A lost mutation response may still have committed. Reconcile before another click.
+      setOverviewStale(true);
+      await load(true);
     } finally {
-      setBusy(false);
+      acting.current = false; setBusy(false);
     }
   };
+  const selectedChild = data ? familyProgress(data).children.find(item => item.id === child) : undefined;
   const stateLabels: Record<string, string> = {
     connected: 'מחובר',
     connecting: 'מתחברים…',
@@ -1733,13 +1807,15 @@ function Parent({
             </div>
           </div>
         )}
+        {data && <FamilyProgress data={data} busy={busy} stale={overviewStale} onAdd={() => setAddingChild(true)} onSelect={id => { setChild(id); setCreatedChild(''); }} />}
+        {data && <ChildGroupSummary data={data} selected={child} busy={busy} stale={overviewStale} onSelect={id => { setChild(id); setCreatedChild(''); }} />}
         <div className="parent-grid">
-          <section className="parent-card">
+          <section className="parent-card" id="family-connection" tabIndex={-1}>
             <div className="step-title">
               <span>01</span>
               <h2>מחברים את WhatsApp</h2>
               <span className={'state-pill ' + (data?.state === 'connected' ? 'connected' : '')}>
-                {(data?.disconnect ? 'מנותק' : stateLabels[data?.state]) || 'טוענים…'}
+                {(data?.disconnect ? 'מנותק' : stateLabels[data?.state || '']) || 'טוענים…'}
               </span>
             </div>
             <p>חשבון ההורה משמש לשליחה ולקבלה. פרטי הקישור נשארים בשרת.</p>
@@ -1790,7 +1866,7 @@ function Parent({
               </p>
             </div>
           </section>
-          <section className="parent-card group-picker">
+          <section className="parent-card group-picker" id="family-groups" tabIndex={-1}>
             <div className="step-title">
               <span>02</span>
               <h2>בוחרים את הקבוצות</h2>
@@ -1803,14 +1879,14 @@ function Parent({
               </IconButton>
             </div>
             <p>רק הקבוצות המסומנות נגישות בחשבון הילדה.</p>
-            <button type="button" className="outline-button" onClick={() => setAddingChild(true)}>הוספת ילד או ילדה</button>
-            {data?.children.length > 1 && (
+            <button type="button" className="outline-button" disabled={busy || !data || overviewStale} onClick={() => setAddingChild(true)}>הוספת ילד או ילדה</button>
+            {data && data.children.length > 1 && (
               <label>
-                חשבון ילדה
+                חשבון ילד או ילדה
                 <select value={child} disabled={busy} onChange={(e) => { setChild(e.target.value); setCreatedChild(''); }}>
                   {data.children.map((x: any) => (
                     <option key={x.id} value={x.id}>
-                      {x.username}
+                      {childLabel(x, data.children)}
                     </option>
                   ))}
                 </select>
@@ -1819,7 +1895,7 @@ function Parent({
             {createdChild === child && data?.children.some((x: any) => x.id === createdChild) && <p role="status" className="setup-success">החשבון נוצר ונבחר. סמנו את הקבוצות שיופיעו בו. אפשר להוסיף חשבון נוסף בהמשך.</p>}
             {data?.children.length === 0 && <p className="setup-success">מתחילים בחשבון ילד. רק אחר כך מאשרים עבורו קבוצות — אין גישה אוטומטית לשיחות.</p>}
             <GroupPicker photoRetryKey={`${data?.state || 'idle'}:${groupPhotoRevision}`} groups={data?.groups || []} grants={data?.grants || []} childId={child}
-              busy={busy} loading={!data} onToggle={(groupId, allowed) => void act('/parent/grant', { childId: child, groupId, allowed }, 'PUT')} />
+              busy={busy || overviewStale} loading={!data} onToggle={(groupId, allowed) => void act('/parent/grant', { childId: child, groupId, allowed }, 'PUT')} />
             <div className="small-note">
               <ShieldCheck size={16} />
               <p>
@@ -1829,11 +1905,12 @@ function Parent({
             </div>
           </section>
         </div>
-        <section className="parent-card next-step">
+        <section className="parent-card next-step" id="family-tablet" tabIndex={-1}>
           <div>
             <span className="eyebrow">03 · מתחילים לדבר</span>
-            <h2>מוכנים לטאבלט</h2>
-            <p>פותחים את אותה כתובת מאובטחת, ונכנסים עם חשבון הילדה.</p>
+            <h2>{selectedChild?.ready && !overviewStale ? 'מוכן לכניסה בטאבלט' : 'לפני הכניסה בטאבלט'}</h2>
+            <p>{!data ? 'טוענים את מצב ההכנה…' : overviewStale ? 'ממתינים לאימות מצב ההכנה מול השרת.' : !selectedChild ? 'הוסיפו חשבון ילד ובחרו עבורו קבוצות.' : !selectedChild.groups.length ? 'לחשבון שנבחר אין קבוצות מאושרות. בחרו לפחות קבוצה אחת לפני הכניסה.' : !selectedChild.ready ? 'הקבוצות נשמרו. חברו את החשבון כדי להמשיך.' : 'פותחים את אותה כתובת מאובטחת, ונכנסים עם חשבון הילד שנבחר.'}</p>
+            <p className="muted">המסך אינו מאשר שהטאבלט התחבר. ודאו בטאבלט שהכניסה הצליחה והקבוצות מופיעות.</p>
           </div>
           <div className="child-login-details">
             <span>כתובת הטאבלט <b dir="ltr">{location.origin}</b></span>
@@ -1841,7 +1918,7 @@ function Parent({
             <b dir="ltr">{data?.children.find((x: any) => x.id === child)?.username || '—'}</b>
           </div>
           <button className="outline-button" onClick={openChat}>
-            לממשק השיחות <ArrowLeft size={18} />
+            לממשק השיחות של ההורה <ArrowLeft size={18} />
           </button>
         </section>
         <IdentitySettings
@@ -1888,7 +1965,7 @@ function Parent({
           <button onClick={() => setDeleteOpen(true)}>מחיקת המשפחה והחשבונות</button>
         </div>
       </div>
-      {addingChild && <FamilySetup existingUsernames={[me.user.username, ...(data?.children || []).map((x: any) => x.username)]} onDone={id => { setAddingChild(false); if (id) { setChild(id); setCreatedChild(id); } void load(); }} onClose={() => { setAddingChild(false); void load(); }} />}
+      {addingChild && <FamilySetup existingUsernames={[me.user.username, ...(data?.children || []).map((x: any) => x.username)]} onDone={id => { setAddingChild(false); setOverviewStale(true); if (id) { setChild(id); setCreatedChild(id); } void load(); }} onClose={() => { setAddingChild(false); setOverviewStale(true); void load(); }} />}
       {settings && (
         <AccountSettings
           children={data?.children}

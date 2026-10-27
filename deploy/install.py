@@ -150,10 +150,35 @@ class Installer:
                     COOKIE_SECURE='true',CONNECTOR='mock',ALLOW_REAL_WHATSAPP='no',HOST='127.0.0.1',PORT='3000',
                     UPDATE_STATUS_FILE='/var/lib/yachad-updates/status.json',SETUP_CAPABILITY_FILE='/etc/yachad/setup-capability.json'),True
     def prerequisites(self):
-        if self.s.run(['/usr/bin/cat','/proc/1/comm']).strip()!=b'systemd': raise InstallError('systemd is required (enable it in the selected WSL2 distribution)')
+        # Read-only, grouped diagnostics before downloads, confirmation or provisioning.
+        missing=[]
+        try:
+            if self.s.run(['/usr/bin/cat','/proc/1/comm']).strip()!=b'systemd':
+                missing.append('systemd is not running. In WSL, enable systemd in the selected distribution using docs/INSTALL.md; then reopen it.')
+        except InstallError:
+            missing.append('Cannot check systemd. Use a supported Debian/Ubuntu Linux terminal (Windows requires WSL2).')
         node=shutil.which('node'); npm=shutil.which('npm')
-        if not node or not npm or not self.s.run([node,'--version']).startswith(b'v24.'): raise InstallError('Install Node 24 LTS and npm first')
-        self.s.run(['ffmpeg','-version']);self.s.run(['openssl','version'])
+        if not node:
+            missing.append('Node 24 is missing. Install Node 24 LTS inside this Linux/WSL distribution, available to system services.')
+        else:
+            try:
+                if not self.s.run([node,'--version']).startswith(b'v24.'):
+                    missing.append('Node has the wrong version. Use Node 24 LTS, not another major version.')
+            except InstallError:missing.append('Node could not start. Repair the Node 24 installation inside this Linux/WSL distribution.')
+        if not npm:missing.append('npm is missing. Install npm alongside Node 24 inside this Linux/WSL distribution.')
+        requirements=[('ffmpeg','-version','ffmpeg'),('openssl','version','OpenSSL')]
+        # Existing HTTPS arrangements are preserved, not replaced with Caddy.
+        config_dir=self.p('/etc/yachad')
+        # An ordinary owner cannot traverse the protected existing config directory.
+        # Check accessibility before probing ENV; privileged run() still validates
+        # its actual files/ownership through load() and paths().
+        if (not config_dir.exists() or os.access(config_dir,os.R_OK|os.X_OK)) and not self.p(ENV).exists():
+            requirements.append(('caddy','version','Caddy (fresh-install HTTPS)'))
+        for command,argument,label in requirements:
+            try:self.s.run([command,argument])
+            except InstallError:missing.append(label+' is missing or cannot start. Install/repair it inside this Linux/WSL distribution.')
+        if missing:
+            raise InstallError('NOT READY — no installation changes made. Fix these prerequisites first:\n- '+'\n- '.join(missing)+'\nSee docs/INSTALL.md. This check does not install packages, enable WSL/systemd, or change security settings.')
         return node,npm
     def active(self,env):
         data=self.p(env['DATA_DIR']);key=self.p(env['MASTER_KEY_FILE'])
@@ -489,7 +514,14 @@ class Installer:
         finally:os.close(fd)
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--origin');args=parser.parse_args()
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--origin')
+    parser.add_argument('--check-only',action='store_true',help='Check local prerequisites without sudo, downloads or installation changes')
+    args=parser.parse_args()
+    if args.check_only:
+        if args.origin:origin(args.origin)
+        Installer(Linux()).prerequisites()
+        print('PREREQUISITES_OK: local tools are available. No installation changes made. Network, existing-install safety, LAN access and certificate trust still require installation/owner checks.')
+        return
     if os.geteuid()!=0 or not sys.stdin.isatty():raise InstallError('Run using sudo in the local owner terminal')
     Installer(Linux()).run(args.origin)
 if __name__=='__main__':

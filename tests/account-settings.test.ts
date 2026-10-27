@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import ts from 'typescript';
+import { childLabel } from '../web/childLabels.js';
 
 // Exercise the actual component handlers with deterministic hooks, not a DOM.
 // Focus, browser validation and geometry still require browser acceptance.
@@ -23,6 +24,7 @@ function harness() {
       useRef(initial: any) { const i = cursor++; return slots[i] ||= { current: initial }; },
     } : name === './useDialogFocus' ? { useDialogFocus() {} }
       : name === './FamilySetup' ? { passphraseHelp: 'synthetic help' }
+      : name === './childLabels' ? { childLabel }
       : name === './api' ? { api: (...args: any[]) => { requests.push(args); return new Promise<void>(r => resolve = r); } }
       : require(name),
   });

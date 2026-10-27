@@ -3,13 +3,14 @@ import { X, Check } from 'lucide-react';
 import { api } from './api';
 import { passphraseHelp } from './FamilySetup';
 import { useDialogFocus } from './useDialogFocus';
+import { childLabel, type ChildIdentity } from './childLabels';
 
 export function AccountSettings({
   onClose,
   children: users,
 }: {
   onClose: () => void;
-  children?: { id: string; username: string }[];
+  children?: ChildIdentity[];
 }) {
   const [current, setCurrent] = useState(''),
     [next, setNext] = useState(''),
@@ -40,7 +41,8 @@ export function AccountSettings({
           try {
             if (child) {
               await api('/parent/child-password', 'POST', { childId: child, password: next, confirmation });
-              setMessage(`הסיסמה של ${users?.find(u => u.id === child)?.username || 'החשבון'} עודכנה וכל חיבורי החשבון נותקו.`);
+              const selected = users?.find(u => u.id === child);
+              setMessage(`הסיסמה של ${selected ? childLabel(selected, users || []) : 'החשבון'} עודכנה וכל חיבורי החשבון נותקו.`);
               setNext(''); setConfirmation('');
             } else {
               await api('/password', 'POST', { current, next, confirmation });
@@ -66,7 +68,7 @@ export function AccountSettings({
               <option value="">החשבון שלי</option>
               {users.map((u) => (
                 <option key={u.id} value={u.id}>
-                  {u.username}
+                  {childLabel(u, users)}
                 </option>
               ))}
             </select>
