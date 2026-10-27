@@ -1,0 +1,13 @@
+[Unit]
+Description=Wake the Yachad updater when a parent queues a request
+
+[Path]
+# Installer overrides both with DATA_DIR. The latch is cleared once at service
+# start, never on exit: a new request during shutdown must remain level-triggered.
+PathExists=/var/lib/yachad/update-request.wake
+# Compatibility for older apps without a latch; timer is still the fallback.
+PathChanged=/var/lib/yachad/update-request.json
+Unit=yachad-update-request.service
+
+[Install]
+WantedBy=multi-user.target

@@ -389,7 +389,25 @@ class Worker:
                               lastModeRequest={'id':data['id'], 'mode':data['mode'], 'state':'pending', 'error':None})
                 consume = True
                 return 'set_mode'
-            if abs(time.time() * 1000 - data['createdAt']) > 600000: return None
+            # Older local request writers did not always include a UUID. Keep
+            # their command contract, but correlate modern UI work durably.
+            try:
+                correlated = str(uuid.UUID(data.get('id', ''))) == data.get('id')
+            except (ValueError, TypeError, AttributeError): correlated = False
+            if abs(time.time() * 1000 - data['createdAt']) > 600000:
+                if correlated:
+                    consume = False
+                    now = int(time.time()*1000)
+                    self.save(lastRequest={'id':data['id'], 'action':data['action'], 'state':'failed',
+                              'startedAt':now, 'finishedAt':now, 'error':'expired'})
+                    consume = True
+                    return 'expired'
+                return None
+            if correlated:
+                consume = False
+                self.save(lastRequest={'id':data['id'], 'action':data['action'], 'state':'running',
+                          'startedAt':int(time.time()*1000), 'finishedAt':None, 'error':None})
+                consume = True
             return data['action']
         finally:
             if consume: path.unlink(missing_ok=True)
@@ -398,6 +416,11 @@ class Worker:
         now = time.time() * 1000
         return [x for x in self.status.get('modeRequestSeen', []) if isinstance(x, dict) and
                 isinstance(x.get('id'), str) and type(x.get('at')) in (int, float) and math.isfinite(x['at']) and abs(now-x['at']) <= 1200000]
+
+    def finish_request(self, state, error=None):
+        request = self.status.get('lastRequest')
+        if isinstance(request, dict) and request.get('state') == 'running':
+            self.save(lastRequest=dict(request, state=state, finishedAt=int(time.time()*1000), error=error))
 
     def finish_mode_request(self, request, state, error=None):
         seen = [x for x in self.mode_seen() if x['id'] != request['id']]
@@ -472,7 +495,9 @@ class Worker:
             trust = release_policy(self.c, self.status)
             required = release_assets(self.c, self.status)
             limits = {ASSETS[0]:8192, ASSETS[1]:64, ASSETS[2]:64 * 1024 * 1024}
+            self.save(phase='downloading')
             content = {name:download(assets[name]['url'], limits[name], token) for name in required}
+            self.save(phase='verifying')
             if trust == 'signature':
                 key = pathlib.Path(self.c['publicKeyFile'])
                 if not key.is_file() or key.is_symlink() or key.stat().st_uid != 0 or key.stat().st_mode & 0o022:
@@ -506,6 +531,7 @@ class Worker:
                 os.chown(p, user.pw_uid, user.pw_gid, follow_symlinks=False)
                 os.chmod(p, 0o700 if p.is_dir() else 0o600)
             os.chown(build, user.pw_uid, user.pw_gid)
+            self.save(phase='building')
             self.command([self.c['npm'], 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'],
                          user=self.c['builderUser'], cwd=build, timeout=1200, code='build')
             self.command([self.c['node'], '--import', 'tsx', 'scripts/update-smoke.ts'], user=self.c['builderUser'], cwd=build, timeout=90, code='build')
@@ -566,7 +592,14 @@ class Worker:
             if p not in (active, previous) and not p.is_symlink() and p.is_dir() and re.fullmatch(r'v\d+\.\d+\.\d+', p.name):
                 shutil.rmtree(p)
 
-    def run(self):
+    def run(self, request_only=False):
+        # PathChanged also observes removal. A stale event must never turn into
+        # a scheduled release check (which could install in auto mode).
+        if request_only and not os.path.lexists(pathlib.Path(self.c['dataDirectory']) / 'update-request.json'):
+            return
+        # Acquiring the same flock means a previous running request is orphaned,
+        # not evidence that it succeeded. Recovery still has priority below.
+        self.finish_request('failed', 'internal')
         was_recovering = self.status.get('phase') in PHASES
         if not self.recover():
             return
@@ -582,15 +615,21 @@ class Worker:
         if self.status.get('modeChangePending'):
             self.apply_mode_request()
             return
-        if self.status.get('phase') == 'preparing':
+        if self.status.get('phase') in ('checking', 'preparing', 'downloading', 'verifying', 'building'):
             # A previous worker stopped before touching the active service.
             self.save(phase='failed', error='build', failedVersion=self.status.get('latestVersion'))
         if not self.c['enabled']:
             self.save(phase='idle', error=None)
             return
         action = self.request()
+        if action == 'expired':
+            # Explicit stale intent is terminal, never an implicit scheduled
+            # auto-install in the same timer invocation that consumes it.
+            return
         if action == 'set_mode':
             self.apply_mode_request()
+            return
+        if request_only and not action:
             return
         if not action and self.status.get('checkedAt', 0) and time.time() * 1000 - self.status['checkedAt'] < self.c.get('checkHours', 6) * 3600000:
             self.save()
@@ -600,6 +639,7 @@ class Worker:
             current_version = json.loads((current / 'package.json').read_bytes())['version']
             version(current_version)
             token = private_file(self.c['tokenFile']).decode().strip() if self.c.get('tokenFile') else None
+            self.save(phase='checking', error=None)
             release, assets = self.release(token)
             newest = release['tag_name'].lstrip('v')
             self.save(currentVersion=current_version, latestVersion=newest, checkedAt=int(time.time() * 1000), error=None,
@@ -625,6 +665,47 @@ class Worker:
                 self.recover()
             else:
                 self.save(phase='failed')
+        finally:
+            if action in ('check', 'install'):
+                error = self.status.get('error')
+                self.finish_request('failed' if error else 'succeeded', error)
+
+
+def load_config():
+    config = json.loads(private_file(CONFIG))
+    if config.get('mode') not in ('notify', 'auto') or type(config.get('enabled')) is not bool:
+        raise UpdateError('configuration')
+    if type(config.get('allowUiModeControl', False)) is not bool:
+        raise UpdateError('configuration')
+    if config.get('installVersionPin') is not None:
+        version(config['installVersionPin'])
+    return config
+
+
+def queued_stamp(config):
+    try:
+        info = (pathlib.Path(config['dataDirectory']) / 'update-request.json').lstat()
+        return info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size
+    except FileNotFoundError:
+        return None
+
+
+def run_requests(state):
+    # Drain a follow-on click arriving while this service is running. Reload
+    # policy after each serialized action, especially a confirmed mode change.
+    # No progress means recovery/configuration needs attention, not a busy loop.
+    for _ in range(16):
+        config = load_config()
+        if pathlib.Path(config['stateDirectory']) != state:
+            raise UpdateError('configuration')
+        before = queued_stamp(config)
+        if before is None:
+            return
+        worker = Worker(config)
+        pending = worker.status.get('modeChangePending')
+        worker.run(request_only=True)
+        if queued_stamp(config) == before and worker.status.get('modeChangePending') == pending:
+            return
 
 
 def main():
@@ -633,28 +714,32 @@ def main():
     # Installing the boot guard before configuring updates must leave a normal
     # non-updating installation usable. Missing config is permitted only at boot.
     boot = sys.argv[1:] == ['boot-recover']
+    request_only = sys.argv[1:] == ['requests']
     if boot and not CONFIG.exists():
         return
-    config = json.loads(private_file(CONFIG))
-    if config.get('mode') not in ('notify', 'auto') or type(config.get('enabled')) is not bool:
-        raise UpdateError('configuration')
-    if type(config.get('allowUiModeControl', False)) is not bool:
-        raise UpdateError('configuration')
-    if config.get('installVersionPin') is not None:
-        version(config['installVersionPin'])
+    config = load_config()
     state = pathlib.Path(config['stateDirectory'])
     st = state.lstat()
     if not stat.S_ISDIR(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o022:
         raise UpdateError('configuration')
     with (state / 'worker.lock').open('a') as lock:
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # Keep an event wake-up queued behind an already-running worker.
+            # The service timeout bounds waiting; timer remains a fallback.
+            fcntl.flock(lock, fcntl.LOCK_EX | (0 if request_only else fcntl.LOCK_NB))
         except BlockingIOError:
             if boot:
                 raise UpdateError('configuration') from None
             return
+        if request_only:
+            run_requests(state)
+            return
+        config = load_config()
+        if pathlib.Path(config['stateDirectory']) != state:
+            raise UpdateError('configuration')
         worker = Worker(config)
         if sys.argv[1:] in (['recover'], ['boot-recover']):
+            worker.finish_request('failed', 'internal')
             if not worker.recover(boot=boot):
                 raise UpdateError('rollback')
         else:

@@ -792,8 +792,10 @@ export async function createApp(
     return { ok: true };
   });
   // SSE carries invalidations only, never chat text or IDs from other families/groups.
-  const streams = new Set<() => void>();
+  const streams = new Set<(force?: boolean) => void>();
+  let shuttingDown = false;
   app.get('/api/events', async (req, reply) => {
+    if (shuttingDown) throw new AppError(503, 'SERVER_SHUTTING_DOWN');
     const s = req.session;
     const same = [...streams].length;
     if (same >= 64) throw new AppError(429, 'TOO_MANY_STREAMS');
@@ -806,15 +808,19 @@ export async function createApp(
       'X-Content-Type-Options': 'nosniff',
     });
     let closed = false;
-    const end = () => {
-      if (closed) return;
-      closed = true;
-      clearInterval(heartbeat);
-      service.listeners.delete(listener);
-      streams.delete(end);
-      reply.raw.end();
+    const end = (force = false) => {
+      if (!closed) {
+        closed = true;
+        clearInterval(heartbeat);
+        service.listeners.delete(listener);
+        if (!reply.raw.destroyed) reply.raw.end();
+      }
+      // SSE contains disposable invalidations, not message deliveries. Do not
+      // let even an already-ended response's buffered flush block shutdown.
+      if (force) reply.raw.destroy();
     };
     const emit = (event: string, data: unknown) => {
+      if (closed || shuttingDown) return;
       if (!store.session(s.sid)) {
         reply.raw.write(`event: expired\ndata: {}\n\n`);
         end();
@@ -839,6 +845,13 @@ export async function createApp(
     streams.add(end);
     const heartbeat = setInterval(() => emit('heartbeat', {}), 10000);
     req.raw.on('close', end);
+    // Logical end is not transport close: retain shutdown reachability until
+    // buffered writes finish or the socket is destroyed.
+    reply.raw.once('close', () => {
+      streams.delete(end);
+      req.raw.off('close', end);
+      end();
+    });
     emit('ready', {});
   });
   const cleanup = setInterval(() => {
@@ -855,9 +868,14 @@ export async function createApp(
         : reply.type('text/html').send(readFileSync(resolve('dist/index.html'))),
     );
   }
-  app.addHook('onClose', async () => {
+  app.addHook('preClose', async () => {
+    shuttingDown = true;
     clearInterval(cleanup);
-    for (const end of streams) end();
+    // onClose runs only AFTER HTTP connections drain. Closing long-lived SSE
+    // there deadlocks shutdown and can leave a fresh data lock after SIGKILL.
+    for (const end of streams) end(true);
+  });
+  app.addHook('onClose', async () => {
     await service.close();
     await store.diagnostics.stop();
     if (!options.store) store.close();
