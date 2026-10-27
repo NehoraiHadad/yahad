@@ -1,0 +1,37 @@
+/* A single quiet burst near the composer, never a full-screen overlay. */
+.chat-celebration {
+  position: absolute;
+  bottom: 64px;
+  left: 50%;
+  width: min(220px, 80%);
+  height: 120px;
+  transform: translateX(-50%);
+  pointer-events: none;
+  overflow: hidden;
+  contain: layout paint;
+  z-index: 1;
+}
+.chat-celebration-particle {
+  position: absolute;
+  bottom: 6px;
+  left: calc(50% - 9px);
+  color: var(--accent, #368c76);
+  opacity: 0;
+  animation: chat-celebration-rise 900ms ease-out both;
+}
+.chat-celebration-particle:nth-child(1) { --drift: -80px; --lift: -52px; --turn: -24deg; }
+.chat-celebration-particle:nth-child(2) { --drift: -48px; --lift: -78px; --turn: 16deg; }
+.chat-celebration-particle:nth-child(3) { --drift: -16px; --lift: -94px; --turn: -12deg; }
+.chat-celebration-particle:nth-child(4) { --drift: 16px; --lift: -94px; --turn: 12deg; }
+.chat-celebration-particle:nth-child(5) { --drift: 48px; --lift: -78px; --turn: -16deg; }
+.chat-celebration-particle:nth-child(6) { --drift: 80px; --lift: -52px; --turn: 24deg; }
+@keyframes chat-celebration-rise {
+  0% { opacity: 0; transform: translate(0, 0) scale(.7); }
+  18% { opacity: .75; }
+  65% { opacity: .6; }
+  100% { opacity: 0; transform: translate(var(--drift), var(--lift)) rotate(var(--turn)) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-celebration { display: none; }
+  .chat-celebration-particle { animation: none; }
+}

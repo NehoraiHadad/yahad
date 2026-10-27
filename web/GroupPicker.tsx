@@ -1,4 +1,5 @@
 import React, { useId, useState } from 'react';
+import { GroupAvatar } from './GroupAvatar';
 
 export type PickerGroup = { id: string; title: string };
 export type PickerGrant = { user_id: string; group_id: string };
@@ -7,7 +8,8 @@ export function filterGroups(groups: PickerGroup[], query: string) {
   return search ? groups.filter(g => g.title.normalize('NFKC').toLocaleLowerCase().includes(search)) : groups;
 }
 
-export function GroupPicker({ groups, grants, childId, busy, loading, onToggle }: {
+export function GroupPicker({ groups, grants, childId, busy, loading, onToggle, photoRetryKey }: {
+  photoRetryKey?: string | number;
   groups: PickerGroup[]; grants: PickerGrant[]; childId: string; busy: boolean; loading: boolean;
   onToggle: (groupId: string, allowed: boolean) => void;
 }) {
@@ -30,7 +32,7 @@ export function GroupPicker({ groups, grants, childId, busy, loading, onToggle }
       {visible.map(g => {
         const checked = selected.has(g.id);
         return <label key={g.id} className={'approval-row ' + (checked ? 'approved' : '')}>
-          <span className="avatar av-0" aria-hidden="true">{g.title.slice(0, 1)}</span>
+          <GroupAvatar groupId={g.id} title={g.title} retryKey={photoRetryKey} />
           <span className="group-choice-title"><b>{g.title}</b><small>{checked ? 'מאושרת · מוצגת לילד' : 'לא מאושרת'}</small></span>
           <input type="checkbox" aria-label={'אישור קבוצה ' + g.title} checked={checked} disabled={busy || loading || !childId}
             onChange={e => onToggle(g.id, e.target.checked)} />

@@ -1772,6 +1772,8 @@ a {
   gap: 8px;
 }
 .approval-row {
+  /* Keep hidden absolute checkboxes inside the scrollable list, not the page. */
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -2506,3 +2508,31 @@ a {
 .history-status { margin: 12px auto; padding: 12px 16px; max-width: 620px; background: #f5f7ef; border-radius: 12px; color: #425e51; font-size: 12px; line-height: 1.7; }
 .history-status p { margin: 5px 0; }
 .history-status button { min-height: 44px; }
+/* Compact, readable setup keeps the next action reachable on tablet and mobile. */
+.family-form.modal { width:min(100%,520px); max-height:calc(100dvh - 32px); overflow:auto; padding:24px; margin:0; }
+.family-form h1 { font-size:26px; margin:12px 0; }
+.family-form > p { margin:8px 0 14px; line-height:1.65; }
+.family-form > label { display:flex; flex-direction:column; gap:6px; margin:12px 0; font-size:14px; }
+.family-form input:not([type=checkbox]) { min-height:44px; padding:10px 12px; margin:0; }
+.family-form small { color:#456354; line-height:1.6; }
+.family-form .eyebrow { display:flex; gap:8px; align-items:center; font-size:12px; }
+.family-form-actions { position:sticky; bottom:-24px; display:flex; gap:10px; padding:16px 0; background:var(--surface,#fffef9); }
+.family-form-actions .primary { flex:1; }
+.setup-success,.setup-link-notice { padding:14px; border-radius:12px; background:#e9f3ec; color:#244d3c; line-height:1.7; }
+.setup-link-notice { position:absolute; top:12px; inset-inline:12px; z-index:2; }
+.child-login-details span { display:block; overflow-wrap:anywhere; }
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible { outline:3px solid #167b68; outline-offset:3px; }
+@media(max-width:600px) { .family-form.modal { padding:18px; max-height:calc(100dvh - 20px); } .family-form-actions { bottom:-18px; } .parent-nav > div:last-child { flex-wrap:wrap; } }
+.update-mode-status { border-inline-start:4px solid #157c69; padding:12px 16px; background:#edf5ee; border-radius:10px; margin-block:16px; }
+.playful .group-row:hover .avatar svg { transform:rotate(-8deg) scale(1.08); }
+.playful .avatar svg { transition:transform 180ms ease-out; }
+.playful .send-button:not(:disabled):active svg { transform:translate(-4px,-3px); }
+.playful .send-button svg { transition:transform 160ms ease-out; }
+.playful .theme-option.chosen > span { animation:gentle-pop 240ms ease-out; }
+@keyframes gentle-pop { from { transform:scale(.9); } to { transform:scale(1); } }
+@media(prefers-reduced-motion:reduce) { .playful *, .playful *::before, .playful *::after { animation:none !important; transition:none !important; scroll-behavior:auto !important; } }
+
+.profile-flairs { display:flex; gap:12px; }
+.profile-flairs button { min-width:52px; min-height:52px; border:2px solid transparent; background:#edf5ef; border-radius:16px; color:#157c69; }
+.profile-flairs button[aria-pressed=true] { border-color:#157c69; }
+.family-form.modal { gap:0; }

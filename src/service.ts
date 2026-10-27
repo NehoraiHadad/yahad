@@ -1,3 +1,4 @@
+import { GroupPhotoCache } from './group-photos.js';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { Store, type User } from './store.js';
 import { MockConnector } from './connectors/mock.js';
@@ -26,6 +27,7 @@ export interface PublicMessage extends Omit<StoredMessage, 'raw' | 'replyId' | '
 }
 export class ChatService {
   readonly histories: HistoryTracker;
+  private photos = new GroupPhotoCache();
   connectors = new Map<string, Connector>();
   states = new Map<string, { state: ConnectionState; qr?: string }>();
   listeners = new Set<(family: string, group: string | undefined, type: string) => void>();
@@ -52,6 +54,24 @@ export class ChatService {
   requireGroup(user: User, g: string) {
     if (!this.store.allowed(user, g)) throw deny();
   }
+  requirePhotoGroup(user: User, g: string) {
+    if (!this.store.one('SELECT 1 FROM groups WHERE family_id=? AND id=?', user.familyId, g) ||
+      (user.role !== 'parent' && !this.store.allowed(user, g))) throw deny();
+  }
+  async groupPhoto(user: User, g: string) {
+    this.requirePhotoGroup(user, g);
+    const c = this.connectors.get(user.familyId);
+    if (!c?.groupPhoto || this.states.get(user.familyId)?.state !== 'connected') return;
+    const photo = await this.photos.get(c, JSON.stringify([user.familyId, g]), () => {
+      // A queued request may outlive its original grant or connection.
+      this.requirePhotoGroup(user, g);
+      if (this.connectors.get(user.familyId) !== c || this.states.get(user.familyId)?.state !== 'connected')
+        return Promise.resolve(undefined);
+      return c.groupPhoto!(g);
+    });
+    this.requirePhotoGroup(user, g);
+    return this.connectors.get(user.familyId) === c && this.states.get(user.familyId)?.state === 'connected' ? photo : undefined;
+  }
   connector(f: string) {
     const c = this.connectors.get(f);
     if (!c) throw new AppError(409, 'NOT_CONNECTED');
@@ -69,6 +89,7 @@ export class ChatService {
     if (this.connectors.has(f)) {
       const state = this.states.get(f)?.state;
       if (state === 'needs_pairing' || state === 'conflict' || state === 'idle') {
+        this.photos.clear(this.connectors.get(f)!);
         await this.connectors.get(f)!.stop();
         this.connectors.delete(f);
       } else return;
@@ -169,6 +190,8 @@ export class ChatService {
   }
   async grant(f: string, u: string, g: string, on: boolean) {
     this.store.grant(f, u, g, on);
+    const photoConnector = this.connectors.get(f);
+    if (photoConnector) this.photos.clear(photoConnector);
     this.notify(f, g, 'revoked');
     if (on) await this.connectors.get(f)?.approved?.(g);
     if (!this.store.retained(f,g)) this.histories.forget(f,g);
@@ -389,6 +412,7 @@ export class ChatService {
     this.connectionOps.add(f);
     try {
     const c = this.connectors.get(f);
+    if (c) this.photos.clear(c);
     this.histories.forget(f);
     const previousResult = this.store.one('SELECT value FROM instance_metadata WHERE key=?', 'disconnect:' + f)?.value;
     const eraseLocal = () => {
@@ -427,6 +451,7 @@ export class ChatService {
   }
   async close() {
     for (const [family, connector] of this.connectors) {
+      this.photos.clear(connector);
       const previous = this.states.get(family)?.state;
       await connector.stop();
       if (previous === 'needs_pairing' || previous === 'conflict') {

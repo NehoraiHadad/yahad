@@ -420,7 +420,7 @@ test('documented setup CLI creates real separate accounts and a protected random
       child.on('close', resolve);
     });
     clearTimeout(timer);
-    assert.equal(code, 0, errors);
+    assert.equal(code, 0, errors || `setup stopped after ${index}/${prompts.length} prompts; completed=${output.includes('Family created.')}`);
     assert.equal(index, prompts.length);
     assert.ok(!output.includes(parentPassword) && !output.includes(childPassword));
     assert.equal(statSync(join(directory, 'master.key')).mode & 0o777, 0o600);

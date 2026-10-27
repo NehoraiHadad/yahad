@@ -44,6 +44,11 @@ test('first-run requires local capability, same origin, confirmation, and single
     assert.equal(f.store.one('SELECT count(*) AS n FROM families').n, 1);
     assert.equal(f.store.one("SELECT count(*) AS n FROM users WHERE role='child'").n, 0);
     assert.equal((await f.setup()).statusCode, 403);
+    const winner = results.find(r => r.statusCode === 200)!;
+    const cookie = winner.cookies.find(c => c.name === 'sid');
+    assert.ok(cookie?.value);
+    assert.equal((await f.app.inject({ url: '/api/me', headers: { cookie: 'sid=' + cookie.value } })).statusCode, 200);
+    assert.equal((await f.app.inject({ url: '/api/setup/status' })).json().state, 'complete');
     assert.ok(await verifyPassword(password, f.store.one("SELECT password FROM users WHERE username='parent'").password));
   } finally { await f.close(); }
 });
@@ -51,7 +56,8 @@ test('first-run requires local capability, same origin, confirmation, and single
 test('normal startup and expired bootstrap cannot claim an empty database', async () => {
   for (const args of [[true, true], [false, false]] as const) {
     const f = await fixture(...args);
-    try { assert.equal((await f.setup()).statusCode, 403); assert.equal(f.store.one('SELECT count(*) AS n FROM families').n, 0); }
+    try { assert.equal((await f.setup()).statusCode, 403); assert.equal(f.store.one('SELECT count(*) AS n FROM families').n, 0);
+      assert.equal((await f.app.inject({ url: '/api/setup/status' })).json().state, 'closed'); }
     finally { await f.close(); }
   }
 });
@@ -66,6 +72,8 @@ test('child creation is parent-only, CSRF protected, unique, and grants no group
     assert.equal((await f.req(parent, '/api/parent/children', body)).statusCode, 200);
     assert.equal((await f.req(parent, '/api/parent/children', body)).statusCode, 409);
     assert.equal(f.store.one('SELECT count(*) AS n FROM grants').n, 0);
+    assert.ok(f.store.session(parent.sid), 'creating a child preserves the parent session');
+    assert.equal((await f.app.inject({ url: '/api/me', headers: { cookie: 'sid=' + parent.sid } })).statusCode, 200);
     const child = f.store.createSession(f.store.user(f.store.one("SELECT * FROM users WHERE username='child'")));
     assert.equal((await f.req(child, '/api/parent/children', { ...body, username: 'sibling' })).statusCode, 403);
   } finally { await f.close(); }

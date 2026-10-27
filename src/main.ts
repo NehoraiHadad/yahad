@@ -3,6 +3,7 @@ import { loadEnvFile } from 'node:process';
 import { loadConfig } from './config.js';
 import { createApp } from './server.js';
 import { acquireDataLock } from './lock.js';
+import { readBootstrap } from './bootstrap.js';
 try {
   loadEnvFile('.env');
 } catch {}
@@ -19,7 +20,7 @@ process.on('unhandledRejection', () => {
 try {
   const config = loadConfig();
   const release = await acquireDataLock(config.dataDir);
-  const { app } = await createApp(config);
+  const { app } = await createApp(config, { bootstrap: readBootstrap(process.env.SETUP_CAPABILITY_FILE || '/etc/yachad/setup-capability.json') });
   await app.listen({ host: config.host, port: config.port });
   process.stdout.write(`Yachad listening (${config.connector}) on port ${config.port}\n`);
   for (const signal of ['SIGTERM', 'SIGINT'] as const)
