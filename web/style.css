@@ -2536,3 +2536,24 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 .profile-flairs button { min-width:52px; min-height:52px; border:2px solid transparent; background:#edf5ef; border-radius:16px; color:#157c69; }
 .profile-flairs button[aria-pressed=true] { border-color:#157c69; }
 .family-form.modal { gap:0; }
+
+/* Setup status is derived from the existing overview, not a separate wizard. */
+.family-progress, .child-group-summary { margin-bottom: 24px; }
+.setup-checklist { display:flex; flex-wrap:wrap; gap:12px 24px; list-style:none; padding:0; line-height:1.8; }
+.setup-next-link { display:inline-block; color:var(--green-dark, #244d3c); font-weight:700; padding:10px 0; }
+.child-summary-list { list-style:none; padding:0; margin:0; }
+.child-summary-list > li { padding:18px 0; border-top:1px solid #e3e8e4; min-width:0; }
+.child-summary-heading { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; }
+.child-summary-heading h3 { margin:0; overflow-wrap:anywhere; }
+.child-summary-heading small { font-size:13px; font-weight:400; }
+.child-group-titles { display:flex; flex-wrap:wrap; gap:8px; list-style:none; padding:0; }
+.child-group-titles li { padding:6px 12px; border-radius:10px; background:#eef4ef; overflow-wrap:anywhere; max-width:100%; }
+#family-connection, #family-groups, #family-tablet { scroll-margin-top:20px; }
+
+.parent-chat-filter { padding: 0 20px 12px; }
+.parent-chat-modes { display: flex; gap: 6px; margin-bottom: 10px; }
+.parent-chat-modes button { flex: 1; border: 1px solid var(--border); border-radius: 10px; padding: 8px; background: var(--surface); color: inherit; }
+.parent-chat-modes button[aria-pressed="true"] { border-color: var(--accent); font-weight: 700; background: var(--accent-soft); }
+.parent-chat-filter label { display: grid; gap: 5px; }
+.parent-chat-filter select { width: 100%; min-width: 0; padding: 8px; border-radius: 8px; color: inherit; background: var(--surface); }
+.parent-chat-filter p { font-size: 12px; line-height: 1.5; margin: 8px 0 0; }

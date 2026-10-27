@@ -20,6 +20,75 @@ class Worker:
 
 class GuidedInstallLogicTests(unittest.TestCase):
     """Pure fixture checks also run as an ordinary Linux development user."""
+    def test_preflight_collects_all_missing_tools_without_writes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            system=System(); installer=u.Installer(system,pathlib.Path(tmp))
+            system.fail=lambda args:args[0] in ('ffmpeg','openssl','caddy')
+            with patch.object(u.shutil,'which',return_value=None):
+                with self.assertRaises(u.InstallError) as raised:installer.prerequisites()
+            for label in ('systemd','Node 24','npm','ffmpeg','OpenSSL','Caddy'):
+                self.assertIn(label,str(raised.exception))
+            self.assertEqual(list(pathlib.Path(tmp).iterdir()),[])
+            self.assertFalse(any('systemctl' in arg or 'sudo' in arg for call in system.calls for arg in call))
+
+    def test_preflight_wrong_node_and_existing_https_preserved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            installer=u.Installer(System(),pathlib.Path(tmp)); calls=[]
+            installer.p(u.ENV).parent.mkdir(parents=True); installer.p(u.ENV).write_text('synthetic existing environment')
+            def run(args):
+                calls.append(args)
+                return b'systemd' if args[0]=='/usr/bin/cat' else b'v22.0.0' if args[-1]=='--version' else b''
+            installer.s.run=run
+            with patch.object(u.shutil,'which',lambda name:'/usr/bin/'+name):
+                with self.assertRaisesRegex(u.InstallError,'wrong version'):installer.prerequisites()
+            self.assertFalse(any(call[0]=='caddy' for call in calls))
+            self.assertEqual(installer.p(u.ENV).read_text(),'synthetic existing environment')
+
+    def test_preflight_does_not_probe_environment_inside_inaccessible_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            installer=u.Installer(System(),pathlib.Path(tmp)); calls=[]
+            original_exists=pathlib.Path.exists
+            def exists(path):
+                if path==installer.p(u.ENV):
+                    raise PermissionError('synthetic protected existing environment')
+                if path==installer.p('/etc/yachad'):return True
+                return original_exists(path)
+            def run(args):
+                calls.append(args)
+                return b'systemd' if args[0]=='/usr/bin/cat' else b'v24.0.0' if args[-1]=='--version' else b''
+            installer.s.run=run
+            with patch.object(pathlib.Path,'exists',exists), \
+                 patch.object(u.os,'access',return_value=False), \
+                 patch.object(u.shutil,'which',lambda name:'/usr/bin/'+name):
+                self.assertEqual(installer.prerequisites(),('/usr/bin/node','/usr/bin/npm'))
+            self.assertFalse(any(call[0]=='caddy' for call in calls))
+            self.assertEqual(list(pathlib.Path(tmp).iterdir()),[])
+
+    def test_preflight_success_and_unstartable_node(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            installer=u.Installer(System(),pathlib.Path(tmp))
+            def run(args):
+                return b'systemd' if args[0]=='/usr/bin/cat' else b'v24.0.0' if args[-1]=='--version' else b''
+            installer.s.run=run
+            with patch.object(u.shutil,'which',lambda name:'/usr/bin/'+name):
+                self.assertEqual(installer.prerequisites(),('/usr/bin/node','/usr/bin/npm'))
+                installer.s.run=lambda args:(_ for _ in ()).throw(u.InstallError('synthetic failure'))
+                with self.assertRaisesRegex(u.InstallError,'Node could not start'):installer.prerequisites()
+            self.assertEqual(list(pathlib.Path(tmp).iterdir()),[])
+
+    def test_check_only_needs_no_root_confirmation_or_provisioning(self):
+        with patch.object(u.sys,'argv',['install.py','--check-only','--origin','https://192.168.1.2']), \
+             patch.object(u.Installer,'prerequisites',return_value=('/node','/npm')) as check, \
+             patch.object(u.Installer,'run',side_effect=AssertionError('must not install')), \
+             patch.object(u.os,'geteuid',side_effect=AssertionError('must not require root')):
+            with contextlib.redirect_stdout(io.StringIO()) as output:u.main()
+            self.assertIn('PREREQUISITES_OK',output.getvalue());check.assert_called_once()
+
+    def test_check_only_rejects_bad_origin_before_probes(self):
+        with patch.object(u.sys,'argv',['install.py','--check-only','--origin','https://8.8.8.8']), \
+             patch.object(u.Installer,'prerequisites',side_effect=AssertionError('must validate first')):
+            with self.assertRaises(u.InstallError):u.main()
+
     def test_custom_request_paths_and_secret_boundary_are_derived_together(self):
         installer=u.Installer(System());writes={};directories=[]
         installer.directory=lambda path:directories.append(path)

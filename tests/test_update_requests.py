@@ -232,7 +232,18 @@ class RequestTests(unittest.TestCase):
         def replace(worker, request_only=False):
             self.assertTrue(request_only)
             calls.append(True)
-            self.queue_path.unlink(); self.queue()
+            # Allocate the replacement while the old inode still exists. An
+            # unlink/recreate can reuse its inode and timestamp on some filesystems,
+            # which correctly looks like no progress rather than continuous churn.
+            previous = self.queue_path.stat()
+            value = json.loads(self.queue_path.read_text())
+            value['id'] = str(uuid.uuid4())
+            replacement = self.queue_path.with_suffix('.replacement')
+            replacement.write_text(json.dumps(value))
+            replacement.chmod(0o600)
+            # Exercise same-timestamp replacements without relying on clock resolution.
+            os.utime(replacement, ns=(previous.st_atime_ns, previous.st_mtime_ns))
+            replacement.replace(self.queue_path)
         with patch.object(self.Worker, 'run', replace):
             self.run_requests()
         self.assertEqual(len(calls), 16)
