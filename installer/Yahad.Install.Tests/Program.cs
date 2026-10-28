@@ -25,6 +25,12 @@ if (args is ["--tree", var pidPath])
     File.WriteAllText(pidPath, child.Id.ToString());
     await Task.Delay(Timeout.Infinite); return 0;
 }
+if (args is ["--orphan-tree", var orphanPath])
+{
+    var start = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true };
+    start.ArgumentList.Add("--wait"); using var child = Process.Start(start)!;
+    File.WriteAllText(orphanPath, child.Id.ToString()); return 0;
+}
 if (args is ["--job-owner", var ownerPidPath])
 {
     using var child = JobProcess.Start(Environment.ProcessPath!, ["--tree", ownerPidPath], AppContext.BaseDirectory);
@@ -150,6 +156,19 @@ await Check("job disposal kills child and grandchild", async () =>
     try { await WaitFor(output); var grandchild = int.Parse(File.ReadAllText(output)); Assert(Alive(job.ProcessId) && Alive(grandchild)); job.Dispose(); await Gone(job.ProcessId, grandchild); }
     finally { job.Dispose(); }
 });
+await Check("root exit cannot claim empty native process tree", async () =>
+{
+    var output = Path.Combine(root, "orphan-tree.pid");
+    using var job = JobProcess.Start(Environment.ProcessPath!, ["--orphan-tree", output], root);
+    using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+    Assert(await job.WaitAsync(deadline.Token) == 0); await WaitFor(output);
+    var descendant = int.Parse(File.ReadAllText(output)); Assert(Alive(descendant));
+    using var shortWait = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+    try { await job.WaitForTreeEmptyAsync(shortWait.Token); throw new Exception("living descendant ignored"); }
+    catch (OperationCanceledException) { }
+    using var child = Process.GetProcessById(descendant); child.Kill(); await child.WaitForExitAsync();
+    await job.WaitForTreeEmptyAsync(deadline.Token);
+});
 await Check("host crash closes job and kills descendants", async () =>
 {
     var output = Path.Combine(root, "crash-grandchild.pid");
@@ -179,6 +198,8 @@ await Check("occupied loopback port is a recoverable conflict", () =>
     return Task.CompletedTask;
 });
 await NativeBoundaryTests.Run(root, Check);
+await InstallerPlanningTests.Run(Check);
+await AppLifecycleTests.Run(Check);
 var report = JsonSerializer.Serialize(new { platform = "Windows x64", kind = "synthetic-nonprivileged", passed = results.Count - failed, failed, tests = results }, new JsonSerializerOptions { WriteIndented = true });
 if (args is ["--report", var reportPath]) File.WriteAllText(reportPath, report);
 Console.WriteLine($"{results.Count - failed} passed; {failed} failed. Synthetic fixtures only. Session: {root}");

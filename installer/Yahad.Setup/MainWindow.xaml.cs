@@ -100,6 +100,9 @@ public partial class MainWindow : Window
         NoticeText.Text = "הבקשה המתוכננת: התקנת שירות יחד בלבד. פתיחת גישה לרשת הביתית ואמון בתעודה יוסברו בנפרד. לא תופיע בקשת הרשאה בגרסת ההדגמה הזו.";
         Primary.Content = "חזרה לבדיקה";
     }
+    private void LanPlan_Click(object sender, RoutedEventArgs e)
+    { new LanPlanWindow { Owner = this }.ShowDialog(); }
+
     private void Close_Click(object sender, RoutedEventArgs e)
     { if (running is not null) running.Cancel(); else Close(); }
     private void OnClosing(object? sender, CancelEventArgs e)

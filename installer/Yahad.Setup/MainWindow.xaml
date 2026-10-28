@@ -46,6 +46,7 @@
     </StackPanel>
    </ScrollViewer>
    <StackPanel Grid.Row="2">
+    <Button Content="תכנון כניסה ממכשיר נוסף" Click="LanPlan_Click" Background="Transparent" Foreground="#157C69" Margin="0,0,0,10"/>
     <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
      <Button x:Name="Primary" Content="התחלת בדיקה  ←" Click="Start_Click" HorizontalAlignment="Stretch" AutomationProperties.Name="התחלת בדיקה מבודדת"/>
      <Button x:Name="Secondary" Grid.Column="1" Content="סגירה" Click="Close_Click" Background="Transparent" Foreground="#5C716B" Margin="8,0,0,0"/>

@@ -67,6 +67,19 @@ public sealed class JobProcess : IDisposable
             await Task.Delay(20, cancellation);
         }
     }
+    // A root process exit is insufficient: a descendant may still hold the DB.
+    // Keep the job handle open until the complete contained tree is empty.
+    public async Task WaitForTreeEmptyAsync(CancellationToken cancellation)
+    {
+        while (true)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            if (!Native.QueryInformationJobObject(job, 1, out var accounting,
+                    (uint)Marshal.SizeOf<BasicAccounting>(), IntPtr.Zero)) throw new Win32Exception();
+            if (accounting.ActiveProcesses == 0) return;
+            await Task.Delay(20, cancellation);
+        }
+    }
     public void Dispose() { job.Dispose(); process.Dispose(); }
 
     // Microsoft C runtime quoting, including trailing slashes before the closing quote.
@@ -83,6 +96,11 @@ public sealed class JobProcess : IDisposable
         return b.Append('\\', slashes * 2).Append('"').ToString();
     }
 
+    [StructLayout(LayoutKind.Sequential)] private struct BasicAccounting
+    {
+        public long TotalUser, TotalKernel, PeriodUser, PeriodKernel;
+        public uint PageFaults, TotalProcesses, ActiveProcesses, TerminatedProcesses;
+    }
     [StructLayout(LayoutKind.Sequential)] private struct BasicLimit
     {
         public long ProcessTime, JobTime;
@@ -117,6 +135,9 @@ public sealed class JobProcess : IDisposable
         internal static extern bool CreateProcessW(string app, StringBuilder command, IntPtr processAttributes,
             IntPtr threadAttributes, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint flags, IntPtr environment,
             string directory, ref StartupInfo startup, out ProcessInfo process);
+        [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool QueryInformationJobObject(SafeFileHandle job, int kind,
+            out BasicAccounting information, uint length, IntPtr returnedLength);
         [DllImport("kernel32.dll", SetLastError = true)] internal static extern uint ResumeThread(IntPtr thread);
         [DllImport("kernel32.dll", SetLastError = true)] internal static extern uint WaitForSingleObject(SafeProcessHandle process, uint milliseconds);
         [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
