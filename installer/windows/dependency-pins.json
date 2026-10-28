@@ -1,0 +1,122 @@
+{
+  "schema": 1,
+  "target": "win-x64",
+  "sources": {
+    "ffmpeg": {
+      "publisher": "BtbN/FFmpeg-Builds",
+      "origin": "upstream-linked-vendor",
+      "upstreamLink": "https://ffmpeg.org/download.html",
+      "version": "n9.0.2-37-gae19868753",
+      "release": "autobuild-2026-10-28-19-47",
+      "license": "LGPL-3.0-or-later",
+      "licenseReview": "corresponding-sources-and-transitive-notices-pending",
+      "archive": {
+        "name": "ffmpeg-n9.0.2-37-gae19868753-win64-lgpl-shared-9.0.zip",
+        "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-28-19-47/ffmpeg-n9.0.2-37-gae19868753-win64-lgpl-shared-9.0.zip",
+        "sha256": "96c8534b790325d1bf8b611b80716e97b501dc28680a75e5b548e74409f4b895"
+      },
+      "checksums": {
+        "name": "checksums.sha256",
+        "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-28-19-47/checksums.sha256",
+        "sha256": "72b4c1fe06bfb3aea6aecc1f1647d2d4c26a80760253f1931ef46f18ed09d9bc",
+        "algorithm": "sha256"
+      },
+      "files": [
+        {
+          "archivePath": "ffmpeg-n9.0.2-37-gae19868753-win64-lgpl-shared-9.0/LICENSE.txt",
+          "path": "legal/FFmpeg-LICENSE.txt",
+          "size": 7651,
+          "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768"
+        },
+        {
+          "archivePath": "ffmpeg-n9.0.2-37-gae19868753-win64-lgpl-shared-9.0/bin/avcodec-63.dll",
+          "path": "runtime/ffmpeg/avcodec-63.dll",
+          "size": 91810816,
+          "sha256": "1ab43ac33e92aad9f29e82e6b4f57e06ff3537097d71908786d1388a6032ea45"
+        },
+        {
+          "archivePath": "ffmpeg-n9.0.2-37-gae19868753-win64-lgpl-shared-9.0/bin/avdevice-63.dll",
+          "path": "runtime/ffmpeg/avdevice-63.dll",
+          "size": 5008384,
+          "sha256": "239d76ae8f78ea859cfcaf392fed7f22254bb7663695be62c2191abd52793b39"
+        },
+        {
+          "archivePath": "ffmpeg-n9.0.2-37-gae19868753-win64-lgpl-shared-9.0/bin/avfilter-12.dll",
+          "path": "runtime/ffmpeg/avfilter-12.dll",
+          "size": 31876096,
+          "sha256": "5cf124b0ca092028eef57667d9b66a822e09dbc807a22b5016a60e8fa504b06d"
+        },
+        {
+          "archivePath": "ffmpeg-n9.0.2-37-gae19868753-win64-lgpl-shared-9.0/bin/avformat-63.dll",
+          "path": "runtime/ffmpeg/avformat-63.dll",
+          "size": 23003136,
+          "sha256": "1082bdcb0fd3bb62205a2be123350f2f4fa67a1478bb0162989d65c1463d29ef"
+        },
+        {
+          "archivePath": "ffmpeg-n9.0.2-37-gae19868753-win64-lgpl-shared-9.0/bin/avutil-61.dll",
+          "path": "runtime/ffmpeg/avutil-61.dll",
+          "size": 3025408,
+          "sha256": "aabe139afdf6c3277d490faddaac739c8ed616739bd9287cd53a7a56ba919022"
+        },
+        {
+          "archivePath": "ffmpeg-n9.0.2-37-gae19868753-win64-lgpl-shared-9.0/bin/ffmpeg.exe",
+          "path": "runtime/ffmpeg/ffmpeg.exe",
+          "size": 551424,
+          "sha256": "05c1c4b5e7df9a1b97b3eb37338150fd482a7b1295fa3c8880e6b8c10dc79aeb"
+        },
+        {
+          "archivePath": "ffmpeg-n9.0.2-37-gae19868753-win64-lgpl-shared-9.0/bin/swresample-7.dll",
+          "path": "runtime/ffmpeg/swresample-7.dll",
+          "size": 747008,
+          "sha256": "dc8594e1c7cc627a2f2a1510c98a6b823a8dff95455684aafcfd3514dc12eb93"
+        },
+        {
+          "archivePath": "ffmpeg-n9.0.2-37-gae19868753-win64-lgpl-shared-9.0/bin/swscale-10.dll",
+          "path": "runtime/ffmpeg/swscale-10.dll",
+          "size": 2343936,
+          "sha256": "c10c48b8003ed5730b3ece95009a2db5c5e49c40c0a0b07c3b305ddc7fcc01f4"
+        }
+      ]
+    },
+    "caddy": {
+      "publisher": "caddyserver/caddy",
+      "origin": "official-vendor",
+      "upstreamLink": "https://caddyserver.com/docs/install",
+      "version": "2.11.7",
+      "release": "v2.11.7",
+      "license": "Apache-2.0",
+      "licenseReview": "transitive-notices-pending",
+      "archive": {
+        "name": "caddy_2.11.7_windows_amd64.zip",
+        "url": "https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_windows_amd64.zip",
+        "sha256": "0a1edc0b799512051c57071ce0e798d3f2cf67dc98171366f1d2b326072e3b06"
+      },
+      "checksums": {
+        "name": "caddy_2.11.7_checksums.txt",
+        "url": "https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_checksums.txt",
+        "sha256": "5d27b76b95f496638d79208c55250317b8755fd9e90005f7466aa32956944a90",
+        "algorithm": "sha512"
+      },
+      "files": [
+        {
+          "archivePath": "caddy.exe",
+          "path": "runtime/caddy/caddy.exe",
+          "size": 53159936,
+          "sha256": "5f93a9bd555f3aac9d33af2756ba14b3519d8cca4ffd55256bdaeab444c9db2a"
+        },
+        {
+          "archivePath": "LICENSE",
+          "path": "legal/Caddy-LICENSE.txt",
+          "size": 11358,
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "archivePath": "README.md",
+          "path": "legal/Caddy-README.md",
+          "size": 12661,
+          "sha256": "0bc5939a26994a481e65b84b4e1b9ee44dd06796df4a196c75e9bdcdd4868b18"
+        }
+      ]
+    }
+  }
+}

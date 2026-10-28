@@ -9,7 +9,7 @@ import stat
 import uuid
 import zipfile
 from urllib.parse import urlsplit
-from . import pe
+from . import pe, dependencies
 
 class BundleError(ValueError): pass
 
@@ -38,6 +38,8 @@ def inventory(root):
         if directory.is_symlink() or getattr(directory.lstat(), 'st_file_attributes', 0) & 0x400: raise BundleError('Linked directory')
         for path in sorted(directory.iterdir()):
             name = path.relative_to(root).as_posix()
+            if name.casefold() in folded: raise BundleError('Case collision')
+            folded.add(name.casefold())
             if path.is_dir() and name in ('app','runtime','legal'):
                 pending.append(path); continue
             if len(name) > 240 or not name.startswith(('app/', 'runtime/', 'legal/')): raise BundleError('Package path')
@@ -47,8 +49,7 @@ def inventory(root):
             if path.is_symlink() or getattr(info, 'st_file_attributes', 0) & 0x400: raise BundleError('Linked path')
             if path.is_dir(): pending.append(path); continue
             if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 512 * 1024 ** 2 or re.search(r'\.(key|pem|sqlite(?:-wal|-shm)?|backup)$', name, re.I): raise BundleError('Unsafe package input')
-            if name.casefold() in folded: raise BundleError('Case collision')
-            folded.add(name.casefold()); result[name] = path
+            result[name] = path
             if len(result) > MAX_FILES: raise BundleError('File count')
     return result
 
@@ -82,6 +83,10 @@ def validate(prepared, profile='full'):
     if profile == 'full': expected.update(ffmpeg='runtime/ffmpeg/ffmpeg.exe', caddy='runtime/caddy/caddy.exe')
     components = runtime_lock.get('components', [])
     if runtime_lock.get('schema') != 1 or runtime_lock.get('target') != 'win-x64' or not isinstance(components, list) or not all(isinstance(c,dict) for c in components) or len(components) != len(expected) or {c.get('id') for c in components} != set(expected): raise BundleError('Runtime lock contract')
+    pinned_components = {}
+    if any(c.get('id') == 'ffmpeg' and c.get('origin') == 'upstream-linked-vendor' for c in components):
+        try: pinned_components = dependencies.validate_staged(files)
+        except dependencies.DependencyError as error: raise BundleError('Pinned vendor dependency verification') from error
     for component in components:
         name = expected[component['id']]
         source = urlsplit(component.get('sourceUrl', ''))
@@ -89,9 +94,10 @@ def validate(prepared, profile='full'):
         if component['id'] == 'node' and (source.hostname != 'nodejs.org' or not re.fullmatch(r'24\.\d+\.\d+', component.get('version',''))): raise BundleError('Official pinned Node 24 required')
         if component['id'] == 'caddy' and (source.hostname != 'github.com' or not source.path.startswith('/caddyserver/caddy/releases/download/')): raise BundleError('Official Caddy required')
         if component['id'] == 'platform' and (component.get('origin') != 'project-built' or not re.fullmatch('[a-f0-9]{40}', component.get('sourceCommit',''))): raise BundleError('Project build identity required')
-        if component['id'] == 'ffmpeg':
-            # FFmpeg publishes source, not Windows binaries. The strict policy
-            # cannot silently relabel a community build as vendor-official.
+        if component['id'] in pinned_components and component != pinned_components[component['id']]: raise BundleError('Pinned vendor component identity')
+        if component['id'] == 'ffmpeg' and not pinned_components:
+            # Source builds retain their own contract. The separately pinned
+            # upstream-linked vendor route preserves its actual publisher.
             build = object_file(files['legal/ffmpeg-build.json'])
             if component.get('origin') != 'project-built-from-official-source' or source.hostname != 'ffmpeg.org' or not source.path.startswith('/releases/') or not re.fullmatch('[a-f0-9]{64}', build.get('sourceSha256','')) or not re.fullmatch('[a-f0-9]{64}', build.get('buildRecipeSha256','')) or not isinstance(build.get('configure'), list) or any(x in build['configure'] for x in ('--enable-nonfree','--enable-gpl')): raise BundleError('Official-source LGPL FFmpeg build/provenance required')
     object_file(files['legal/SBOM.json'])
@@ -118,7 +124,8 @@ def validate(prepared, profile='full'):
     return {'schema':1,'kind':'windows-runtime-candidate','target':'win-x64','profile':profile,
         'version':package['version'],'authority':'application-updater','machineAcceptance':'not-performed',
         'familyInstallationReady':False,'launch':{'node':'runtime/node/node.exe','entry':'app/src/main.ts',
-        'helper':'app/native/Yahad.Platform.exe','ffmpeg':'runtime/ffmpeg/ffmpeg.exe' if profile == 'full' else None},
+        'helper':'app/native/Yahad.Platform.exe','ffmpeg':'runtime/ffmpeg/ffmpeg.exe' if profile == 'full' else None,
+        'caddy':'runtime/caddy/caddy.exe' if profile == 'full' else None},
         'files':records,'peModules':modules}
 
 def build(prepared, output, profile='full'):

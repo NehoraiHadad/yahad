@@ -6,7 +6,7 @@ import struct
 import tempfile
 import unittest
 import zipfile
-from installer.windows import bundle, pe
+from installer.windows import bundle, pe, verify_archive
 
 def image(imports=(), machine=0x8664, managed=False):
     data=bytearray(2048); data[:2]=b'MZ'; struct.pack_into('<I',data,0x3c,0x80); data[0x80:0x84]=b'PE\0\0'
@@ -54,6 +54,19 @@ class WindowsBundleTests(unittest.TestCase):
             saved=json.loads(archive.read('bundle.json')); self.assertEqual(saved['kind'],'windows-runtime-candidate')
             for record in saved['files']: self.assertEqual(hashlib.sha256(archive.read(record['path'])).hexdigest(),record['sha256'])
 
+    def test_verified_candidate_extracts_and_matches_whole_manifest(self):
+        bundle.build(self.prepared,self.root/'verified.zip')
+        result=verify_archive.verify(self.root/'verified.zip',self.root/'unpacked')
+        self.assertTrue(result['allExtractedFilesVerified']); self.assertFalse(result['releaseSignatureVerified'])
+        self.assertFalse(result['familyInstallationReady'])
+        with self.assertRaisesRegex(bundle.BundleError,'New extraction'): verify_archive.verify(self.root/'verified.zip',self.root/'unpacked')
+
+    def test_extra_candidate_archive_entry_is_refused_before_extraction(self):
+        path=self.root/'extra.zip'; bundle.build(self.prepared,path)
+        with zipfile.ZipFile(path,'a') as archive: archive.writestr('../escape',b'fixture')
+        with self.assertRaisesRegex(bundle.BundleError,'member set'): verify_archive.verify(path,self.root/'unpacked')
+        self.assertFalse((self.root/'unpacked').exists())
+
     def test_deterministic_offline_build(self):
         bundle.build(self.prepared,self.root/'a.zip'); bundle.build(self.prepared,self.root/'b.zip')
         self.assertEqual((self.root/'a.zip').read_bytes(),(self.root/'b.zip').read_bytes())
@@ -89,6 +102,10 @@ class WindowsBundleTests(unittest.TestCase):
     def test_officially_linked_ffmpeg_not_silently_vendor_official(self):
         path=self.prepared/'legal/runtime-lock.json'; value=json.loads(path.read_text()); item=next(c for c in value['components'] if c['id']=='ffmpeg'); item['sourceUrl']='https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/example.zip'; item['origin']='community-build'; path.write_text(json.dumps(value))
         with self.assertRaisesRegex(bundle.BundleError,'Official-source'): bundle.validate(self.prepared)
+
+    def test_vendor_origin_cannot_be_self_asserted_with_fake_payload(self):
+        path=self.prepared/'legal/runtime-lock.json'; value=json.loads(path.read_text()); item=next(c for c in value['components'] if c['id']=='ffmpeg'); item['sourceUrl']='https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-fixture/fixture.zip'; item['origin']='upstream-linked-vendor'; path.write_text(json.dumps(value))
+        with self.assertRaisesRegex(bundle.BundleError,'Pinned vendor'): bundle.validate(self.prepared)
 
     def test_private_state_not_packaged(self):
         self.put('app/.env','fixture only')
