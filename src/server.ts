@@ -15,7 +15,7 @@ import type { Config } from './config.js';
 import { Store, type Session } from './store.js';
 import { ChatService, AppError, deny } from './service.js';
 import { voiceToOpus } from './media.js';
-import { updateStatus, requestUpdate } from './updates.js';
+import { updateStatus, requestUpdate, updateTargetSchema } from './updates.js';
 import type { ConnectorHooks, Connector, StoredMessage, Kind } from './connectors/types.js';
 const textSchema = z.string().trim().max(12000);
 const accountNameSchema = z.string().max(240).transform((value, ctx) => {
@@ -279,9 +279,8 @@ export async function createApp(
       f = s.user.familyId;
     return store
       .groups(f)
-      // Catalog visibility is not content permission: parents already have this
-      // family-scoped metadata in /parent/overview. Children still see grants only.
-      .filter((g) => s.user.role === 'parent' || store.allowed(s.user, g.id))
+      // A single authorization policy governs lists and every content route.
+      .filter((g) => store.allowed(s.user, g.id))
       .map((g) => ({
         ...g,
         canRead: store.allowed(s.user, g.id),
@@ -356,6 +355,12 @@ export async function createApp(
     current(s, g);
     const f = s.user.familyId;
     const c = service.connector(f);
+    const retentionToken = store.groupKey(f, g).toString('hex');
+    const sameRetention = () => store.retained(f, g) && store.groupKey(f, g).toString('hex') === retentionToken;
+    const currentSend = () => {
+      current(s, g);
+      if (!sameRetention()) throw deny();
+    };
     if (service.states.get(f)?.state !== 'connected') throw new AppError(409, 'NOT_CONNECTED');
     if (attachment) capable(s, attachment.kind);
     if (!attachment && !data.text) throw new AppError(400, 'EMPTY_MESSAGE');
@@ -389,7 +394,7 @@ export async function createApp(
     pending.add(requestKey);
     service.notify(f, g);
     try {
-      current(s, g);
+      currentSend();
       let wireReply = reply;
       if (needsMarker) {
         const markerId = id + 'L';
@@ -419,16 +424,16 @@ export async function createApp(
               reply,
             });
           } catch {
-            service.update(f, g, markerId, { status: 'failed' });
+            if (sameRetention()) service.update(f, g, markerId, { status: 'failed' });
             throw new Error('Marker send failed');
           }
-          current(s, g);
+          currentSend();
           await service.ingest(f, { ...sentMarker, id: markerId });
           marker = store.getMessage(f, g, markerId);
         }
         if (!wireReply) wireReply = marker;
       }
-      current(s, g);
+      currentSend();
       const sent = await c.send({
         id,
         groupId: g,
@@ -439,7 +444,7 @@ export async function createApp(
         filename: attachment?.filename,
         reply: wireReply,
       });
-      current(s, g);
+      currentSend();
       await service.ingest(f, {
         ...sent,
         id,
@@ -449,9 +454,11 @@ export async function createApp(
         replyId: wireReply?.id,
         status: sent.status,
       });
+      currentSend();
       return { message: service.public(f, store.getMessage(f, g, id)!) };
     } catch {
-      service.update(f, g, id, { status: 'failed' });
+      if (sameRetention())
+        service.update(f, g, id, { status: 'failed' });
       throw new AppError(502, 'SEND_UNCERTAIN');
     } finally {
       pending.delete(requestKey);
@@ -682,11 +689,14 @@ export async function createApp(
   app.post('/api/parent/updates', async req => {
     parent(req.session);
     const request = z.discriminatedUnion('action',[
-      z.object({action:z.enum(['check','install'])}).strict(),
+      z.object({action:z.literal('check')}).strict(),
+      z.object({action:z.literal('install'),target:updateTargetSchema.optional()}).strict(),
       z.object({action:z.literal('set_mode'),mode:z.enum(['notify','auto'])}).strict(),
     ]).parse(req.body);
-    const state = await requestUpdate(config, req.session.user, request.action, 'mode' in request?request.mode:undefined);
+    const state = await requestUpdate(config, req.session.user, request.action, 'mode' in request?request.mode:undefined,
+      request.action==='install'?request.target:undefined);
     if (state === 'unavailable') throw new AppError(409, 'UPDATES_UNAVAILABLE');
+    if (state === 'target_changed') throw new AppError(409, 'UPDATES_TARGET_CHANGED');
     if (state === 'mode_locked') throw new AppError(409, 'UPDATES_MODE_LOCKED');
     return { state };
   });

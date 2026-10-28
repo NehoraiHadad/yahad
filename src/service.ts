@@ -55,8 +55,7 @@ export class ChatService {
     if (!this.store.allowed(user, g)) throw deny();
   }
   requirePhotoGroup(user: User, g: string) {
-    if (!this.store.one('SELECT 1 FROM groups WHERE family_id=? AND id=?', user.familyId, g) ||
-      (user.role !== 'parent' && !this.store.allowed(user, g))) throw deny();
+    this.requireGroup(user, g);
   }
   async groupPhoto(user: User, g: string) {
     this.requirePhotoGroup(user, g);
@@ -183,7 +182,10 @@ export class ChatService {
           g.id,
         ))
           this.store.grant(f, u.user_id, g.id, false);
+        // Membership loss, not child-grant removal, ends family retention.
+        this.store.purgeGroup(f, g.id);
         this.store.run('DELETE FROM groups WHERE family_id=? AND id=?', f, g.id);
+        this.histories.forget(f, g.id);
         this.notify(f, g.id, 'revoked');
       }
     this.notify(f, undefined, 'groups');

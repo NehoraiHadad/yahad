@@ -364,7 +364,8 @@ test('family isolation with identical group/message/media IDs, all direct action
   }
 });
 
-test('filter BEFORE media download and storage; external quote content removed', async () => {
+test('filter unknown groups BEFORE media download and storage; external quote content removed', async () => {
+  const blocked = 'never-known@g.us';
   const f = await fixture();
   try {
     let called = false;
@@ -545,7 +546,7 @@ test('multipart upload is sniffed, authorized, bounded, converted voice and pers
   }
 });
 
-test('revocation removes messages, media and active key; in-flight download cannot resurrect', async () => {
+test('membership removal purges messages, media and active key; in-flight download cannot resurrect', async () => {
   const f = await fixture();
   try {
     await f.ingest(f.a.familyId, 'photo', 'private caption', {
@@ -566,7 +567,8 @@ test('revocation removes messages, media and active key; in-flight download cann
       text: 'late',
       download: () => new Promise((r) => (done = r)),
     });
-    await f.service.grant(f.a.familyId, f.a.childId, group, false);
+    f.service.connector(f.a.familyId).groups = async () => mockGroups.filter(g => g.id !== group);
+    await f.service.syncGroups(f.a.familyId);
     done(readFileSync('fixtures/garden.jpg'));
     await inflight;
     assert.equal(existsSync(path), false);

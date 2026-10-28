@@ -34,7 +34,7 @@ class SchemaContractTests(unittest.TestCase):
                         {'databaseMigrationsFrom': ['1']}, {'databaseMigrationsFrom': [0]},
                         {'databaseMigrationsFrom': list(range(1, 34)), 'databaseSchema': 40},
                         {'minimumUpdaterProtocol': True}, {'minimumUpdaterProtocol': 0},
-                        {'minimumUpdaterProtocol': 3}, {'minimumUpdaterProtocol': '2'}):
+                        {'minimumUpdaterProtocol': 4}, {'minimumUpdaterProtocol': '2'}):
             with self.subTest(changes=changes), self.assertRaises(u.UpdateError):
                 u.manifest_contract(dict(base, **changes))
         self.assertEqual(u.manifest_contract({'format': 1, 'databaseSchema': 1}), (1, []))

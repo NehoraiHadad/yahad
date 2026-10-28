@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Immutable launcher for independently signed, versioned updater runtimes.
+"""Owner-enrolled immutable launcher for versioned updater runtimes.
 
 This file is provisioned only by an owner-reviewed bootstrap. It never installs
 itself, keys, helpers or units, and never trusts an application release to supply
-root code. Transport is deliberately separate: stage() accepts authenticated
-bundle bytes, not URLs/commands from an app manifest or web request.
+root code. Signed enrollment remains signature-only. The separately bootstrapped
+GitHub HTTPS profile delegates publisher authority to one fixed repository;
+its hashes provide integrity, not independent publisher authentication.
 """
 import contextlib
 import fcntl
@@ -27,6 +28,8 @@ import zipfile
 CONFIG = '/etc/yachad/updates.json'
 KEY = '/etc/yachad/updater-signing.pub'
 TRANSPORT = '/usr/local/lib/yachad-updater/updater-transport.py'
+POLICY = '/etc/yachad/updater-source.json'
+PUBLIC_REPOSITORY = 'NehoraiHadad/yahad'
 COMMANDS = {'run', 'requests', 'recover', 'boot-recover'}
 CAPABILITIES = dict(supervisorProtocol=1, workerProtocol=2, helperProtocol=1,
                     configFormat=1, stateFormat=1, appManifestFormats=[1, 2])
@@ -38,7 +41,13 @@ MAX_ARCHIVE = 2 * 1024 * 1024
 MAX_SOURCE = 1024 * 1024
 MAX_SCHEMA_ID = 1_000_000
 RUNTIME_FILES = {'updater.py', 'manifest.json', 'manifest.sig', 'payload.zip'}
+HTTPS_RUNTIME_FILES = {'updater.py', 'manifest.json', 'payload.zip'}
 ENV = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'HOME': '/root', 'LANG': 'C.UTF-8'}
+
+# Linux UAPI values; unavailable kernel support still fails closed in fcntl.
+F_ADD_SEALS = getattr(fcntl, 'F_ADD_SEALS', 1033)
+F_GET_SEALS = getattr(fcntl, 'F_GET_SEALS', 1034)
+SELECTION_SEALS = 0x0001 | 0x0002 | 0x0004 | 0x0008
 
 
 class SupervisorError(Exception):
@@ -115,7 +124,7 @@ def public_key_der(public_key_bytes, work_directory):
 
 
 def verify_bundle(raw, signature, archive, public_key_bytes, work_directory):
-    if not 1 <= len(raw) <= 8192 or len(signature) != 64 or not 1 <= len(archive) <= MAX_ARCHIVE:
+    if not isinstance(signature, bytes) or not 1 <= len(raw) <= 8192 or len(signature) != 64 or not 1 <= len(archive) <= MAX_ARCHIVE:
         raise SupervisorError('bundle')
     # The caller must pin this key independently of the bundle/app transport.
     if not isinstance(public_key_bytes, bytes) or not 1 <= len(public_key_bytes) <= 8192:
@@ -133,6 +142,25 @@ def verify_bundle(raw, signature, archive, public_key_bytes, work_directory):
                            '-rawin', '-in', str(directory / 'manifest'), '-sigfile', str(directory / 'signature')], cwd=directory)
         except (OSError, subprocess.SubprocessError, SupervisorError):
             raise SupervisorError('signature') from None
+    return validate_bundle(raw, archive)
+
+
+def verify_https_bundle(raw, archive):
+    """Integrity only: callers must establish the fixed GitHub HTTPS authority.
+
+    Only explicit owner enrollment may use this path. A missing/bad signature in
+    a signed profile never reaches it. Protocol 3 supports joined release input.
+    """
+    manifest, source = validate_bundle(raw, archive)
+    if manifest['workerProtocol'] < 3:
+        raise SupervisorError('protocol')
+    return manifest, source
+
+
+def validate_bundle(raw, archive):
+    if (not isinstance(raw, bytes) or not isinstance(archive, bytes) or
+            not 1 <= len(raw) <= 8192 or not 1 <= len(archive) <= MAX_ARCHIVE):
+        raise SupervisorError('bundle')
     manifest = strict_json(raw)
     fields = {'format', 'kind', 'version', 'archive', 'bytes', 'sha256', *CAPABILITIES}
     if (not isinstance(manifest, dict) or set(manifest) != fields or type(manifest['format']) is not int or
@@ -164,8 +192,8 @@ def verify_bundle(raw, signature, archive, public_key_bytes, work_directory):
                 raise SupervisorError('archive')
             with bundle.open(item) as stream: source = stream.read(MAX_SOURCE + 1)
             if len(source) != item.file_size: raise SupervisorError('archive')
-            # Parsing is not execution/import and happens only after signature checks.
-            compile(source, 'signed-updater.py', 'exec', dont_inherit=True)
+            # Parsing is not execution/import; source authority is a separate step.
+            compile(source, 'enrolled-updater.py', 'exec', dont_inherit=True)
     except (zipfile.BadZipFile, RuntimeError, ValueError, SyntaxError):
         raise SupervisorError('archive') from None
     return manifest, source
@@ -189,6 +217,30 @@ class Supervisor:
         self.current = self.runtime / 'current'
         self.journal_path = self.state / 'updater-runtime.json'
         self.key = self.path(KEY)
+
+    def trust_profile(self):
+        # Missing policy preserves historical signature-only enrollment. Neither
+        # an app trust setting nor the absence of a .sig file selects HTTPS.
+        try: value = strict_json(self.read(self.path(POLICY), 8192, private=True))
+        except FileNotFoundError: return 'signature'
+        if isinstance(value, dict) and value.get('format') == 1 and type(value.get('format')) is int:
+            return 'signature'
+        if (not isinstance(value, dict) or set(value) != {'format', 'trust', 'enabled', 'repository', 'channel', 'checkHours'} or
+                type(value['format']) is not int or value['format'] != 2 or value['trust'] != 'github-https' or
+                type(value['enabled']) is not bool or value['repository'] != PUBLIC_REPOSITORY or
+                value['channel'] != 'stable' or type(value['checkHours']) is not int or not 1 <= value['checkHours'] <= 168 or
+                os.path.lexists(self.key)):
+            raise SupervisorError('configuration')
+        return 'github-https'
+
+    def runtime_files(self):
+        return HTTPS_RUNTIME_FILES if self.trust_profile() == 'github-https' else RUNTIME_FILES
+
+    def reference(self, manifest, raw):
+        value = dict(version=manifest['version'], sha256=manifest['sha256'])
+        if self.trust_profile() == 'github-https':
+            value['manifestSha256'] = hashlib.sha256(raw).hexdigest()
+        return value
 
     def path(self, absolute):
         return self.root / str(absolute).lstrip('/')
@@ -265,11 +317,14 @@ class Supervisor:
             os.close(fd)
 
     def ref(self, value):
-        if not isinstance(value, dict) or set(value) != {'version', 'sha256'}:
+        fields = {'version', 'sha256'}
+        if self.trust_profile() == 'github-https': fields.add('manifestSha256')
+        if not isinstance(value, dict) or set(value) != fields:
             raise SupervisorError('journal')
         version(value['version'])
-        if not isinstance(value['sha256'], str) or not re.fullmatch('[0-9a-f]{64}', value['sha256']):
-            raise SupervisorError('journal')
+        for key in fields - {'version'}:
+            if not isinstance(value[key], str) or not re.fullmatch('[0-9a-f]{64}', value[key]):
+                raise SupervisorError('journal')
         return value
 
     def journal(self):
@@ -295,6 +350,9 @@ class Supervisor:
 
     def verify(self, raw, signature, archive):
         self.directory(self.runtime)
+        if self.trust_profile() == 'github-https':
+            if signature is not None: raise SupervisorError('configuration')
+            return verify_https_bundle(raw, archive)
         return verify_bundle(raw, signature, archive, self.read(self.key, 8192), self.runtime)
 
     def runtime_path(self, reference):
@@ -303,12 +361,14 @@ class Supervisor:
     def verify_runtime(self, reference):
         directory = self.runtime_path(reference)
         self.directory(directory)
-        if {item.name for item in directory.iterdir()} != RUNTIME_FILES:
+        self.ref(reference)
+        if {item.name for item in directory.iterdir()} != self.runtime_files():
             raise SupervisorError('runtime_files')
-        manifest, source = self.verify(self.read(directory / 'manifest.json', 8192),
-                                       self.read(directory / 'manifest.sig', 64),
+        raw = self.read(directory / 'manifest.json', 8192)
+        signature = self.read(directory / 'manifest.sig', 64) if 'manifest.sig' in self.runtime_files() else None
+        manifest, source = self.verify(raw, signature,
                                        self.read(directory / 'payload.zip', MAX_ARCHIVE))
-        if ({'version': manifest['version'], 'sha256': manifest['sha256']} != reference or
+        if (self.reference(manifest, raw) != reference or
                 self.read(directory / 'updater.py', MAX_SOURCE) != source):
             raise SupervisorError('runtime_digest')
         return directory
@@ -392,7 +452,7 @@ class Supervisor:
         if self.pointer() != 'versions/v' + journal['active']['version']:
             raise SupervisorError('pointer')
         manifest, source = self.verify(manifest_bytes, signature_bytes, archive_bytes)
-        candidate = {'version': manifest['version'], 'sha256': manifest['sha256']}
+        candidate = self.reference(manifest, manifest_bytes)
         if version(candidate['version']) <= version(journal['maxAcceptedVersion']):
             if candidate == journal['active']: return candidate
             raise SupervisorError('downgrade')
@@ -403,8 +463,9 @@ class Supervisor:
             self.directory(self.versions)
             temporary = pathlib.Path(tempfile.mkdtemp(prefix='.candidate-', dir=self.versions))
             try:
-                for name, content in {'updater.py': source, 'manifest.json': manifest_bytes,
-                                      'manifest.sig': signature_bytes, 'payload.zip': archive_bytes}.items():
+                contents = {'updater.py': source, 'manifest.json': manifest_bytes, 'payload.zip': archive_bytes}
+                if 'manifest.sig' in self.runtime_files(): contents['manifest.sig'] = signature_bytes
+                for name, content in contents.items():
                     self.atomic(temporary / name, content)
                 self.sync(temporary)
                 os.rename(temporary, destination)
@@ -490,11 +551,34 @@ class Supervisor:
     def recover(self):
         with self.locked(): return self.recover_locked()
 
-    def dispatch(self, command):
+    @contextlib.contextmanager
+    def selected_release(self, selection):
+        """Sealed inherited bytes, not a mutable path or release-supplied command."""
+        raw = json.dumps(selection, separators=(',', ':')).encode()
+        if not 1 <= len(raw) <= 8192: raise SupervisorError('selection')
+        fd = os.memfd_create('yachad-release-selection', os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+        try:
+            os.write(fd, raw)
+            os.lseek(fd, 0, os.SEEK_SET)
+            fcntl.fcntl(fd, F_ADD_SEALS, SELECTION_SEALS)
+            yield fd
+        finally: os.close(fd)
+
+    def dispatch(self, command, selection=None, failure=None):
         if command not in COMMANDS: raise SupervisorError('command')
+        if failure is not None:
+            if (selection is not None or failure not in {'target_changed', 'network', 'archive', 'configuration', 'incompatible'} or
+                    command not in {'run', 'requests'} or self.trust_profile() != 'github-https'):
+                raise SupervisorError('selection')
+        if selection is not None and (command not in {'run', 'requests'} or self.trust_profile() != 'github-https'):
+            raise SupervisorError('selection')
         with self.locked(wait=command == 'requests'):
             journal = self.recover_locked()
             reference = journal['active']
+            if failure is not None:
+                selection = dict(format=1, repository=PUBLIC_REPOSITORY, runtimeSha256=reference['sha256'], error=failure)
+            if selection is not None and selection.get('runtimeSha256') != reference['sha256']:
+                raise SupervisorError('selection_runtime_changed')
             status = self.app_status()
             if not isinstance(status.get('phase', 'idle'), str) or status.get('phase', 'idle') not in APP_PHASES:
                 raise SupervisorError('app_journal')
@@ -503,10 +587,14 @@ class Supervisor:
             directory = self.verify_runtime(reference)
             # Do not catch a failed app run by restoring the previous runtime:
             # the database or pending recovery format may already have changed.
-            return self.runner(['/usr/bin/python3', '-I', '-B', str(directory / 'updater.py'), command,
-                                '--supervisor-lock-fd', str(self.lock_fd), '--runtime-digest', reference['sha256']],
-                               cwd=directory, pass_fds=(self.lock_fd,),
-                               timeout=3900 if command == 'requests' else 1800 if command == 'run' else 180)
+            args = ['/usr/bin/python3', '-I', '-B', str(directory / 'updater.py'), command,
+                    '--supervisor-lock-fd', str(self.lock_fd), '--runtime-digest', reference['sha256']]
+            timeout = 3900 if command == 'requests' else 1800 if command == 'run' else 180
+            if selection is not None:
+                with self.selected_release(selection) as fd:
+                    return self.runner(args + ['--release-selection-fd', str(fd)], cwd=directory,
+                                       pass_fds=(self.lock_fd, fd), timeout=timeout)
+            return self.runner(args, cwd=directory, pass_fds=(self.lock_fd,), timeout=timeout)
 
 
 def refresh_runtime(supervisor, command='run'):
@@ -525,13 +613,22 @@ def main():
     if os.geteuid() != 0 or len(sys.argv) != 2 or sys.argv[1] not in COMMANDS:
         raise SupervisorError('command')
     supervisor = Supervisor()
+    selection = None
+    failure = None
     if sys.argv[1] in {'run', 'requests'}:
-        try: refresh_runtime(supervisor, sys.argv[1])
+        try:
+            outcome = refresh_runtime(supervisor, sys.argv[1])
+            selection = outcome.get('selection') if isinstance(outcome, dict) else None
+            if selection is None and supervisor.trust_profile() == 'github-https' and isinstance(outcome, dict) and outcome.get('error'):
+                failure = {'target_changed':'target_changed', 'invalid_release':'archive', 'protocol':'incompatible',
+                           'downgrade':'incompatible', 'configuration':'configuration'}.get(outcome['error'], 'network')
         except Exception:
             # Optional remote discovery never replaces a missing signature with
             # app HTTPS trust or prevents verified local runtime recovery.
             print('YACHAD_UPDATER_RUNTIME_CHECK_FAILED', file=sys.stderr)
-    supervisor.dispatch(sys.argv[1])
+    if failure is not None: supervisor.dispatch(sys.argv[1], failure=failure)
+    elif selection is None: supervisor.dispatch(sys.argv[1])
+    else: supervisor.dispatch(sys.argv[1], selection=selection)
 
 
 if __name__ == '__main__':

@@ -25,7 +25,7 @@ class PinnedSourceTests(unittest.TestCase):
                          'Review supervisor changes and refresh the explicit bootstrap pin together')
         self.assertEqual(hashlib.sha256((ROOT / 'deploy/updater-transport.py').read_bytes()).hexdigest(), u.TRANSPORT_SHA256,
                          'Review immutable transport changes and refresh the bootstrap pin together')
-        self.assertEqual(hashlib.sha256((ROOT / 'deploy/updater.py').read_bytes()).hexdigest(), u.DIRECT_WORKER_SHA256,
+        self.assertEqual(hashlib.sha256((ROOT / 'tests/fixtures/updater-direct-0.5.txt').read_bytes()).hexdigest(), u.DIRECT_WORKER_SHA256,
                          'Review the fresh-install direct worker enrollment pin together')
         self.assertEqual(u.OLD_SHA256, '6b1523a207ecff1ad7bff19c80d85809f4e453125bf5b5ecece64463465a6cad')
 
@@ -315,7 +315,7 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(self.states[u.SCHEDULERS[0]]['ActiveState'], 'inactive')
 
     def test_exact_reviewed_current_direct_worker_from_fresh_install_can_enroll(self):
-        self.target.write_bytes((ROOT / 'deploy/updater.py').read_bytes())
+        self.target.write_bytes((ROOT / 'tests/fixtures/updater-direct-0.5.txt').read_bytes())
         self.assertIn('WORKER_UPGRADED', self.run_bootstrap())
         self.assertEqual(self.target.read_bytes(), u.LAUNCHER)
         self.assert_preserved()

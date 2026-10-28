@@ -66,6 +66,12 @@ export class Store {
       this.run('INSERT OR IGNORE INTO instance_metadata VALUES(?,?)', 'connector', config.connector);
       if (this.one('SELECT version FROM schema_version')?.version !== DATABASE_SCHEMA)
         throw new Error('Unsupported database schema');
+      // Upgrade existing catalogs as well as newly synced groups. Previously an
+      // ungranted group had no key; creating one cannot recover discarded history.
+      this.tx(() => {
+        for (const row of this.all('SELECT family_id,id FROM groups'))
+          this.ensureGroupKey(row.family_id, row.id);
+      });
       this.cleanOrphans();
     } catch (error) { this.db.close(); throw error; }
   }
@@ -161,7 +167,8 @@ export class Store {
     return { user: this.user(row), sid, csrf: row.csrf, expires: row.expires, last: row.last };
   }
   allowed(user: User, g: string) {
-    if (user.role === 'parent') return this.retained(user.familyId, g);
+    if (!this.knownGroup(user.familyId, g)) return false;
+    if (user.role === 'parent') return true;
     return !!this.one(
       'SELECT 1 FROM grants WHERE family_id=? AND user_id=? AND group_id=?',
       user.familyId,
@@ -169,8 +176,18 @@ export class Store {
       g,
     );
   }
+  knownGroup(f: string, g: string) {
+    return !!this.one('SELECT 1 FROM groups WHERE family_id=? AND id=?', f, g);
+  }
   retained(f: string, g: string) {
-    return !!this.one('SELECT 1 FROM grants WHERE family_id=? AND group_id=?', f, g);
+    // The family parent's access is independent of child grants. Unknown groups
+    // (including arbitrary JIDs and groups known only to another family) stay out.
+    return this.knownGroup(f, g);
+  }
+  private ensureGroupKey(f: string, g: string) {
+    if (!this.one('SELECT 1 FROM group_keys WHERE family_id=? AND group_id=?', f, g))
+      this.run('INSERT INTO group_keys VALUES(?,?,?)', f, g,
+        seal(this.config.masterKey, randomBytes(32), `${f}:key:${g}`));
   }
   groups(f: string): ChatGroup[] {
     return this.all('SELECT id,title FROM groups WHERE family_id=? ORDER BY title', f).map((x) => ({
@@ -181,13 +198,15 @@ export class Store {
   syncGroups(f: string, groups: ChatGroup[]) {
     this.tx(() => {
       for (const g of groups)
-        if (g.id.endsWith('@g.us'))
+        if (g.id.endsWith('@g.us')) {
           this.run(
             'INSERT INTO groups VALUES(?,?,?) ON CONFLICT(family_id,id) DO UPDATE SET title=excluded.title',
             f,
             g.id,
             seal(this.config.masterKey, g.title.slice(0, 200), `${f}:title:${g.id}`),
           );
+          this.ensureGroupKey(f, g.id);
+        }
     });
   }
   groupKey(f: string, g: string) {
@@ -202,19 +221,10 @@ export class Store {
     )
       throw new Error('Unknown child or group');
     if (on) {
-      this.tx(() => {
-        this.run('INSERT OR IGNORE INTO grants VALUES(?,?,?)', f, u, g);
-        if (!this.one('SELECT 1 FROM group_keys WHERE family_id=? AND group_id=?', f, g))
-          this.run(
-            'INSERT INTO group_keys VALUES(?,?,?)',
-            f,
-            g,
-            seal(this.config.masterKey, randomBytes(32), `${f}:key:${g}`),
-          );
-      });
+      this.run('INSERT OR IGNORE INTO grants VALUES(?,?,?)', f, u, g);
     } else {
       this.run('DELETE FROM grants WHERE family_id=? AND user_id=? AND group_id=?', f, u, g);
-      if (!this.retained(f, g)) this.purgeGroup(f, g);
+      // Revoking a child never revokes the parent or erases the parent’s copy.
     }
   }
   getMessage(f: string, g: string, id: string): StoredMessage | undefined {

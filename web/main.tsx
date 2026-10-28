@@ -9,7 +9,8 @@ import { HistoryPanel } from './HistoryPanel';
 import { MessageImage } from './MessageImage';
 import { DisconnectPanel } from './DisconnectPanel';
 import { GroupAvatar } from './GroupAvatar';
-import { GroupPicker } from './GroupPicker';
+import { ChildManagement } from './ChildManagement';
+import { reconcileChildSelection } from './childManagementState';
 import { ParentChatFilter, filterParentGroups, searchChatGroups, parentEmptyMessage, type ChatFilter } from './ParentChatFilter';
 import { CatalogConversation, ConversationVerification } from './CatalogConversation';
 import './parentChatCatalog.css';
@@ -18,7 +19,7 @@ import { LatestRequest, isGroupDataRefresh } from './latestRequest';
 import { AccountSettings } from './AccountSettings';
 import './account-settings.css';
 import { FamilySetup } from './FamilySetup';
-import { FamilyProgress, ChildGroupSummary, familyProgress, type FamilyOverview } from './FamilyProgress';
+import { FamilyProgress, familyProgress, type FamilyOverview } from './FamilyProgress';
 let setupToken = new URLSearchParams(location.hash.slice(1)).get('setup') || '';
 if (setupToken) history.replaceState(null, '', location.pathname + location.search);
 import React, { useState, useEffect, useRef, useCallback } from 'react';
@@ -68,6 +69,7 @@ import {
 } from 'lucide-react';
 import { api, isTransientApiError, setCsrf } from './api';
 import './style.css';
+import './child-management.css';
 import { DiagnosticsPanel } from './DiagnosticsPanel';
 import { UpdatesPanel } from './UpdatesPanel';
 import type { PublicMessage } from '../src/service';
@@ -682,7 +684,7 @@ function Chat({
                         {!groupsVerified
                           ? 'בודקים את הגישה לתוכן…'
                           : !g.canRead
-                          ? 'לא מאושרת לילדים · ללא תוכן ב״יחד״'
+                          ? 'הגישה לשיחה אינה זמינה כרגע'
                           : g.last?.deleted
                           ? 'הודעה נמחקה'
                           : g.last?.text ||
@@ -984,7 +986,7 @@ function Chat({
         ) : current && !groupsVerified ? (
           <ConversationVerification title={current.title} checking={groupsChecking} onBack={() => setSelected(null)} onRetry={() => void refreshList()} />
         ) : current ? (
-          <CatalogConversation title={current.title} onBack={() => setSelected(null)} onManage={parent} />
+          <CatalogConversation title={current.title} onBack={() => setSelected(null)} onRetry={() => void refreshList()} />
         ) : (
           <div className="welcome">
             <div className="welcome-emblem">
@@ -1725,10 +1727,10 @@ function Parent({
   openChat: () => void;
   onError: (x: string) => void;
 }) {
-  const [identity, setIdentity] = useState('');
   const [groupPhotoRevision, setGroupPhotoRevision] = useState(0);
   const [createdChild, setCreatedChild] = useState('');
   const [settingsChild, setSettingsChild] = useState('');
+  const [settingsMode, setSettingsMode] = useState<'profile' | 'password'>('profile');
   const [overviewStale, setOverviewStale] = useState(false);
   const [data, setData] = useState<FamilyOverview | null>(null),
     [qr, setQr] = useState<string | null>(null),
@@ -1746,7 +1748,7 @@ function Parent({
       const d = await api<FamilyOverview>('/parent/overview');
       if (request !== overviewRequest.current) return;
       setData(d);
-      setChild((prev) => d.children.some(child => child.id === prev) ? prev : familyProgress(d).pendingChild?.id || d.children[0]?.id || '');
+      setChild(prev => reconcileChildSelection(d, prev));
       if (d.state === 'qr') {
         const q = await api('/parent/qr');
         if (request !== overviewRequest.current) return;
@@ -1767,12 +1769,13 @@ function Parent({
     source.addEventListener('expired', () => window.dispatchEvent(new Event('session-expired')));
     const timer = setInterval(() => void load(true), 10000);
     return () => {
+      overviewRequest.current++;
       source.close();
       clearInterval(timer);
     };
   }, []);
   const act = async (path: string, body?: unknown, method = 'POST') => {
-    if (acting.current) return;
+    if (acting.current) return false;
     acting.current = true; setBusy(true);
     try {
       await api(path, method, body);
@@ -1781,11 +1784,13 @@ function Parent({
       // the newest read confirms the persisted state (even after busy clears).
       setOverviewStale(true);
       await load();
+      return true;
     } catch (e) {
       onError((e as Error).message);
       // A lost mutation response may still have committed. Reconcile before another click.
       setOverviewStale(true);
       await load(true);
+      return false;
     } finally {
       acting.current = false; setBusy(false);
     }
@@ -1807,9 +1812,9 @@ function Parent({
           <MessageCircleHeart /> יחד <span>המרחב להורה</span>
         </div>
         <div>
-          <button className="text-button" onClick={() => { setSettingsChild(''); setSettings(true); }}>
+          <button className="text-button" disabled={busy || overviewStale} onClick={() => { setSettingsChild(''); setSettingsMode('password'); setSettings(true); }}>
             <Settings size={17} />
-            הגדרות חשבון
+            החשבון שלי
           </button>
           <IconButton label="יציאה" onClick={() => void logout()}>
             <LogOut size={20} />
@@ -1817,14 +1822,10 @@ function Parent({
         </div>
       </header>
       <div className="parent-content">
-        <span className="eyebrow">בוחרים את המרחב, משאירים מקום לשיחה</span>
-        <h1>
-          הקבוצות שלה.
-          <br />
-          <span>הבחירה שלכם.</span>
-        </h1>
-        <p className="parent-intro">מקשרים חשבון, בוחרים קבוצות, ונכנסים לשיחות בטאבלט.</p>
-        {overviewStale && <p className="diagnostics-caption" role="status">עדכון המסך ממתין לחיבור לשרת. ננסה שוב אוטומטית; המידע שכבר מוצג עשוי להיות לא מעודכן. זו אינה הודעת כשל של פעולה שביקשתם.</p>}
+        <span className="eyebrow">יחד · ניהול המשפחה</span>
+        <h1>מרחב משלהם.<br /><span>בחירה שלכם.</span></h1>
+        <p className="parent-intro">כל הילדים, הקבוצות וההגדרות — במקום אחד.</p>
+        {overviewStale && <p className="diagnostics-caption" role="status">עדכון המסך ממתין לחיבור לשרת. ננסה שוב אוטומטית; המידע שכבר מוצג עשוי להיות לא מעודכן. שינויים חסומים עד לאימות המצב.</p>}
         {me.connector === 'mock' && (
           <div className="mock-notice">
             <Flower2 size={21} />
@@ -1834,9 +1835,22 @@ function Parent({
             </div>
           </div>
         )}
-        {data && <FamilyProgress data={data} busy={busy} stale={overviewStale} onAdd={() => setAddingChild(true)} onSelect={id => { setChild(id); setCreatedChild(''); }} />}
-        {data && <ChildGroupSummary data={data} selected={child} busy={busy} stale={overviewStale} onSelect={id => { setChild(id); setCreatedChild(''); }} />}
-        <div className="parent-grid">
+        {data && familyProgress(data).completed < 3 && <FamilyProgress data={data} busy={busy} stale={overviewStale} onAdd={() => setAddingChild(true)} onSelect={id => { setChild(id); setCreatedChild(''); }} />}
+        <ChildManagement data={data} selected={child} busy={busy} stale={overviewStale} createdChild={createdChild}
+          photoRetryKey={`${data?.state || 'idle'}:${groupPhotoRevision}`}
+          onAdd={() => setAddingChild(true)} onSelect={id => { setChild(id); setCreatedChild(''); }}
+          onSettings={(id, mode) => { setSettingsChild(id); setSettingsMode(mode); setSettings(true); }}
+          onRetry={() => void load()} onRefresh={() => void act('/parent/sync-groups')}
+          onGrant={change => { setCreatedChild(''); return act('/parent/grant', change, 'PUT'); }}>
+          <IdentitySettings key={child} childId={child} disabled={busy || overviewStale}
+            value={data?.children.find(account => account.id === child)?.senderLabel || ''}
+            onSave={async label => {
+              const saved = await act('/parent/identity', { childId: child, label }, 'PUT');
+              if (!saved) throw new Error('לא התקבל אישור לשמירת החתימה. בדקו את המצב לאחר הרענון.');
+            }} onError={onError}/>
+        </ChildManagement>
+        <details className="parent-connection-details" open={data?.state !== 'connected' || !!data?.disconnect}>
+          <summary>חיבור החשבון <span>{data?.state === 'connected' && !data?.disconnect ? 'מחובר' : 'נדרשת בדיקה'}</span></summary>
           <section className="parent-card" id="family-connection" tabIndex={-1}>
             <div className="step-title">
               <span>01</span>
@@ -1893,51 +1907,12 @@ function Parent({
               </p>
             </div>
           </section>
-          <section className="parent-card group-picker" id="family-groups" tabIndex={-1}>
-            <div className="step-title">
-              <span>02</span>
-              <h2>בוחרים את הקבוצות</h2>
-              <IconButton
-                label="רענון רשימת קבוצות"
-                disabled={busy || data?.state !== 'connected'}
-                onClick={() => void act('/parent/sync-groups')}
-              >
-                <RefreshCw size={17} />
-              </IconButton>
-            </div>
-            <p>רק הקבוצות המסומנות נגישות בחשבון הילדה.</p>
-            <button type="button" className="outline-button" disabled={busy || !data || overviewStale} onClick={() => setAddingChild(true)}>הוספת ילד או ילדה</button>
-            {data && data.children.length > 1 && (
-              <label>
-                חשבון ילד או ילדה
-                <select value={child} disabled={busy} onChange={(e) => { setChild(e.target.value); setCreatedChild(''); }}>
-                  {data.children.map((x: any) => (
-                    <option key={x.id} value={x.id}>
-                      {childLabel(x)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            {data?.children.some(account => account.id === child) && <button type="button" className="text-button" disabled={busy || overviewStale} onClick={() => { setSettingsChild(child); setSettings(true); }}>שינוי השם של {childLabel(data.children.find(account => account.id === child)!)}</button>}
-            {createdChild === child && data?.children.some((x: any) => x.id === createdChild) && <p role="status" className="setup-success">החשבון נוצר ונבחר. סמנו את הקבוצות שיופיעו בו. אפשר להוסיף חשבון נוסף בהמשך.</p>}
-            {data?.children.length === 0 && <p className="setup-success">מתחילים בחשבון ילד. רק אחר כך מאשרים עבורו קבוצות — אין גישה אוטומטית לשיחות.</p>}
-            <GroupPicker photoRetryKey={`${data?.state || 'idle'}:${groupPhotoRevision}`} groups={data?.groups || []} grants={data?.grants || []} childId={child}
-              busy={busy || overviewStale} loading={!data} onToggle={(groupId, allowed) => void act('/parent/grant', { childId: child, groupId, allowed }, 'PUT')} />
-            <div className="small-note">
-              <ShieldCheck size={16} />
-              <p>
-                הסרת סימון מבטלת גישה מיד. כשאין עוד חשבון ילד מורשה בקבוצה, נמחקים העותקים הפעילים
-                שבשליטת האפליקציה. קבצים שכבר הורדו למכשיר אינם ניתנים למחיקה מרחוק.
-              </p>
-            </div>
-          </section>
-        </div>
+        </details>
         <section className="parent-card next-step" id="family-tablet" tabIndex={-1}>
           <div>
             <span className="eyebrow">03 · מתחילים לדבר</span>
-            <h2>{selectedChild?.ready && !overviewStale ? 'מוכן לכניסה בטאבלט' : 'לפני הכניסה בטאבלט'}</h2>
-            <p>{!data ? 'טוענים את מצב ההכנה…' : overviewStale ? 'ממתינים לאימות מצב ההכנה מול השרת.' : !selectedChild ? 'הוסיפו חשבון ילד ובחרו עבורו קבוצות.' : !selectedChild.groups.length ? 'לחשבון שנבחר אין קבוצות מאושרות. בחרו לפחות קבוצה אחת לפני הכניסה.' : !selectedChild.ready ? 'הקבוצות נשמרו. חברו את החשבון כדי להמשיך.' : 'פותחים את אותה כתובת מאובטחת, ונכנסים עם חשבון הילד שנבחר.'}</p>
+            <h2>{selectedChild ? `כניסה לטאבלט של ${selectedChild.name}` : 'לפני הכניסה בטאבלט'}</h2>
+            <p>{!data ? 'טוענים את מצב ההכנה…' : overviewStale ? 'ממתינים לאימות מצב ההכנה מול השרת.' : !selectedChild ? 'הוסיפו חשבון ילד ובחרו עבורו קבוצות.' : !selectedChild.groups.length ? 'לחשבון שנבחר אין קבוצות מאושרות. בחרו לפחות קבוצה אחת לפני הכניסה.' : !selectedChild.ready ? 'הקבוצות נשמרו. חברו את החשבון כדי להמשיך.' : 'פותחים את אותה כתובת של יחד, ונכנסים עם השם שמופיע כאן והסיסמה שבחרתם לחשבון.'}</p>
             <p className="muted">המסך אינו מאשר שהטאבלט התחבר. ודאו בטאבלט שהכניסה הצליחה והקבוצות מופיעות.</p>
           </div>
           <div className="child-login-details">
@@ -1949,25 +1924,15 @@ function Parent({
             לממשק השיחות של ההורה <ArrowLeft size={18} />
           </button>
         </section>
-        <IdentitySettings
-          key={child}
-          childId={child}
-          value={data?.children.find((x: any) => x.id === child)?.senderLabel || ''}
-          onSave={async (label) => {
-            await api('/parent/identity', 'PUT', { childId: child, label });
-            await load();
-          }}
-          onError={onError}
-        />
         <DiagnosticsPanel />
         <UpdatesPanel />
         <details className="transparency">
           <summary>מה חשוב לדעת על המרחב הזה?</summary>
           <p>
             זו עדיין זהות ההורה: ההודעות נשלחות מהמספר שלו, והוא יכול לראות אותן ב־WhatsApp. השרת
-            הוא מכשיר מקושר שעשוי לקבל ולפענח גם שיחות שאינן מוצגות לילדה. האפליקציה אינה שומרת תוכן
-            שלהן, אך אין כאן פרטיות מההורה או הצפנה מקצה לקצה עד הדפדפן. מידע ניהולי מינימלי של
-            קבוצות זמין להורה בלבד.
+            הוא מכשיר מקושר שעשוי לקבל ולפענח גם שיחות שאינן מוצגות לילדים. קבוצות מוכרות במשפחה
+            נשמרות עבור ההורה גם בלי אישור לילד. רק קבוצות שאושרו זמינות לילד; אין כאן פרטיות
+            מההורה או הצפנה מקצה לקצה עד הדפדפן. מידע ניהולי של קבוצות זמין להורה בלבד.
           </p>
           <p>
             ההיסטוריה עלולה להיות חלקית, במיוחד לאחר ניתוק. אין הבטחה לשחזור מלא. שיחות קול ווידאו,
@@ -1998,6 +1963,7 @@ function Parent({
         <AccountSettings
           children={data?.children}
           initialChildId={settingsChild}
+          initialMode={settingsMode}
           onProfileChanged={() => { setOverviewStale(true); void load(); }}
           onClose={() => setSettings(false)}
         />
@@ -2055,8 +2021,10 @@ function IdentitySettings({
   value,
   onSave,
   onError,
+  disabled,
 }: {
   childId: string;
+  disabled: boolean;
   value: string;
   onSave: (label: string) => Promise<void>;
   onError: (x: string) => void;
@@ -2064,33 +2032,36 @@ function IdentitySettings({
   const [label, setLabel] = useState(value),
     [saved, setSaved] = useState(false),
     [busy, setBusy] = useState(false);
-  useEffect(() => setLabel(value), [value]);
+  const submitting = useRef(false);
+  useEffect(() => { setLabel(value); setSaved(false); }, [value]);
   return (
     <form
       className="parent-card identity-settings"
       onSubmit={async (e) => {
         e.preventDefault();
-        setBusy(true);
+        if (submitting.current || disabled || !childId) return;
+        submitting.current = true; setBusy(true);
         try {
           await onSave(label.trim());
           setSaved(true);
         } catch (e) {
           onError((e as Error).message);
         } finally {
-          setBusy(false);
+          submitting.current = false; setBusy(false);
         }
       }}
     >
       <div>
-        <span className="eyebrow">מי כותבת?</span>
+        <span className="eyebrow">מי כותב או כותבת?</span>
         <h2>חתימה אוטומטית להודעות</h2>
-        <p>השולח ב־WhatsApp נשאר ההורה. חתימה עוזרת למשתתפים לדעת מי כתבה.</p>
+        <p>השולח ב־WhatsApp נשאר ההורה. חתימה עוזרת למשתתפים לדעת מי כתב או כתבה.</p>
       </div>
       <label>
         כיתוב שההורה בוחר
         <input
           aria-label="חתימה אוטומטית"
           maxLength={40}
+          disabled={disabled || busy}
           value={label}
           placeholder="ללא חתימה"
           onChange={(e) => {
@@ -2109,8 +2080,8 @@ function IdentitySettings({
         הודעת זיהוי נפרדת. אם היא נשלחה והמדיה נכשלה, היא עשויה להישאר לבדה. תגובות אימוג׳י תמיד
         מופיעות בשם ההורה. החתימה אינה הוכחת זהות.
       </p>
-      <button className="outline-button" disabled={!childId || busy}>
-        {saved ? 'החתימה נשמרה' : 'שמירת החתימה'}
+      <button className="outline-button" disabled={!childId || busy || disabled || label.trim() === value}>
+        {busy ? 'שומרים…' : saved && !disabled ? 'החתימה נשמרה' : 'שמירת החתימה'}
         <Check size={17} />
       </button>
     </form>

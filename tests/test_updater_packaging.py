@@ -38,7 +38,7 @@ class UpdaterPackagingTests(unittest.TestCase):
         content = (output / 'yachad-updater.zip').read_bytes()
         self.assertEqual(manifest, dict(format=1, kind='yachad-updater', version='1.0.0', archive='yachad-updater.zip',
                          bytes=len(content), sha256=hashlib.sha256(content).hexdigest(), supervisorProtocol=1,
-                         workerProtocol=2, helperProtocol=1, configFormat=1, stateFormat=1, appManifestFormats=[1, 2]))
+                         workerProtocol=3, helperProtocol=1, configFormat=1, stateFormat=1, appManifestFormats=[1, 2]))
         self.assertEqual(len((output / 'yachad-updater.sig').read_bytes()), 64)
         subprocess.run(['openssl', 'pkeyutl', '-verify', '-pubin', '-inkey', str(self.public), '-rawin',
                         '-in', str(output / 'yachad-updater.json'), '-sigfile', str(output / 'yachad-updater.sig')], check=True, capture_output=True)

@@ -134,13 +134,19 @@ test('empty or unsafe name is inline, cancel does not save, and changing account
   h.close().props.onClick(); assert.equal(h.closed(), 1); assert.equal(h.requests.length, 0);
 });
 
-test('failed or uncertain rename is never presented as saved and leaves a recoverable form', async () => {
+test('failed rename can retry but uncertain rename requires close/reconcile before another request', async () => {
   for (const error of [new Error('not allowed'), new Error('network')]) {
     const h = harness('a');
     h.profileInput().props.onChange({ target: { value: 'שם חדש' } });
     const pending = h.form().props.onSubmit({ preventDefault() {} });
     h.fail(error); await pending;
-    assert.equal(h.profileInput().props.disabled, false); assert.equal(h.save().props.disabled, false);
+    assert.equal(h.profileInput().props.disabled, error.message === 'network');
+    assert.equal(h.save().props.disabled, error.message === 'network');
+    if (error.message === 'network') {
+      await h.form().props.onSubmit({ preventDefault() {} });
+      assert.equal(h.requests.length, 1, 'an uncertain response must not produce a duplicate mutation');
+      assert.equal(h.select().props.disabled, true);
+    }
     assert.ok(!h.text().includes('השם עודכן ל־'));
     assert.ok(h.text().includes(error.message === 'network' ? 'ייתכן שהשם עודכן' : 'not allowed'));
     assert.equal(h.refreshed(), 1);

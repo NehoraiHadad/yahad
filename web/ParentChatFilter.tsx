@@ -32,7 +32,7 @@ export function ParentChatFilter({ filter, overview, verified, onChange }: {
       <button type="button" aria-pressed={filter.mode === 'all'} onClick={() => onChange({ ...filter, mode: 'all' })}>כל השיחות</button>
       <button type="button" aria-pressed={filter.mode === 'child'} onClick={() => onChange({ ...filter, mode: 'child' })}>לפי ילד</button>
     </div>
-    {filter.mode === 'all' && <p>כל הקבוצות שסונכרנו בחשבון ההורה, לא שיחות פרטיות. תוכן מוצג רק בקבוצות שאושרו לילד אחד לפחות.</p>}
+    {filter.mode === 'all' && <p>כל הקבוצות שסונכרנו בחשבון ההורה, לא שיחות פרטיות. אפשר לקרוא ולשלוח גם בקבוצות שלא אושרו לילדים. הרשאות הילדים אינן משתנות.</p>}
     {filter.mode === 'child' && <>
       <label>בחירת ילד או ילדה
         <select disabled={!verified || !overview?.children.length}

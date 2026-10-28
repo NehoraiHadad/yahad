@@ -32,14 +32,52 @@ ASSETS = ('yachad-release.json', 'yachad-release.sig', 'yachad-app.zip')
 PUBLIC_REPOSITORY = 'NehoraiHadad/yahad'
 PHASES = {'stopping', 'backing_up', 'activating', 'checking_health', 'rolling_back', 'recovery_required'}
 HOSTS = {'api.github.com', 'github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com'}
-UPDATER_PROTOCOL = 2
+UPDATER_PROTOCOL = 3
 MAX_SCHEMA_ID = 1000000
 RELEASE_METADATA = '.release-manifest.json'
+
+# Linux UAPI values; unavailable kernel support still fails closed in fcntl.
+F_ADD_SEALS = getattr(fcntl, 'F_ADD_SEALS', 1033)
+F_GET_SEALS = getattr(fcntl, 'F_GET_SEALS', 1034)
+SELECTION_SEALS = 0x0001 | 0x0002 | 0x0004 | 0x0008
 
 
 class UpdateError(Exception):
     def __init__(self, code):
         self.code = code
+
+
+def release_target(release, repository):
+    """Opaque selected-object identity, not publisher authentication."""
+    names = {'yachad-release.json', 'yachad-release.sig', 'yachad-app.zip',
+             'yachad-updater.json', 'yachad-updater.sig', 'yachad-updater.zip'}
+    if (not isinstance(repository, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}', repository) or not isinstance(release, dict) or
+            type(release.get('id')) is not int or not 1 <= release['id'] <= 2**63 - 1 or
+            release.get('draft') is not False or release.get('prerelease') is not False or
+            not isinstance(release.get('tag_name'), str) or
+            not re.fullmatch(r'v?(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})', release['tag_name']) or
+            not isinstance(release.get('assets'), list) or len(release['assets']) > 1000):
+        return None
+    assets, seen = [], set()
+    for item in release['assets']:
+        if not isinstance(item, dict) or not isinstance(item.get('name'), str) or item['name'] in seen:
+            return None
+        seen.add(item['name'])
+        if item['name'] not in names: continue
+        url = item.get('url')
+        if not isinstance(url, str) or not re.fullmatch(r'https://api\.github\.com/repos/' + re.escape(repository) + r'/releases/assets/[0-9]+', url):
+            return None
+        assets.append([item['name'], url])
+    if not {'yachad-release.json', 'yachad-app.zip'}.issubset(seen): return None
+    identity = dict(repository=repository, releaseId=release['id'], tag=release['tag_name'], assets=sorted(assets))
+    raw = json.dumps(identity, sort_keys=True, separators=(',', ':')).encode()
+    return dict(version=release['tag_name'].lstrip('v'), fingerprint=hashlib.sha256(raw).hexdigest())
+
+
+def valid_target(value):
+    return (isinstance(value, dict) and set(value) == {'version', 'fingerprint'} and
+            isinstance(value['version'], str) and re.fullmatch(r'(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})', value['version']) is not None and
+            isinstance(value['fingerprint'], str) and re.fullmatch('[0-9a-f]{64}', value['fingerprint']) is not None)
 
 
 def schema_id(value):
@@ -414,17 +452,39 @@ class Worker:
     def recover(self, boot=False):
         if self.status.get('phase') not in PHASES:
             return True
+        stopped = False
         try:
+            if self.status.get('runtimeDigest') != getattr(self, 'runtime_digest', None):
+                raise UpdateError('incompatible')
+            previous_schema = schema_id(self.status.get('previousDatabaseSchema', 1))
+            # A crash after positive readiness but before the healthy journal
+            # commit is not evidence that the migrated target failed. Adopt only
+            # an exact journalled code/manifest/schema/runtime pairing. Never
+            # retry a candidate whose actual health failure was already recorded.
+            if self.status.get('phase') == 'checking_health' and self.status.get('error') is None:
+                try:
+                    self.recovery_target()
+                    if boot:
+                        # The app is ordered AFTER this boot unit. Do not start it
+                        # here (dependency cycle), nor claim readiness prematurely.
+                        # Preserve checking_health; next worker validates live health.
+                        return True
+                    self.health(self.status['targetVersion'], expected_schema=self.status['targetDatabaseSchema'])
+                except (UpdateError, OSError, ValueError, TypeError, KeyError):
+                    # Historical/incomplete metadata cannot authorize adoption.
+                    # The normal same-schema rollback gate still applies below.
+                    pass
+                else:
+                    self.save(phase='healthy', currentVersion=self.status['targetVersion'], failedVersion=None, error=None)
+                    self.finish_adopted_request()
+                    return True
             # Stop before checking schema: incompatible code must not continue writing.
             # At boot, systemd orders this unit before the application starts.
             if not boot:
                 self.command(['/usr/bin/systemctl', 'stop', self.c['service']])
-            if self.status.get('runtimeDigest') != getattr(self, 'runtime_digest', None):
-                raise UpdateError('incompatible')
+                stopped = True
             # Old worker journals describe schema 1. Never infer the previous
             # app's schema from the now-migrated DB or restore a stale backup.
-            previous_schema = self.status.get('previousDatabaseSchema', 1)
-            schema_id(previous_schema)
             if self.schema() != previous_schema:
                 raise UpdateError('incompatible')
             previous = pathlib.Path(self.status['previousPath'])
@@ -443,8 +503,41 @@ class Worker:
             self.save(phase='rolled_back', currentVersion=previous_version, error=self.status.get('error') or 'health')
             return True
         except Exception:
+            if not boot and not stopped:
+                # A mismatched or unhealthy adoption candidate must not be left
+                # running. Never switch to old code against a migrated schema.
+                try: self.command(['/usr/bin/systemctl', 'stop', self.c['service']])
+                except Exception: pass
             self.save(phase='recovery_required', error='rollback')
             return False
+
+    def recovery_target(self):
+        target = self.status.get('targetPath')
+        expected = self.status.get('targetVersion')
+        digest = self.status.get('targetManifestSha256')
+        schema = schema_id(self.status.get('targetDatabaseSchema'))
+        if (not isinstance(target, str) or not isinstance(expected, str) or
+                not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest)):
+            raise UpdateError('incompatible')
+        version(expected)
+        current = self.current()
+        if (current != pathlib.Path(target) or current.name != 'v' + expected or
+                self.schema() != schema or self.app_schema(current) != schema or
+                hashlib.sha256((current / RELEASE_METADATA).read_bytes()).hexdigest() != digest or
+                json.loads((current / 'package.json').read_bytes()).get('version') != expected):
+            raise UpdateError('incompatible')
+
+    def finish_adopted_request(self):
+        # Recovery may have marked an interrupted request internal/failed before
+        # discovering exact healthy activation. Only the request bound BEFORE
+        # downtime can be completed; never acknowledge a newer queued action.
+        request = self.status.get('lastRequest')
+        if (isinstance(request, dict) and request.get('action') == 'install' and
+                request.get('id') == self.status.get('activationRequestId') and
+                valid_target(request.get('target')) and request['target'] == self.status.get('activationRequestTarget') and
+                request['target']['version'] == self.status.get('targetVersion') and
+                (request.get('state') == 'running' or request.get('state') == 'failed' and request.get('error') == 'internal')):
+            self.save(lastRequest=dict(request, state='succeeded', error=None, finishedAt=int(time.time()*1000)))
 
     def read_request(self):
         path = pathlib.Path(self.c['dataDirectory']) / 'update-request.json'
@@ -501,15 +594,21 @@ class Worker:
                     consume = False
                     now = int(time.time()*1000)
                     self.save(lastRequest={'id':data['id'], 'action':data['action'], 'state':'failed',
-                              'startedAt':now, 'finishedAt':now, 'error':'expired'})
+                              'startedAt':now, 'finishedAt':now, 'error':'expired',
+                              **({'target':data['target']} if valid_target(data.get('target')) else {})})
                     consume = True
                     return 'expired'
                 return None
             if correlated:
                 consume = False
                 self.save(lastRequest={'id':data['id'], 'action':data['action'], 'state':'running',
-                          'startedAt':int(time.time()*1000), 'finishedAt':None, 'error':None})
+                          'startedAt':int(time.time()*1000), 'finishedAt':None, 'error':None,
+                          **({'target':data['target']} if valid_target(data.get('target')) else {})})
                 consume = True
+            if data['action'] == 'install':
+                self.requested_install_target = data.get('target')
+                self.saved_install_target = self.status.get('installTarget')
+                self.saved_install_phase = self.status.get('phase')
             return data['action']
         finally:
             if consume: path.unlink(missing_ok=True)
@@ -567,7 +666,9 @@ class Worker:
         repo = self.c['repository']
         if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo):
             raise UpdateError('configuration')
-        raw = download(f'https://api.github.com/repos/{repo}/releases/latest', 1024 * 1024, token, 'application/vnd.github+json')
+        selected = getattr(self, 'release_selection', None)
+        raw = (json.dumps(selected['release']).encode() if selected is not None else
+               download(f'https://api.github.com/repos/{repo}/releases/latest', 1024 * 1024, token, 'application/vnd.github+json'))
         try:
             release = json.loads(raw)
             if release.get('draft') is not False or release.get('prerelease') is not False:
@@ -599,6 +700,9 @@ class Worker:
             limits = {ASSETS[0]:8192, ASSETS[1]:64, ASSETS[2]:64 * 1024 * 1024}
             self.save(phase='downloading')
             content = {name:download(assets[name]['url'], limits[name], token) for name in required}
+            selection = getattr(self, 'release_selection', None)
+            if selection is not None and hashlib.sha256(content[ASSETS[0]]).hexdigest() != selection.get('appManifestSha256'):
+                raise UpdateError('target_changed')
             self.save(phase='verifying')
             if trust == 'signature':
                 key = pathlib.Path(self.c['publicKeyFile'])
@@ -673,8 +777,16 @@ class Worker:
                 raise UpdateError('configuration')
             # Persist the complete new tree before publishing the intent to switch.
             self.command(['/usr/bin/sync', '-f', str(destination)], timeout=120, code='storage')
+            request = self.status.get('lastRequest')
+            correlated = (isinstance(request, dict) and request.get('state') == 'running' and
+                          request.get('action') == 'install' and valid_target(request.get('target')) and
+                          request['target']['version'] == manifest['version'])
             self.save(phase='stopping', previousPath=str(current), rollbackVersion=self.status['currentVersion'],
                       previousDatabaseSchema=previous_schema, targetDatabaseSchema=manifest['databaseSchema'],
+                      targetPath=str(destination), targetVersion=manifest['version'],
+                      targetManifestSha256=hashlib.sha256(content[ASSETS[0]]).hexdigest(),
+                      activationRequestId=request['id'] if correlated else None,
+                      activationRequestTarget=request['target'] if correlated else None,
                       runtimeDigest=getattr(self, 'runtime_digest', None), backupId=None, error=None)
             self.command(['/usr/bin/systemctl', 'stop', self.c['service']])
             if self.schema() != previous_schema:
@@ -754,10 +866,28 @@ class Worker:
             return
         if request_only and not action:
             return
-        if not action and self.status.get('checkedAt', 0) and time.time() * 1000 - self.status['checkedAt'] < self.c.get('checkHours', 6) * 3600000:
+        selected = getattr(self, 'release_selection', None)
+        usable_selection = isinstance(selected, dict) and 'release' in selected
+        if (not action and not usable_selection and self.status.get('checkedAt', 0) and
+                time.time() * 1000 - self.status['checkedAt'] < self.c.get('checkHours', 6) * 3600000):
             self.save()
             return
         try:
+            if action == 'install' and (getattr(self, 'require_release_selection', False) or getattr(self, 'requested_install_target', None) is not None):
+                if (not valid_target(getattr(self, 'requested_install_target', None)) or
+                        self.requested_install_target != getattr(self, 'saved_install_target', None) or
+                        getattr(self, 'saved_install_phase', None) != 'available'):
+                    raise UpdateError('target_changed')
+            if ((isinstance(selected, dict) and 'error' in selected) or
+                    getattr(self, 'require_release_selection', False) and not usable_selection and
+                    (self.c['mode'] == 'auto' or action == 'install')):
+                # No joined root transaction means no app attempt. In particular
+                # do not advance its cache or poison failedVersion because the
+                # root schedule is cached/deferred/offline. A selected release
+                # overrides the independent legacy app cache above.
+                if action in ('check', 'install'):
+                    self.save(phase='failed', error=selected.get('error', 'network') if isinstance(selected, dict) else 'network')
+                return
             current = self.current()
             current_version = json.loads((current / 'package.json').read_bytes())['version']
             version(current_version)
@@ -768,19 +898,29 @@ class Worker:
             self.save(phase='checking', runtimeDigest=getattr(self, 'runtime_digest', None), error=None)
             release, assets = self.release(token)
             newest = release['tag_name'].lstrip('v')
+            target = release_target(release, self.c.get('repository'))
+            if action == 'install' and getattr(self, 'requested_install_target', None) is not None and target != self.requested_install_target:
+                raise UpdateError('target_changed')
             self.save(currentVersion=current_version, latestVersion=newest, checkedAt=int(time.time() * 1000), error=None,
+                      installTarget=target,
                       phase='available' if version(newest) > version(current_version) else 'idle')
             if version(newest) > version(current_version) and (action == 'install' or self.c['mode'] == 'auto'):
+                # A failed/deferred HTTPS root-runtime transaction must not turn
+                # into an unrelated second latest-release install. Checks remain
+                # readable; boot/recovery and disabled root updates are offline.
                 if self.c.get('installVersionPin') is not None and version(newest) != version(self.c['installVersionPin']):
                     raise UpdateError('incompatible')
                 # A failed version is not retried automatically forever; explicit install retries it.
-                if self.status.get('failedVersion') == newest and action != 'install':
+                if (self.status.get('failedVersion') == newest and action != 'install' and
+                        self.status.get('failedRuntimeDigest') == getattr(self, 'runtime_digest', None)):
                     self.save(phase='failed', error='health')
                     return
                 self.save(phase='preparing')
                 self.install(release, assets, token, current)
         except UpdateError as e:
-            self.save(error=e.code, failedVersion=self.status.get('latestVersion'))
+            failure = {} if e.code == 'target_changed' else dict(failedVersion=self.status.get('latestVersion'),
+                                                               failedRuntimeDigest=getattr(self, 'runtime_digest', None))
+            self.save(error=e.code, **failure)
             if self.status.get('phase') in PHASES:
                 self.recover()
             else:
@@ -816,7 +956,7 @@ def queued_stamp(config):
         return None
 
 
-def run_requests(state, runtime_digest=None):
+def run_requests(state, runtime_digest=None, release_selection=None, require_release_selection=False):
     # Drain a follow-on click arriving while this service is running. Reload
     # policy after each serialized action, especially a confirmed mode change.
     # No progress means recovery/configuration needs attention, not a busy loop.
@@ -829,6 +969,8 @@ def run_requests(state, runtime_digest=None):
             return
         worker = Worker(config)
         worker.runtime_digest = runtime_digest
+        worker.release_selection = release_selection
+        worker.require_release_selection = require_release_selection
         pending = worker.status.get('modeChangePending')
         worker.run(request_only=True)
         if queued_stamp(config) == before and worker.status.get('modeChangePending') == pending:
@@ -841,11 +983,83 @@ def parse_command(arguments):
     if command not in ('run', 'requests', 'recover', 'boot-recover', 'self-check'):
         raise UpdateError('configuration')
     if not args:
-        return command, None, None
+        return command, None, None, None
+    selection_fd = None
+    if len(args) == 6:
+        if (command not in ('run', 'requests') or args[4] != '--release-selection-fd' or
+                not re.fullmatch(r'[0-9]{1,9}', args[5])):
+            raise UpdateError('configuration')
+        selection_fd = int(args[5])
+        args = args[:4]
     if (len(args) != 4 or args[0] != '--supervisor-lock-fd' or not re.fullmatch(r'[0-9]{1,9}', args[1]) or
             args[2] != '--runtime-digest' or not re.fullmatch(r'[0-9a-f]{64}', args[3])):
         raise UpdateError('configuration')
-    return command, int(args[1]), args[3]
+    if selection_fd == int(args[1]): raise UpdateError('configuration')
+    return command, int(args[1]), args[3], selection_fd
+
+
+def read_release_selection(fd, config):
+    """Validate the supervisor's sealed, bounded fixed-repository input.
+
+    This capability is never exposed through the app API. No arbitrary paths,
+    source URLs, shell commands or trust choices are accepted in the descriptor.
+    """
+    if config.get('repository') != PUBLIC_REPOSITORY or config.get('releaseTrust') != 'github-https':
+        raise UpdateError('configuration')
+    info = os.fstat(fd)
+    seals = SELECTION_SEALS
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or not 1 <= info.st_size <= 8192 or
+            fcntl.fcntl(fd, F_GET_SEALS) & seals != seals):
+        raise UpdateError('configuration')
+    raw = os.pread(fd, 8193, 0)
+    def pairs(items):
+        value = {}
+        for key, item in items:
+            if key in value: raise UpdateError('configuration')
+            value[key] = item
+        return value
+    try: value = json.loads(raw, object_pairs_hook=pairs)
+    except (ValueError, UnicodeError): raise UpdateError('configuration') from None
+    if isinstance(value, dict) and set(value) == {'format', 'repository', 'runtimeSha256', 'error'}:
+        if (len(raw) != info.st_size or type(value['format']) is not int or value['format'] != 1 or
+                value['repository'] != PUBLIC_REPOSITORY or value['error'] not in
+                ('target_changed', 'network', 'archive', 'configuration', 'incompatible') or
+                not isinstance(value['runtimeSha256'], str) or not re.fullmatch('[0-9a-f]{64}', value['runtimeSha256'])):
+            raise UpdateError('configuration')
+        return value
+    if (len(raw) != info.st_size or not isinstance(value, dict) or not {'format', 'repository', 'release'}.issubset(value) or
+            set(value) - {'format', 'repository', 'release', 'appManifestSha256', 'runtimeSha256'} or
+            type(value['format']) is not int or value['format'] != 1 or value['repository'] != PUBLIC_REPOSITORY):
+        raise UpdateError('configuration')
+    for key in ('appManifestSha256', 'runtimeSha256'):
+        if key in value and (not isinstance(value[key], str) or not re.fullmatch('[0-9a-f]{64}', value[key])):
+            raise UpdateError('configuration')
+    release = value['release']
+    if (not isinstance(release, dict) or set(release) != {'id', 'tag_name', 'draft', 'prerelease', 'assets'} or
+            type(release['id']) is not int or not 1 <= release['id'] <= 2**63 - 1 or
+            release['draft'] is not False or release['prerelease'] is not False or
+            not isinstance(release['assets'], list) or not 2 <= len(release['assets']) <= 6):
+        raise UpdateError('configuration')
+    version(release['tag_name'])
+    names = set()
+    for asset in release['assets']:
+        if (not isinstance(asset, dict) or set(asset) != {'name', 'url'} or asset['name'] not in
+                (*ASSETS, 'yachad-updater.json', 'yachad-updater.sig', 'yachad-updater.zip') or
+                asset['name'] in names or not isinstance(asset['url'], str) or
+                not re.fullmatch(r'https://api\.github\.com/repos/NehoraiHadad/yahad/releases/assets/[0-9]+', asset['url'])):
+            raise UpdateError('configuration')
+        names.add(asset['name'])
+    if not {ASSETS[0], ASSETS[2]}.issubset(names) or release_target(release, PUBLIC_REPOSITORY) is None:
+        raise UpdateError('configuration')
+    return value
+
+
+def requires_release_selection(inherited_fd):
+    if inherited_fd is None: return False
+    path = pathlib.Path('/etc/yachad/updater-source.json')
+    try: policy = json.loads(private_file(path))
+    except FileNotFoundError: return False  # Historical signed enrollment.
+    return policy.get('format') == 2 and policy.get('trust') == 'github-https' and policy.get('enabled') is True
 
 
 def supervisor_lock(fd, state, digest, command):
@@ -877,7 +1091,7 @@ def self_check(worker):
 
 
 def main():
-    command, inherited_fd, runtime_digest = parse_command(sys.argv[1:])
+    command, inherited_fd, runtime_digest, selection_fd = parse_command(sys.argv[1:])
     if os.geteuid() != 0:
         raise UpdateError('configuration')
     # Installing the boot guard before configuring updates must leave a normal
@@ -896,6 +1110,10 @@ def main():
         return
     if inherited_fd is not None:
         supervisor_lock(inherited_fd, state, runtime_digest, command)
+    selection = read_release_selection(selection_fd, config) if selection_fd is not None else None
+    if selection is not None and selection.get('runtimeSha256') != runtime_digest:
+        raise UpdateError('configuration')
+    require_selection = requires_release_selection(inherited_fd)
     with (os.fdopen(inherited_fd, 'a') if inherited_fd is not None else (state / 'worker.lock').open('a')) as lock:
         try:
             # Keep an event wake-up queued behind an already-running worker.
@@ -906,13 +1124,15 @@ def main():
                 raise UpdateError('configuration') from None
             return
         if request_only:
-            run_requests(state, runtime_digest)
+            run_requests(state, runtime_digest, selection, require_selection)
             return
         config = load_config()
         if pathlib.Path(config['stateDirectory']) != state:
             raise UpdateError('configuration')
         worker = Worker(config)
         worker.runtime_digest = runtime_digest
+        worker.release_selection = selection
+        worker.require_release_selection = require_selection
         if command == 'self-check':
             print(json.dumps(self_check(worker), separators=(',', ':')))
         elif command in ('recover', 'boot-recover'):

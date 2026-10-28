@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Fixed stable-release transport for independently signed root runtimes.
+"""Fixed stable-release transport for explicitly enrolled root runtimes.
 
 Provisioned once with the immutable supervisor. The app manifest/HTTP API cannot
 choose a root-code URL, key, command or trust policy. All I/O is bounded; only the
-supervisor's pinned-signature verifier may install a downloaded candidate.
+supervisor's enrolled trust profile may install a downloaded candidate. Existing
+signed enrollment never falls back to HTTPS-only trust.
 """
 import json
 import math
@@ -21,10 +22,13 @@ import urllib.request
 
 POLICY = '/etc/yachad/updater-source.json'
 ASSETS = ('yachad-updater.json', 'yachad-updater.sig', 'yachad-updater.zip')
+HTTPS_ASSETS = ('yachad-updater.json', 'yachad-updater.zip')
+APP_ASSETS = ('yachad-release.json', 'yachad-app.zip')
+PUBLIC_REPOSITORY = 'NehoraiHadad/yahad'
 HOSTS = {'api.github.com', 'github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com'}
 LIMITS = (8192, 64, 2 * 1024 * 1024)
 RESULTS = {'checking', 'updated', 'unchanged', 'unavailable', 'failed', 'deferred'}
-ERRORS = {'network', 'invalid_release', 'signature', 'protocol', 'downgrade', 'activation', 'configuration', 'busy'}
+ERRORS = {'network', 'invalid_release', 'signature', 'protocol', 'downgrade', 'activation', 'configuration', 'busy', 'target_changed'}
 
 
 class TransportError(Exception): pass
@@ -79,12 +83,48 @@ def download(url, maximum, accept='application/octet-stream'):
         raise TransportError('network') from None
 
 
+def release_target(release, repository):
+    """Opaque selected-object identity, not publisher authentication."""
+    names = {'yachad-release.json', 'yachad-release.sig', 'yachad-app.zip',
+             'yachad-updater.json', 'yachad-updater.sig', 'yachad-updater.zip'}
+    if (not isinstance(repository, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}', repository) or not isinstance(release, dict) or
+            type(release.get('id')) is not int or not 1 <= release['id'] <= 2**63 - 1 or
+            release.get('draft') is not False or release.get('prerelease') is not False or
+            not isinstance(release.get('tag_name'), str) or
+            not re.fullmatch(r'v?(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})', release['tag_name']) or
+            not isinstance(release.get('assets'), list) or len(release['assets']) > 1000):
+        return None
+    assets, seen = [], set()
+    for item in release['assets']:
+        if not isinstance(item, dict) or not isinstance(item.get('name'), str) or item['name'] in seen:
+            return None
+        seen.add(item['name'])
+        if item['name'] not in names: continue
+        url = item.get('url')
+        if not isinstance(url, str) or not re.fullmatch(r'https://api\.github\.com/repos/' + re.escape(repository) + r'/releases/assets/[0-9]+', url):
+            return None
+        assets.append([item['name'], url])
+    if not {'yachad-release.json', 'yachad-app.zip'}.issubset(seen): return None
+    identity = dict(repository=repository, releaseId=release['id'], tag=release['tag_name'], assets=sorted(assets))
+    raw = json.dumps(identity, sort_keys=True, separators=(',', ':')).encode()
+    return dict(version=release['tag_name'].lstrip('v'), fingerprint=hashlib.sha256(raw).hexdigest())
+
+
+def valid_target(value):
+    return (isinstance(value, dict) and set(value) == {'version', 'fingerprint'} and
+            isinstance(value['version'], str) and re.fullmatch(r'(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})', value['version']) is not None and
+            isinstance(value['fingerprint'], str) and re.fullmatch('[0-9a-f]{64}', value['fingerprint']) is not None)
+
+
 def policy(supervisor):
     value = strict_json(supervisor.read(supervisor.path(POLICY), 8192, private=True))
-    if (not isinstance(value, dict) or set(value) != {'format', 'enabled', 'repository', 'channel', 'checkHours'} or
-            type(value['format']) is not int or value['format'] != 1 or type(value['enabled']) is not bool or
+    if not isinstance(value, dict): raise TransportError('configuration')
+    https = type(value.get('format')) is int and value['format'] == 2
+    fields = {'format', 'enabled', 'repository', 'channel', 'checkHours'} | ({'trust'} if https else set())
+    if (set(value) != fields or type(value['format']) is not int or value['format'] not in (1, 2) or type(value['enabled']) is not bool or
             not isinstance(value['repository'], str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}', value['repository']) or
-            value['channel'] != 'stable' or type(value['checkHours']) is not int or not 1 <= value['checkHours'] <= 168):
+            value['channel'] != 'stable' or type(value['checkHours']) is not int or not 1 <= value['checkHours'] <= 168 or
+            https and (value['trust'] != 'github-https' or value['repository'] != PUBLIC_REPOSITORY or supervisor.trust_profile() != 'github-https')):
         raise TransportError('configuration')
     return value
 
@@ -128,7 +168,7 @@ def save(supervisor, checked_at, attempt, result, error=None, version=None):
     return value
 
 
-def release_assets(raw, repository):
+def release_assets(raw, repository, *, https=False):
     value = strict_json(raw)
     if (not isinstance(value, dict) or value.get('draft') is not False or value.get('prerelease') is not False or
             not isinstance(value.get('tag_name'), str) or not re.fullmatch(r'v?\d{1,5}\.\d{1,5}\.\d{1,5}', value['tag_name']) or
@@ -139,11 +179,14 @@ def release_assets(raw, repository):
         if not isinstance(item, dict) or not isinstance(item.get('name'), str) or item['name'] in assets:
             raise TransportError('invalid_release')
         assets[item['name']] = item
-    present = [name for name in ASSETS if name in assets]
+    required = HTTPS_ASSETS if https else ASSETS
+    present = [name for name in required if name in assets]
+    if https and any(name in assets for name in ASSETS) and len(present) != len(HTTPS_ASSETS):
+        raise TransportError('invalid_release')
     if not present: return None  # Older app-only releases remain usable.
-    if len(present) != len(ASSETS): raise TransportError('invalid_release')
+    if len(present) != len(required): raise TransportError('invalid_release')
     urls = []
-    for name in ASSETS:
+    for name in required:
         url = assets[name].get('url')
         if not isinstance(url, str) or not re.fullmatch(r'https://api\.github\.com/repos/' + re.escape(repository) + r'/releases/assets/[0-9]+', url):
             raise TransportError('invalid_release')
@@ -151,7 +194,60 @@ def release_assets(raw, repository):
     return urls
 
 
-def install_intent(supervisor, config, now_ms):
+def release_selection(raw, repository):
+    """Compact fixed-source app input from the SAME release as the root bundle.
+
+    This is transient supervisor input, never a browser/config supplied URL. The
+    worker receives it in a sealed descriptor and does not resolve latest again.
+    """
+    value = strict_json(raw)
+    if (repository != PUBLIC_REPOSITORY or not isinstance(value, dict) or
+            type(value.get('id')) is not int or not 1 <= value['id'] <= 2**63 - 1 or
+            value.get('draft') is not False or value.get('prerelease') is not False or
+            not isinstance(value.get('tag_name'), str) or not re.fullmatch(r'v?(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})', value['tag_name']) or
+            not isinstance(value.get('assets'), list) or len(value['assets']) > 1000):
+        raise TransportError('invalid_release')
+    assets = {}
+    for item in value['assets']:
+        if not isinstance(item, dict) or not isinstance(item.get('name'), str) or item['name'] in assets:
+            raise TransportError('invalid_release')
+        assets[item['name']] = item
+    selected = []
+    if not set(APP_ASSETS).issubset(assets): raise TransportError('invalid_release')
+    for name in sorted(set(APP_ASSETS) | (set(ASSETS) & assets.keys()) | ({'yachad-release.sig'} & assets.keys())):
+        url = assets.get(name, {}).get('url')
+        if not isinstance(url, str) or not re.fullmatch(r'https://api\.github\.com/repos/' + re.escape(PUBLIC_REPOSITORY) + r'/releases/assets/[0-9]+', url):
+            raise TransportError('invalid_release')
+        selected.append(dict(name=name, url=url))
+    return dict(format=1, repository=repository, release=dict(id=value['id'], tag_name=value['tag_name'],
+                draft=False, prerelease=False, assets=selected))
+
+
+def preflight_app(selection, fetch):
+    """Check selected app bytes BEFORE executing a new privileged runtime.
+
+    This does not extract/import app code or predict future migration support.
+    The new worker separately verifies compatibility, builds, backs up and checks
+    readiness. Its bounded second download must retain this exact manifest hash.
+    """
+    assets = {item['name']: item['url'] for item in selection['release']['assets']}
+    raw = fetch(assets['yachad-release.json'], 8192)
+    archive = fetch(assets['yachad-app.zip'], 64 * 1024 * 1024)
+    if (not isinstance(raw, bytes) or not 1 <= len(raw) <= 8192 or
+            not isinstance(archive, bytes) or not 1 <= len(archive) <= 64 * 1024 * 1024):
+        raise TransportError('invalid_release')
+    manifest = strict_json(raw)
+    if (not isinstance(manifest, dict) or manifest.get('archive') != 'yachad-app.zip' or
+            manifest.get('version') != selection['release']['tag_name'].lstrip('v') or
+            type(manifest.get('bytes')) is not int or not 1 <= manifest['bytes'] <= 64 * 1024 * 1024 or
+            manifest['bytes'] != len(archive) or not isinstance(manifest.get('sha256'), str) or
+            not re.fullmatch('[0-9a-f]{64}', manifest['sha256']) or
+            hashlib.sha256(archive).hexdigest() != manifest['sha256']):
+        raise TransportError('invalid_release')
+    return dict(selection, appManifestSha256=hashlib.sha256(raw).hexdigest())
+
+
+def install_intent(supervisor, config, now_ms, *, details=False):
     """Read the same narrow local operator contract as Worker.request, not a URL.
 
     The independent root policy and pinned signature remain mandatory. This
@@ -162,26 +258,35 @@ def install_intent(supervisor, config, now_ms):
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         before = os.fstat(fd)
+        https = getattr(supervisor, 'trust_profile', lambda: 'signature')() == 'github-https'
         if (not stat.S_ISREG(before.st_mode) or before.st_uid != pwd.getpwnam(config['appUser']).pw_uid or
-                before.st_mode & 0o077 or before.st_nlink != 1 or not 0 < before.st_size <= 512):
+                before.st_mode & 0o077 or before.st_nlink not in ((1, 2, 3) if https else (1,)) or not 0 < before.st_size <= 512):
             return None
+        # The reviewed publishers briefly retain queue + temporary + wake links.
+        # We only read this stable descriptor; never follow/write the other links.
         raw = os.read(fd, 513)
         after = os.fstat(fd)
         if len(raw) != before.st_size or (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
             return None
         value = strict_json(raw)
-        if (not isinstance(value, dict) or set(value) != {'id', 'action', 'familyId', 'userId', 'createdAt'} or
-                value['action'] != 'install' or str(uuid.UUID(value['id'])) != value['id'] or
+        if (not isinstance(value, dict) or set(value) not in ({'id', 'action', 'familyId', 'userId', 'createdAt'},
+                                                            {'id', 'action', 'familyId', 'userId', 'createdAt', 'target'}) or
+                not (value['action'] == 'install' or https and config.get('mode') == 'auto' and value['action'] == 'check' and 'target' not in value) or
+                str(uuid.UUID(value['id'])) != value['id'] or
                 value['familyId'] != config['operator']['familyId'] or value['userId'] != config['operator']['userId'] or
                 type(value['createdAt']) not in (int, float) or not math.isfinite(value['createdAt']) or
                 abs(now_ms-value['createdAt']) > 600000):
             return None
         status = supervisor.app_status()
+        if value['action'] == 'install' and (https or 'target' in value) and (not valid_target(value.get('target')) or
+                value['target'] != status.get('installTarget') or status.get('phase') != 'available'):
+            return None
         if (any(isinstance(status.get(key), dict) and status[key].get('id') == value['id']
                 for key in ('lastRequest', 'lastModeRequest')) or
                 any(isinstance(item, dict) and item.get('id') == value['id'] for item in status.get('modeRequestSeen', []))):
             return None
-        return hashlib.sha256(raw).hexdigest()
+        digest = hashlib.sha256(raw).hexdigest()
+        return dict(digest=digest, action=value['action']) if details else digest
     except (OSError, ValueError, KeyError, TypeError, AttributeError, TransportError):
         return None
     finally:
@@ -230,6 +335,11 @@ def refresh(supervisor, command='run', *, fetch=download, now=time.time):
         if not selected['enabled']: return {'result': 'disabled'}
         app = app_policy(supervisor)
         if not app['enabled']: return {'result': 'app_disabled'}
+        # A missed/overlapping path wake must still take the joined intent-bound
+        # path on the timer, rather than consuming an install without selection.
+        if (selected['format'] == 2 and command == 'run' and request_pending(supervisor) and
+                install_intent(supervisor, app, checked_at) is not None):
+            command = 'requests'
         if command == 'run' and app['mode'] != 'auto': return {'result': 'notify'}
         if command == 'requests' and install_intent(supervisor, app, checked_at) is None:
             return {'result': 'skipped'}
@@ -237,6 +347,7 @@ def refresh(supervisor, command='run', *, fetch=download, now=time.time):
             if supervisor.journal()['phase'] != 'stable': return {'result': 'deferred'}
             supervisor.require_quiet_app()
             intent = eligible(supervisor, command, selected, checked_at)
+            bound_install = command == 'requests' and install_intent(supervisor, app_policy(supervisor), checked_at, details=True)['action'] == 'install'
             previous = saved_status(supervisor)
             if command == 'run' and previous and 0 <= checked_at - previous['checkedAt'] < selected['checkHours'] * 3600000:
                 return {'result': 'cached'}
@@ -245,15 +356,29 @@ def refresh(supervisor, command='run', *, fetch=download, now=time.time):
             save(supervisor, checked_at, attempt, 'checking')
         repository = selected['repository']
         raw = fetch('https://api.github.com/repos/' + repository + '/releases/latest', 1024 * 1024, 'application/vnd.github+json')
-        urls = release_assets(raw, repository)
-        if urls is None: return finish(supervisor, checked_at, attempt, 'unavailable')
-        payload = [fetch(url, maximum) for url, maximum in zip(urls, LIMITS)]
+        https = selected['format'] == 2
+        urls = release_assets(raw, repository, https=https)
+        selection = release_selection(raw, repository) if https else None
+        if https and bound_install and release_target(selection['release'], repository) != supervisor.app_status().get('installTarget'):
+            raise TransportError('target_changed')
+        if https: selection = preflight_app(selection, fetch)
+        if urls is None:
+            result = finish(supervisor, checked_at, attempt, 'unavailable')
+            if selection is not None: result = dict(result, selection=dict(selection, runtimeSha256=before['sha256']))
+            return result
+        limits = (8192, 2 * 1024 * 1024) if https else LIMITS
+        payload = [fetch(url, maximum) for url, maximum in zip(urls, limits)]
+        if https: payload.insert(1, None)
         def guard():
             eligible(supervisor, command, selected, now()*1000, intent)
+            if https and bound_install and release_target(selection['release'], repository) != supervisor.app_status().get('installTarget'):
+                raise TransportError('target_changed')
         # The guard rechecks root policy + bounded intent after acquiring the
         # SAME lock retained throughout authentication, stage, probe and commit.
         installed = supervisor.install_bundle(*payload, guard=guard)
-        return finish(supervisor, checked_at, attempt, 'unchanged' if installed == before else 'updated', version=installed['version'])
+        result = finish(supervisor, checked_at, attempt, 'unchanged' if installed == before else 'updated', version=installed['version'])
+        if selection is not None: result = dict(result, selection=dict(selection, runtimeSha256=installed['sha256']))
+        return result
     except Exception as error:
         code = ('busy' if str(error) in ('app_busy', 'pending_runtime', 'busy') else
                 'configuration' if isinstance(error, FileNotFoundError) else
