@@ -1,4 +1,4 @@
-param([string]$DotNet = 'dotnet', [switch]$Publish)
+param([string]$DotNet = 'dotnet', [switch]$Publish, [string]$PackageCache)
 $ErrorActionPreference = 'Stop'
 $installerRoot = $PSScriptRoot
 $buildEnvironmentNames = @('DOTNET_CLI_HOME', 'NUGET_PACKAGES', 'APPDATA', 'DOTNET_CLI_TELEMETRY_OPTOUT', 'DOTNET_NOLOGO', 'DOTNET_ADD_GLOBAL_TOOLS_TO_PATH', 'DOTNET_ROOT', 'TEMP', 'TMP')
@@ -6,7 +6,7 @@ $previousBuildEnvironment = @{}
 foreach ($name in $buildEnvironmentNames) { $previousBuildEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 try {
 $env:DOTNET_CLI_HOME = Join-Path $installerRoot '.scratch/dotnet-home'
-$env:NUGET_PACKAGES = Join-Path $installerRoot '.scratch/nuget'
+$env:NUGET_PACKAGES = if ($PackageCache) { [IO.Path]::GetFullPath($PackageCache) } else { Join-Path $installerRoot '.scratch/nuget' }
 # NuGet also probes per-user configuration even with RestoreConfigFile. Keep
 # build settings/cache private to this process; do not read the owner's config.
 $env:APPDATA = Join-Path $installerRoot '.scratch/appdata'

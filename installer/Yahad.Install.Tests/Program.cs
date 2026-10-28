@@ -7,6 +7,19 @@ using System.Text;
 using System.Text.Json;
 using Yahad.Install;
 
+Dictionary<string,string> FixtureEnvironment(string directory)
+{
+    var clean=LaunchEnvironment.Clean(directory);
+    // Explicit developer runtime only for this framework-dependent test exe.
+    if (Environment.GetEnvironmentVariable("DOTNET_ROOT") is { } runtime) clean["DOTNET_ROOT"]=runtime;
+    return clean;
+}
+JobProcess FixtureJob(string executable,IEnumerable<string> arguments,string directory) => JobProcess.Start(executable,arguments,directory,FixtureEnvironment(directory));
+if(args is ["--environment",var environmentOutput])
+{
+    var names=new[]{"NODE_OPTIONS","NODE_PATH","DOTNET_STARTUP_HOOKS","CORECLR_ENABLE_PROFILING","COR_ENABLE_PROFILING","OPENSSL_CONF","ESBUILD_BINARY_PATH","PATH","TEMP","SystemRoot"};
+    File.WriteAllText(environmentOutput,JsonSerializer.Serialize(names.ToDictionary(n=>n,n=>Environment.GetEnvironmentVariable(n))));return 0;
+}
 if (args is ["--wait"]) { await Task.Delay(Timeout.Infinite); return 0; }
 if (args is ["--exit", var requestedCode]) return int.Parse(requestedCode);
 if (args is ["--hold-lock", var heldLockPath, var lockReadyPath])
@@ -33,7 +46,7 @@ if (args is ["--orphan-tree", var orphanPath])
 }
 if (args is ["--job-owner", var ownerPidPath])
 {
-    using var child = JobProcess.Start(Environment.ProcessPath!, ["--tree", ownerPidPath], AppContext.BaseDirectory);
+    using var child = FixtureJob(Environment.ProcessPath!, ["--tree", ownerPidPath], AppContext.BaseDirectory);
     File.WriteAllText(ownerPidPath + ".root", child.ProcessId.ToString());
     await Task.Delay(Timeout.Infinite); return 0;
 }
@@ -109,7 +122,7 @@ await Check("refuse bundle change during resume", async () =>
 await Check("exclusive lock held by a separate process", async () =>
 {
     var s = Session(); var readyPath = Path.Combine(s, "lock-ready");
-    using var held = JobProcess.Start(Environment.ProcessPath!, ["--hold-lock", Path.Combine(s, "operation.lock"), readyPath], root);
+    using var held = FixtureJob(Environment.ProcessPath!, ["--hold-lock", Path.Combine(s, "operation.lock"), readyPath], root);
     using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
     while (!File.Exists(readyPath)) await Task.Delay(25, deadline.Token);
     await Reject(() => FixtureInstaller.StageAsync(valid, s, default)); Assert(!Directory.Exists(Path.Combine(s, "payload")));
@@ -139,27 +152,45 @@ async Task Gone(params int[] ids)
 await Check("native argument quoting without shell", async () =>
 {
     var output = Path.Combine(root, "quoted args.json"); var expected = new[] { "space name", "quote\"inside", @"C:\a b\", "שלום", "", @"\\\" };
-    using var job = JobProcess.Start(Environment.ProcessPath!, new[] { "--echo", output }.Concat(expected), root);
+    using var job = FixtureJob(Environment.ProcessPath!, new[] { "--echo", output }.Concat(expected), root);
     using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10)); await job.WaitAsync(deadline.Token);
     Assert(JsonSerializer.Deserialize<string[]>(File.ReadAllText(output))!.SequenceEqual(expected));
 });
 await Check("retain exact process exit status after early exit", async () =>
 {
-    using var job = JobProcess.Start(Environment.ProcessPath!, ["--exit", "19"], root);
+    using var job = FixtureJob(Environment.ProcessPath!, ["--exit", "19"], root);
     await Task.Delay(300);
     using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
     Assert(await job.WaitAsync(deadline.Token) == 19);
 });
+await Check("native job child environment omits host hooks and search variables",async()=>
+{
+    var names=new[]{"NODE_OPTIONS","NODE_PATH","DOTNET_STARTUP_HOOKS","CORECLR_ENABLE_PROFILING","COR_ENABLE_PROFILING","OPENSSL_CONF","ESBUILD_BINARY_PATH","SystemRoot"};
+    var previous=names.ToDictionary(n=>n,n=>Environment.GetEnvironmentVariable(n));
+    try
+    {
+        foreach(var name in names)Environment.SetEnvironmentVariable(name,"Z:\\host-injection");
+        var output=Path.Combine(root,"clean-environment.json");
+        using var job=FixtureJob(Environment.ProcessPath!,["--environment",output],root);
+        using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        Assert(await job.WaitAsync(deadline.Token)==0);
+        var observed=JsonSerializer.Deserialize<Dictionary<string,string?>>(File.ReadAllText(output))!;
+        foreach(var name in names.Where(n=>n!="SystemRoot"))Assert(observed[name] is null);
+        Assert(string.IsNullOrEmpty(observed["PATH"]));Assert(observed["TEMP"]==root);
+        Assert(observed["SystemRoot"]!=Environment.GetEnvironmentVariable("SystemRoot"));
+    }
+    finally{foreach(var item in previous)Environment.SetEnvironmentVariable(item.Key,item.Value);}
+});
 await Check("job disposal kills child and grandchild", async () =>
 {
-    var output = Path.Combine(root, "grandchild.pid"); var job = JobProcess.Start(Environment.ProcessPath!, ["--tree", output], root);
+    var output = Path.Combine(root, "grandchild.pid"); var job = FixtureJob(Environment.ProcessPath!, ["--tree", output], root);
     try { await WaitFor(output); var grandchild = int.Parse(File.ReadAllText(output)); Assert(Alive(job.ProcessId) && Alive(grandchild)); job.Dispose(); await Gone(job.ProcessId, grandchild); }
     finally { job.Dispose(); }
 });
 await Check("root exit cannot claim empty native process tree", async () =>
 {
     var output = Path.Combine(root, "orphan-tree.pid");
-    using var job = JobProcess.Start(Environment.ProcessPath!, ["--orphan-tree", output], root);
+    using var job = FixtureJob(Environment.ProcessPath!, ["--orphan-tree", output], root);
     using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
     Assert(await job.WaitAsync(deadline.Token) == 0); await WaitFor(output);
     var descendant = int.Parse(File.ReadAllText(output)); Assert(Alive(descendant));
@@ -201,6 +232,7 @@ await NativeBoundaryTests.Run(root, Check);
 await InstallerPlanningTests.Run(Check);
 await AppLifecycleTests.Run(Check);
 await UpdateRecoveryTests.Run(Check);
+await LifecycleCleanupTests.Run(root,Check);
 var report = JsonSerializer.Serialize(new { platform = "Windows x64", kind = "synthetic-nonprivileged", passed = results.Count - failed, failed, tests = results }, new JsonSerializerOptions { WriteIndented = true });
 if (args is ["--report", var reportPath]) File.WriteAllText(reportPath, report);
 Console.WriteLine($"{results.Count - failed} passed; {failed} failed. Synthetic fixtures only. Session: {root}");

@@ -13,6 +13,7 @@ internal static class AppLifecycleTests
             public Task<int> WaitForRootExitAsync(CancellationToken cancellation) { owner.Calls.Add("root-exit"); return Task.FromResult(owner.RootExit); }
             public async Task WaitForTreeEmptyAsync(CancellationToken cancellation)
             { owner.Calls.Add("tree-empty"); if (owner.StuckTree) await Task.Delay(Timeout.Infinite, cancellation); }
+            public Task TerminateAndWaitForTreeEmptyAsync(CancellationToken cancellation) { owner.Calls.Add("abort-tree-empty"); return Task.CompletedTask; }
             public ValueTask DisposeAsync() { owner.Calls.Add("dispose-session"); return ValueTask.CompletedTask; }
         }
         public Task RequireStartAllowedAsync(AppRelease release, CancellationToken cancellation)

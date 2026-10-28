@@ -11,6 +11,7 @@ public interface IContainedAppSession : IAsyncDisposable
     Task RequestGracefulStopAsync(CancellationToken cancellation);
     Task<int> WaitForRootExitAsync(CancellationToken cancellation);
     Task WaitForTreeEmptyAsync(CancellationToken cancellation);
+    Task TerminateAndWaitForTreeEmptyAsync(CancellationToken cancellation);
 }
 public interface IPrivateAppLauncher
 {
@@ -47,6 +48,7 @@ public sealed class AppLifecycle : IAsyncDisposable
     private IContainedAppSession? session;
     private AppRelease active;
     private bool disposed;
+    public bool QuiescenceReconciliationRequired => session is not null && State == AppLifecycleState.RecoveryRequired;
     public AppLifecycleState State { get; private set; } = AppLifecycleState.Stopped;
 
     public AppLifecycle(AppRelease active, IPrivateAppLauncher launcher, IAppRecoveryBarrier recovery,
@@ -68,7 +70,7 @@ public sealed class AppLifecycle : IAsyncDisposable
             Require(AppLifecycleState.Stopped);
             using var bounded = Bound(cancellation);
             try { await StartCoreAsync(bounded.Token); }
-            catch { State = AppLifecycleState.RecoveryRequired; throw; }
+            catch { await FailAndCleanAsync(); throw; }
         }
         finally { serial.Release(); }
     }
@@ -77,16 +79,16 @@ public sealed class AppLifecycle : IAsyncDisposable
         State = AppLifecycleState.Starting;
         await recovery.RequireStartAllowedAsync(active, cancellation);
         session = await launcher.StartAsync(active, cancellation);
-        await launcher.WaitForHealthyAsync(session, cancellation);
+        await launcher.WaitForHealthyAsync(session, cancellation).WaitAsync(cancellation);
         State = AppLifecycleState.Running;
     }
     private async Task<QuiescentApp> QuiesceAsync(CancellationToken cancellation)
     {
         State = AppLifecycleState.Quiescing;
         var running = session ?? throw new InvalidOperationException("SESSION_REQUIRED");
-        await running.RequestGracefulStopAsync(cancellation);
-        if (await running.WaitForRootExitAsync(cancellation) != 0) throw new InvalidOperationException("UNCLEAN_APP_EXIT");
-        await running.WaitForTreeEmptyAsync(cancellation);
+        await running.RequestGracefulStopAsync(cancellation).WaitAsync(cancellation);
+        if (await running.WaitForRootExitAsync(cancellation).WaitAsync(cancellation) != 0) throw new InvalidOperationException("UNCLEAN_APP_EXIT");
+        await running.WaitForTreeEmptyAsync(cancellation).WaitAsync(cancellation);
         cancellation.ThrowIfCancellationRequested();
         await running.DisposeAsync(); session = null;
         return new(active);
@@ -99,7 +101,7 @@ public sealed class AppLifecycle : IAsyncDisposable
             Require(AppLifecycleState.Running);
             using var bounded = Bound(cancellation);
             try { await QuiesceAsync(bounded.Token); State = AppLifecycleState.Stopped; }
-            catch { State = AppLifecycleState.RecoveryRequired; throw; }
+            catch { await FailAndCleanAsync(); throw; }
         }
         finally { serial.Release(); }
     }
@@ -120,9 +122,25 @@ public sealed class AppLifecycle : IAsyncDisposable
             }
             // Activation/start may already have changed the schema. Never relaunch
             // the old app or overwrite data as a generic catch/rollback action.
-            catch { State = AppLifecycleState.RecoveryRequired; throw; }
+            catch { await FailAndCleanAsync(); throw; }
         }
         finally { serial.Release(); }
+    }
+    private async Task FailAndCleanAsync()
+    {
+        State = AppLifecycleState.RecoveryRequired;
+        if (session is null) return;
+        using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        try
+        {
+            await session.TerminateAndWaitForTreeEmptyAsync(cleanup.Token).WaitAsync(cleanup.Token);
+            await session.DisposeAsync(); session = null;
+        }
+        catch
+        {
+            // Retain ownership and recovery quarantine when quiescence is unknown.
+            // No restore, activation grant or restart is issued from this path.
+        }
     }
     public async ValueTask DisposeAsync()
     {
@@ -131,7 +149,11 @@ public sealed class AppLifecycle : IAsyncDisposable
         {
             if (disposed) return;
             disposed = true;
-            if (session is not null) { State = AppLifecycleState.RecoveryRequired; await session.DisposeAsync(); session = null; }
+            if (session is not null)
+            {
+                await FailAndCleanAsync();
+                if (session is not null) throw new IOException("LIFECYCLE_QUIESCENCE_UNCONFIRMED");
+            }
         }
         finally { serial.Release(); }
     }

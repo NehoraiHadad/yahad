@@ -14,11 +14,13 @@ public sealed class JobProcess : IDisposable
     private JobProcess(SafeFileHandle job, SafeProcessHandle process, int id)
     { this.job = job; this.process = process; ProcessId = id; }
 
-    public static JobProcess Start(string executable, IEnumerable<string> arguments, string directory)
+    public static JobProcess Start(string executable, IEnumerable<string> arguments, string directory, IReadOnlyDictionary<string,string>? environment = null)
     {
         if (!Path.IsPathFullyQualified(executable) || !File.Exists(executable)) throw new IOException("EXECUTABLE_REQUIRED");
+        var environmentBlock = LaunchEnvironment.Block(environment ?? LaunchEnvironment.Clean(directory));
+        var environmentPointer = Marshal.StringToHGlobalUni(environmentBlock);
         var job = Native.CreateJobObjectW(IntPtr.Zero, null);
-        if (job.IsInvalid) throw new Win32Exception();
+        if (job.IsInvalid) { Marshal.FreeHGlobal(environmentPointer); throw new Win32Exception(); }
         var info = new ExtendedLimit { Basic = new BasicLimit { LimitFlags = 0x2000 } }; // KILL_ON_JOB_CLOSE
         var buffer = Marshal.AllocHGlobal(Marshal.SizeOf<ExtendedLimit>());
         ProcessInfo process = default;
@@ -30,7 +32,7 @@ public sealed class JobProcess : IDisposable
             var command = new StringBuilder(Quote(executable) + " " + string.Join(" ", arguments.Select(Quote)));
             // No shell. Suspended creation closes the race where a child could spawn before containment.
             if (!Native.CreateProcessW(executable, command, IntPtr.Zero, IntPtr.Zero, false,
-                    0x00000004 | 0x08000000, IntPtr.Zero, directory, ref start, out process)) throw new Win32Exception();
+                    0x00000004 | 0x08000000 | 0x00000400, environmentPointer, directory, ref start, out process)) throw new Win32Exception();
             if (!Native.AssignProcessToJobObject(job, process.Process)) throw new Win32Exception();
             if (Native.ResumeThread(process.Thread) == uint.MaxValue) throw new Win32Exception();
             var result = new JobProcess(job, new SafeProcessHandle(process.Process, true), (int)process.Id);
@@ -49,6 +51,7 @@ public sealed class JobProcess : IDisposable
             if (process.Thread != IntPtr.Zero) Native.CloseHandle(process.Thread);
             if (process.Process != IntPtr.Zero) Native.CloseHandle(process.Process);
             Marshal.FreeHGlobal(buffer);
+            Marshal.FreeHGlobal(environmentPointer);
         }
     }
 
@@ -79,6 +82,12 @@ public sealed class JobProcess : IDisposable
             if (accounting.ActiveProcesses == 0) return;
             await Task.Delay(20, cancellation);
         }
+    }
+    public async Task TerminateAndWaitForTreeEmptyAsync(CancellationToken cancellation)
+    {
+        // Keep the job handle until the OS reports every contained process gone.
+        if (!Native.TerminateJobObject(job,1)) throw new Win32Exception();
+        await WaitForTreeEmptyAsync(cancellation);
     }
     public void Dispose() { job.Dispose(); process.Dispose(); }
 
@@ -129,6 +138,8 @@ public sealed class JobProcess : IDisposable
         internal static extern SafeFileHandle CreateJobObjectW(IntPtr attributes, string? name);
         [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool SetInformationJobObject(SafeFileHandle job, int kind, IntPtr information, uint length);
+        [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool TerminateJobObject(SafeFileHandle job,uint code);
         [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool AssignProcessToJobObject(SafeFileHandle job, IntPtr process);
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]

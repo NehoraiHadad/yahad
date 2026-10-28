@@ -26,6 +26,7 @@ try {
   await app.listen({ host: config.host, port: config.port });
   process.stdout.write(`Yachad listening (${config.connector}) on port ${config.port}\n`);
   installRuntimeShutdown(() => app.close(), release);
+  if (process.connected && process.send) process.send({ type: 'yahad.ready' }, undefined, undefined, () => {});
 } catch {
   process.stderr.write(
     'Startup failed. Check local configuration, file permissions, and port availability. No secrets logged.\n',
