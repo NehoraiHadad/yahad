@@ -1382,9 +1382,9 @@ not ok 224 - request publication is complete/private and wakes without overwriti
   failureType: 'testCodeFailure'
   error: |-
     Expected values to be strictly equal:
-    
+
     438 !== 384
-    
+
   code: 'ERR_ASSERTION'
   name: 'AssertionError'
   expected: 384
@@ -1612,9 +1612,9 @@ not ok 258 - HTTP install echoes the displayed root identity in a private atomic
   failureType: 'testCodeFailure'
   error: |-
     Expected values to be strictly equal:
-    
+
     438 !== 384
-    
+
   code: 'ERR_ASSERTION'
   name: 'AssertionError'
   expected: 384
