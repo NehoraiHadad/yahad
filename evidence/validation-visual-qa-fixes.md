@@ -82,3 +82,14 @@ permissions still need browser evidence; no Pi or real-provider acceptance is im
 
 Exact notification source checks: **232 Node tests passed, 0 failed/skipped**, typecheck
 and production build passed. Documentation-only evidence update follows the tested source.
+
+## Manual notification dismissal focus
+
+Muse's source-verified report 1793190396.186319 on 55cc91c/tree73cfbf4e reports
+mobile/tablet notification geometry and draft preservation passing, with auto-expiry
+retaining composer focus. It identifies manual dismissal leaving focus on body. The
+correction tracks the last valid outside control and restores it only on explicit close,
+only if focus has not moved elsewhere and that exact control remains connected, visible,
+enabled and outside no active modal boundary. Hidden/revoked composers cannot regain
+focus. Timer expiry and unmount do not trigger restoration. Tests use synthetic DOM
+objects; browser verification of this final focus correction is still required.
