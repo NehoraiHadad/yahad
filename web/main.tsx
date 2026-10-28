@@ -7,7 +7,7 @@ import { insertEmoji, rememberEmoji } from './emojiSelection';
 import { loadStickerFile } from './stickerFile';
 import './emoji-picker.css';
 import './groupAvatar.css';
-import { ChatCelebration, useChatCelebration } from './ChatCelebration';
+import { ChatCelebration, useChatCelebration } from './ChatCelebrationView';
 import './chatCelebration.css';
 import { HistoryPanel } from './HistoryPanel';
 import { MessageImage } from './MessageImage';
