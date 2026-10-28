@@ -1,0 +1,40 @@
+test_architecture_mismatch_refused (test_linux_native_bundle.CandidateTests.test_architecture_mismatch_refused) ... ok
+test_arm64_uses_separate_executable_architecture (test_linux_native_bundle.CandidateTests.test_arm64_uses_separate_executable_architecture) ... ok
+test_deterministic_candidate_inventory_and_modes (test_linux_native_bundle.CandidateTests.test_deterministic_candidate_inventory_and_modes) ... ok
+test_existing_output_preserved (test_linux_native_bundle.CandidateTests.test_existing_output_preserved) ... ok
+test_hardlink_input_refused (test_linux_native_bundle.CandidateTests.test_hardlink_input_refused) ... ok
+test_lockfile_drift_refused (test_linux_native_bundle.CandidateTests.test_lockfile_drift_refused) ... ok
+test_missing_dependency_refused (test_linux_native_bundle.CandidateTests.test_missing_dependency_refused) ... ok
+test_mixed_native_dependency_architectures_refused (test_linux_native_bundle.CandidateTests.test_mixed_native_dependency_architectures_refused) ... ok
+test_nonfree_ffmpeg_refused (test_linux_native_bundle.CandidateTests.test_nonfree_ffmpeg_refused) ... ok
+test_output_inside_input_refused (test_linux_native_bundle.CandidateTests.test_output_inside_input_refused) ... ok
+test_private_file_refused (test_linux_native_bundle.CandidateTests.test_private_file_refused) ... ok
+test_runtime_checksum_drift_refused (test_linux_native_bundle.CandidateTests.test_runtime_checksum_drift_refused) ... ok
+test_unknown_target_refused (test_linux_native_bundle.CandidateTests.test_unknown_target_refused) ... ok
+test_windows_runtime_refused (test_linux_native_bundle.CandidateTests.test_windows_runtime_refused) ... ok
+test_addon_node_host_import_resolves_only_for_native_addon (test_windows_native_bundle.WindowsBundleTests.test_addon_node_host_import_resolves_only_for_native_addon) ... ok
+test_core_fixture_cannot_pass_as_full_package (test_windows_native_bundle.WindowsBundleTests.test_core_fixture_cannot_pass_as_full_package) ... ok
+test_corrupt_runtime_checksum_refused (test_windows_native_bundle.WindowsBundleTests.test_corrupt_runtime_checksum_refused) ... ok
+test_dependency_data_folder_does_not_allow_live_app_data (test_windows_native_bundle.WindowsBundleTests.test_dependency_data_folder_does_not_allow_live_app_data) ... ok
+test_deterministic_offline_build (test_windows_native_bundle.WindowsBundleTests.test_deterministic_offline_build) ... ok
+test_existing_output_never_replaced (test_windows_native_bundle.WindowsBundleTests.test_existing_output_never_replaced) ... ok
+test_extra_candidate_archive_entry_is_refused_before_extraction (test_windows_native_bundle.WindowsBundleTests.test_extra_candidate_archive_entry_is_refused_before_extraction) ... ok
+test_framework_dependent_dotnet_refused (test_windows_native_bundle.WindowsBundleTests.test_framework_dependent_dotnet_refused) ... ok
+test_full_candidate_content_and_no_install_claim (test_windows_native_bundle.WindowsBundleTests.test_full_candidate_content_and_no_install_claim) ... ok
+test_missing_node_blocks_full_candidate (test_windows_native_bundle.WindowsBundleTests.test_missing_node_blocks_full_candidate) ... ok
+test_missing_private_dotnet_asset_refused (test_windows_native_bundle.WindowsBundleTests.test_missing_private_dotnet_asset_refused) ... ok
+test_officially_linked_ffmpeg_not_silently_vendor_official (test_windows_native_bundle.WindowsBundleTests.test_officially_linked_ffmpeg_not_silently_vendor_official) ... ok
+test_pe_bounds_and_rva_reject_malformed_files (test_windows_native_bundle.WindowsBundleTests.test_pe_bounds_and_rva_reject_malformed_files) ... ok
+test_private_state_not_packaged (test_windows_native_bundle.WindowsBundleTests.test_private_state_not_packaged) ... ok
+test_sibling_private_dll_resolves_without_path (test_windows_native_bundle.WindowsBundleTests.test_sibling_private_dll_resolves_without_path) ... ok
+test_unbundled_vc_runtime_refused (test_windows_native_bundle.WindowsBundleTests.test_unbundled_vc_runtime_refused) ... ok
+test_undeclared_runtime_namespace_refused (test_windows_native_bundle.WindowsBundleTests.test_undeclared_runtime_namespace_refused) ... ok
+test_unrelated_folder_dll_cannot_mask_dependency (test_windows_native_bundle.WindowsBundleTests.test_unrelated_folder_dll_cannot_mask_dependency) ... ok
+test_vendor_origin_cannot_be_self_asserted_with_fake_payload (test_windows_native_bundle.WindowsBundleTests.test_vendor_origin_cannot_be_self_asserted_with_fake_payload) ... ok
+test_verified_candidate_extracts_and_matches_whole_manifest (test_windows_native_bundle.WindowsBundleTests.test_verified_candidate_extracts_and_matches_whole_manifest) ... ok
+test_wrong_architecture_refused (test_windows_native_bundle.WindowsBundleTests.test_wrong_architecture_refused) ... ok
+
+----------------------------------------------------------------------
+Ran 35 tests in 4.258s
+
+OK

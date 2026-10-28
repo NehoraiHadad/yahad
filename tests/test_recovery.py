@@ -1,4 +1,4 @@
-"""Synthetic schema-2 account recovery; never controls a real service or account."""
+"""Synthetic schema-5 account recovery; never controls a real service or account."""
 import hashlib
 import importlib.util
 import io
@@ -27,7 +27,7 @@ class RecoveryTests(unittest.TestCase):
             db.executescript("""
                 PRAGMA foreign_keys=ON;
                 CREATE TABLE schema_version(version INTEGER NOT NULL);
-                INSERT INTO schema_version VALUES(2);
+                INSERT INTO schema_version VALUES(5);
                 CREATE TABLE users(family_id TEXT,id TEXT,name TEXT,name_key TEXT UNIQUE,role TEXT,password TEXT,
                     PRIMARY KEY(family_id,id));
                 CREATE TABLE sessions(family_id TEXT,user_id TEXT,
@@ -108,19 +108,19 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(self.snapshot(), before)
 
     def test_legacy_future_missing_or_ambiguous_schema_is_rejected_without_mutations(self):
-        for versions in ([1], [3], [], [2, 2]):
+        for versions in ([1], [2], [3], [4], [6], [], [5, 5]):
             with self.subTest(versions=versions):
                 with closing(sqlite3.connect(self.path)) as db:
                     db.execute('DELETE FROM schema_version')
                     db.executemany('INSERT INTO schema_version VALUES(?)', [(value,) for value in versions])
                     db.commit()
                 before = self.snapshot()
-                with self.assertRaisesRegex(ValueError, 'requires database schema 2'):
+                with self.assertRaisesRegex(ValueError, 'requires database schema 5'):
                     recovery.reset(self.path, 'הורה Élan', 'a random long phrase')
                 self.assertEqual(self.snapshot(), before)
         with closing(sqlite3.connect(self.path)) as db:
             db.execute('DROP TABLE schema_version')
-        with self.assertRaisesRegex(ValueError, 'requires database schema 2'):
+        with self.assertRaisesRegex(ValueError, 'requires database schema 5'):
             recovery.reset(self.path, 'הורה Élan', 'a random long phrase')
 
     def test_schema1_cli_rejects_before_secret_prompt_or_service_command(self):
@@ -132,7 +132,7 @@ class RecoveryTests(unittest.TestCase):
              patch.object(recovery.sys, 'stdin', io.StringIO('')), \
              patch.object(recovery.subprocess, 'run', side_effect=AssertionError('must not control service')), \
              patch.object(recovery.getpass, 'getpass', side_effect=AssertionError('must not ask for password')):
-            with self.assertRaisesRegex(ValueError, 'requires database schema 2'):
+            with self.assertRaisesRegex(ValueError, 'requires database schema 5'):
                 recovery.main()
 
     def test_typo_in_database_path_never_creates_a_database(self):

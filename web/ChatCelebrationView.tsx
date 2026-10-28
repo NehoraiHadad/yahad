@@ -5,7 +5,7 @@ import {
   celebrationFlair,
   createCelebrationController,
   type CelebrationBurst,
-} from './chatCelebration';
+} from './chatCelebrationState';
 
 /** Reuses the existing effects preference and personal flair; no new persistence. */
 export function useChatCelebration(enabled: boolean, flair: string, scope: string | null) {

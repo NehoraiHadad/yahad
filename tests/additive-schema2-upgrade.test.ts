@@ -24,14 +24,14 @@ test('existing schema2 gains unread and throttle tables without changing credent
     text: 'Synthetic retained history', time: 1, kind: 'text', status: 'delivered', reactions: {} });
   const originalHash = seed.one('SELECT password FROM users WHERE id=?', child.id).password;
   const originalGrants = seed.all('SELECT * FROM grants');
-  seed.db.exec('DROP TABLE chat_unread; DROP TABLE credential_attempts');
+  seed.db.exec('DROP TABLE chat_unread; DROP TABLE credential_attempts; DROP TABLE usage_calendar; DROP TABLE usage_bonus; DROP TABLE usage_leases; DROP TABLE usage_days; DROP TABLE usage_policy; DROP TABLE usage_families; UPDATE schema_version SET version=2');
   seed.close();
   try {
     const upgraded = await createApp(config, { boot: false });
     try {
       const { store, app } = upgraded;
       const ready = await app.inject({ url: '/health/ready' });
-      assert.equal(ready.statusCode, 200); assert.equal(ready.json().databaseSchema, 2);
+      assert.equal(ready.statusCode, 200); assert.equal(ready.json().databaseSchema, 5);
       assert.equal(store.one('SELECT password FROM users WHERE id=?', child.id).password, originalHash);
       assert.equal(store.session(session.sid)?.user.id, child.id);
       assert.deepEqual(store.all('SELECT * FROM grants'), originalGrants);

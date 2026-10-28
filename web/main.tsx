@@ -1,5 +1,9 @@
 import { compareChatActivity } from './chatOrder';
+import { newClientId as newId } from './clientId';
 import { useVisibleChatRead } from './useVisibleChatRead';
+import { useUsageBudget } from './useUsageBudget';
+import { UsageIndicator, UsageOverlay } from './UsageBudget';
+import './usage-budget.css';
 import { readRoute, writeRoute, type AppRoute } from './browserNavigation';
 import { resilientEventStream } from './eventStream';
 import { LazyEmojiStickerPicker as EmojiStickerPicker } from './LazyEmojiStickerPicker';
@@ -96,13 +100,6 @@ type Me = {
   senderLabel?: string;
 };
 type Group = { id: string; title: string; canRead: boolean; last?: PublicMessage; lastMessageTime?: number; unreadCount?: number; kind?: 'group' | 'direct' };
-const newId = () => {
-  const b = crypto.getRandomValues(new Uint8Array(16));
-  b[6] = (b[6] & 15) | 64;
-  b[8] = (b[8] & 63) | 128;
-  const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
-};
 const emojiChoices = ['💚', '❤️', '👍', '😂', '✨', '🌸', '🎉', '🙏'];
 const time = (n: number) =>
   new Intl.DateTimeFormat('he-IL', { hour: '2-digit', minute: '2-digit' }).format(n);
@@ -389,6 +386,10 @@ function Chat({
   onSelect?: (group: string | null) => void;
   onError: (x: string) => void;
 }) {
+  const budget = useUsageBudget(me.user.role === 'child', me.user.id);
+  const [confirmedUsage, setConfirmedUsage] = useState(-1);
+  const usageVerifying = me.user.role === 'child' && confirmedUsage !== budget.activation.current;
+  const usageSuspended = budget.suspended || usageVerifying;
   const [groups, setGroups] = useState<Group[]>([]),
     [selected, setSelected] = useState<string | null>(routeGroup ?? null),
     [messages, setMessages] = useState<PublicMessage[]>([]),
@@ -429,7 +430,7 @@ function Chat({
   const visibleGroups = me.user.role === 'parent'
     ? filterParentGroups(groups, chatFilter, filterOverview, filterVerified) : groups;
   const listedGroups = searchChatGroups(visibleGroups, query).slice().sort(compareChatActivity);
-  const activeSelected = groupsVerified && visibleGroups.some(group => group.id === selected && group.canRead) ? selected : null;
+  const activeSelected = !usageSuspended && groupsVerified && visibleGroups.some(group => group.id === selected && group.canRead) ? selected : null;
   const viewport = useRef<HTMLDivElement>(null),
     bottom = useRef<HTMLDivElement>(null),
     selectedRef = useRef(selected),
@@ -440,7 +441,7 @@ function Chat({
     composerPending = useRef(false);
   const composerBusyChanged = useCallback((value: boolean) => { composerPending.current = value; }, []);
   selectedRef.current = activeSelected;
-  const verifyingSelection = !groupsVerified || (me.user.role === 'parent' && chatFilter.mode === 'child' && !filterVerified);
+  const verifyingSelection = usageSuspended || !groupsVerified || (me.user.role === 'parent' && chatFilter.mode === 'child' && !filterVerified);
   // Preserve only the local composer while verification is pending, never message content.
   // A confirmed removal/revocation destroys it, as does leaving this Chat/account.
   const composerGroup = (verifyingSelection ? groups : visibleGroups).find(g => g.id === selected && g.canRead);
@@ -465,6 +466,8 @@ function Chat({
     if (next.mode === 'child') void refreshList();
   };
   const refreshList = useCallback(async () => {
+    if (budget.suspendedRef.current) return;
+    const usageActivation = budget.activation.current;
     const generation = listGeneration.current.begin();
     groupDataGeneration.current.invalidate();
     invalidateFilter();
@@ -474,10 +477,11 @@ function Chat({
         api<Group[]>('/groups'),
         me.user.role === 'parent' ? api<FamilyOverview>('/parent/overview').catch(() => null) : Promise.resolve(null),
       ]);
-      if (!listGeneration.current.isCurrent(generation)) return;
+      if (!listGeneration.current.isCurrent(generation) || budget.suspendedRef.current || usageActivation !== budget.activation.current) return;
       setFilterOverview(overview);
       setFilterVerified(overview !== null);
       setGroups(data);
+      setConfirmedUsage(usageActivation);
       groupsVerifiedRef.current = true;
       setGroupsVerified(true);
       setGroupsChecking(false);
@@ -493,6 +497,12 @@ function Chat({
       setNeedsRefresh(true);
     }
   }, [me.user.id, me.user.role]);
+  useEffect(() => {
+    if (me.user.role !== 'child') return;
+    invalidateFilter();
+    listGeneration.current.invalidate(); groupDataGeneration.current.invalidate();
+    if (!budget.suspended) void refreshList();
+  }, [budget.suspended, me.user.role]);
   // Message-only events cannot change grants. Keep the composer mounted so incoming
   // messages and successful sends do not destroy a parent's unsent draft/attachment.
   const refreshGroupData = useCallback(async () => {
@@ -572,6 +582,7 @@ function Chat({
       }
     });
     source.addEventListener('paused', () => setTyping(false));
+    source.addEventListener('usage', budget.reconcile);
     source.onerror = () => {
       setOnline(false);
       listGeneration.current.invalidate();
@@ -668,7 +679,9 @@ function Chat({
     }
   };
   return (
-    <main className={`chat-app theme-${theme} ${effects ? 'playful' : ''} ${dark ? 'dark' : ''} ${current || (verifyingSelection && composerGroup) ? 'has-chat' : ''}`}>
+    <>
+    <UsageOverlay reason={budget.reason || (usageVerifying ? 'checking' : '')} status={budget.status} resume={budget.resume} logout={logout}/>
+    <main inert={usageSuspended} style={usageSuspended ? { visibility: 'hidden' } : undefined} aria-hidden={usageSuspended || undefined} className={`chat-app theme-${theme} ${effects ? 'playful' : ''} ${dark ? 'dark' : ''} ${current || (verifyingSelection && composerGroup) ? 'has-chat' : ''}`}>
       <aside className="sidebar">
         <header className="side-top">
           <a className="brand" href="/" onClick={(e) => e.preventDefault()}>
@@ -679,6 +692,7 @@ function Chat({
             <Palette size={21} />
           </IconButton>
         </header>
+        {me.user.role === 'child' && <UsageIndicator status={budget.status} paused={usageSuspended}/>}
         <div className="side-title">
           <div>
             <span className="eyebrow">קצת מילים, הרבה ביחד</span>
@@ -1132,6 +1146,7 @@ function Chat({
       )}
       {settingsOpen && <AccountSettings onClose={() => setSettingsOpen(false)} />}
     </main>
+    </>
   );
 }
 function Message({

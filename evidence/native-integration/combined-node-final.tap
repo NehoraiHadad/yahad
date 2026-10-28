@@ -1,0 +1,1882 @@
+TAP version 13
+# Subtest: single-name normalization supports Hebrew and canonical uniqueness without accepting invisible controls
+ok 1 - single-name normalization supports Hebrew and canonical uniqueness without accepting invisible controls
+  ---
+  duration_ms: 7.5198
+  type: 'test'
+  ...
+# Subtest: v1 migration keeps unique login names and all durable identity references, not duplicate legacy display labels
+ok 2 - v1 migration keeps unique login names and all durable identity references, not duplicate legacy display labels
+  ---
+  duration_ms: 6.314
+  type: 'test'
+  ...
+# Subtest: normalized-name collision rolls back completely rather than choosing aliases or losing accounts
+ok 3 - normalized-name collision rolls back completely rather than choosing aliases or losing accounts
+  ---
+  duration_ms: 2.0296
+  type: 'test'
+  ...
+# Subtest: failure after dropping the old table rolls back rows and schema, then a clean retry succeeds
+ok 4 - failure after dropping the old table rolls back rows and schema, then a clean retry succeeds
+  ---
+  duration_ms: 3.6416
+  type: 'test'
+  ...
+# Subtest: unsupported schemas and invalid references fail before committing any account migration
+ok 5 - unsupported schemas and invalid references fail before committing any account migration
+  ---
+  duration_ms: 5.6254
+  type: 'test'
+  ...
+# Subtest: missing schema metadata is accepted only for a truly empty database
+ok 6 - missing schema metadata is accepted only for a truly empty database
+  ---
+  duration_ms: 1.9674
+  type: 'test'
+  ...
+# Subtest: wrong connector startup rejects before migrating a legacy data directory
+ok 7 - wrong connector startup rejects before migrating a legacy data directory
+  ---
+  duration_ms: 204.319
+  type: 'test'
+  ...
+# Subtest: password reset serializes repeated submits and holds its original target until confirmed
+ok 8 - password reset serializes repeated submits and holds its original target until confirmed
+  ---
+  duration_ms: 242.187
+  type: 'test'
+  ...
+# Subtest: password mismatch is inline and sends no request
+ok 9 - password mismatch is inline and sends no request
+  ---
+  duration_ms: 69.5143
+  type: 'test'
+  ...
+# Subtest: one child name is used for display and login, separate from password controls
+ok 10 - one child name is used for display and login, separate from password controls
+  ---
+  duration_ms: 34.2239
+  type: 'test'
+  ...
+# Subtest: account-name save serializes repeated submissions and preserves target through confirmation
+ok 11 - account-name save serializes repeated submissions and preserves target through confirmation
+  ---
+  duration_ms: 46.417
+  type: 'test'
+  ...
+# Subtest: empty or unsafe name is inline, cancel does not save, and changing accounts discards drafts
+ok 12 - empty or unsafe name is inline, cancel does not save, and changing accounts discards drafts
+  ---
+  duration_ms: 131.4361
+  type: 'test'
+  ...
+# Subtest: failed rename can retry but uncertain rename requires close/reconcile before another request
+ok 13 - failed rename can retry but uncertain rename requires close/reconcile before another request
+  ---
+  duration_ms: 40.557
+  type: 'test'
+  ...
+# Subtest: name conflict is explicit and does not apply an unconfirmed name
+ok 14 - name conflict is explicit and does not apply an unconfirmed name
+  ---
+  duration_ms: 20.331
+  type: 'test'
+  ...
+# Subtest: normalization-equivalent rename does not falsely claim old capitalization is rejected
+ok 15 - normalization-equivalent rename does not falsely claim old capitalization is rejected
+  ---
+  duration_ms: 17.9847
+  type: 'test'
+  ...
+# Subtest: existing schema2 gains unread and throttle tables without changing credentials, grants, sessions or history
+ok 16 - existing schema2 gains unread and throttle tables without changing credentials, grants, sessions or history
+  ---
+  duration_ms: 502.3877
+  type: 'test'
+  ...
+# Subtest: admin checkbox containing block stays within each scrollable approval row
+ok 17 - admin checkbox containing block stays within each scrollable approval row
+  ---
+  duration_ms: 14.2218
+  type: 'test'
+  ...
+# Subtest: admin group list keeps bounded internal scrolling on desktop and narrow screens
+ok 18 - admin group list keeps bounded internal scrolling on desktop and narrow screens
+  ---
+  duration_ms: 8.0562
+  type: 'test'
+  ...
+# Subtest: long, filtered, and cleared group lists retain native labelled keyboard controls
+ok 19 - long, filtered, and cleared group lists retain native labelled keyboard controls
+  ---
+  duration_ms: 82.1913
+  type: 'test'
+  ...
+# Subtest: child login details are not hidden by responsive styles
+ok 20 - child login details are not hidden by responsive styles
+  ---
+  duration_ms: 2.5435
+  type: 'test'
+  ...
+# Subtest: background retry classification includes disconnects and server downtime, never auth or input rejection
+ok 21 - background retry classification includes disconnects and server downtime, never auth or input rejection
+  ---
+  duration_ms: 1.3413
+  type: 'test'
+  ...
+# Subtest: API retains status and error code for callers without changing translated messages
+ok 22 - API retains status and error code for callers without changing translated messages
+  ---
+  duration_ms: 34.1854
+  type: 'test'
+  ...
+# Subtest: management → chats → group supports Back/Forward without leaving the app or duplicate entries
+ok 23 - management → chats → group supports Back/Forward without leaving the app or duplicate entries
+  ---
+  duration_ms: 2.2593
+  type: 'test'
+  ...
+# Subtest: history is account-bound, never grants access, and ignores invalid routes
+ok 24 - history is account-bound, never grants access, and ignores invalid routes
+  ---
+  duration_ms: 0.1721
+  type: 'test'
+  ...
+# Subtest: actual App navigation restores history on popstate and clears stale errors
+ok 25 - actual App navigation restores history on popstate and clears stale errors
+  ---
+  duration_ms: 720.7519
+  type: 'test'
+  ...
+# Subtest: revocation closes content immediately and rejects late messages; new approval reopens through a fresh read
+ok 26 - revocation closes content immediately and rejects late messages; new approval reopens through a fresh read
+  ---
+  duration_ms: 140.6411
+  type: 'test'
+  ...
+# Subtest: catalog selection never requests content; All resets child search and repeated clicks are inert
+ok 27 - catalog selection never requests content; All resets child search and repeated clicks are inert
+  ---
+  duration_ms: 48.196
+  type: 'test'
+  ...
+# Subtest: failed permission refresh stays closed in All mode and late message-only snapshots cannot reopen it
+ok 28 - failed permission refresh stays closed in All mode and late message-only snapshots cannot reopen it
+  ---
+  duration_ms: 38.7572
+  type: 'test'
+  ...
+# Subtest: only newest full snapshot restores content; ordinary messages do not reset verified conversation state
+ok 29 - only newest full snapshot restores content; ordinary messages do not reset verified conversation state
+  ---
+  duration_ms: 44.1096
+  type: 'test'
+  ...
+# Subtest: removed catalog selection stays cleared when the group reappears later
+ok 30 - removed catalog selection stays cleared when the group reappears later
+  ---
+  duration_ms: 34.5217
+  type: 'test'
+  ...
+# Subtest: parent-only conversation opens in All, survives child-grant refresh and repeated All, and retries failed verification safely
+ok 31 - parent-only conversation opens in All, survives child-grant refresh and repeated All, and retries failed verification safely
+  ---
+  duration_ms: 32.3796
+  type: 'test'
+  ...
+# Subtest: temporary verification retains only composer identity; confirmed revocation or navigation destroys it
+ok 32 - temporary verification retains only composer identity; confirmed revocation or navigation destroys it
+  ---
+  duration_ms: 22.689
+  type: 'test'
+  ...
+# Subtest: child-filter verification retains the selected composer without retaining visible conversation content
+ok 33 - child-filter verification retains the selected composer without retaining visible conversation content
+  ---
+  duration_ms: 21.4117
+  type: 'test'
+  ...
+# Subtest: a renewed child lease cannot reveal chats until a fresh permission snapshot confirms that activation
+ok 34 - a renewed child lease cannot reveal chats until a fresh permission snapshot confirms that activation
+  ---
+  duration_ms: 29.073
+  type: 'test'
+  ...
+# Subtest: effects do not run on mount, opt-out, hidden tab or reduced-motion denial
+ok 35 - effects do not run on mount, opt-out, hidden tab or reduced-motion denial
+  ---
+  duration_ms: 2.0891
+  type: 'test'
+  ...
+# Subtest: send bursts are bounded to one timer, expire, and throttle repeated sends
+ok 36 - send bursts are bounded to one timer, expire, and throttle repeated sends
+  ---
+  duration_ms: 0.5343
+  type: 'test'
+  ...
+# Subtest: preference/visibility cancellation and unmount cancel all pending work
+ok 37 - preference/visibility cancellation and unmount cancel all pending work
+  ---
+  duration_ms: 0.2628
+  type: 'test'
+  ...
+# Subtest: decorations reuse personal flair, stay hidden to assistive tech, and contain no controls
+ok 38 - decorations reuse personal flair, stay hidden to assistive tech, and contain no controls
+  ---
+  duration_ms: 16.0987
+  type: 'test'
+  ...
+# Subtest: CSS protects pointer interaction and reduced-motion independently of JavaScript
+ok 39 - CSS protects pointer interaction and reduced-motion independently of JavaScript
+  ---
+  duration_ms: 0.6428
+  type: 'test'
+  ...
+# Subtest: local unread is per account, authorized, incoming-only; fetching is not viewing
+ok 40 - local unread is per account, authorized, incoming-only; fetching is not viewing
+  ---
+  duration_ms: 635.3309
+  type: 'test'
+  ...
+# Subtest: viewing validates exact IDs atomically and cannot clear unseen new messages
+ok 41 - viewing validates exact IDs atomically and cannot clear unseen new messages
+  ---
+  duration_ms: 285.9431
+  type: 'test'
+  ...
+# Subtest: activity ordering is newest first, stable ties, missing/invalid timestamp zero
+ok 42 - activity ordering is newest first, stable ties, missing/invalid timestamp zero
+  ---
+  duration_ms: 1.5595
+  type: 'test'
+  ...
+# Subtest: read-state persists across reopen, and additive initialization does not backfill old rows
+ok 43 - read-state persists across reopen, and additive initialization does not backfill old rows
+  ---
+  duration_ms: 282.2947
+  type: 'test'
+  ...
+# Subtest: actual grant handler serializes repeated clicks and sends only captured account/group/allowed fields
+ok 44 - actual grant handler serializes repeated clicks and sends only captured account/group/allowed fields
+  ---
+  duration_ms: 246.0438
+  type: 'test'
+  ...
+# Subtest: stale state and failed/lost mutation responses reconcile without fabricated success
+ok 45 - stale state and failed/lost mutation responses reconcile without fabricated success
+  ---
+  duration_ms: 52.1104
+  type: 'test'
+  ...
+# Subtest: switch/unmount invalidates late feedback and a new child workspace starts without old search/save state
+ok 46 - switch/unmount invalidates late feedback and a new child workspace starts without old search/save state
+  ---
+  duration_ms: 70.8487
+  type: 'test'
+  ...
+# Subtest: revoke remains visibly approved while saving, then confirms only fresh persisted removal
+ok 47 - revoke remains visibly approved while saving, then confirms only fresh persisted removal
+  ---
+  duration_ms: 31.7181
+  type: 'test'
+  ...
+# Subtest: child workspace identifies roster, selected name, login name, per-child counts and direct settings
+ok 48 - child workspace identifies roster, selected name, login name, per-child counts and direct settings
+  ---
+  duration_ms: 40.5004
+  type: 'test'
+  ...
+# Subtest: switching selected child renders only that child grants, without copying sibling approvals
+ok 49 - switching selected child renders only that child grants, without copying sibling approvals
+  ---
+  duration_ms: 4.7458
+  type: 'test'
+  ...
+# Subtest: loading, failed load, zero children, created child and stale snapshots have explicit safe states
+ok 50 - loading, failed load, zero children, created child and stale snapshots have explicit safe states
+  ---
+  duration_ms: 10.4216
+  type: 'test'
+  ...
+# Subtest: selection survives reorder/rename/refresh but chooses a pending known child if removed
+ok 51 - selection survives reorder/rename/refresh but chooses a pending known child if removed
+  ---
+  duration_ms: 0.3412
+  type: 'test'
+  ...
+# Subtest: confirmation needs the exact child/group in a fresh server snapshot, including revoke
+ok 52 - confirmation needs the exact child/group in a fresh server snapshot, including revoke
+  ---
+  duration_ms: 0.3698
+  type: 'test'
+  ...
+# Subtest: repeated clicks are rejected synchronously and stale completions cannot finish newer work
+ok 53 - repeated clicks are rejected synchronously and stale completions cannot finish newer work
+  ---
+  duration_ms: 0.2369
+  type: 'test'
+  ...
+# Subtest: direct password action opens the selected child password form, never the parent form
+ok 54 - direct password action opens the selected child password form, never the parent form
+  ---
+  duration_ms: 2.6346
+  type: 'test'
+  ...
+# Subtest: a removed initial child never silently falls back to changing the parent account
+ok 55 - a removed initial child never silently falls back to changing the parent account
+  ---
+  duration_ms: 1.542
+  type: 'test'
+  ...
+# Subtest: long synthetic names are escaped and scoped layout preserves responsive native controls
+ok 56 - long synthetic names are escaped and scoped layout preserves responsive native controls
+  ---
+  duration_ms: 4.6112
+  type: 'test'
+  ...
+# Subtest: maximum-sized family keeps every child reachable in a bounded keyboard-scrollable roster
+ok 57 - maximum-sized family keeps every child reachable in a bounded keyboard-scrollable roster
+  ---
+  duration_ms: 8.361
+  type: 'test'
+  ...
+# Subtest: parent changes only the child account name, preserving password, sessions, grants and signature
+ok 58 - parent changes only the child account name, preserving password, sessions, grants and signature
+  ---
+  duration_ms: 711.1193
+  type: 'test'
+  ...
+# Subtest: account-name edit rejects children, other families, parent targets, missing auth and CSRF
+ok 59 - account-name edit rejects children, other families, parent targets, missing auth and CSRF
+  ---
+  duration_ms: 296.1378
+  type: 'test'
+  ...
+# Subtest: account-name edit validates bounded names and rejects old name fields and cannot mutate security fields
+ok 60 - account-name edit validates bounded names and rejects old name fields and cannot mutate security fields
+  ---
+  duration_ms: 338.8218
+  type: 'test'
+  ...
+# Subtest: account name uniqueness includes normalized forms across all accounts, with no login alias fallback
+ok 61 - account name uniqueness includes normalized forms across all accounts, with no login alias fallback
+  ---
+  duration_ms: 391.9473
+  type: 'test'
+  ...
+# Subtest: a login using the old name cannot finish after an in-flight rename
+ok 62 - a login using the old name cannot finish after an in-flight rename
+  ---
+  duration_ms: 373.9552
+  type: 'test'
+  ...
+# Subtest: account selector shows the sole canonical name and preserves account IDs
+ok 63 - account selector shows the sole canonical name and preserves account IDs
+  ---
+  duration_ms: 13.0193
+  type: 'test'
+  ...
+# Subtest: child summary selection buttons and headings use consistent unambiguous labels
+ok 64 - child summary selection buttons and headings use consistent unambiguous labels
+  ---
+  duration_ms: 15.9953
+  type: 'test'
+  ...
+# Subtest: setup next action identifies the pending child by the same canonical name
+ok 65 - setup next action identifies the pending child by the same canonical name
+  ---
+  duration_ms: 1.2919
+  type: 'test'
+  ...
+# Subtest: tablet handoff groups three instructions and labels site address separately from parent navigation
+ok 66 - tablet handoff groups three instructions and labels site address separately from parent navigation
+  ---
+  duration_ms: 14.1001
+  type: 'test'
+  ...
+# Subtest: stale, loading and missing child states never expose actionable old credentials
+ok 67 - stale, loading and missing child states never expose actionable old credentials
+  ---
+  duration_ms: 5.3287
+  type: 'test'
+  ...
+# Subtest: missing grants and disconnected account expose correct next step without claiming readiness
+ok 68 - missing grants and disconnected account expose correct next step without claiming readiness
+  ---
+  duration_ms: 3.2476
+  type: 'test'
+  ...
+# Subtest: selected child replacement changes login identity and password action atomically
+ok 69 - selected child replacement changes login identity and password action atomically
+  ---
+  duration_ms: 2.7788
+  type: 'test'
+  ...
+# Subtest: loopback origins are clearly marked as unusable on another device
+ok 70 - loopback origins are clearly marked as unusable on another device
+  ---
+  duration_ms: 7.0146
+  type: 'test'
+  ...
+# Subtest: client UUIDs work with getRandomValues when randomUUID is unavailable on a LAN HTTP origin
+ok 71 - client UUIDs work with getRandomValues when randomUUID is unavailable on a LAN HTTP origin
+  ---
+  duration_ms: 65.3313
+  type: 'test'
+  ...
+# Subtest: real adapter normalizes supported types and strips untrusted embedded previews/quotes from raw
+ok 72 - real adapter normalizes supported types and strips untrusted embedded previews/quotes from raw
+  ---
+  duration_ms: 2.4103
+  type: 'test'
+  ...
+# Subtest: encrypted auth store restores Buffer credentials, Signal keys, null deletes and app-state proto
+ok 73 - encrypted auth store restores Buffer credentials, Signal keys, null deletes and app-state proto
+  ---
+  duration_ms: 33.1896
+  type: 'test'
+  ...
+# Subtest: real adapter lifecycle with injected socket: QR, restart reconnect, logout, no network
+ok 74 - real adapter lifecycle with injected socket: QR, restart reconnect, logout, no network
+  ---
+  duration_ms: 580.4044
+  type: 'test'
+  ...
+# Subtest: provider unlink reports request transmission only, closes socket, ignores stale QR and never reconnects
+ok 75 - provider unlink reports request transmission only, closes socket, ignores stale QR and never reconnects
+  ---
+  duration_ms: 641.3448
+  type: 'test'
+  ...
+# Subtest: provider unlink timeout still stops locally and reports remote revocation unconfirmed
+ok 76 - provider unlink timeout still stops locally and reports remote revocation unconfirmed
+  ---
+  duration_ms: 12.3965
+  type: 'test'
+  ...
+# Subtest: authenticated encrypted backup + restore of SQLite, encrypted media and WA auth; tamper/wrong password/retention/lock
+ok 77 - authenticated encrypted backup + restore of SQLite, encrypted media and WA auth; tamper/wrong password/retention/lock # SKIP Requires Linux private file modes; run on Linux before activation
+  ---
+  duration_ms: 0.1387
+  type: 'test'
+  ...
+# Subtest: untrusted media URLs and paths cannot make server-side requests
+ok 78 - untrusted media URLs and paths cannot make server-side requests
+  ---
+  duration_ms: 1.5696
+  type: 'test'
+  ...
+# Subtest: third-party console payloads never reach production logging
+ok 79 - third-party console payloads never reach production logging
+  ---
+  duration_ms: 481.4705
+  type: 'test'
+  ...
+# Subtest: real adapter maps actual media bytes, captions, Opus duration and thumbnail in memory (stub transport)
+ok 80 - real adapter maps actual media bytes, captions, Opus duration and thumbnail in memory (stub transport)
+  ---
+  duration_ms: 268.8018
+  type: 'test'
+  ...
+# Subtest: documented setup CLI creates real separate accounts and a protected random key without printing passwords
+ok 81 - documented setup CLI creates real separate accounts and a protected random key without printing passwords # SKIP Requires Linux private file modes; run on Linux before activation
+  ---
+  duration_ms: 0.4032
+  type: 'test'
+  ...
+# Subtest: diagnostics isolate families, sanitize failures, retain bounded encrypted history across restart
+ok 82 - diagnostics isolate families, sanitize failures, retain bounded encrypted history across restart
+  ---
+  duration_ms: 55.8285
+  type: 'test'
+  ...
+# Subtest: diagnostics survive persistence failure, reset cannot be resurrected by in-flight flush, opt-out writes nothing
+ok 83 - diagnostics survive persistence failure, reset cannot be resurrected by in-flight flush, opt-out writes nothing
+  ---
+  duration_ms: 11.2148
+  type: 'test'
+  ...
+# Subtest: parent-only diagnostics/export/reset and operator-only update queue enforce sessions, family isolation and CSRF
+ok 84 - parent-only diagnostics/export/reset and operator-only update queue enforce sessions, family isolation and CSRF
+  ---
+  duration_ms: 575.3907
+  type: 'test'
+  ...
+# Subtest: Unicode 17 catalog covers all nine categories without duplicate bases
+ok 85 - Unicode 17 catalog covers all nine categories without duplicate bases
+  ---
+  duration_ms: 2.9412
+  type: 'test'
+  ...
+# Subtest: search supports names, Hebrew keyword bridge, native emoji, and categories
+ok 86 - search supports names, Hebrew keyword bridge, native emoji, and categories
+  ---
+  duration_ms: 1.8343
+  type: 'test'
+  ...
+# Subtest: recents are bounded, valid, deduplicated, and most recent first
+ok 87 - recents are bounded, valid, deduplicated, and most recent first
+  ---
+  duration_ms: 7.4258
+  type: 'test'
+  ...
+# Subtest: emoji insertion preserves caret selection and complex unicode
+ok 88 - emoji insertion preserves caret selection and complex unicode
+  ---
+  duration_ms: 0.2533
+  type: 'test'
+  ...
+# Subtest: picker exposes dialog/search/close with bounded initial DOM and gated sticker controls
+ok 89 - picker exposes dialog/search/close with bounded initial DOM and gated sticker controls
+  ---
+  duration_ms: 13.1274
+  type: 'test'
+  ...
+# Subtest: sticker helper rejects external paths without fetching
+ok 90 - sticker helper rejects external paths without fetching
+  ---
+  duration_ms: 1.0725
+  type: 'test'
+  ...
+# Subtest: sticker helper validates mime, signature, max bytes, and cancellation
+ok 91 - sticker helper validates mime, signature, max bytes, and cancellation
+  ---
+  duration_ms: 33.2671
+  type: 'test'
+  ...
+# Subtest: official tone variants preserve ZWJ sequences and support mixed tones, search, and recents
+ok 92 - official tone variants preserve ZWJ sequences and support mixed tones, search, and recents
+  ---
+  duration_ms: 2.5129
+  type: 'test'
+  ...
+# Subtest: CLOSED error reconnects once; new ready recovers and obsolete stream events cannot change state
+ok 93 - CLOSED error reconnects once; new ready recovers and obsolete stream events cannot change state
+  ---
+  duration_ms: 3.4242
+  type: 'test'
+  ...
+# Subtest: CONNECTING uses native retry; unmount cancels CLOSED recovery
+ok 94 - CONNECTING uses native retry; unmount cancels CLOSED recovery
+  ---
+  duration_ms: 0.5494
+  type: 'test'
+  ...
+# Subtest: session expiry is terminal and cancels any pending recovery
+ok 95 - session expiry is terminal and cancels any pending recovery
+  ---
+  duration_ms: 0.4358
+  type: 'test'
+  ...
+# Subtest: setup is derived from persisted overview after interruptions/reload, never local completion flags
+ok 96 - setup is derived from persisted overview after interruptions/reload, never local completion flags
+  ---
+  duration_ms: 17.7717
+  type: 'test'
+  ...
+# Subtest: zero groups, zero children and unknown/stale grants cannot mark a child ready
+ok 97 - zero groups, zero children and unknown/stale grants cannot mark a child ready
+  ---
+  duration_ms: 0.5535
+  type: 'test'
+  ...
+# Subtest: reconnection is distinct from saved grants and readiness is never tablet connection evidence
+ok 98 - reconnection is distinct from saved grants and readiness is never tablet connection evidence
+  ---
+  duration_ms: 9.6199
+  type: 'test'
+  ...
+# Subtest: summary lists authorized titles per child, preserves duplicate titles and escapes synthetic content
+ok 99 - summary lists authorized titles per child, preserves duplicate titles and escapes synthetic content
+  ---
+  duration_ms: 2.911
+  type: 'test'
+  ...
+# Subtest: empty and stale setup surfaces next action without enabling duplicate account creation
+ok 100 - empty and stale setup surfaces next action without enabling duplicate account creation
+  ---
+  duration_ms: 0.5821
+  type: 'test'
+  ...
+# Subtest: stale summaries do not claim current login readiness
+ok 101 - stale summaries do not claim current login readiness
+  ---
+  duration_ms: 1.4408
+  type: 'test'
+  ...
+# Subtest: family setup has one Hebrew-capable account name and accessible passphrase labels
+ok 102 - family setup has one Hebrew-capable account name and accessible passphrase labels
+  ---
+  duration_ms: 17.7627
+  type: 'test'
+  ...
+# Subtest: first-parent setup offers an explicit login exit without submitting account details
+ok 103 - first-parent setup offers an explicit login exit without submitting account details
+  ---
+  duration_ms: 2.6003
+  type: 'test'
+  ...
+# Subtest: password settings are a labeled dialog with explicit non-submit close and confirmation
+ok 104 - password settings are a labeled dialog with explicit non-submit close and confirmation
+  ---
+  duration_ms: 15.0541
+  type: 'test'
+  ...
+# Subtest: CDN fetch permits only HTTPS allowlisted hosts, disables redirects and sniffs raster bytes
+ok 105 - CDN fetch permits only HTTPS allowlisted hosts, disables redirects and sniffs raster bytes
+  ---
+  duration_ms: 28.6603
+  type: 'test'
+  ...
+# Subtest: cache coalesces, expires positive and negative entries, isolates owners and clears pending work
+ok 106 - cache coalesces, expires positive and negative entries, isolates owners and clears pending work
+  ---
+  duration_ms: 0.684
+  type: 'test'
+  ...
+# Subtest: cache bounds concurrent downloads and retained entries
+ok 107 - cache bounds concurrent downloads and retained entries
+  ---
+  duration_ms: 16.2489
+  type: 'test'
+  ...
+# Subtest: Baileys requests group previews with a provider timeout and hides missing/private pictures
+ok 108 - Baileys requests group previews with a provider timeout and hides missing/private pictures
+  ---
+  duration_ms: 0.6948
+  type: 'test'
+  ...
+# Subtest: photo route enforces session/family/grant boundaries, parent metadata access and no-store
+ok 109 - photo route enforces session/family/grant boundaries, parent metadata access and no-store
+  ---
+  duration_ms: 588.2978
+  type: 'test'
+  ...
+# Subtest: photo route rechecks revocation and logout after provider work and ignores late disconnect results
+ok 110 - photo route rechecks revocation and logout after provider work and ignores late disconnect results
+  ---
+  duration_ms: 312.1454
+  type: 'test'
+  ...
+# Subtest: avatar uses only encoded same-origin paths and falls back on image errors; new group retries
+ok 111 - avatar uses only encoded same-origin paths and falls back on image errors; new group retries
+  ---
+  duration_ms: 104.3211
+  type: 'test'
+  ...
+# Subtest: group search preserves stable IDs, duplicates and granted state through filter and clear
+ok 112 - group search preserves stable IDs, duplicates and granted state through filter and clear
+  ---
+  duration_ms: 17.4228
+  type: 'test'
+  ...
+# Subtest: approval after connect stays honestly unavailable without an anchor; requests cannot target other groups or supply anchors
+ok 113 - approval after connect stays honestly unavailable without an anchor; requests cannot target other groups or supply anchors
+  ---
+  duration_ms: 580.4853
+  type: 'test'
+  ...
+# Subtest: server chooses the oldest usable original outgoing/received anchor, skipping malformed/deleted/unsupported/pending rows
+ok 114 - server chooses the oldest usable original outgoing/received anchor, skipping malformed/deleted/unsupported/pending rows
+  ---
+  duration_ms: 341.8702
+  type: 'test'
+  ...
+# Subtest: identical group IDs remain isolated between families and bounded anchor scans report their limit
+ok 115 - identical group IDs remain isolated between families and bounded anchor scans report their limit
+  ---
+  duration_ms: 1238.0227
+  type: 'test'
+  ...
+# Subtest: submitted request is distinct from stored history; duplicates and unmatched events do not invent restoration
+ok 116 - submitted request is distinct from stored history; duplicates and unmatched events do not invent restoration
+  ---
+  duration_ms: 349.104
+  type: 'test'
+  ...
+# Subtest: response before request ID resolution correlates only when the exact supported field matches
+ok 117 - response before request ID resolution correlates only when the exact supported field matches
+  ---
+  duration_ms: 306.635
+  type: 'test'
+  ...
+# Subtest: exact-ID empty responses are zero-stored partial replies, including early responses; unmatched empties are not replies
+ok 118 - exact-ID empty responses are zero-stored partial replies, including early responses; unmatched empties are not replies
+  ---
+  duration_ms: 334.0213
+  type: 'test'
+  ...
+# Subtest: history failures and response/submission timeouts remain partial and retry is bounded
+ok 119 - history failures and response/submission timeouts remain partial and retry is bounded
+  ---
+  duration_ms: 359.7535
+  type: 'test'
+  ...
+# Subtest: revoking permission while history submission waits prevents status/count disclosure
+ok 120 - revoking permission while history submission waits prevents status/count disclosure
+  ---
+  duration_ms: 322.3437
+  type: 'test'
+  ...
+# Subtest: real adapter scheduling processes all 600 authorized history entries and explicitly reports oversized batches
+ok 121 - real adapter scheduling processes all 600 authorized history entries and explicitly reports oversized batches
+  ---
+  duration_ms: 126.8478
+  type: 'test'
+  ...
+# Subtest: queue filters unapproved groups before normalization and invalidates old permissions after revoke/regrant
+ok 122 - queue filters unapproved groups before normalization and invalidates old permissions after revoke/regrant
+  ---
+  duration_ms: 15.7473
+  type: 'test'
+  ...
+# Subtest: anchor validation never invents keys and provider return value remains only a request ID
+ok 123 - anchor validation never invents keys and provider return value remains only a request ID
+  ---
+  duration_ms: 13.611
+  type: 'test'
+  ...
+# Subtest: byte limits and synchronous consumer errors are reported without storing payloads
+ok 124 - byte limits and synchronous consumer errors are reported without storing payloads
+  ---
+  duration_ms: 0.9491
+  type: 'test'
+  ...
+# Subtest: stalled consumers report failure, invalidate their work and hold bounded capacity until unwound
+ok 125 - stalled consumers report failure, invalidate their work and hold bounded capacity until unwound
+  ---
+  duration_ms: 27.3178
+  type: 'test'
+  ...
+# Subtest: 257 simultaneously receiving groups degrade to overload without throwing and expired slots are reclaimed
+ok 126 - 257 simultaneously receiving groups degrade to overload without throwing and expired slots are reclaimed
+  ---
+  duration_ms: 273.2359
+  type: 'test'
+  ...
+# Subtest: admitted processing cannot time out or enable a duplicate request while its batch is draining
+ok 127 - admitted processing cannot time out or enable a duplicate request while its batch is draining
+  ---
+  duration_ms: 295.0609
+  type: 'test'
+  ...
+# Subtest: reconnecting disposes old queued buffers and shares a bound on unresolved consumers across generations
+ok 128 - reconnecting disposes old queued buffers and shares a bound on unresolved consumers across generations
+  ---
+  duration_ms: 48.2681
+  type: 'test'
+  ...
+# Subtest: disposing active ingestion retires processing markers and reconnect clears obsolete status
+ok 129 - disposing active ingestion retires processing markers and reconnect clears obsolete status
+  ---
+  duration_ms: 330.1136
+  type: 'test'
+  ...
+# Subtest: underlying request slots belong to the connector and late old completions cannot free new slots
+ok 130 - underlying request slots belong to the connector and late old completions cannot free new slots
+  ---
+  duration_ms: 370.1284
+  type: 'test'
+  ...
+# Subtest: a replacement connector shares the family ingestion bound while a disposed transport is still hung
+ok 131 - a replacement connector shares the family ingestion bound while a disposed transport is still hung
+  ---
+  duration_ms: 22.1098
+  type: 'test'
+  ...
+# Subtest: history requests share a family rate bound even across different groups and empty replies
+ok 132 - history requests share a family rate bound even across different groups and empty replies
+  ---
+  duration_ms: 434.4405
+  type: 'test'
+  ...
+# Subtest: provider discovery precedes private message admission and ignores broadcasts, stale events and contacts without chats
+ok 133 - provider discovery precedes private message admission and ignores broadcasts, stale events and contacts without chats
+  ---
+  duration_ms: 11.0899
+  type: 'test'
+  ...
+# Subtest: initial history waits for verified group membership instead of discarding catalog-race messages
+ok 134 - initial history waits for verified group membership instead of discarding catalog-race messages
+  ---
+  duration_ms: 11.8305
+  type: 'test'
+  ...
+# Subtest: late verified group fetch cannot reintroduce chats after connector stop
+ok 135 - late verified group fetch cannot reintroduce chats after connector stop
+  ---
+  duration_ms: 10.9866
+  type: 'test'
+  ...
+# Subtest: private original keys work end to end for send, read, media normalization and history requests
+ok 136 - private original keys work end to end for send, read, media normalization and history requests
+  ---
+  duration_ms: 11.6593
+  type: 'test'
+  ...
+# Subtest: initial history rechecks stale known group membership before retaining messages
+ok 137 - initial history rechecks stale known group membership before retaining messages
+  ---
+  duration_ms: 10.5604
+  type: 'test'
+  ...
+# Subtest: live ingress also waits initial membership and stale fetches cannot return an empty authoritative catalog
+ok 138 - live ingress also waits initial membership and stale fetches cannot return an empty authoritative catalog
+  ---
+  duration_ms: 10.9019
+  type: 'test'
+  ...
+# Subtest: only explicit Baileys notify arrivals are live; append/replay rows stay history and requestId duplicates stay suppressed
+ok 139 - only explicit Baileys notify arrivals are live; append/replay rows stay history and requestId duplicates stay suppressed
+  ---
+  duration_ms: 11.2734
+  type: 'test'
+  ...
+# Subtest: manual notification dismissal restores only a still-valid visible control without stealing focus
+ok 140 - manual notification dismissal restores only a still-valid visible control without stealing focus
+  ---
+  duration_ms: 1.5216
+  type: 'test'
+  ...
+# Subtest: auto-expiry and unmount do not restore focus, only explicit close does
+ok 141 - auto-expiry and unmount do not restore focus, only explicit close does
+  ---
+  duration_ms: 1.09
+  type: 'test'
+  ...
+# Subtest: temporary disconnect retains typed draft and idempotency key, blocks send, and resumes after verification
+ok 142 - temporary disconnect retains typed draft and idempotency key, blocks send, and resumes after verification
+  ---
+  duration_ms: 123.1497
+  type: 'test'
+  ...
+# Subtest: local attachments survive suspension; copied message edit content does not
+ok 143 - local attachments survive suspension; copied message edit content does not
+  ---
+  duration_ms: 65.8642
+  type: 'test'
+  ...
+# Subtest: Composer is a stable sibling outside the permission-gated message subtree and is hidden while suspended
+ok 144 - Composer is a stable sibling outside the permission-gated message subtree and is hidden while suspended
+  ---
+  duration_ms: 1.5857
+  type: 'test'
+  ...
+# Subtest: microphone permission resolving after suspension stops tracks and cannot start hidden recording
+ok 145 - microphone permission resolving after suspension stops tracks and cannot start hidden recording
+  ---
+  duration_ms: 25.3301
+  type: 'test'
+  ...
+# Subtest: first-run requires local capability, same origin, confirmation, and single empty-store claim
+ok 146 - first-run requires local capability, same origin, confirmation, and single empty-store claim
+  ---
+  duration_ms: 431.9859
+  type: 'test'
+  ...
+# Subtest: normal startup and expired bootstrap cannot claim an empty database
+ok 147 - normal startup and expired bootstrap cannot claim an empty database
+  ---
+  duration_ms: 167.1375
+  type: 'test'
+  ...
+# Subtest: one Hebrew account name is both the display identity and login; obsolete alias fields are rejected
+ok 148 - one Hebrew account name is both the display identity and login; obsolete alias fields are rejected
+  ---
+  duration_ms: 449.3845
+  type: 'test'
+  ...
+# Subtest: child creation is parent-only, CSRF protected, unique, and grants no groups
+ok 149 - child creation is parent-only, CSRF protected, unique, and grants no groups
+  ---
+  duration_ms: 235.7883
+  type: 'test'
+  ...
+# Subtest: own and child password confirmation reject mismatch and reset revokes sessions
+ok 150 - own and child password confirmation reject mismatch and reset revokes sessions
+  ---
+  duration_ms: 344.6316
+  type: 'test'
+  ...
+# Subtest: prompt preserves buffered Unicode lines and never echoes supplied secrets
+ok 151 - prompt preserves buffered Unicode lines and never echoes supplied secrets
+  ---
+  duration_ms: 488.9402
+  type: 'test'
+  ...
+# Subtest: terminal multiline paste never echoes later secret lines before their prompt
+ok 152 - terminal multiline paste never echoes later secret lines before their prompt
+  ---
+  duration_ms: 4.2167
+  type: 'test'
+  ...
+# Subtest: first parent can choose a four-character code, not fewer; no default credential is generated
+ok 153 - first parent can choose a four-character code, not fewer; no default credential is generated
+  ---
+  duration_ms: 169.9916
+  type: 'test'
+  ...
+# Subtest: parent filter intersects persisted child-ID grants with parent groups without altering inputs
+ok 154 - parent filter intersects persisted child-ID grants with parent groups without altering inputs
+  ---
+  duration_ms: 2.8369
+  type: 'test'
+  ...
+# Subtest: loading, reconnect, stale grants, removed child and no selection fail closed; all mode stays unchanged
+ok 155 - loading, reconnect, stale grants, removed child and no selection fail closed; all mode stays unchanged
+  ---
+  duration_ms: 0.2776
+  type: 'test'
+  ...
+# Subtest: grant revocation immediately excludes the selected conversation, not just its list row
+ok 156 - grant revocation immediately excludes the selected conversation, not just its list row
+  ---
+  duration_ms: 0.1942
+  type: 'test'
+  ...
+# Subtest: filter controls expose the unified account name, blank stale selection, and accurate parent identity explanation
+ok 157 - filter controls expose the unified account name, blank stale selection, and accurate parent identity explanation
+  ---
+  duration_ms: 9.5186
+  type: 'test'
+  ...
+# Subtest: all-mode copy describes synced groups and private chats without expanding child access
+ok 158 - all-mode copy describes synced groups and private chats without expanding child access
+  ---
+  duration_ms: 1.1598
+  type: 'test'
+  ...
+# Subtest: normalized group search has explicit empty results and does not mutate the source or grants
+ok 159 - normalized group search has explicit empty results and does not mutate the source or grants
+  ---
+  duration_ms: 0.5098
+  type: 'test'
+  ...
+# Subtest: unavailable-content fallback stays closed and never invites accidental child access
+ok 160 - unavailable-content fallback stays closed and never invites accidental child access
+  ---
+  duration_ms: 2.0705
+  type: 'test'
+  ...
+# Subtest: failed permission verification suspends content and exposes retry without implying revoked approval
+ok 161 - failed permission verification suspends content and exposes retry without implying revoked approval
+  ---
+  duration_ms: 2.4342
+  type: 'test'
+  ...
+# Subtest: chat wiring invalidates asynchronous responses and uses filtered groups for the active conversation
+ok 162 - chat wiring invalidates asynchronous responses and uses filtered groups for the active conversation
+  ---
+  duration_ms: 1.869
+  type: 'test'
+  ...
+# Subtest: async snapshots reject late grants after newer revocation, disconnect and cleanup
+ok 163 - async snapshots reject late grants after newer revocation, disconnect and cleanup
+  ---
+  duration_ms: 0.8199
+  type: 'test'
+  ...
+# Subtest: message-only refreshes preserve verified selection/draft lifetime; permission events fail closed
+ok 164 - message-only refreshes preserve verified selection/draft lifetime; permission events fail closed
+  ---
+  duration_ms: 1.7287
+  type: 'test'
+  ...
+# Subtest: parent opens, reads, sends and repeats in known same-family groups without granting any child access
+ok 165 - parent opens, reads, sends and repeats in known same-family groups without granting any child access
+  ---
+  duration_ms: 583.9192
+  type: 'test'
+  ...
+# Subtest: media, direct actions and settings remain scoped; unknown and foreign-only groups never ingest or download
+ok 166 - media, direct actions and settings remain scoped; unknown and foreign-only groups never ingest or download
+  ---
+  duration_ms: 443.2505
+  type: 'test'
+  ...
+# Subtest: SSE grants parent known ungranted group updates, never leaks them to children or across families
+ok 167 - SSE grants parent known ungranted group updates, never leaks them to children or across families
+  ---
+  duration_ms: 253.7949
+  type: 'test'
+  ...
+# Subtest: catalog startup initializes missing keys without changing existing ciphertext keys or granting children
+ok 168 - catalog startup initializes missing keys without changing existing ciphertext keys or granting children
+  ---
+  duration_ms: 320.2322
+  type: 'test'
+  ...
+# Subtest: final child revocation preserves parent media and in-flight ingestion; membership removal purges and invalidates old generation
+ok 169 - final child revocation preserves parent media and in-flight ingestion; membership removal purges and invalidates old generation
+  ---
+  duration_ms: 290.5028
+  type: 'test'
+  ...
+# Subtest: a delayed send acknowledgement cannot resurrect content after group removal and re-add
+ok 170 - a delayed send acknowledgement cannot resurrect content after group removal and re-add
+  ---
+  duration_ms: 265.8361
+  type: 'test'
+  ...
+# Subtest: child grant revoked during async send ingestion cannot disclose a response retained for parent
+ok 171 - child grant revoked during async send ingestion cannot disclose a response retained for parent
+  ---
+  duration_ms: 281.4767
+  type: 'test'
+  ...
+# Subtest: successful mutation stays stale until the newest overview confirms state
+ok 172 - successful mutation stays stale until the newest overview confirms state
+  ---
+  duration_ms: 82.5799
+  type: 'test'
+  ...
+# Subtest: lost-response mutation stays stale until the newest overview confirms state
+ok 173 - lost-response mutation stays stale until the newest overview confirms state
+  ---
+  duration_ms: 18.3748
+  type: 'test'
+  ...
+# Subtest: Windows native private key reader and app config use ACLs rather than POSIX mode
+ok 174 - Windows native private key reader and app config use ACLs rather than POSIX mode
+  ---
+  duration_ms: 775.4595
+  type: 'test'
+  ...
+# Subtest: Windows capability keeps administrator-owner requirement and missing-file semantics
+ok 175 - Windows capability keeps administrator-owner requirement and missing-file semantics
+  ---
+  duration_ms: 480.3763
+  type: 'test'
+  ...
+# Subtest: Windows native data lease excludes a second process and releases normally
+ok 176 - Windows native data lease excludes a second process and releases normally
+  ---
+  duration_ms: 732.3997
+  type: 'test'
+  ...
+# Subtest: missing Windows helper fails closed without falling back to chmod
+ok 177 - missing Windows helper fails closed without falling back to chmod
+  ---
+  duration_ms: 1.2084
+  type: 'test'
+  ...
+# Subtest: abrupt Node parent death closes the native helper lifetime pipe and releases its lease
+ok 178 - abrupt Node parent death closes the native helper lifetime pipe and releases its lease
+  ---
+  duration_ms: 1041.4691
+  type: 'test'
+  ...
+# Subtest: helper crash retains the exclusive native lease in its still-living Node owner
+ok 179 - helper crash retains the exclusive native lease in its still-living Node owner
+  ---
+  duration_ms: 1240.5982
+  type: 'test'
+  ...
+# Subtest: actual mock app starts without development tools on PATH, excludes another writer and stops through private IPC
+ok 180 - actual mock app starts without development tools on PATH, excludes another writer and stops through private IPC
+  ---
+  duration_ms: 9378.7004
+  type: 'test'
+  ...
+# Subtest: parent opens, reads, sends and repeats in known same-family direct conversations without granting any child access
+ok 181 - parent opens, reads, sends and repeats in known same-family direct conversations without granting any child access
+  ---
+  duration_ms: 589.8996
+  type: 'test'
+  ...
+# Subtest: direct conversations survive group-only catalog refresh but never cross family boundaries
+ok 182 - direct conversations survive group-only catalog refresh but never cross family boundaries
+  ---
+  duration_ms: 269.6426
+  type: 'test'
+  ...
+# Subtest: media, direct actions and settings remain scoped; unknown and foreign-only groups never ingest or download
+ok 183 - media, direct actions and settings remain scoped; unknown and foreign-only groups never ingest or download
+  ---
+  duration_ms: 473.5485
+  type: 'test'
+  ...
+# Subtest: SSE grants parent known ungranted group updates, never leaks them to children or across families
+ok 184 - SSE grants parent known ungranted group updates, never leaks them to children or across families
+  ---
+  duration_ms: 250.5811
+  type: 'test'
+  ...
+# Subtest: verified membership refresh purges departed known groups without deleting direct conversations
+ok 185 - verified membership refresh purges departed known groups without deleting direct conversations
+  ---
+  duration_ms: 280.2254
+  type: 'test'
+  ...
+# Subtest: repeated parent grant actions are idempotent and preserve selections hidden by group filtering
+ok 186 - repeated parent grant actions are idempotent and preserve selections hidden by group filtering
+  ---
+  duration_ms: 558.0572
+  type: 'test'
+  ...
+# Subtest: intentional disconnect commits local revocation before provider wait, retains chats, blocks stale hooks and reboot reconnect
+ok 187 - intentional disconnect commits local revocation before provider wait, retains chats, blocks stale hooks and reboot reconnect
+  ---
+  duration_ms: 355.0308
+  type: 'test'
+  ...
+# Subtest: in-flight provider media cannot persist after a retaining disconnect
+ok 188 - in-flight provider media cannot persist after a retaining disconnect
+  ---
+  duration_ms: 306.7208
+  type: 'test'
+  ...
+# Subtest: separately requested history deletion completes locally before unlink network wait and reports its outcome
+ok 189 - separately requested history deletion completes locally before unlink network wait and reports its outcome
+  ---
+  duration_ms: 386.4931
+  type: 'test'
+  ...
+# Subtest: a group refresh finishing after retaining disconnect cannot revoke grants or history
+ok 190 - a group refresh finishing after retaining disconnect cannot revoke grants or history
+  ---
+  duration_ms: 316.5631
+  type: 'test'
+  ...
+# Subtest: persisted incomplete deletion blocks reconnect until explicit deletion is completed
+ok 191 - persisted incomplete deletion blocks reconnect until explicit deletion is completed
+  ---
+  duration_ms: 355.5038
+  type: 'test'
+  ...
+# Subtest: authentication, separate roles, secure headers and CSRF
+ok 192 - authentication, separate roles, secure headers and CSRF
+  ---
+  duration_ms: 310.8733
+  type: 'test'
+  ...
+# Subtest: login uses salted passwords, expiring HttpOnly sessions and throttles
+ok 193 - login uses salted passwords, expiring HttpOnly sessions and throttles
+  ---
+  duration_ms: 735.561
+  type: 'test'
+  ...
+# Subtest: family isolation with identical group/message/media IDs, all direct actions scoped
+ok 194 - family isolation with identical group/message/media IDs, all direct actions scoped
+  ---
+  duration_ms: 449.3902
+  type: 'test'
+  ...
+# Subtest: filter unknown groups BEFORE media download and storage; external quote content removed
+ok 195 - filter unknown groups BEFORE media download and storage; external quote content removed
+  ---
+  duration_ms: 338.5657
+  type: 'test'
+  ...
+# Subtest: send, idempotency, scoped replies, real media bytes, edit, delete and reactions
+ok 196 - send, idempotency, scoped replies, real media bytes, edit, delete and reactions
+  ---
+  duration_ms: 441.1707
+  type: 'test'
+  ...
+# Subtest: multipart upload is sniffed, authorized, bounded, converted voice and persists media
+ok 197 - multipart upload is sniffed, authorized, bounded, converted voice and persists media
+  ---
+  duration_ms: 613.4897
+  type: 'test'
+  ...
+# Subtest: membership removal purges messages, media and active key; in-flight download cannot resurrect
+ok 198 - membership removal purges messages, media and active key; in-flight download cannot resurrect
+  ---
+  duration_ms: 322.4263
+  type: 'test'
+  ...
+# Subtest: one child revocation preserves another child grant within the same family
+ok 199 - one child revocation preserves another child grant within the same family
+  ---
+  duration_ms: 320.731
+  type: 'test'
+  ...
+# Subtest: pagination stable on identical timestamps, search and cross-group reply protections
+ok 200 - pagination stable on identical timestamps, search and cross-group reply protections
+  ---
+  duration_ms: 594.6946
+  type: 'test'
+  ...
+# Subtest: SSE reauthorizes per family/group and closes on session revocation
+ok 201 - SSE reauthorizes per family/group and closes on session revocation
+  ---
+  duration_ms: 301.3186
+  type: 'test'
+  ...
+# Subtest: ciphertext storage survives restart, auth is encrypted and disconnect purge scoped
+ok 202 - ciphertext storage survives restart, auth is encrypted and disconnect purge scoped
+  ---
+  duration_ms: 356.1897
+  type: 'test'
+  ...
+# Subtest: parent-controlled sender signature is enforced on server, isolated, and retained on edits
+ok 203 - parent-controlled sender signature is enforced on server, isolated, and retained on edits
+  ---
+  duration_ms: 383.8742
+  type: 'test'
+  ...
+# Subtest: terminal pairing state survives service restart, clears invalid auth and stops auto boot
+ok 204 - terminal pairing state survives service restart, clears invalid auth and stops auto boot
+  ---
+  duration_ms: 311.7734
+  type: 'test'
+  ...
+# Subtest: missing connector receipts stay unknown and an out-of-order pending echo cannot regress read
+ok 205 - missing connector receipts stay unknown and an out-of-order pending echo cannot regress read
+  ---
+  duration_ms: 325.2676
+  type: 'test'
+  ...
+# Subtest: four-character codes work across child creation, child reset and own password change
+ok 206 - four-character codes work across child creation, child reset and own password change
+  ---
+  duration_ms: 760.5189
+  type: 'test'
+  ...
+# Subtest: login guessing budget follows the account across IPs and does not lock the family NAT
+ok 207 - login guessing budget follows the account across IPs and does not lock the family NAT
+  ---
+  duration_ms: 786.5796
+  type: 'test'
+  ...
+# Subtest: credential throttle is durable, bounded, expires, and does not reset the network budget on success
+ok 208 - credential throttle is durable, bounded, expires, and does not reset the network budget on success
+  ---
+  duration_ms: 678.2321
+  type: 'test'
+  ...
+# Subtest: short code hashing preserves salted scrypt format and rejects fewer than four characters
+ok 209 - short code hashing preserves salted scrypt format and rejects fewer than four characters
+  ---
+  duration_ms: 176.0345
+  type: 'test'
+  ...
+# Subtest: password re-verification shares account budget and explicit child reset restores access
+ok 210 - password re-verification shares account budget and explicit child reset restores access
+  ---
+  duration_ms: 808.8923
+  type: 'test'
+  ...
+# Subtest: open authenticated SSE drains before HTTP shutdown and immediately permits a backup
+ok 211 - open authenticated SSE drains before HTTP shutdown and immediately permits a backup # SKIP Requires the Linux backup adapter; native Windows backup acceptance remains blocked
+  ---
+  duration_ms: 1.0866
+  type: 'test'
+  ...
+# Subtest: shutdown rejects SSE reconnects while preClose is running
+ok 212 - shutdown rejects SSE reconnects while preClose is running
+  ---
+  duration_ms: 711.8165
+  type: 'test'
+  ...
+# Subtest: already-ended backpressured SSE transport remains reachable during shutdown
+ok 213 - already-ended backpressured SSE transport remains reachable during shutdown
+  ---
+  duration_ms: 408.3856
+  type: 'test'
+  ...
+# Subtest: actual protobuf null defaults cannot misclassify static/animated stickers or other media as empty text
+ok 214 - actual protobuf null defaults cannot misclassify static/animated stickers or other media as empty text
+  ---
+  duration_ms: 6.7225
+  type: 'test'
+  ...
+# Subtest: sanitized directPath-only sticker uses supported lower-level transport after source validation
+ok 215 - sanitized directPath-only sticker uses supported lower-level transport after source validation
+  ---
+  duration_ms: 6.0095
+  type: 'test'
+  ...
+# Subtest: incoming static and animated WebP are encrypted, served inline as WebP, and family-scoped
+ok 216 - incoming static and animated WebP are encrypted, served inline as WebP, and family-scoped
+  ---
+  duration_ms: 613.5424
+  type: 'test'
+  ...
+# Subtest: download failure or legacy empty text can be repaired on permitted same-ID redelivery without duplicating usable media
+ok 217 - download failure or legacy empty text can be repaired on permitted same-ID redelivery without duplicating usable media
+  ---
+  duration_ms: 307.6507
+  type: 'test'
+  ...
+# Subtest: unsupported sticker bytes stay an explicit explanation and are not stored as media
+ok 218 - unsupported sticker bytes stay an explicit explanation and are not stored as media
+  ---
+  duration_ms: 299.2986
+  type: 'test'
+  ...
+# Subtest: sticker download and repair cannot cross removed or replaced group retention epochs
+ok 219 - sticker download and repair cannot cross removed or replaced group retention epochs
+  ---
+  duration_ms: 308.8382
+  type: 'test'
+  ...
+# Subtest: mode control requires designated parent, session, CSRF and strict mode-only input
+ok 220 - mode control requires designated parent, session, CSRF and strict mode-only input
+  ---
+  duration_ms: 697.6239
+  type: 'test'
+  ...
+# Subtest: old worker, disabled root gate and stale status cannot be used to enable UI mode control
+ok 221 - old worker, disabled root gate and stale status cannot be used to enable UI mode control
+  ---
+  duration_ms: 364.4459
+  type: 'test'
+  ...
+# Subtest: queued and root-journal pending requests never optimistically change applied mode or overwrite requests
+ok 222 - queued and root-journal pending requests never optimistically change applied mode or overwrite requests
+  ---
+  duration_ms: 404.7859
+  type: 'test'
+  ...
+# Subtest: root rejection is visible and a fresh request can be queued without changing effective mode
+ok 223 - root rejection is visible and a fresh request can be queued without changing effective mode
+  ---
+  duration_ms: 360.5501
+  type: 'test'
+  ...
+# Subtest: request publication is complete/private and wakes without overwriting a competing request
+ok 224 - request publication is complete/private and wakes without overwriting a competing request
+  ---
+  duration_ms: 478.6583
+  type: 'test'
+  ...
+# Subtest: queue collision preserves a symlink target and cleans temporary files
+ok 225 - queue collision preserves a symlink target and cleans temporary files # SKIP File symlink creation requires unapproved Windows privilege; Linux symlink and native junction guards remain required
+  ---
+  duration_ms: 0.2589
+  type: 'test'
+  ...
+# Subtest: root request journal exposes only actual stages and prevents concurrent submissions while running
+ok 226 - root request journal exposes only actual stages and prevents concurrent submissions while running
+  ---
+  duration_ms: 376.5272
+  type: 'test'
+  ...
+# Subtest: wake-link ENOSPC cannot report failure after an install request was published
+ok 227 - wake-link ENOSPC cannot report failure after an install request was published
+  ---
+  duration_ms: 345.1057
+  type: 'test'
+  ...
+# Subtest: expired authenticated work is visible as a matching terminal failure, not success or continuing work
+ok 228 - expired authenticated work is visible as a matching terminal failure, not success or continuing work
+  ---
+  duration_ms: 354.8692
+  type: 'test'
+  ...
+# Subtest: queued install is not represented as started, and old success cannot acknowledge a new request
+ok 229 - queued install is not represented as started, and old success cannot acknowledge a new request
+  ---
+  duration_ms: 3.0422
+  type: 'test'
+  ...
+# Subtest: each worker stage is reported as real running work, never as an invented percentage
+ok 230 - each worker stage is reported as real running work, never as an invented percentage
+  ---
+  duration_ms: 48.3594
+  type: 'test'
+  ...
+# Subtest: terminal results distinguish check-only availability, verified installation, and rollback failure
+ok 231 - terminal results distinguish check-only availability, verified installation, and rollback failure
+  ---
+  duration_ms: 0.4365
+  type: 'test'
+  ...
+# Subtest: queue and journal publication race retains identity through fast completion and older-worker uncertainty
+ok 232 - queue and journal publication race retains identity through fast completion and older-worker uncertainty
+  ---
+  duration_ms: 0.3981
+  type: 'test'
+  ...
+# Subtest: unrelated automatic phases never acknowledge an in-flight or uncertain local request
+ok 233 - unrelated automatic phases never acknowledge an in-flight or uncertain local request
+  ---
+  duration_ms: 0.7102
+  type: 'test'
+  ...
+# Subtest: acknowledgement requires the relevant action and exact ID after observing a queue
+ok 234 - acknowledgement requires the relevant action and exact ID after observing a queue
+  ---
+  duration_ms: 0.2908
+  type: 'test'
+  ...
+# Subtest: reconnect preserves the last worker stage and disables repeat actions without claiming update failure
+ok 235 - reconnect preserves the last worker stage and disables repeat actions without claiming update failure
+  ---
+  duration_ms: 1.2347
+  type: 'test'
+  ...
+# Subtest: mode requests preserve applied mode and legacy missing acknowledgements never invent completion
+ok 236 - mode requests preserve applied mode and legacy missing acknowledgements never invent completion
+  ---
+  duration_ms: 0.2822
+  type: 'test'
+  ...
+# Subtest: polling serializes refreshes, backs off disconnected reads, then resumes and stops cleanly
+ok 237 - polling serializes refreshes, backs off disconnected reads, then resumes and stops cleanly
+  ---
+  duration_ms: 30.7356
+  type: 'test'
+  ...
+# Subtest: hung status reads time out and reconnect without publishing a fabricated terminal outcome
+ok 238 - hung status reads time out and reconnect without publishing a fabricated terminal outcome
+  ---
+  duration_ms: 1.3885
+  type: 'test'
+  ...
+# Subtest: mutation transport sends one CSRF-protected request and separates rejection from uncertain disconnect
+ok 239 - mutation transport sends one CSRF-protected request and separates rejection from uncertain disconnect
+  ---
+  duration_ms: 36.6538
+  type: 'test'
+  ...
+# Subtest: status transport distinguishes 401/403 access loss from retryable 503 and network loss
+ok 240 - status transport distinguishes 401/403 access loss from retryable 503 and network loss
+  ---
+  duration_ms: 1.3108
+  type: 'test'
+  ...
+# Subtest: repair-required states override stale running journals and queues and never offer a blind retry
+ok 241 - repair-required states override stale running journals and queues and never offer a blind retry
+  ---
+  duration_ms: 0.358
+  type: 'test'
+  ...
+# Subtest: reopening uses reported worker state, while stale success and unknown phases are not current success
+ok 242 - reopening uses reported worker state, while stale success and unknown phases are not current success
+  ---
+  duration_ms: 1.428
+  type: 'test'
+  ...
+# Subtest: unrecognized or malformed status cannot replace the last real report with invented progress
+ok 243 - unrecognized or malformed status cannot replace the last real report with invented progress
+  ---
+  duration_ms: 1.5211
+  type: 'test'
+  ...
+# Subtest: actual panel hides recovery mutations including already-open confirmations and preserves repair state on reopen
+ok 244 - actual panel hides recovery mutations including already-open confirmations and preserves repair state on reopen
+  ---
+  duration_ms: 229.8509
+  type: 'test'
+  ...
+# Subtest: actual panel treats an unavailable current status as unknown even when last report was healthy
+ok 245 - actual panel treats an unavailable current status as unknown even when last report was healthy
+  ---
+  duration_ms: 42.5132
+  type: 'test'
+  ...
+# Subtest: fresh panel without an app status reports unavailable rather than claiming a reachable recovery console
+ok 246 - fresh panel without an app status reports unavailable rather than claiming a reachable recovery console
+  ---
+  duration_ms: 43.7963
+  type: 'test'
+  ...
+# Subtest: only a valid available root target enables install, including older-root and failed/recovery status
+ok 247 - only a valid available root target enables install, including older-root and failed/recovery status
+  ---
+  duration_ms: 42.6789
+  type: 'test'
+  ...
+# Subtest: install transport refuses an absent target and explains a definitive stale-target rejection without retrying
+ok 248 - install transport refuses an absent target and explains a definitive stale-target rejection without retrying
+  ---
+  duration_ms: 1.1408
+  type: 'test'
+  ...
+# Subtest: queued and restarted progress retain requested X rather than newer available Y
+ok 249 - queued and restarted progress retain requested X rather than newer available Y
+  ---
+  duration_ms: 0.4705
+  type: 'test'
+  ...
+# Subtest: actual confirmation snapshots X; refresh to Y or changed bytes invalidates consent without silently installing Y
+ok 250 - actual confirmation snapshots X; refresh to Y or changed bytes invalidates consent without silently installing Y
+  ---
+  duration_ms: 82.2346
+  type: 'test'
+  ...
+# Subtest: actual panel sends one target-bound request on repeated clicks, and closing or reopening never retries it
+ok 251 - actual panel sends one target-bound request on repeated clicks, and closing or reopening never retries it
+  ---
+  duration_ms: 72.5146
+  type: 'test'
+  ...
+# Subtest: browser closure during target-bound POST causes no retry; unsubmitted confirmation is discarded on reopen
+ok 252 - browser closure during target-bound POST causes no retry; unsubmitted confirmation is discarded on reopen
+  ---
+  duration_ms: 73.4747
+  type: 'test'
+  ...
+# Subtest: definite pending response follows the actual competing Y request instead of pretending X was accepted
+ok 253 - definite pending response follows the actual competing Y request instead of pretending X was accepted
+  ---
+  duration_ms: 29.6682
+  type: 'test'
+  ...
+# Subtest: app check timestamp does not claim to be the background transport check time
+ok 254 - app check timestamp does not claim to be the background transport check time
+  ---
+  duration_ms: 0.6685
+  type: 'test'
+  ...
+# Subtest: recovery phases reject every queued action while leaving sanitized status readable
+ok 255 - recovery phases reject every queued action while leaving sanitized status readable
+  ---
+  duration_ms: 80.7917
+  type: 'test'
+  ...
+# Subtest: recovery refusal preserves an existing queue and wins over pending acknowledgement
+ok 256 - recovery refusal preserves an existing queue and wins over pending acknowledgement
+  ---
+  duration_ms: 19.9085
+  type: 'test'
+  ...
+# Subtest: HTTP recovery POSTs are conflict responses, GET is available, and normal terminal work remains queueable
+ok 257 - HTTP recovery POSTs are conflict responses, GET is available, and normal terminal work remains queueable
+  ---
+  duration_ms: 431.1079
+  type: 'test'
+  ...
+# Subtest: HTTP install echoes the displayed root identity in a private atomic queue and repeated clicks preserve it
+ok 258 - HTTP install echoes the displayed root identity in a private atomic queue and repeated clicks preserve it
+  ---
+  duration_ms: 605.507
+  type: 'test'
+  ...
+# Subtest: GET-to-POST release and same-version asset races fail closed without queue or wake mutation
+ok 259 - GET-to-POST release and same-version asset races fail closed without queue or wake mutation
+  ---
+  duration_ms: 210.7661
+  type: 'test'
+  ...
+# Subtest: lost install response followed by reload and duplicate request retains the one durable target and request ID
+ok 260 - lost install response followed by reload and duplicate request retains the one durable target and request ID
+  ---
+  duration_ms: 231.0229
+  type: 'test'
+  ...
+# Subtest: older status and invalid root target remain readable but cannot silently queue an unbound install
+ok 261 - older status and invalid root target remain readable but cannot silently queue an unbound install
+  ---
+  duration_ms: 293.1067
+  type: 'test'
+  ...
+# Subtest: root target and journal expose only opaque identity, while unknown request keys are rejected
+ok 262 - root target and journal expose only opaque identity, while unknown request keys are rejected
+  ---
+  duration_ms: 211.784
+  type: 'test'
+  ...
+# Subtest: failed target capability needs a fresh check and recovery barriers dominate even a matching target
+ok 263 - failed target capability needs a fresh check and recovery barriers dominate even a matching target
+  ---
+  duration_ms: 287.8962
+  type: 'test'
+  ...
+# Subtest: time badge formats minutes/seconds, longer allowances and zero without negative time
+ok 264 - time badge formats minutes/seconds, longer allowances and zero without negative time
+  ---
+  duration_ms: 1.5397
+  type: 'test'
+  ...
+# Subtest: badge countdown freezes on pause, resumes without charging pause time and reconciles server bonuses
+ok 265 - badge countdown freezes on pause, resumes without charging pause time and reconciles server bonuses
+  ---
+  duration_ms: 0.3267
+  type: 'test'
+  ...
+# Subtest: visual badge ticks are silent and warning announcements change only at thresholds
+ok 266 - visual badge ticks are silent and warning announcements change only at thresholds
+  ---
+  duration_ms: 0.636
+  type: 'test'
+  ...
+# Subtest: children start unlimited; arbitrary, zero and unlimited policies remain independent and parent-owned
+ok 267 - children start unlimited; arbitrary, zero and unlimited policies remain independent and parent-owned
+  ---
+  duration_ms: 600.921
+  type: 'test'
+  ...
+# Subtest: leases bill the union across tabs and sessions; reordered, duplicate and stale pauses cannot extend/cancel
+ok 268 - leases bill the union across tabs and sessions; reordered, duplicate and stale pauses cannot extend/cancel
+  ---
+  duration_ms: 324.0671
+  type: 'test'
+  ...
+# Subtest: untrusted elapsed fields are rejected; pause halts at server time; crash/network tail is bounded
+ok 269 - untrusted elapsed fields are rejected; pause halts at server time; crash/network tail is bounded
+  ---
+  duration_ms: 334.1674
+  type: 'test'
+  ...
+# Subtest: policy changes settle atomically; today-only bonuses are idempotent and cannot move to a different day
+ok 270 - policy changes settle atomically; today-only bonuses are idempotent and cannot move to a different day
+  ---
+  duration_ms: 311.6891
+  type: 'test'
+  ...
+# Subtest: midnight splits a lease by family timezone; DST creates 23/25-hour days and ignores browser dates
+ok 271 - midnight splits a lease by family timezone; DST creates 23/25-hour days and ignores browser dates
+  ---
+  duration_ms: 314.0892
+  type: 'test'
+  ...
+# Subtest: restart preserves ledger and bonus, settles only bounded tail, and requires a fresh lease
+ok 272 - restart preserves ledger and bonus, settles only bounded tail, and requires a fresh lease
+  ---
+  duration_ms: 347.9905
+  type: 'test'
+  ...
+# Subtest: central HTTP gate blocks content, ranges and side effects with typed 403 while recovery remains available
+ok 273 - central HTTP gate blocks content, ranges and side effects with typed 403 while recovery remains available
+  ---
+  duration_ms: 348.6446
+  type: 'test'
+  ...
+# Subtest: expiry is precise and cannot bill more than quota; bounded late heartbeat cannot revive yesterday bonus
+ok 274 - expiry is precise and cannot bill more than quota; bounded late heartbeat cannot revive yesterday bonus
+  ---
+  duration_ms: 324.1921
+  type: 'test'
+  ...
+# Subtest: schema and local recovery/package contract agree; UI preserves mounted drafts through quota suspension
+ok 275 - schema and local recovery/package contract agree; UI preserves mounted drafts through quota suspension
+  ---
+  duration_ms: 2.0148
+  type: 'test'
+  ...
+# Subtest: async photo and attachment-marker sends recheck the budget before later disclosure or side effects
+ok 276 - async photo and attachment-marker sends recheck the budget before later disclosure or side effects
+  ---
+  duration_ms: 340.673
+  type: 'test'
+  ...
+# Subtest: exhausted SSE remains available for quota controls but omits group invalidations
+ok 277 - exhausted SSE remains available for quota controls but omits group invalidations
+  ---
+  duration_ms: 288.8862
+  type: 'test'
+  ...
+# Subtest: schema-2 to 3 DDL and version bump roll back together after a synthetic failure
+ok 278 - schema-2 to 3 DDL and version bump roll back together after a synthetic failure
+  ---
+  duration_ms: 1.6798
+  type: 'test'
+  ...
+# Subtest: session cleanup settles before discarding orphan leases; graceful shutdown stops charging immediately
+ok 279 - session cleanup settles before discarding orphan leases; graceful shutdown stops charging immediately
+  ---
+  duration_ms: 291.6489
+  type: 'test'
+  ...
+# Subtest: unconfirmed families remain unlimited and unmetered until an explicit parent timezone choice
+ok 280 - unconfirmed families remain unlimited and unmetered until an explicit parent timezone choice
+  ---
+  duration_ms: 306.8961
+  type: 'test'
+  ...
+# Subtest: timezone changes extend the current period to a future target midnight without early reset or bonus replay
+ok 281 - timezone changes extend the current period to a future target midnight without early reset or bonus replay
+  ---
+  duration_ms: 340.8718
+  type: 'test'
+  ...
+# Subtest: an exhausted child cannot regain time at the old midnight while a calendar transition is pending
+ok 282 - an exhausted child cannot regain time at the old midnight while a calendar transition is pending
+  ---
+  duration_ms: 342.4374
+  type: 'test'
+  ...
+# Subtest: legacy schema-3 quota data requires a visible choice and retains usage when the parent chooses Jerusalem
+ok 283 - legacy schema-3 quota data requires a visible choice and retains usage when the parent chooses Jerusalem
+  ---
+  duration_ms: 278.0944
+  type: 'test'
+  ...
+# Subtest: schema-3 to 4 calendar DDL and version bump are atomic
+ok 284 - schema-3 to 4 calendar DDL and version bump are atomic
+  ---
+  duration_ms: 1.04
+  type: 'test'
+  ...
+# Subtest: 64 sequential remounts reuse bounded slots without relogin; retired heartbeats never recreate rows
+ok 285 - 64 sequential remounts reuse bounded slots without relogin; retired heartbeats never recreate rows
+  ---
+  duration_ms: 1693.6873
+  type: 'test'
+  ...
+# Subtest: 32 concurrent tab leases enforce capacity; pausing or expiry frees capacity without stale revival
+ok 286 - 32 concurrent tab leases enforce capacity; pausing or expiry frees capacity without stale revival
+  ---
+  duration_ms: 490.8598
+  type: 'test'
+  ...
+# Subtest: lost admissions reserve bounded slots briefly but cannot bill or grant access, including across restart
+ok 287 - lost admissions reserve bounded slots briefly but cannot bill or grant access, including across restart
+  ---
+  duration_ms: 725.8124
+  type: 'test'
+  ...
+# Subtest: schema-4 to 5 admission policy boundary advances atomically without rewriting leases
+ok 288 - schema-4 to 5 admission policy boundary advances atomically without rewriting leases
+  ---
+  duration_ms: 1.0434
+  type: 'test'
+  ...
+# Subtest: content is hidden until server reconciliation; focus/visibility pause immediately and old responses cannot reveal chats
+ok 289 - content is hidden until server reconciliation; focus/visibility pause immediately and old responses cannot reveal chats
+  ---
+  duration_ms: 101.892
+  type: 'test'
+  ...
+# Subtest: reading counts without constant input; five-minute idle requires explicit resume and never sends content
+ok 290 - reading counts without constant input; five-minute idle requires explicit resume and never sends content
+  ---
+  duration_ms: 30.9301
+  type: 'test'
+  ...
+# Subtest: offline and expired leases mask cached content; reconnect alone cannot unlock; exhausted sessions can receive extensions
+ok 291 - offline and expired leases mask cached content; reconnect alone cannot unlock; exhausted sessions can receive extensions
+  ---
+  duration_ms: 19.8848
+  type: 'test'
+  ...
+# Subtest: network error fails closed and pagehide uses higher-sequence best-effort pause
+ok 292 - network error fails closed and pagehide uses higher-sequence best-effort pause
+  ---
+  duration_ms: 16.6269
+  type: 'test'
+  ...
+# Subtest: a legacy limited session awaiting timezone choice shows parent setup rather than logging out
+ok 293 - a legacy limited session awaiting timezone choice shows parent setup rather than logging out
+  ---
+  duration_ms: 18.3571
+  type: 'test'
+  ...
+# Subtest: tab admission errors describe window capacity, retry without login and never claim offline
+ok 294 - tab admission errors describe window capacity, retry without login and never claim offline
+  ---
+  duration_ms: 23.7055
+  type: 'test'
+  ...
+# Subtest: retired identities obtain fresh server admission before resuming; late old responses cannot unlock
+ok 295 - retired identities obtain fresh server admission before resuming; late old responses cannot unlock
+  ---
+  duration_ms: 17.3173
+  type: 'test'
+  ...
+# Subtest: lost admission and unmount cannot activate or bill; hidden mounts reserve no slot
+ok 296 - lost admission and unmount cannot activate or bill; hidden mounts reserve no slot
+  ---
+  duration_ms: 33.95
+  type: 'test'
+  ...
+# Subtest: parent form captures the selected child, accepts arbitrary/zero/unlimited values and serializes clicks
+ok 297 - parent form captures the selected child, accepts arbitrary/zero/unlimited values and serializes clicks
+  ---
+  duration_ms: 161.3138
+  type: 'test'
+  ...
+# Subtest: lost bonus response retains the same child/day/idempotency key; unmount suppresses stale feedback
+ok 298 - lost bonus response retains the same child/day/idempotency key; unmount suppresses stale feedback
+  ---
+  duration_ms: 45.5803
+  type: 'test'
+  ...
+# Subtest: a confirmed retry after midnight acknowledges yesterday without claiming a new bonus today
+ok 299 - a confirmed retry after midnight acknowledges yesterday without claiming a new bonus today
+  ---
+  duration_ms: 30.4203
+  type: 'test'
+  ...
+# Subtest: parent chooses Israel from a Hebrew dropdown before enabling metering, without typing an IANA identifier
+ok 300 - parent chooses Israel from a Hebrew dropdown before enabling metering, without typing an IANA identifier
+  ---
+  duration_ms: 27.899
+  type: 'test'
+  ...
+# Subtest: switching child invalidates stale bonus handlers and late feedback without changing the recurring quota
+ok 301 - switching child invalidates stale bonus handlers and late feedback without changing the recurring quota
+  ---
+  duration_ms: 51.0452
+  type: 'test'
+  ...
+# Subtest: only actually intersecting rendered rows count; hidden/unfocused tab and hidden viewport never do
+ok 302 - only actually intersecting rendered rows count; hidden/unfocused tab and hidden viewport never do
+  ---
+  duration_ms: 2.6636
+  type: 'test'
+  ...
+# Subtest: provider receipts retain existing capability but only follow visible local acknowledgement; cancellation blocks them
+ok 303 - provider receipts retain existing capability but only follow visible local acknowledgement; cancellation blocks them
+  ---
+  duration_ms: 33.4398
+  type: 'test'
+  ...
+# Subtest: roster ordering is deterministic across server order and uses IDs to break name ties
+ok 304 - roster ordering is deterministic across server order and uses IDs to break name ties
+  ---
+  duration_ms: 19.5608
+  type: 'test'
+  ...
+# Subtest: child name is bidi isolated in mixed Hebrew copy and singular grant counts are grammatical
+ok 305 - child name is bidi isolated in mixed Hebrew copy and singular grant counts are grammatical
+  ---
+  duration_ms: 20.1086
+  type: 'test'
+  ...
+# Subtest: setup consistently labels password and ties name errors to name input
+ok 306 - setup consistently labels password and ties name errors to name input
+  ---
+  duration_ms: 2.9942
+  type: 'test'
+  ...
+# Subtest: toast has a keyboard-operable explicit dismiss button and a bounded lifetime
+ok 307 - toast has a keyboard-operable explicit dismiss button and a bounded lifetime
+  ---
+  duration_ms: 1.7881
+  type: 'test'
+  ...
+# Subtest: focus recovers from body or a disabled submitting control without stealing an external focus target
+ok 308 - focus recovers from body or a disabled submitting control without stealing an external focus target
+  ---
+  duration_ms: 0.8272
+  type: 'test'
+  ...
+# Subtest: desktop add button overrides inherited full width while mobile retains full width
+ok 309 - desktop add button overrides inherited full width while mobile retains full width
+  ---
+  duration_ms: 0.9359
+  type: 'test'
+  ...
+# Subtest: remembered selection is account scoped, reconciled with server children, and storage failure is harmless
+ok 310 - remembered selection is account scoped, reconciled with server children, and storage failure is harmless
+  ---
+  duration_ms: 0.8275
+  type: 'test'
+  ...
+# Subtest: account heading isolates and wraps long names without shrinking its close control
+ok 311 - account heading isolates and wraps long names without shrinking its close control
+  ---
+  duration_ms: 0.7182
+  type: 'test'
+  ...
+# Subtest: error notification reserves layout space rather than overlaying composer or navigation
+ok 312 - error notification reserves layout space rather than overlaying composer or navigation
+  ---
+  duration_ms: 2.0075
+  type: 'test'
+  ...
+1..312
+# tests 312
+# suites 0
+# pass 308
+# fail 0
+# cancelled 0
+# skipped 4
+# todo 0
+# duration_ms 124477.9331

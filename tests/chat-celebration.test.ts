@@ -7,7 +7,7 @@ import { ChatCelebration } from '../web/ChatCelebrationView.js';
 import {
   createCelebrationController, celebrationFlair, CELEBRATION_PARTICLES,
   CELEBRATION_DURATION_MS, CELEBRATION_COOLDOWN_MS, type CelebrationBurst,
-} from '../web/chatCelebration.js';
+} from '../web/chatCelebrationState.js';
 
 function harness() {
   let time = 0;
