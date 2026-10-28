@@ -22,7 +22,7 @@ async function fixture(expired = false, enabled = true) {
   const store = new Store(config), secret = randomBytes(32).toString('base64url');
   const { app } = await createApp(config, { store, boot: false,
     ...(enabled ? { bootstrap: { token: secret, expiresAt: Date.now() + (expired ? -1 : 60000) } } : {}) });
-  const setupBody = { name: 'Family', username: 'parent', password, confirmation: password };
+  const setupBody = { familyName: 'Family', name: 'הורה', password, confirmation: password };
   const setup = (body: any = setupBody, extra: any = {}) => app.inject({ method: 'POST', url: '/api/setup',
     headers: { origin: config.origin, 'x-setup-token': secret, ...extra }, payload: body });
   const req = (session: { sid: string; csrf: string }, url: string, body: any, extra: any = {}) => app.inject({
@@ -49,7 +49,7 @@ test('first-run requires local capability, same origin, confirmation, and single
     assert.ok(cookie?.value);
     assert.equal((await f.app.inject({ url: '/api/me', headers: { cookie: 'sid=' + cookie.value } })).statusCode, 200);
     assert.equal((await f.app.inject({ url: '/api/setup/status' })).json().state, 'complete');
-    assert.ok(await verifyPassword(password, f.store.one("SELECT password FROM users WHERE username='parent'").password));
+    assert.ok(await verifyPassword(password, f.store.one("SELECT password FROM users WHERE name='הורה'").password));
   } finally { await f.close(); }
 });
 
@@ -62,11 +62,44 @@ test('normal startup and expired bootstrap cannot claim an empty database', asyn
   }
 });
 
+test('one Hebrew account name is both the display identity and login; obsolete alias fields are rejected', async () => {
+  const f = await fixture();
+  try {
+    assert.equal((await f.setup({ name: 'Family', username: 'parent', password, confirmation: password })).statusCode, 400);
+    assert.equal((await f.setup({ ...f.setupBody, display: 'Other identity' })).statusCode, 400);
+    assert.equal(f.store.one('SELECT count(*) AS n FROM users').n, 0);
+    assert.equal((await f.setup()).statusCode, 200);
+    const parent = f.parent();
+    const login = (body: any) => f.app.inject({ method: 'POST', url: '/api/login', payload: body,
+      headers: { origin: 'http://localhost:3000' } });
+    for (const body of [{ username: 'הורה', password }, { name: 'הורה', username: 'parent', password },
+      { name: 'הורה', display: 'אני', password }]) assert.equal((await login(body)).statusCode, 400);
+    const signedIn = await login({ name: '  הורה  ', password });
+    assert.equal(signedIn.statusCode, 200);
+    const cookie = signedIn.cookies.find(cookie => cookie.name === 'sid');
+    const me = (await f.app.inject({ url: '/api/me', headers: { cookie: 'sid=' + cookie?.value } })).json().user;
+    assert.equal(me.name, 'הורה');
+    assert.deepEqual(Object.keys(me).sort(), ['familyId', 'id', 'name', 'role']);
+    assert.equal((await login({ name: 'parent', password })).statusCode, 401, 'no hidden English default login');
+    assert.equal((await login({ name: 'אני', password })).statusCode, 401, 'no hidden display-name alias');
+    const child = { name: 'עדי', password: password + ' child', confirmation: password + ' child' };
+    for (const body of [{ ...child, username: 'adi' }, { ...child, display: 'אני' },
+      { username: 'adi', display: 'עדי', password, confirmation: password }])
+      assert.equal((await f.req(parent, '/api/parent/children', body)).statusCode, 400);
+    assert.equal((await f.req(parent, '/api/parent/children', child)).statusCode, 200);
+    assert.equal((await login({ name: 'עדי', password: child.password })).statusCode, 200);
+    assert.equal((await login({ name: 'adi', password: child.password })).statusCode, 401);
+    const columns = f.store.all('PRAGMA table_info(users)').map(column => column.name);
+    assert.ok(columns.includes('name') && columns.includes('name_key'));
+    assert.ok(!columns.includes('username') && !columns.includes('display'));
+  } finally { await f.close(); }
+});
+
 test('child creation is parent-only, CSRF protected, unique, and grants no groups', async () => {
   const f = await fixture();
   try {
     await f.setup(); const parent = f.parent();
-    const body = { username: 'child', display: 'Child', password: password + ' child', confirmation: password + ' child' };
+    const body = { name: 'עדי', password: password + ' child', confirmation: password + ' child' };
     assert.equal((await f.req(parent, '/api/parent/children', body, { 'x-csrf-token': 'wrong' })).statusCode, 403);
     assert.equal((await f.req(parent, '/api/parent/children', { ...body, confirmation: '' })).statusCode, 400);
     assert.equal((await f.req(parent, '/api/parent/children', body)).statusCode, 200);
@@ -74,8 +107,8 @@ test('child creation is parent-only, CSRF protected, unique, and grants no group
     assert.equal(f.store.one('SELECT count(*) AS n FROM grants').n, 0);
     assert.ok(f.store.session(parent.sid), 'creating a child preserves the parent session');
     assert.equal((await f.app.inject({ url: '/api/me', headers: { cookie: 'sid=' + parent.sid } })).statusCode, 200);
-    const child = f.store.createSession(f.store.user(f.store.one("SELECT * FROM users WHERE username='child'")));
-    assert.equal((await f.req(child, '/api/parent/children', { ...body, username: 'sibling' })).statusCode, 403);
+    const child = f.store.createSession(f.store.user(f.store.one("SELECT * FROM users WHERE name='עדי'")));
+    assert.equal((await f.req(child, '/api/parent/children', { ...body, name: 'דנה' })).statusCode, 403);
   } finally { await f.close(); }
 });
 
@@ -83,8 +116,8 @@ test('own and child password confirmation reject mismatch and reset revokes sess
   const f = await fixture();
   try {
     await f.setup(); const parent = f.parent(), next = 'another random constellation phrase';
-    await f.req(parent, '/api/parent/children', { username: 'child', display: 'Child', password, confirmation: password });
-    const row = f.store.one("SELECT * FROM users WHERE username='child'"), child = f.store.createSession(f.store.user(row));
+    await f.req(parent, '/api/parent/children', { name: 'עדי', password, confirmation: password });
+    const row = f.store.one("SELECT * FROM users WHERE name='עדי'"), child = f.store.createSession(f.store.user(row));
     assert.equal((await f.req(parent, '/api/parent/child-password', { childId: row.id, password: next, confirmation: '' })).statusCode, 400);
     assert.ok(f.store.session(child.sid));
     assert.equal((await f.req(parent, '/api/password', { current: password, next, confirmation: '' })).statusCode, 400);

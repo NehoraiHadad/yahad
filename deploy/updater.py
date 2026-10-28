@@ -32,11 +32,54 @@ ASSETS = ('yachad-release.json', 'yachad-release.sig', 'yachad-app.zip')
 PUBLIC_REPOSITORY = 'NehoraiHadad/yahad'
 PHASES = {'stopping', 'backing_up', 'activating', 'checking_health', 'rolling_back', 'recovery_required'}
 HOSTS = {'api.github.com', 'github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com'}
+UPDATER_PROTOCOL = 2
+MAX_SCHEMA_ID = 1000000
+RELEASE_METADATA = '.release-manifest.json'
 
 
 class UpdateError(Exception):
     def __init__(self, code):
         self.code = code
+
+
+def schema_id(value):
+    if type(value) is not int or not 1 <= value <= MAX_SCHEMA_ID:
+        raise UpdateError('incompatible')
+    return value
+
+
+def manifest_contract(manifest):
+    target = schema_id(manifest.get('databaseSchema'))
+    if type(manifest.get('format')) is not int:
+        raise UpdateError('incompatible')
+    if manifest['format'] == 1:
+        # Existing releases have only the historical schema-1 contract.
+        if target != 1:
+            raise UpdateError('incompatible')
+        return target, []
+    if manifest['format'] != 2:
+        raise UpdateError('incompatible')
+    minimum = manifest.get('minimumUpdaterProtocol')
+    if type(minimum) is not int or not 1 <= minimum <= UPDATER_PROTOCOL:
+        raise UpdateError('incompatible')
+    sources = manifest.get('databaseMigrationsFrom')
+    if not isinstance(sources, list) or len(sources) > 32:
+        raise UpdateError('incompatible')
+    for source in sources:
+        if schema_id(source) >= target:
+            raise UpdateError('incompatible')
+    if len(set(sources)) != len(sources):
+        raise UpdateError('incompatible')
+    return target, sources
+
+
+def schema_transition(previous, target, sources=()):
+    # Migration code runs only as the app user. Authenticated metadata declares
+    # the supported sources; no speculative migration, downgrade or root hook.
+    schema_id(previous)
+    schema_id(target)
+    if previous != target and (previous >= target or previous not in sources):
+        raise UpdateError('incompatible')
 
 
 def version(value):
@@ -119,7 +162,8 @@ def verify_manifest(manifest_bytes, archive):
     try:
         manifest = json.loads(manifest_bytes)
         version(manifest['version'])
-        if manifest.get('format') != 1 or manifest.get('databaseSchema') != 1 or manifest.get('archive') != ASSETS[2]:
+        manifest_contract(manifest)
+        if manifest.get('archive') != ASSETS[2]:
             raise UpdateError('incompatible')
         if type(manifest.get('bytes')) is not int or not 1 <= manifest['bytes'] <= 64 * 1024 * 1024:
             raise UpdateError('archive')
@@ -280,9 +324,54 @@ class Worker:
         path = pathlib.Path(self.c['dataDirectory']) / 'app.sqlite'
         try:
             with sqlite3.connect(path.as_uri() + '?mode=ro', uri=True) as db:
-                return db.execute('SELECT version FROM schema_version').fetchone()[0]
+                rows = db.execute('SELECT version FROM schema_version').fetchall()
+                if len(rows) != 1:
+                    raise UpdateError('incompatible')
+                return schema_id(rows[0][0])
         except (sqlite3.Error, TypeError):
             raise UpdateError('incompatible') from None
+
+    def app_schema(self, release):
+        # Written by root only after authenticating the release; archive
+        # extraction rejects this dotfile, so package code cannot supply it.
+        path = pathlib.Path(release) / RELEASE_METADATA
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            return 1  # Narrow bridge for installations predating metadata.
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022 or info.st_size > 8192:
+            raise UpdateError('configuration')
+        try:
+            manifest = json.loads(path.read_bytes())
+            package = json.loads((path.parent / 'package.json').read_bytes())
+            if manifest['version'] != package['version']:
+                raise UpdateError('incompatible')
+            return manifest_contract(manifest)[0]
+        except (KeyError, ValueError, TypeError, AttributeError):
+            raise UpdateError('incompatible') from None
+
+    def backup_inventory(self):
+        # Record names/metadata only, never read application-controlled backup
+        # contents as root. A successful backup must identify one new private
+        # archive so local recovery can locate it without guessing "latest".
+        directory = pathlib.Path(self.c['backupDirectory'])
+        try:
+            if not stat.S_ISDIR(directory.lstat().st_mode):
+                raise UpdateError('backup')
+        except FileNotFoundError:
+            return set()
+        found = set()
+        for index, path in enumerate(directory.iterdir()):
+            if index >= 1000:
+                raise UpdateError('backup')
+            if not re.fullmatch(r'yachad-[0-9]{1,16}\.backup', path.name):
+                continue
+            info = path.lstat()
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != pwd.getpwnam(self.c['appUser']).pw_uid or
+                    info.st_mode & 0o077 or info.st_size < 1):
+                raise UpdateError('backup')
+            found.add(path.name)
+        return found
 
     def switch(self, target):
         root = pathlib.Path(self.c['releasesDirectory']).resolve(strict=True)
@@ -296,7 +385,10 @@ class Worker:
         temporary.replace(link)
         sync_directory(link.parent)
 
-    def health(self, expected=None):
+    def health(self, expected=None, expected_schema=None):
+        if expected_schema is None:
+            expected_schema = self.schema()
+        schema_id(expected_schema)
         deadline = time.monotonic() + self.c.get('healthTimeoutSeconds', 90)
         url = self.c['healthUrl']
         if not re.fullmatch(r'http://127\.0\.0\.1:\d{1,5}/health/ready', url):
@@ -310,7 +402,9 @@ class Worker:
                 self.command(['/usr/bin/systemctl', 'is-active', '--quiet', self.c['service']], timeout=5, code='health')
                 with opener.open(url, timeout=3) as response:
                     body = json.loads(response.read(1024))
-                if body.get('ok') is True and body.get('databaseSchema') == 1 and (expected is None or body.get('version') == expected):
+                if (body.get('ok') is True and type(body.get('databaseSchema')) is int and
+                        body['databaseSchema'] == expected_schema and self.schema() == expected_schema and
+                        (expected is None or body.get('version') == expected)):
                     return
             except (OSError, ValueError, UpdateError):
                 pass
@@ -325,9 +419,17 @@ class Worker:
             # At boot, systemd orders this unit before the application starts.
             if not boot:
                 self.command(['/usr/bin/systemctl', 'stop', self.c['service']])
-            if self.schema() != 1:
+            if self.status.get('runtimeDigest') != getattr(self, 'runtime_digest', None):
+                raise UpdateError('incompatible')
+            # Old worker journals describe schema 1. Never infer the previous
+            # app's schema from the now-migrated DB or restore a stale backup.
+            previous_schema = self.status.get('previousDatabaseSchema', 1)
+            schema_id(previous_schema)
+            if self.schema() != previous_schema:
                 raise UpdateError('incompatible')
             previous = pathlib.Path(self.status['previousPath'])
+            if self.app_schema(previous) != previous_schema:
+                raise UpdateError('incompatible')
             previous_version = json.loads((previous / 'package.json').read_bytes())['version']
             if previous_version != self.status.get('rollbackVersion', self.status.get('currentVersion')):
                 raise UpdateError('rollback')
@@ -337,7 +439,7 @@ class Worker:
                 self.save(phase='rollback_pending_health', error=self.status.get('error') or 'health')
                 return True
             self.command(['/usr/bin/systemctl', 'start', self.c['service']])
-            self.health(previous_version)
+            self.health(previous_version, expected_schema=previous_schema)
             self.save(phase='rolled_back', currentVersion=previous_version, error=self.status.get('error') or 'health')
             return True
         except Exception:
@@ -507,8 +609,11 @@ class Worker:
                 manifest = verify_manifest(content[ASSETS[0]], content[ASSETS[2]])
             if version(manifest['version']) != version(release['tag_name']):
                 raise UpdateError('incompatible')
-            if self.schema() != manifest['databaseSchema']:
+            previous_schema = self.schema()
+            if self.app_schema(current) != previous_schema:
                 raise UpdateError('incompatible')
+            target_schema, migration_sources = manifest_contract(manifest)
+            schema_transition(previous_schema, target_schema, migration_sources)
             free = shutil.disk_usage(self.c['releasesDirectory']).free
             data_bytes = sum(p.stat().st_size for p in pathlib.Path(self.c['dataDirectory']).rglob('*') if p.is_file() and not p.is_symlink())
             if free < self.c.get('minimumFreeMiB', 512) * 1048576 + data_bytes:
@@ -534,7 +639,10 @@ class Worker:
             self.save(phase='building')
             self.command([self.c['npm'], 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'],
                          user=self.c['builderUser'], cwd=build, timeout=1200, code='build')
-            self.command([self.c['node'], '--import', 'tsx', 'scripts/update-smoke.ts'], user=self.c['builderUser'], cwd=build, timeout=90, code='build')
+            smoke = [self.c['node'], '--import', 'tsx', 'scripts/update-smoke.ts']
+            if manifest['format'] == 2:
+                smoke += ['--database-schema', str(target_schema), '--database-migrations-from', json.dumps(migration_sources, separators=(',', ':'))]
+            self.command(smoke, user=self.c['builderUser'], cwd=build, timeout=90, code='build')
             destination = pathlib.Path(self.c['releasesDirectory']) / ('v' + manifest['version'])
             if destination.exists():
                 # A crashed preparation may leave an unpublished release. Preserve
@@ -548,6 +656,7 @@ class Worker:
             dependencies = self.command(['/usr/bin/python3', '/usr/local/lib/yachad-updater/export-dependencies.py', str(build)],
                                         user=self.c['builderUser'], timeout=300, code='build')
             shutil.copytree(source, destination)
+            (destination / RELEASE_METADATA).write_bytes(content[ASSETS[0]])
             extract_dependencies(dependencies, destination)
             for p in [destination, *destination.rglob('*')]:
                 if p.is_symlink():
@@ -564,19 +673,29 @@ class Worker:
                 raise UpdateError('configuration')
             # Persist the complete new tree before publishing the intent to switch.
             self.command(['/usr/bin/sync', '-f', str(destination)], timeout=120, code='storage')
-            self.save(phase='stopping', previousPath=str(current), rollbackVersion=self.status['currentVersion'], error=None)
+            self.save(phase='stopping', previousPath=str(current), rollbackVersion=self.status['currentVersion'],
+                      previousDatabaseSchema=previous_schema, targetDatabaseSchema=manifest['databaseSchema'],
+                      runtimeDigest=getattr(self, 'runtime_digest', None), backupId=None, error=None)
             self.command(['/usr/bin/systemctl', 'stop', self.c['service']])
+            if self.schema() != previous_schema:
+                raise UpdateError('incompatible')
             self.save(phase='backing_up')
+            backups_before = self.backup_inventory()
             self.command(['/usr/bin/python3', '/usr/local/lib/yachad-updater/data-lock.py', self.c['dataDirectory'],
                           self.c['node'], '--import', 'tsx', 'scripts/update-backup.ts', self.c['dataDirectory'],
                           self.c['masterKeyFile'], self.c['backupDirectory']], user=self.c['appUser'],
                          cwd=current, input=passphrase, timeout=900, code='backup')
             self.command(['/usr/bin/sync', '-f', self.c['backupDirectory']], timeout=120, code='backup')
-            self.save(phase='activating')
+            created_backups = self.backup_inventory() - backups_before
+            if len(created_backups) != 1:
+                raise UpdateError('backup')
+            if self.schema() != previous_schema:
+                raise UpdateError('incompatible')
+            self.save(phase='activating', backupId=created_backups.pop())
             self.switch(destination)
             self.command(['/usr/bin/systemctl', 'start', self.c['service']])
             self.save(phase='checking_health')
-            self.health(manifest['version'])
+            self.health(manifest['version'], expected_schema=manifest['databaseSchema'])
             self.save(phase='healthy', currentVersion=manifest['version'], failedVersion=None, error=None)
             activated = True
             self.prune_releases(destination, current)
@@ -607,7 +726,11 @@ class Worker:
             return
         if self.status.get('phase') == 'rollback_pending_health':
             try:
-                self.health(self.status.get('rollbackVersion', self.status.get('currentVersion')))
+                if self.status.get('runtimeDigest') != getattr(self, 'runtime_digest', None):
+                    self.command(['/usr/bin/systemctl', 'stop', self.c['service']])
+                    raise UpdateError('incompatible')
+                self.health(self.status.get('rollbackVersion', self.status.get('currentVersion')),
+                            expected_schema=self.status.get('previousDatabaseSchema', 1))
                 self.save(phase='rolled_back')
             except Exception:
                 self.save(phase='recovery_required', error='rollback')
@@ -639,7 +762,10 @@ class Worker:
             current_version = json.loads((current / 'package.json').read_bytes())['version']
             version(current_version)
             token = private_file(self.c['tokenFile']).decode().strip() if self.c.get('tokenFile') else None
-            self.save(phase='checking', error=None)
+            # Bind the active runtime before the first nonterminal phase, not
+            # only before downtime: interrupted downloads/builds also dispatch
+            # through the supervisor after a restart.
+            self.save(phase='checking', runtimeDigest=getattr(self, 'runtime_digest', None), error=None)
             release, assets = self.release(token)
             newest = release['tag_name'].lstrip('v')
             self.save(currentVersion=current_version, latestVersion=newest, checkedAt=int(time.time() * 1000), error=None,
@@ -690,7 +816,7 @@ def queued_stamp(config):
         return None
 
 
-def run_requests(state):
+def run_requests(state, runtime_digest=None):
     # Drain a follow-on click arriving while this service is running. Reload
     # policy after each serialized action, especially a confirmed mode change.
     # No progress means recovery/configuration needs attention, not a busy loop.
@@ -702,19 +828,62 @@ def run_requests(state):
         if before is None:
             return
         worker = Worker(config)
+        worker.runtime_digest = runtime_digest
         pending = worker.status.get('modeChangePending')
         worker.run(request_only=True)
         if queued_stamp(config) == before and worker.status.get('modeChangePending') == pending:
             return
 
 
+def parse_command(arguments):
+    args = list(arguments)
+    command = args.pop(0) if args else 'run'
+    if command not in ('run', 'requests', 'recover', 'boot-recover', 'self-check'):
+        raise UpdateError('configuration')
+    if not args:
+        return command, None, None
+    if (len(args) != 4 or args[0] != '--supervisor-lock-fd' or not re.fullmatch(r'[0-9]{1,9}', args[1]) or
+            args[2] != '--runtime-digest' or not re.fullmatch(r'[0-9a-f]{64}', args[3])):
+        raise UpdateError('configuration')
+    return command, int(args[1]), args[3]
+
+
+def supervisor_lock(fd, state, digest, command):
+    # Root supervisor retains the existing worker flock across exec. Verify the
+    # descriptor identifies that root-owned lock, never an arbitrary inherited fd.
+    path = state / 'worker.lock'
+    info, expected = os.fstat(fd), path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or not stat.S_ISREG(expected.st_mode) or
+            info.st_uid != 0 or expected.st_uid != 0 or info.st_mode & 0o077 or
+            info.st_nlink != 1 or (info.st_dev, info.st_ino) != (expected.st_dev, expected.st_ino)):
+        raise UpdateError('configuration')
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    runtime = json.loads(private_file(state / 'updater-runtime.json'))
+    records = ('active', 'candidate') if command == 'self-check' else ('active',)
+    if not any(isinstance(runtime.get(name), dict) and runtime[name].get('sha256') == digest for name in records):
+        raise UpdateError('configuration')
+    if command != 'self-check' and runtime.get('phase') != 'stable':
+        raise UpdateError('configuration')
+
+
+def self_check(worker):
+    # Explicit, read-only capability probe. Never use run(), save(), request(),
+    # package imports, service commands or release/network checks here.
+    schema = worker.schema()
+    if worker.app_schema(worker.current()) != schema:
+        raise UpdateError('incompatible')
+    return dict(supervisorProtocol=1, workerProtocol=UPDATER_PROTOCOL, helperProtocol=1,
+                configFormat=1, stateFormat=1, appManifestFormats=[1, 2], databaseSchema=schema)
+
+
 def main():
+    command, inherited_fd, runtime_digest = parse_command(sys.argv[1:])
     if os.geteuid() != 0:
         raise UpdateError('configuration')
     # Installing the boot guard before configuring updates must leave a normal
     # non-updating installation usable. Missing config is permitted only at boot.
-    boot = sys.argv[1:] == ['boot-recover']
-    request_only = sys.argv[1:] == ['requests']
+    boot = command == 'boot-recover'
+    request_only = command == 'requests'
     if boot and not CONFIG.exists():
         return
     config = load_config()
@@ -722,7 +891,12 @@ def main():
     st = state.lstat()
     if not stat.S_ISDIR(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o022:
         raise UpdateError('configuration')
-    with (state / 'worker.lock').open('a') as lock:
+    if command == 'self-check' and inherited_fd is None:
+        print(json.dumps(self_check(Worker(config)), separators=(',', ':')))
+        return
+    if inherited_fd is not None:
+        supervisor_lock(inherited_fd, state, runtime_digest, command)
+    with (os.fdopen(inherited_fd, 'a') if inherited_fd is not None else (state / 'worker.lock').open('a')) as lock:
         try:
             # Keep an event wake-up queued behind an already-running worker.
             # The service timeout bounds waiting; timer remains a fallback.
@@ -732,13 +906,16 @@ def main():
                 raise UpdateError('configuration') from None
             return
         if request_only:
-            run_requests(state)
+            run_requests(state, runtime_digest)
             return
         config = load_config()
         if pathlib.Path(config['stateDirectory']) != state:
             raise UpdateError('configuration')
         worker = Worker(config)
-        if sys.argv[1:] in (['recover'], ['boot-recover']):
+        worker.runtime_digest = runtime_digest
+        if command == 'self-check':
+            print(json.dumps(self_check(worker), separators=(',', ':')))
+        elif command in ('recover', 'boot-recover'):
             worker.finish_request('failed', 'internal')
             if not worker.recover(boot=boot):
                 raise UpdateError('rollback')

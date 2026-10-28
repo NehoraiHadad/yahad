@@ -2001,7 +2001,9 @@ a {
     font-size: 9px;
   }
   .child-login-details {
-    display: none;
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
   }
   .login-art {
     padding: 40px 30px;

@@ -32,8 +32,8 @@ try {
   if (store.one('SELECT 1 FROM families')) throw new Error('Demo needs an empty data directory');
   const family = await store.createFamily(
     'משפחת דוגמה',
-    { username: 'parent', password: process.env.DEMO_PARENT_PASSWORD },
-    { username: 'child', password: process.env.DEMO_CHILD_PASSWORD },
+    { name: 'הורה לדוגמה', password: process.env.DEMO_PARENT_PASSWORD },
+    { name: 'ילד לדוגמה', password: process.env.DEMO_CHILD_PASSWORD },
   );
   const service = new ChatService(store);
   await service.connect(family.familyId);
@@ -47,7 +47,7 @@ try {
       { mode: 0o600 },
     );
   console.log(
-    'Synthetic demo ready. Usernames: parent / child. Use the locally supplied passwords.',
+    'Synthetic demo ready. Account names for display and sign-in: הורה לדוגמה / ילד לדוגמה. Use the locally supplied passwords.',
   );
 } finally {
   store.close();

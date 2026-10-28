@@ -221,8 +221,8 @@ test('authenticated encrypted backup + restore of SQLite, encrypted media and WA
   try {
     const f = await store.createFamily(
       'Backup test',
-      { username: 'p', password },
-      { username: 'c', password: password + 'c' },
+      { name: 'p', password },
+      { name: 'c', password: password + 'c' },
     );
     store.syncGroups(f.familyId, [{ id: '1@g.us', title: 'Test' }]);
     store.grant(f.familyId, f.childId, '1@g.us', true);
@@ -380,8 +380,8 @@ test('documented setup CLI creates real separate accounts and a protected random
   const childPassword = randomBytes(24).toString('base64url');
   const prompts = [
     ['Family label (local only): ', 'Synthetic setup'],
-    ['Parent username (unique): ', 'setup-parent'],
-    ['Child username (unique): ', 'setup-child'],
+    ['Parent name (also used to sign in): ', 'הורה לבדיקה'],
+    ['Child name (also used to sign in): ', 'עדי לבדיקה'],
     ['Parent password, 14+ characters: ', parentPassword],
     ['Child passphrase, 14+ characters: ', childPassword],
     ['Confirm parent password: ', parentPassword],
@@ -428,9 +428,13 @@ test('documented setup CLI creates real separate accounts and a protected random
       join(directory, 'data', 'app.sqlite'),
     );
     assert.equal((db.prepare('SELECT count(*) AS n FROM users').get() as any).n, 2);
-    const rows = db.prepare('SELECT role,password FROM users').all() as any[];
+    const rows = db.prepare('SELECT role,name,name_key,password FROM users').all() as any[];
     assert.notEqual(rows[0].password, rows[1].password);
     assert.deepEqual(new Set(rows.map((r) => r.role)), new Set(['parent', 'child']));
+    assert.deepEqual(new Set(rows.map((r) => r.name)), new Set(['הורה לבדיקה', 'עדי לבדיקה']));
+    assert.ok(rows.every(row => row.name_key === row.name));
+    const columns = db.prepare('PRAGMA table_info(users)').all() as any[];
+    assert.ok(!columns.some(column => ['username', 'display'].includes(column.name)), 'fresh setup creates no login/display aliases');
     db.close();
   } finally {
     rmSync(directory, { recursive: true, force: true });

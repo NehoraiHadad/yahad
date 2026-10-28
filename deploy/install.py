@@ -195,7 +195,9 @@ class Installer:
         if not path.exists(): return None
         self.secure(path,self.app.pw_uid)
         with sqlite3.connect(path.as_uri()+'?mode=ro',uri=True) as db:
-            if db.execute('SELECT version FROM schema_version').fetchone()!=(1,): raise InstallError('Database schema is not supported')
+            rows=db.execute('SELECT version FROM schema_version').fetchall()
+            if len(rows)!=1: raise InstallError('Database schema is not supported')
+            worker.schema_id(rows[0][0])
             rows=db.execute("SELECT family_id,id FROM users WHERE role='parent' ORDER BY id").fetchall()
         if not rows:return None
         old=self.receipt.get('operator') or getattr(self,'config_value',{}).get('operator')
@@ -326,9 +328,11 @@ class Installer:
                 for item in [*build.rglob('*'),build]:
                     os.chown(item,self.builder.pw_uid,self.builder.pw_gid,follow_symlinks=False);os.chmod(item,0o700 if item.is_dir() else 0o600)
                 w.command([config['npm'],'ci','--omit=dev','--ignore-scripts','--no-audit','--no-fund'],user=config['builderUser'],cwd=build,timeout=1200,code='build')
-                w.command([config['node'],'--import','tsx','scripts/update-smoke.ts'],user=config['builderUser'],cwd=build,timeout=90,code='build')
+                w.command([config['node'],'--import','tsx','scripts/update-smoke.ts','--database-schema',str(manifest['databaseSchema']),
+                           '--database-migrations-from',json.dumps(manifest['databaseMigrationsFrom'],separators=(',',':'))],user=config['builderUser'],cwd=build,timeout=90,code='build')
                 deps=w.command(['/usr/bin/python3','/usr/local/lib/yachad-updater/export-dependencies.py',str(build)],user=config['builderUser'],code='build')
                 shutil.copytree(source,destination);worker.extract_dependencies(deps,destination)
+                (destination/worker.RELEASE_METADATA).write_bytes((json.dumps(manifest,separators=(',',':'))+'\n').encode())
                 for item in [destination,*destination.rglob('*')]:
                     executable=bool(item.stat().st_mode & 0o111)
                     os.chown(item,0,self.app.pw_gid,follow_symlinks=False);os.chmod(item,0o750 if item.is_dir() or executable else 0o640)
@@ -345,8 +349,8 @@ class Installer:
         raw=worker.download(assets['yachad-release.json']['url'],8192)
         archive=worker.download(assets['yachad-app.zip']['url'],64*1024*1024)
         manifest=worker.verify_manifest(raw,archive)
-        if worker.version(manifest['version'])!=worker.version(release['tag_name']) or worker.version(manifest['version'])<(0,4,0) or manifest['databaseSchema']!=1:
-            raise InstallError('Publish the reviewed 0.4.0+ installer release first; no provisioning was performed')
+        if worker.version(manifest['version'])!=worker.version(release['tag_name']) or worker.version(manifest['version'])<(0,4,0) or manifest['format']!=2:
+            raise InstallError('Publish the reviewed format-2 installer release first; no provisioning was performed')
         self.release_input=(manifest,archive)
     def bootstrap(self,env,version):
         if self.parent(env):return

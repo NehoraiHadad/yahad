@@ -70,8 +70,8 @@ test('parent-only diagnostics/export/reset and operator-only update queue enforc
   const f=fixture(); const {app,store}=await createApp(f.config,{boot:false});
   try {
     const password=randomBytes(24).toString('hex');
-    const a=await store.createFamily('A',{username:'pa',password},{username:'ca',password});
-    const b=await store.createFamily('B',{username:'pb',password},{username:'cb',password});
+    const a=await store.createFamily('A',{name:'pa',password},{name:'ca',password});
+    const b=await store.createFamily('B',{name:'pb',password},{name:'cb',password});
     function session(family:string,id:string){return store.createSession(store.user(store.one('SELECT * FROM users WHERE family_id=? AND id=?',family,id)));}
     const pa=session(a.familyId,a.parentId), ca=session(a.familyId,a.childId), pb=session(b.familyId,b.parentId);
     function req(s:typeof pa|null,url:string,method:any='GET',payload?:any,csrf=true){return app.inject({url,method,payload,headers:{origin:f.config.origin,...(s?{cookie:'sid='+s.sid,...(csrf?{'x-csrf-token':s.csrf}:{})}:{})}});}

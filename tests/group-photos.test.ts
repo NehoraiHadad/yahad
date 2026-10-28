@@ -89,8 +89,8 @@ async function fixture() {
     host: '127.0.0.1', port: 3000, origin: 'http://localhost:3000', secureCookie: false,
     maxMedia: 1048576, maxStorage: 67108864, childIdleMs: 900000, sessionMs: 3600000, diagnosticsEnabled: false };
   const store = new Store(config), password = randomBytes(24).toString('hex');
-  const a = await store.createFamily('A', { username: 'parent-a', password }, { username: 'child-a', password });
-  const b = await store.createFamily('B', { username: 'parent-b', password }, { username: 'child-b', password });
+  const a = await store.createFamily('A', { name: 'parent-a', password }, { name: 'child-a', password });
+  const b = await store.createFamily('B', { name: 'parent-b', password }, { name: 'child-b', password });
   const { app, service } = await createApp(config, { store, factory: h => new PhotoMock(h) });
   await service.connect(a.familyId); await service.connect(b.familyId);
   const session = (id: string) => store.createSession(store.user(store.one('SELECT * FROM users WHERE id=?', id)));

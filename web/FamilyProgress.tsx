@@ -2,7 +2,7 @@ import React from 'react';
 import type { PickerGrant, PickerGroup } from './GroupPicker';
 import { childLabel } from './childLabels';
 
-export type FamilyChild = { id: string; display: string; username: string; senderLabel?: string };
+export type FamilyChild = { id: string; name: string; senderLabel?: string };
 export type FamilyOverview = {
   children: FamilyChild[]; groups: PickerGroup[]; grants: PickerGrant[];
   state: string; linked?: boolean; disconnect?: string | null; disconnectHistory?: string | null;
@@ -28,7 +28,7 @@ export function FamilyProgress({ data, busy, stale, onAdd, onSelect }: {
 }) {
   const progress = familyProgress(data);
   const nextText = { connect: 'הצעד הבא: חיבור החשבון', child: 'הצעד הבא: הוספת ילד או ילדה',
-    groups: `הצעד הבא: בחירת קבוצות עבור ${progress.pendingChild ? childLabel(progress.pendingChild, data.children) : ''}`,
+    groups: `הצעד הבא: בחירת קבוצות עבור ${progress.pendingChild ? childLabel(progress.pendingChild) : ''}`,
     login: 'הצעד הבא: כניסה בטאבלט עם חשבון הילד' }[progress.next];
   return <section className="parent-card family-progress" aria-labelledby="family-progress-title">
     <h2 id="family-progress-title">ממשיכים מהמקום שבו עצרתם</h2>
@@ -56,12 +56,12 @@ export function ChildGroupSummary({ data, selected, busy, stale = false, onSelec
     <p>שמות הקבוצות בלבד — בלי להיכנס לחשבון הילד ובלי תצוגה מקדימה של הודעות.</p>
     {!progress.children.length && <p>עדיין אין חשבונות ילדים. חשבון חדש מתחיל בלי קבוצות מאושרות.</p>}
     <ul className="child-summary-list">{progress.children.map(child => <li key={child.id}>
-      <div className="child-summary-heading"><h3>{childLabel(child, data.children)}</h3>
+      <div className="child-summary-heading"><h3>{childLabel(child)}</h3>
         <button type="button" className="text-button" disabled={busy} aria-pressed={selected === child.id}
           onClick={() => { onSelect(child.id); document.getElementById('family-groups')?.focus(); }}>
-          בחירת קבוצות עבור {childLabel(child, data.children)}</button></div>
+          בחירת קבוצות עבור {childLabel(child)}</button></div>
       <p>{child.groups.length} קבוצות מאושרות · {stale ? 'ממתינים לאימות מול השרת' : child.ready ? 'מוכן לכניסה בטאבלט' : !child.groups.length ? 'נדרשת בחירת קבוצות' : 'נדרש חיבור החשבון'}</p>
-      {!!child.groups.length && <ul className="child-group-titles" aria-label={'קבוצות מאושרות עבור ' + childLabel(child, data.children)}>
+      {!!child.groups.length && <ul className="child-group-titles" aria-label={'קבוצות מאושרות עבור ' + childLabel(child)}>
         {child.groups.map(group => <li key={group.id}>{group.title}</li>)}
       </ul>}
     </li>)}</ul>

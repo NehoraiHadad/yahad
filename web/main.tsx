@@ -10,10 +10,13 @@ import { MessageImage } from './MessageImage';
 import { DisconnectPanel } from './DisconnectPanel';
 import { GroupAvatar } from './GroupAvatar';
 import { GroupPicker } from './GroupPicker';
-import { ParentChatFilter, filterParentGroups, type ChatFilter } from './ParentChatFilter';
+import { ParentChatFilter, filterParentGroups, searchChatGroups, parentEmptyMessage, type ChatFilter } from './ParentChatFilter';
+import { CatalogConversation, ConversationVerification } from './CatalogConversation';
+import './parentChatCatalog.css';
 import { childLabel } from './childLabels';
 import { LatestRequest, isGroupDataRefresh } from './latestRequest';
 import { AccountSettings } from './AccountSettings';
+import './account-settings.css';
 import { FamilySetup } from './FamilySetup';
 import { FamilyProgress, ChildGroupSummary, familyProgress, type FamilyOverview } from './FamilyProgress';
 let setupToken = new URLSearchParams(location.hash.slice(1)).get('setup') || '';
@@ -74,8 +77,7 @@ type Me = {
     id: string;
     familyId: string;
     role: 'parent' | 'child';
-    display: string;
-    username: string;
+    name: string;
   };
   csrf: string;
   connector: 'mock' | 'baileys';
@@ -85,7 +87,7 @@ type Me = {
   maxMedia: number;
   senderLabel?: string;
 };
-type Group = { id: string; title: string; last?: PublicMessage };
+type Group = { id: string; title: string; canRead: boolean; last?: PublicMessage };
 const newId = () => {
   const b = crypto.getRandomValues(new Uint8Array(16));
   b[6] = (b[6] & 15) | 64;
@@ -237,7 +239,7 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
   const [setupDone, setSetupDone] = useState(false);
   const [setupState, setSetupState] = useState('');
   useEffect(() => { void fetch('/api/setup/status').then(r => r.json()).then(x => setSetupState(x.state)).catch(() => {}); }, []);
-  const [username, setUsername] = useState(''),
+  const [name, setName] = useState(''),
     [password, setPassword] = useState(''),
     [show, setShow] = useState(false),
     [busy, setBusy] = useState(false),
@@ -274,7 +276,7 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
           setBusy(true);
           setError('');
           try {
-            await api('/login', 'POST', { username, password });
+            await api('/login', 'POST', { name, password });
             setPassword('');
             localStorage.removeItem('yachad-locked');
             await onLogin();
@@ -289,14 +291,14 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
         <h1>נכנסים לשיחות</h1>
         <p>עם פרטי הכניסה האישיים שהוגדרו בבית.</p>
         <label>
-          שם משתמש
+          שם
           <input
-            dir="ltr"
+            dir="auto"
             autoComplete="username"
             required
-            maxLength={80}
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
+            maxLength={120}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
           />
         </label>
         <label>
@@ -380,11 +382,15 @@ function Chat({
   const [chatFilter, setChatFilter] = useState<ChatFilter>({ mode: 'all', childId: '' });
   const [filterOverview, setFilterOverview] = useState<FamilyOverview | null>(null);
   const [filterVerified, setFilterVerified] = useState(false);
+  const [groupsVerified, setGroupsVerified] = useState(false), [groupsChecking, setGroupsChecking] = useState(false);
+  const groupsVerifiedRef = useRef(groupsVerified);
+  groupsVerifiedRef.current = groupsVerified;
   const filterRef = useRef(chatFilter), listGeneration = useRef(new LatestRequest()), groupDataGeneration = useRef(new LatestRequest());
   filterRef.current = chatFilter;
   const visibleGroups = me.user.role === 'parent'
     ? filterParentGroups(groups, chatFilter, filterOverview, filterVerified) : groups;
-  const activeSelected = visibleGroups.some(group => group.id === selected) ? selected : null;
+  const listedGroups = searchChatGroups(visibleGroups, query);
+  const activeSelected = groupsVerified && visibleGroups.some(group => group.id === selected && group.canRead) ? selected : null;
   const viewport = useRef<HTMLDivElement>(null),
     bottom = useRef<HTMLDivElement>(null),
     selectedRef = useRef(selected),
@@ -399,10 +405,10 @@ function Chat({
     c = me.capabilities;
   const invalidateFilter = () => {
     setFilterVerified(false);
-    if (filterRef.current.mode === 'child') {
-      selectedRef.current = null;
-      requestGeneration.current++;
-    }
+    groupsVerifiedRef.current = false;
+    setGroupsVerified(false);
+    selectedRef.current = null;
+    requestGeneration.current++;
   };
   const changeFilter = (next: ChatFilter) => {
     if (next.mode === filterRef.current.mode && next.childId === filterRef.current.childId) return;
@@ -410,6 +416,7 @@ function Chat({
     selectedRef.current = null;
     requestGeneration.current++;
     setSelected(null);
+    setQuery('');
     setChatFilter(next);
     // Never reuse a previously verified grant snapshot when entering a child view.
     if (next.mode === 'child') void refreshList();
@@ -418,6 +425,7 @@ function Chat({
     const generation = listGeneration.current.begin();
     groupDataGeneration.current.invalidate();
     invalidateFilter();
+    setGroupsChecking(true);
     try {
       const [data, overview] = await Promise.all([
         api<Group[]>('/groups'),
@@ -427,20 +435,17 @@ function Chat({
       setFilterOverview(overview);
       setFilterVerified(overview !== null);
       setGroups(data);
+      groupsVerifiedRef.current = true;
+      setGroupsVerified(true);
+      setGroupsChecking(false);
       setNeedsRefresh(me.user.role === 'parent' && overview === null);
       setListBusy(false);
-      const g = selectedRef.current;
-      if (g && !data.some((x) => x.id === g)) {
-        requestGeneration.current++;
-        setSelected(null);
-        setMessages([]);
-        setReply(null);
-        setResults(null);
-        setEditing(null);
-        setMenu(null);
-      }
+      // Content invalidation clears selectedRef before the request. Reconcile
+      // the raw selection separately so removed/readded catalog rows cannot reopen.
+      setSelected(previous => previous && data.some(group => group.id === previous) ? previous : null);
     } catch (e) {
       if (!listGeneration.current.isCurrent(generation)) return;
+      setGroupsChecking(false);
       setListBusy(false);
       setNeedsRefresh(true);
     }
@@ -448,6 +453,9 @@ function Chat({
   // Message-only events cannot change grants. Keep the composer mounted so incoming
   // messages and successful sends do not destroy a parent's unsent draft/attachment.
   const refreshGroupData = useCallback(async () => {
+    // A message-only response must not race or bypass a full permission check.
+    // Full refresh invalidates older reads; newer ones wait for its confirmation.
+    if (!groupsVerifiedRef.current) return;
     const generation = groupDataGeneration.current.begin();
     try {
       const data = await api<Group[]>('/groups');
@@ -483,7 +491,7 @@ function Chat({
         if (c.read && document.visibilityState === 'visible' && nearBottom.current && ids.length)
           void api('/groups/' + encodeURIComponent(g) + '/read', 'POST', { ids }).catch(() => {});
       } catch (e) {
-        if (selectedRef.current === g) {
+        if (selectedRef.current === g && generation === requestGeneration.current) {
           setBusy(false);
           onError((e as Error).message);
         }
@@ -526,6 +534,7 @@ function Chat({
       listGeneration.current.invalidate();
       groupDataGeneration.current.invalidate();
       invalidateFilter();
+      setGroupsChecking(false);
     };
     return () => {
       listGeneration.current.invalidate();
@@ -615,7 +624,7 @@ function Chat({
     }
   };
   return (
-    <main className={`chat-app theme-${theme} ${effects ? 'playful' : ''} ${dark ? 'dark' : ''} ${activeSelected ? 'has-chat' : ''}`}>
+    <main className={`chat-app theme-${theme} ${effects ? 'playful' : ''} ${dark ? 'dark' : ''} ${current ? 'has-chat' : ''}`}>
       <aside className="sidebar">
         <header className="side-top">
           <a className="brand" href="/" onClick={(e) => e.preventDefault()}>
@@ -633,18 +642,20 @@ function Chat({
               השיחות שלי<span className="tiny-flower">✳</span>
             </h1>
           </div>
-          <span className="count">{visibleGroups.length}</span>
+          <span className="count" aria-label={`${listedGroups.length} קבוצות מוצגות`}>{listedGroups.length}</span>
         </div>
         {me.user.role === 'parent' && <ParentChatFilter filter={chatFilter} overview={filterOverview}
           verified={filterVerified} onChange={changeFilter} />}
         <label className="group-search">
           <Search size={18} />
           <input
+            type="search"
             aria-label="חיפוש קבוצה"
             placeholder="איזו שיחה מחפשים?"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
+          {query && <button type="button" className="text-button clear-group-search" onClick={() => setQuery('')}>ניקוי</button>}
         </label>
         <div className="group-list">
           {listBusy ? (
@@ -653,23 +664,26 @@ function Chat({
               טוענים שיחות…
             </div>
           ) : (
-            visibleGroups
-              .filter((g) => g.title.includes(query))
+            listedGroups
               .map((g, i) => {
                 return (
                   <button
                     key={g.id}
-                    className={'group-row ' + (g.id === selected ? 'active' : '')}
+                    className={'group-row ' + (g.id === selected ? 'active ' : '') + (!g.canRead ? 'catalog-only' : '')}
                     onClick={() => setSelected(g.id)}
                   >
                     <GroupAvatar groupId={g.id} title={g.title} retryKey={me.connection} className={'avatar av-' + (i % 3)} />
                     <div className="group-info">
                       <div className="group-heading">
                         <b>{g.title}</b>
-                        <span>{g.last ? time(g.last.time) : ''}</span>
+                        <span>{groupsVerified && g.canRead && g.last ? time(g.last.time) : ''}</span>
                       </div>
                       <div className="group-preview">
-                        {g.last?.deleted
+                        {!groupsVerified
+                          ? 'בודקים את הגישה לתוכן…'
+                          : !g.canRead
+                          ? 'לא מאושרת לילדים · ללא תוכן ב״יחד״'
+                          : g.last?.deleted
                           ? 'הודעה נמחקה'
                           : g.last?.text ||
                             (g.last?.kind === 'audio'
@@ -684,11 +698,19 @@ function Chat({
                 );
               })
           )}
+          {!listBusy && !!visibleGroups.length && !listedGroups.length && (
+            <div className="empty-list" role="status">
+              <Search />
+              <h3>לא נמצאו קבוצות</h3>
+              <p>נסו שם אחר או נקו את החיפוש כדי לחזור לרשימה.</p>
+              <button type="button" className="text-button" onClick={() => setQuery('')}>ניקוי חיפוש</button>
+            </div>
+          )}
           {!listBusy && !visibleGroups.length && (
             <div className="empty-list">
               <ShieldCheck />
               <h3>עוד רגע, מתחילים</h3>
-              <p>{me.user.role === 'parent' && chatFilter.mode === 'child' ? !filterVerified ? 'מאמתים הרשאות לפני הצגת שיחות.' : !chatFilter.childId ? 'בחרו ילד או ילדה כדי להציג קבוצות מאושרות.' : 'אין קבוצות מאושרות זמינות לחשבון שנבחר.' : 'הקבוצות שההורה יבחר יופיעו כאן.'}</p>
+              <p>{me.user.role === 'parent' ? parentEmptyMessage(chatFilter, filterOverview, filterVerified) : 'הקבוצות שההורה יבחר יופיעו כאן.'}</p>
               <button className="text-button" onClick={() => void refreshList()}>
                 רענון
               </button>
@@ -698,7 +720,7 @@ function Chat({
         <div className="side-footer">
           <div className="safe-note">
             <ShieldCheck size={16} />
-            <span>רק הקבוצות שנבחרו בשבילך</span>
+            <span>{me.user.role === 'parent' ? 'חשבון הורה · הסינון לא משנה הרשאות' : 'רק הקבוצות שנבחרו בשבילך'}</span>
           </div>
           <div className="profile-row">
             <div className="profile-avatar" aria-hidden="true">{React.createElement(profileIcons[flair] || Flower2, { size: 24 })}</div>
@@ -727,7 +749,7 @@ function Chat({
         </div>
       </aside>
       <section className="conversation">
-        {current ? (
+        {current?.canRead && groupsVerified ? (
           <>
             <header className="chat-header">
               <IconButton className="back" label="חזרה לשיחות" onClick={() => setSelected(null)}>
@@ -959,6 +981,10 @@ function Chat({
               onError={onError}
             />
           </>
+        ) : current && !groupsVerified ? (
+          <ConversationVerification title={current.title} checking={groupsChecking} onBack={() => setSelected(null)} onRetry={() => void refreshList()} />
+        ) : current ? (
+          <CatalogConversation title={current.title} onBack={() => setSelected(null)} onManage={parent} />
         ) : (
           <div className="welcome">
             <div className="welcome-emblem">
@@ -979,7 +1005,7 @@ function Chat({
               </button>
             ) : (
               <span className="welcome-foot">
-                <ShieldCheck size={16} /> השיחות שנבחרו מופיעות בצד
+                <ShieldCheck size={16} /> {me.user.role === 'parent' ? 'הקבוצות מופיעות בצד · הסינון לא משנה הרשאות' : 'השיחות שנבחרו מופיעות בצד'}
               </span>
             )}
             {me.connector === 'mock' && (
@@ -1702,6 +1728,7 @@ function Parent({
   const [identity, setIdentity] = useState('');
   const [groupPhotoRevision, setGroupPhotoRevision] = useState(0);
   const [createdChild, setCreatedChild] = useState('');
+  const [settingsChild, setSettingsChild] = useState('');
   const [overviewStale, setOverviewStale] = useState(false);
   const [data, setData] = useState<FamilyOverview | null>(null),
     [qr, setQr] = useState<string | null>(null),
@@ -1780,7 +1807,7 @@ function Parent({
           <MessageCircleHeart /> יחד <span>המרחב להורה</span>
         </div>
         <div>
-          <button className="text-button" onClick={() => setSettings(true)}>
+          <button className="text-button" onClick={() => { setSettingsChild(''); setSettings(true); }}>
             <Settings size={17} />
             הגדרות חשבון
           </button>
@@ -1886,12 +1913,13 @@ function Parent({
                 <select value={child} disabled={busy} onChange={(e) => { setChild(e.target.value); setCreatedChild(''); }}>
                   {data.children.map((x: any) => (
                     <option key={x.id} value={x.id}>
-                      {childLabel(x, data.children)}
+                      {childLabel(x)}
                     </option>
                   ))}
                 </select>
               </label>
             )}
+            {data?.children.some(account => account.id === child) && <button type="button" className="text-button" disabled={busy || overviewStale} onClick={() => { setSettingsChild(child); setSettings(true); }}>שינוי השם של {childLabel(data.children.find(account => account.id === child)!)}</button>}
             {createdChild === child && data?.children.some((x: any) => x.id === createdChild) && <p role="status" className="setup-success">החשבון נוצר ונבחר. סמנו את הקבוצות שיופיעו בו. אפשר להוסיף חשבון נוסף בהמשך.</p>}
             {data?.children.length === 0 && <p className="setup-success">מתחילים בחשבון ילד. רק אחר כך מאשרים עבורו קבוצות — אין גישה אוטומטית לשיחות.</p>}
             <GroupPicker photoRetryKey={`${data?.state || 'idle'}:${groupPhotoRevision}`} groups={data?.groups || []} grants={data?.grants || []} childId={child}
@@ -1914,8 +1942,8 @@ function Parent({
           </div>
           <div className="child-login-details">
             <span>כתובת הטאבלט <b dir="ltr">{location.origin}</b></span>
-            שם משתמש{' '}
-            <b dir="ltr">{data?.children.find((x: any) => x.id === child)?.username || '—'}</b>
+            שם לכניסה{' '}
+            <b dir="auto">{data?.children.find((x: any) => x.id === child)?.name || '—'}</b>
           </div>
           <button className="outline-button" onClick={openChat}>
             לממשק השיחות של ההורה <ArrowLeft size={18} />
@@ -1965,10 +1993,12 @@ function Parent({
           <button onClick={() => setDeleteOpen(true)}>מחיקת המשפחה והחשבונות</button>
         </div>
       </div>
-      {addingChild && <FamilySetup existingUsernames={[me.user.username, ...(data?.children || []).map((x: any) => x.username)]} onDone={id => { setAddingChild(false); setOverviewStale(true); if (id) { setChild(id); setCreatedChild(id); } void load(); }} onClose={() => { setAddingChild(false); setOverviewStale(true); void load(); }} />}
+      {addingChild && <FamilySetup onDone={id => { setAddingChild(false); setOverviewStale(true); if (id) { setChild(id); setCreatedChild(id); } void load(); }} onClose={() => { setAddingChild(false); setOverviewStale(true); void load(); }} />}
       {settings && (
         <AccountSettings
           children={data?.children}
+          initialChildId={settingsChild}
+          onProfileChanged={() => { setOverviewStale(true); void load(); }}
           onClose={() => setSettings(false)}
         />
       )}

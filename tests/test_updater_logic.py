@@ -30,7 +30,7 @@ class LogicTests(unittest.TestCase):
             def command(self, args, **kw): self.effects.append(args[1])
             def schema(self): return self.db_schema
             def switch(self, path): self.effects.append('switch')
-            def health(self, expected=None):
+            def health(self, expected=None, expected_schema=None):
                 self.effects.append(('health', expected))
                 if self.fail_health: raise u.UpdateError('health')
             def request(self): raise AssertionError('Must not consume requests during failed recovery')

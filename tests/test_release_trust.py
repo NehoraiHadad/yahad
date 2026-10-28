@@ -27,7 +27,7 @@ class TrustTests(unittest.TestCase):
     def test_manifest_checks_integrity_schema_version_and_bounds_without_claiming_authenticity(self):
         archive=b'synthetic archive';m={'format':1,'version':'0.3.2','databaseSchema':1,'archive':'yachad-app.zip','bytes':len(archive),'sha256':hashlib.sha256(archive).hexdigest()}
         self.assertEqual(u.verify_manifest(json.dumps(m).encode(),archive),m)
-        for changes in [{'sha256':'0'*64},{'bytes':True},{'bytes':len(archive)+1},{'databaseSchema':2},{'version':'latest'},{'archive':'other.zip'}]:
+        for changes in [{'sha256':'0'*64},{'bytes':True},{'bytes':len(archive)+1},{'databaseSchema':3},{'version':'latest'},{'archive':'other.zip'}]:
             with self.assertRaises(u.UpdateError):u.verify_manifest(json.dumps(dict(m,**changes)).encode(),archive)
         for raw in [b'[]',b'null',b'x'*8193]:
             with self.assertRaises(u.UpdateError):u.verify_manifest(raw,archive)

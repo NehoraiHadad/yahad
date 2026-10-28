@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { filterParentGroups, ParentChatFilter, type ChatFilter } from '../web/ParentChatFilter.js';
+import { filterParentGroups, searchChatGroups, parentEmptyMessage, ParentChatFilter, type ChatFilter } from '../web/ParentChatFilter.js';
+import { CatalogConversation, ConversationVerification } from '../web/CatalogConversation.js';
 import { LatestRequest, isGroupDataRefresh } from '../web/latestRequest.js';
 import type { FamilyOverview } from '../web/FamilyProgress.js';
 
 const groups = [{ id: 'one', title: 'Synthetic one' }, { id: 'two', title: 'Synthetic two' }, { id: 'parent-only', title: 'Synthetic parent' }];
 const fixture = (): FamilyOverview => ({ state: 'connected', groups, children: [
-  { id: 'a', display: 'Example', username: 'example-a' }, { id: 'b', display: 'Example', username: 'example-b' },
+  { id: 'a', name: 'עדי' }, { id: 'b', name: 'דנה' },
 ], grants: [{ user_id: 'a', group_id: 'one' }, { user_id: 'b', group_id: 'two' }] });
 const byChild: ChatFilter = { mode: 'child', childId: 'a' };
 
@@ -42,15 +43,65 @@ test('grant revocation immediately excludes the selected conversation, not just 
   assert.equal(filterParentGroups(groups, byChild, data, true).find(group => group.id === 'one'), undefined);
 });
 
-test('filter controls expose disambiguated names, blank stale selection, and accurate parent identity explanation', () => {
+test('filter controls expose the unified account name, blank stale selection, and accurate parent identity explanation', () => {
   const html = renderToStaticMarkup(React.createElement(ParentChatFilter, {
     filter: { mode: 'child', childId: 'deleted' }, overview: fixture(), verified: false, onChange() {},
   }));
-  assert.ok(html.includes('Example (example-a)'));
-  assert.ok(html.includes('Example (example-b)'));
+  assert.ok(html.includes('>עדי</option>'));
+  assert.ok(html.includes('>דנה</option>'));
+  assert.ok(!html.includes('example-a'), 'no separate login alias is rendered');
   assert.match(html, /<option value="" selected="">/);
   assert.ok(html.includes('נשארים בחשבון ההורה'));
   assert.ok(html.includes('ממתינים לאימות'));
+});
+
+test('all-mode copy describes the known group catalog rather than promising private conversations', () => {
+  const html = renderToStaticMarkup(React.createElement(ParentChatFilter, {
+    filter: { mode: 'all', childId: 'a' }, overview: fixture(), verified: true, onChange() {},
+  }));
+  assert.ok(html.includes('כל הקבוצות שסונכרנו'));
+  assert.ok(html.includes('לא שיחות פרטיות'));
+  assert.ok(html.includes('שאושרו לילד אחד לפחות'));
+  assert.equal(html.includes('<select'), false);
+  assert.match(parentEmptyMessage({ mode: 'all', childId: '' }, fixture(), true), /ניהול ההורה/);
+  const empty = fixture(); empty.children = [];
+  assert.match(parentEmptyMessage(byChild, empty, true), /עדיין אין חשבונות ילדים/);
+  assert.match(parentEmptyMessage({ mode: 'child', childId: 'removed' }, fixture(), true), /בחרו ילד/);
+  assert.match(parentEmptyMessage(byChild, fixture(), false), /מאמתים הרשאות/);
+});
+
+test('normalized group search has explicit empty results and does not mutate the source or grants', () => {
+  const data = fixture();
+  assert.deepEqual(searchChatGroups(groups, '  SYNTHETIC PARENT  '), [groups[2]]);
+  assert.deepEqual(searchChatGroups(groups, 'missing query'), []);
+  assert.equal(searchChatGroups(groups, '  '), groups);
+  assert.deepEqual(filterParentGroups(groups, byChild, data, true), [groups[0]]);
+  assert.equal(groups.length, 3);
+});
+
+test('catalog-only details are not an empty working conversation and never invite accidental child access', () => {
+  const html = renderToStaticMarkup(React.createElement(CatalogConversation, {
+    title: 'Synthetic private group', onBack() {}, onManage() {},
+  }));
+  assert.ok(html.includes('Synthetic private group'));
+  assert.ok(html.includes('ללא תוכן שמור'));
+  assert.ok(html.includes('אי אפשר לשלוח מכאן'));
+  assert.ok(html.includes('אישור קבוצה לילד ייתן גם לו גישה'));
+  assert.ok(html.includes('לניהול הקבוצות וההרשאות'));
+  assert.ok(html.includes('חזרה לשיחות'));
+  assert.doesNotMatch(html, /<textarea|<input|message-viewport|composer|history-panel/);
+});
+
+test('failed permission verification suspends content and exposes retry without implying revoked approval', () => {
+  for (const checking of [true, false]) {
+    const html = renderToStaticMarkup(React.createElement(ConversationVerification, {
+      title: 'Synthetic group', checking, onBack() {}, onRetry() {},
+    }));
+    assert.ok(html.includes('ההודעות והשליחה מושהות'));
+    assert.equal(html.includes('disabled=""'), checking);
+    assert.doesNotMatch(html, /<textarea|<input|message-viewport|composer|history-panel/);
+    assert.ok(!html.includes('אינה מאושרת'));
+  }
 });
 
 test('chat wiring invalidates asynchronous responses and uses filtered groups for the active conversation', () => {
@@ -58,6 +109,14 @@ test('chat wiring invalidates asynchronous responses and uses filtered groups fo
   const source = readFileSync(new URL('../web/main.tsx', import.meta.url), 'utf8');
   const chat = source.slice(source.indexOf('function Chat('), source.indexOf('function Message'));
   assert.match(chat, /const current = visibleGroups\.find/);
+  assert.match(chat, /const activeSelected = groupsVerified && visibleGroups\.some\(group => group\.id === selected && group\.canRead\)/);
+  assert.match(chat, /\{current\?\.canRead && groupsVerified \? \(/);
+  assert.match(chat, /\) : current && !groupsVerified \? \(\s*<ConversationVerification/);
+  assert.match(chat, /groupsVerified && g\.canRead && g\.last/);
+  assert.match(chat, /!groupsVerified\s*\? 'בודקים את הגישה לתוכן…'/);
+  assert.match(chat, /\) : current \? \(\s*<CatalogConversation/);
+  assert.match(chat, /!listBusy && !!visibleGroups\.length && !listedGroups\.length/);
+  assert.match(chat, /me\.user\.role === 'parent' \? 'חשבון הורה · הסינון לא משנה הרשאות'/);
   assert.match(chat, /selectedRef\.current = activeSelected/);
   assert.match(chat, /if \(!listGeneration\.current\.isCurrent\(generation\)\) return/);
   assert.match(chat, /source\.onerror = \(\) => \{\s*setOnline\(false\);\s*listGeneration\.current\.invalidate\(\);\s*groupDataGeneration\.current\.invalidate\(\);\s*invalidateFilter\(\)/);

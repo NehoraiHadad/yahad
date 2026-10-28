@@ -20,6 +20,19 @@ class Worker:
 
 class GuidedInstallLogicTests(unittest.TestCase):
     """Pure fixture checks also run as an ordinary Linux development user."""
+    def test_parent_operator_uses_stable_ids_on_schema2_without_legacy_name_columns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            installer=u.Installer(System(),pathlib.Path(tmp));installer.secure=lambda *a:None
+            installer.app=types.SimpleNamespace(pw_uid=os.getuid());installer.receipt={}
+            path=installer.p('/data/app.sqlite');path.parent.mkdir()
+            with sqlite3.connect(path) as db:
+                db.executescript("CREATE TABLE schema_version(version INTEGER); INSERT INTO schema_version VALUES(2);"
+                                 "CREATE TABLE users(family_id TEXT,id TEXT,name TEXT,name_key TEXT,role TEXT);"
+                                 "INSERT INTO users VALUES('family','stable-parent','אמא','אמא','parent');")
+            self.assertEqual(installer.parent({'DATA_DIR':'/data'}),{'familyId':'family','userId':'stable-parent'})
+            with sqlite3.connect(path) as db:db.execute('INSERT INTO schema_version VALUES(2)')
+            with self.assertRaisesRegex(u.InstallError,'schema'):installer.parent({'DATA_DIR':'/data'})
+
     def test_preflight_collects_all_missing_tools_without_writes(self):
         with tempfile.TemporaryDirectory() as tmp:
             system=System(); installer=u.Installer(system,pathlib.Path(tmp))
@@ -272,7 +285,7 @@ class GuidedInstallRunTests(unittest.TestCase):
                 fixture.assertIn('yachad.service',fixture.active)
                 fixture.assertEqual(json.loads((fixture.p('/opt/yachad/current')/'package.json').read_bytes())['version'],version)
                 with sqlite3.connect(fixture.database()) as db:
-                    fixture.assertEqual(db.execute('SELECT version FROM schema_version').fetchone(),(1,))
+                    fixture.assertEqual(db.execute('SELECT version FROM schema_version').fetchone(),(2,))
             def command(self,args,**kwargs):
                 fixture.calls.append(args)
                 if 'ci' in args:return b''
@@ -288,13 +301,21 @@ class GuidedInstallRunTests(unittest.TestCase):
         self.stack.enter_context(patch.object(u.worker,'Worker',FixtureWorker))
         self.stack.enter_context(patch.object(u.worker,'download',lambda url,*args:self.assets[url.rsplit('/',1)[1]]))
     def p(self,path):return self.root/path.lstrip('/')
+    def test_fresh_schema1_release_is_rejected_before_any_provisioning(self):
+        manifest=json.loads(self.assets['yachad-release.json']);manifest.update(format=1,databaseSchema=1)
+        self.assets['yachad-release.json']=json.dumps(manifest).encode()
+        with self.assertRaisesRegex(u.InstallError,'format-2'):self.installer.fetch_fresh()
+        self.assertFalse(self.calls)
+        self.assertFalse(self.p('/etc/yachad/updates.json').exists())
+        self.assertFalse(self.p('/opt/yachad/current').exists())
+
     def build_archive(self):
         stream=io.BytesIO()
         files={'package.json':json.dumps({'version':'0.4.0'}),'package-lock.json':'{}','dist/index.html':'synthetic UI',
                'src/main.ts':'','src/bootstrap.ts':'','scripts/update-smoke.ts':'','scripts/update-backup.ts':''}
         with zipfile.ZipFile(stream,'w') as archive:
             for name,value in files.items():archive.writestr(name,value)
-        archive=stream.getvalue();manifest={'format':1,'version':'0.4.0','databaseSchema':1,'archive':'yachad-app.zip',
+        archive=stream.getvalue();manifest={'format':2,'minimumUpdaterProtocol':2,'databaseMigrationsFrom':[1],'version':'0.4.0','databaseSchema':2,'archive':'yachad-app.zip',
                                          'bytes':len(archive),'sha256':hashlib.sha256(archive).hexdigest()}
         self.assets={'yachad-app.zip':archive,'yachad-release.json':json.dumps(manifest).encode()}
         stream=io.BytesIO()
@@ -308,7 +329,7 @@ class GuidedInstallRunTests(unittest.TestCase):
         path=self.database()
         with sqlite3.connect(path) as db:
             db.executescript('CREATE TABLE IF NOT EXISTS schema_version(version INTEGER); CREATE TABLE IF NOT EXISTS users(family_id TEXT,id TEXT,role TEXT);')
-            if not db.execute('SELECT 1 FROM schema_version').fetchone():db.execute('INSERT INTO schema_version VALUES(1)')
+            if not db.execute('SELECT 1 FROM schema_version').fetchone():db.execute('INSERT INTO schema_version VALUES(2)')
             if parent and not db.execute('SELECT 1 FROM users').fetchone():db.execute("INSERT INTO users VALUES('family','parent','parent')")
         self.owners[path]=(1001,1001)
     def run_command(self,args,**kwargs):

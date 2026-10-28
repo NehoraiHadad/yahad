@@ -14,11 +14,11 @@ Download `yachad-app.zip` from the fixed repository's stable Release, extract it
 sudo python3 deploy/install.py --origin https://YOUR_PRIVATE_LAN_IP
 ```
 
-Use the actual LAN IPv4 in place of `YOUR_PRIVATE_LAN_IP`. No GitHub account, token, release signing key, application usernames or account passwords are entered in the terminal.
+Use the actual LAN IPv4 in place of `YOUR_PRIVATE_LAN_IP`. No GitHub account, token, release signing key, application account names or account passwords are entered in the terminal.
 
 For a fresh installation, the guide asks one short yes/no confirmation before system changes. It prepares isolated `yachad` and `yachad-update` accounts, root-owned release files, helper scripts, service units and a private backup secret. It fetches stable assets from `NehoraiHadad/yahad` through verified HTTPS and reuses the existing worker's manifest, size, hash and safe-extraction checks. Hashes establish consistency, not independent publisher authentication.
 
-It prints a **private 15-minute setup link**. Open that link in the browser and create the first parent. The normal service handles setup and stays running if the terminal closes; there is no Ctrl+C transition. The parent is signed in immediately, can add children and approve their groups. New children have zero group permissions. The tablet URL and selected username are shown without displaying a password.
+It prints a **private 15-minute setup link**. Open that link in the browser and create the first parent. The normal service handles setup and stays running if the terminal closes; there is no Ctrl+C transition. The parent is signed in immediately, can add children and approve their groups. New children have zero group permissions. The tablet URL and selected account name are shown without displaying a password.
 
 After parent creation, the installer creates an encrypted local backup, verifies an isolated authenticated restore, restarts the app and verifies health/version/schema. It then enables automatic stable-release updates and the designated parent's auto/notify UI controls, verifies timers and reports `COMPLETE`. There is no required off-device transfer, long typed acceptance word, or notify-only default completion. A brief app interruption occurs during backup/integration. A blank yes/no confirmation cancels before changes.
 
@@ -95,7 +95,7 @@ Windows must remain awake and the user signed in for this logon task. Updates do
 
 ## Checks before calling an installation accepted
 
-- Loopback `/health/ready`: correct release, `ok: true`, schema 1.
+- Loopback `/health/ready`: correct release, `ok: true`, schema 2.
 - Browser: parent setup, child creation, zero default groups, deliberate grants and tablet login.
 - Updater: auto active, request path and timers active/enabled; UI switch confirms requested versus applied mode.
 - Reboot/logon persistence and HTTPS/CA trust on the actual target OS and tablet.

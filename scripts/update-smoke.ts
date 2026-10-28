@@ -1,22 +1,81 @@
-// Runs without access to household data, secrets or a real WhatsApp account.
+// Runs only on fresh temporary synthetic data, never household data or a real provider.
+import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { Store } from '../src/store.js';
+import { DATABASE_SCHEMA, DATABASE_MIGRATIONS_FROM } from '../src/database-schema.js';
 import { createApp } from '../src/server.js';
 if (process.versions.node.split('.')[0] !== '24') throw new Error('Node 24 required');
+const args = process.argv.slice(2);
+if (args.length) {
+  if (args.length !== 4 || args[0] !== '--database-schema' || Number(args[1]) !== DATABASE_SCHEMA || args[2] !== '--database-migrations-from')
+    throw new Error('Unexpected database migration contract');
+  assert.deepEqual(JSON.parse(args[3]), [...DATABASE_MIGRATIONS_FROM], 'Migration sources do not match this release');
+}
 const dir = mkdtempSync(join(tmpdir(), 'yachad-release-'));
 try {
-  const config = { dataDir: dir, masterKey: randomBytes(32), connector: 'mock' as const,
+  const config = { dataDir: join(dir, 'fresh'), masterKey: randomBytes(32), connector: 'mock' as const,
     realAllowed:false, host:'127.0.0.1',port:3000,origin:'http://localhost:3000',secureCookie:false,
     maxMedia:1048576,maxStorage:64*1048576,childIdleMs:60000,sessionMs:3600000,diagnosticsEnabled:false };
-  const { app, store } = await createApp(config, { boot: false });
+  const fresh = await createApp(config, { boot: false });
   try {
-    const response = await app.inject({url:'/health/ready'});
-    if(response.statusCode !== 200 || !response.json().ok) throw new Error('Readiness failed');
-    if(store.one('PRAGMA synchronous')?.synchronous !== 2) throw new Error('Durability changed');
+    const response = await fresh.app.inject({url:'/health/ready'});
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().databaseSchema, DATABASE_SCHEMA);
+    assert.equal(fresh.store.one('PRAGMA synchronous')?.synchronous, 2);
     await import('@whiskeysockets/baileys');
-  } finally { await app.close(); }
+  } finally { await fresh.app.close(); }
+
+  const migrationFixtures = new Map<number, () => Promise<void>>([[1, async () => {
+  const upgradeConfig = { ...config, dataDir: join(dir, 'synthetic-upgrade') };
+  const seed = new Store(upgradeConfig), password = 'synthetic release passphrase only';
+  const family = await seed.createFamily('Synthetic', { name: 'parent-smoke', password }, { name: 'child-smoke', password });
+  const child = seed.user(seed.one('SELECT * FROM users WHERE id=?', family.childId));
+  const session = seed.createSession(child), group = 'synthetic-smoke@g.us';
+  seed.syncGroups(family.familyId, [{ id: group, title: 'Synthetic group' }]);
+  seed.grant(family.familyId, family.childId, group, true);
+  seed.authSet(family.familyId, 'synthetic-auth', 'not a provider credential');
+  seed.setIdentityLabel(family.familyId, family.childId, 'Synthetic signature');
+  seed.putMessage(family.familyId, { id: 'synthetic-message', groupId: group, sender: 'Synthetic', fromMe: false,
+    time: 1, kind: 'text', status: 'delivered', text: 'Synthetic history, not household data', reactions: {} });
+  const originalPassword = seed.one('SELECT password FROM users WHERE id=?', family.childId).password;
+  const originalAuth = seed.one('SELECT value FROM auth WHERE family_id=?', family.familyId).value;
+  seed.close();
+  // Produce an exact legacy users layout inside this disposable fixture only.
+  // This is NOT a runtime downgrade or restore path.
+  const legacy = new DatabaseSync(join(upgradeConfig.dataDir, 'app.sqlite'));
+  try {
+    legacy.exec(`PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE;
+      CREATE TABLE users_legacy(id TEXT NOT NULL,family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE,username TEXT NOT NULL UNIQUE,display TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('parent','child')),password TEXT NOT NULL,PRIMARY KEY(family_id,id));
+      INSERT INTO users_legacy SELECT id,family_id,name,'אני',role,password FROM users;
+      DROP TABLE users; ALTER TABLE users_legacy RENAME TO users; UPDATE schema_version SET version=1; COMMIT;`);
+  } finally { legacy.close(); }
+  const upgraded = await createApp(upgradeConfig, { boot: false });
+  try {
+    const { app, store } = upgraded;
+    const health = await app.inject({url:'/health/ready'});
+    assert.equal(health.json().databaseSchema, DATABASE_SCHEMA);
+    assert.equal(store.one('SELECT version FROM schema_version').version, DATABASE_SCHEMA);
+    assert.equal(store.session(session.sid)?.user.name, 'child-smoke');
+    assert.equal(store.one('SELECT password FROM users WHERE id=?', family.childId).password, originalPassword);
+    assert.deepEqual(store.one('SELECT value FROM auth WHERE family_id=?', family.familyId).value, originalAuth);
+    assert.equal(store.authGet(family.familyId, 'synthetic-auth'), 'not a provider credential');
+    assert.equal(store.identityLabel(family.familyId, family.childId), 'Synthetic signature');
+    assert.equal(store.getMessage(family.familyId, group, 'synthetic-message')?.text, 'Synthetic history, not household data');
+    assert.deepEqual(store.all('PRAGMA foreign_key_check'), []);
+    const columns = store.all('PRAGMA table_info(users)').map(column => column.name);
+    assert.ok(!columns.includes('username') && !columns.includes('display'));
+    const login = await app.inject({ method: 'POST', url: '/api/login', headers: {origin:config.origin}, payload: { name: 'CHILD-SMOKE', password } });
+    assert.equal(login.statusCode, 200);
+  } finally { await upgraded.app.close(); }
+  }]]);
+  for (const source of DATABASE_MIGRATIONS_FROM) {
+    const fixture = migrationFixtures.get(source);
+    if (!fixture) throw new Error(`No synthetic migration fixture for schema ${source}`);
+    await fixture();
+  }
   process.stdout.write('SMOKE_OK\n');
 } finally { rmSync(dir,{recursive:true,force:true}); }

@@ -28,8 +28,8 @@ async function fixture(){
   const dir=mkdtempSync(join(tmpdir(),'yachad-history-'));
   const config:Config={dataDir:dir,masterKey:randomBytes(32),connector:'mock',realAllowed:false,host:'127.0.0.1',port:3000,origin:'http://localhost:3000',secureCookie:false,maxMedia:1048576,maxStorage:67108864,childIdleMs:900000,sessionMs:3600000,diagnosticsEnabled:false};
   const store=new Store(config),pass=randomBytes(24).toString('hex');
-  const a=await store.createFamily('A',{username:'parent-a',password:pass},{username:'child-a',password:pass+'a'});
-  const b=await store.createFamily('B',{username:'parent-b',password:pass},{username:'child-b',password:pass+'b'});
+  const a=await store.createFamily('A',{name:'parent-a',password:pass},{name:'child-a',password:pass+'a'});
+  const b=await store.createFamily('B',{name:'parent-b',password:pass},{name:'child-b',password:pass+'b'});
   const {app,service}=await createApp(config,{store,factory:h=>new HistoryMock(h)});
   await service.connect(a.familyId);await service.connect(b.familyId);
   await service.grant(a.familyId,a.childId,g,true);await service.grant(b.familyId,b.childId,other,true);

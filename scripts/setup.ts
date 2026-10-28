@@ -8,6 +8,7 @@ import { token } from '../src/crypto.js';
 import { loadConfig } from '../src/config.js';
 import { Store } from '../src/store.js';
 import { acquireDataLock } from '../src/lock.js';
+import { normalizeAccountName, accountNameKey } from '../src/account-name.js';
 try {
   loadEnvFile('.env');
 } catch {}
@@ -46,12 +47,9 @@ try {
       await app.close();
     } else {
     const name = await ask('Family label (local only): ');
-    const parent = await ask('Parent username (unique): '),
-      child = await ask('Child username (unique): ');
-    for (const u of [parent, child])
-      if (!/^[a-z0-9._-]{3,60}$/.test(u))
-        throw new Error('Use 3–60 lowercase letters, numbers, dot, dash, underscore');
-    if (parent === child) throw new Error('Usernames must differ');
+    const parent = normalizeAccountName(await ask('Parent name (also used to sign in): ')),
+      child = normalizeAccountName(await ask('Child name (also used to sign in): '));
+    if (accountNameKey(parent) === accountNameKey(child)) throw new Error('Account names must differ');
     const pp = await ask('Parent password, 14+ characters: ', true),
       cp = await ask('Child passphrase, 14+ characters: ', true);
     if (pp !== await ask('Confirm parent password: ', true) || cp !== await ask('Confirm child passphrase: ', true))
@@ -59,8 +57,8 @@ try {
     if (pp === cp) throw new Error('Use separate passwords');
     await store.createFamily(
       name || 'Family',
-      { username: parent, password: pp },
-      { username: child, password: cp },
+      { name: parent, password: pp },
+      { name: child, password: cp },
     );
     if (process.env.SETUP_WRITE_ENV !== 'false' && !existsSync('.env'))
       writeFileSync(

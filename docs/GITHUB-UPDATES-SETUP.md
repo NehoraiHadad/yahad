@@ -1,5 +1,9 @@
 # GitHub automatic updates: new owner installation (0.3.2 candidate)
 
+> Historical app-release setup. The unreleased 0.5.0 updater self-update path
+> uses a separate independently pinned signing key; GitHub-HTTPS app trust alone
+> never authorizes downloaded root code. See [SCHEMA-UPGRADES.md](SCHEMA-UPGRADES.md).
+
 The owner chose to trust stable GitHub Releases from **NehoraiHadad/yahad** over
 normal certificate-verified HTTPS. This new-install profile needs no release
 signing key, public-key transfer, GitHub token or private-repository credentials.

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Clock3, Download, LoaderCircle, RefreshCw, TriangleAlert } from 'lucide-react';
 import { csrf } from './api';
-import { createUpdatePoller, reconcileUpdateRequest, updateActionsDisabled, updateProgress, type ConfiguredUpdate,
+import { createUpdatePoller, reconcileUpdateRequest, updateActionsDisabled, updateNeedsRepair, updatePhases, updateProgress, type ConfiguredUpdate,
   type LocalUpdateRequest, type UpdateAction, type UpdateStatus } from './updateProgress';
 
 export class RejectedUpdateRequest extends Error {}
@@ -17,7 +17,10 @@ export async function readUpdateStatus(signal: AbortSignal): Promise<UpdateStatu
   if (response.status === 401) expiredSession();
   if (response.status === 401 || response.status === 403) throw new UpdateAccessError(response.status);
   if (!response.ok) throw new Error('Status unavailable');
-  return response.json();
+  const value = await response.json();
+  if (!value || typeof value.configured !== 'boolean' || value.configured && !Object.hasOwn(updatePhases, value.phase))
+    throw new Error('Status unavailable');
+  return value;
 }
 export async function submitUpdateRequest(action: UpdateAction, mode?: 'auto' | 'notify'): Promise<{ state: 'queued' | 'pending' }> {
   const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 15_000);
@@ -42,14 +45,15 @@ export async function submitUpdateRequest(action: UpdateAction, mode?: 'auto' | 
 export function UpdateProgressStatus({ data, local = null, reconnecting = false }: {
   data: ConfiguredUpdate; local?: LocalUpdateRequest | null; reconnecting?: boolean;
 }) {
-  const progress = updateProgress(data, local);
-  const Icon = reconnecting ? RefreshCw : progress.kind === 'queued' ? Clock3 : progress.kind === 'running'
+  const progress = updateProgress(data, local), unavailable = reconnecting || data.stale;
+  const Icon = unavailable ? RefreshCw : progress.kind === 'queued' ? Clock3 : progress.kind === 'running'
     ? LoaderCircle : progress.kind === 'success' ? CheckCircle2 : progress.kind === 'failure' ? TriangleAlert : Download;
   return <div className="update-mode-status" role="status" aria-live="polite" aria-atomic="true">
-    <b><Icon size={18} aria-hidden="true" /> {progress.title}</b>
+    <b><Icon size={18} aria-hidden="true" /> {unavailable ? 'המצב העדכני אינו זמין' : progress.title}</b>
+    {unavailable && <p>הדיווח האחרון שהתקבל: {progress.title}</p>}
     {progress.action && <p>הפעולה שהתבקשה: {progress.action}</p>}
-    <p>{progress.detail}</p>
-    {reconnecting && <p>החיבור או דיווח המצב אינם זמינים כרגע. בזמן הפעלה מחדש זה עשוי להיות זמני. המצב שלמעלה הוא הדיווח האחרון, לא תוצאת כשל; ננסה שוב אוטומטית, ואין צורך ללחוץ שוב.</p>}
+    {!unavailable && <p>{progress.detail}</p>}
+    {unavailable && <p>אין כרגע אישור להתקדמות, להצלחה או לכשל חדש. ייתכן שזה ניתוק זמני בזמן הפעלה מחדש. ננסה לקבל דיווח מצב חדש בלבד — לא נשלח שוב בקשת עדכון.</p>}
     {data.updatedAt && <small>דיווח אחרון מהשירות: {new Date(data.updatedAt).toLocaleString('he-IL')}</small>}
   </div>;
 }
@@ -130,31 +134,32 @@ export function UpdatesPanel() {
 
   const pendingMode = configured?.queuedMode || configured?.lastModeRequest?.state === 'pending';
   const disabled = updateActionsDisabled(configured, local, reconnecting, busy);
+  const repairRequired = configured ? updateNeedsRepair(configured) : false;
   return <section className="parent-card diagnostics-card">
     <button className="diagnostics-toggle" aria-expanded={open} onClick={() => { setOpen(!open); if (!open && !accessDenied) { setRefreshing(true); poller.current?.refresh(); } }}>
-      <Download size={20}/><span><b>עדכוני האפליקציה</b><small aria-live="polite">{accessDenied ? 'אין הרשאה לצפייה במצב העדכונים' : reconnecting ? 'מנסים להתחבר מחדש — נשמר הדיווח האחרון' : progress?.title || 'גרסאות מ־GitHub, גיבוי ושליטה שלכם'}</small></span><span>{open ? 'סגירה' : 'פתיחה'}</span>
+      <Download size={20}/><span><b>עדכוני האפליקציה</b><small aria-live="polite">{accessDenied ? 'אין הרשאה לצפייה במצב העדכונים' : reconnecting || configured?.stale ? 'מצב עדכני אינו זמין — בודקים שוב' : progress?.title || 'גרסאות מ־GitHub, גיבוי ושליטה שלכם'}</small></span><span>{open ? 'סגירה' : 'פתיחה'}</span>
     </button>
     {open && <div className="diagnostics-body" aria-busy={busy || refreshing}>
       {error && <p className="error" role="alert">{error}</p>}
       {refreshing && !data && <p role="status">בודקים את המצב…</p>}
-      {reconnecting && !configured && !accessDenied && <p role="status" className="diagnostics-notice">לא ניתן לקבל את מצב שירות העדכון כרגע. מנסים שוב אוטומטית; אין עדיין תוצאת הצלחה או כשל.</p>}
-      {data && !configured && !reconnecting && <p>רכיב העדכון עדיין לא הוגדר במחשב השרת. המתקין החד־פעמי מגדיר אותו; אין צורך בחשבון GitHub נוסף.</p>}
+      {reconnecting && !configured && !accessDenied && <p role="status" className="diagnostics-notice">לא ניתן לקבל את מצב שירות העדכון כרגע. מנסים לקרוא את המצב שוב; אין אישור להצלחה או לכשל ולא נשלחת בקשת עדכון נוספת.</p>}
+      {data && !configured && !reconnecting && <p>מצב העדכונים אינו זמין לחשבון הזה. ייתכן שרכיב העדכון עוד לא הוגדר, שאין כרגע דיווח תקין או שהחשבון אינו מוגדר כאחראי לעדכונים. אפשר לרענן את המצב; אין כאן אישור שעדכון התחיל או הסתיים.</p>}
       {configured && <>
         <UpdateProgressStatus data={configured} local={local} reconnecting={reconnecting}/>
         <p>גרסה נוכחית שדווחה: <span dir="ltr">{configured.currentVersion || 'טרם דווחה'}</span>{configured.latestVersion && <> · גרסה זמינה: <span dir="ltr">{configured.latestVersion}</span></>}</p>
-        <div className="update-mode-status"><b>המצב הפעיל כעת</b><p>{!configured.enabled ? 'העדכונים מושהים בהגדרות השרת' : configured.mode === 'auto' ? 'עדכונים אוטומטיים פועלים' : 'הודעה על גרסה חדשה — ההתקנה לבחירתכם'}</p></div>
-        <p>לפני התקנה נשמר גיבוי מקומי מוצפן, ואחריה נבדקת תקינות האפליקציה. ייתכן ניתוק קצר בזמן עדכון. ההתקדמות מציגה רק שלבים שדווחו בפועל, ללא אחוזים משוערים.</p>
+        <div className="update-mode-status"><b>מצב העדכונים שהוגדר</b><p>{repairRequired ? 'העדכון נעצר עד לבדיקה ותיקון, ללא קשר למצב האוטומטי שהוגדר' : !configured.enabled ? 'העדכונים מושהים בהגדרות השרת' : configured.mode === 'auto' ? 'עדכונים אוטומטיים פועלים' : 'הודעה על גרסה חדשה — ההתקנה לבחירתכם'}</p></div>
+        <p>שירות העדכון שומר גיבוי מקומי מוצפן ובודק תקינות כחלק מההתקנה. השלבים כאן הם רק אלה שדווחו בפועל, ולא הבטחה שהעדכון יצליח. סגירת הדפדפן אינה מבטלת עדכון שכבר נקלט; השאירו את המחשב פועל. בפתיחה מחדש בודקים את המצב מהשירות.</p>
         {pendingMode && <p role="status" className="diagnostics-notice">השינוי שהתבקש: {(configured.queuedMode?.mode || configured.lastModeRequest?.mode) === 'auto' ? 'עדכונים אוטומטיים' : 'הודעה בלבד'}. המצב הפעיל למעלה יתעדכן לאחר שהשינוי יושלם. אין צורך ללחוץ שוב.</p>}
         {!configured.queuedMode && configured.lastModeRequest?.state === 'applied' && <p role="status">הבחירה האחרונה נשמרה והופעלה.</p>}
-        {!configured.queuedMode && configured.lastModeRequest?.state === 'rejected' && <p role="alert">שינוי המצב האחרון לא הוחל. המצב הפעיל למעלה נשמר. רעננו ונסו שוב; אם זה חוזר, נדרשת בדיקה במחשב השרת.</p>}
+        {!repairRequired && !configured.queuedMode && configured.lastModeRequest?.state === 'rejected' && <p role="alert">שינוי המצב האחרון לא הוחל. המצב הפעיל למעלה נשמר. רעננו ונסו שוב; אם זה חוזר, נדרשת בדיקה במחשב השרת.</p>}
         {configured.lastModeRequest?.state === 'pending' && configured.lastModeRequest.error && <p role="alert">לא ניתן לשמור את שינוי המצב בגלל תקלה בהגדרת השירות. נדרשת בדיקה במחשב השרת; בדיקות גרסה חדשות עשויות להמתין עד לתיקון.</p>}
         {!configured.modeControlAllowed && <p>שינוי המצב זמין להורה המוגדר כאחראי לעדכונים, לאחר השלמת המתקין במחשב השרת.</p>}
-        <button type="button" className="outline-button" disabled={disabled || !configured.modeControlAllowed} onClick={() => setChoice(configured.mode === 'auto' ? 'notify' : 'auto')}>{configured.mode === 'auto' ? 'מעבר להודעה בלבד' : 'הפעלת עדכונים אוטומטיים'}</button>
-        {choice && <div className="diagnostics-notice" role="group" aria-label="אישור שינוי מצב העדכונים"><p>{choice === 'auto' ? 'להתקין אוטומטית גרסאות יציבות חדשות? ייתכן ניתוק קצר מהשיחות בזמן התקנה.' : 'לעבור להודעה בלבד? גרסאות חדשות יוצגו כאן, ותבחרו מתי להתקין.'}</p><button className="outline-button" disabled={disabled} onClick={() => void request('set_mode', choice)}>כן, {choice === 'auto' ? 'הפעלת עדכונים אוטומטיים' : 'מעבר להודעה בלבד'}</button><button className="text-button" disabled={busy} onClick={() => setChoice(null)}>ביטול</button></div>}
+        {!repairRequired && <button type="button" className="outline-button" disabled={disabled || !configured.modeControlAllowed} onClick={() => setChoice(configured.mode === 'auto' ? 'notify' : 'auto')}>{configured.mode === 'auto' ? 'מעבר להודעה בלבד' : 'הפעלת עדכונים אוטומטיים'}</button>}
+        {choice && !repairRequired && <div className="diagnostics-notice" role="group" aria-label="אישור שינוי מצב העדכונים"><p>{choice === 'auto' ? 'להתקין אוטומטית גרסאות יציבות חדשות? ייתכן ניתוק קצר מהשיחות בזמן התקנה.' : 'לעבור להודעה בלבד? גרסאות חדשות יוצגו כאן, ותבחרו מתי להתקין.'}</p><button className="outline-button" disabled={disabled} onClick={() => void request('set_mode', choice)}>כן, {choice === 'auto' ? 'הפעלת עדכונים אוטומטיים' : 'מעבר להודעה בלבד'}</button><button className="text-button" disabled={busy} onClick={() => setChoice(null)}>ביטול</button></div>}
         {configured.checkedAt && <p className="diagnostics-caption">בדיקת גרסה אחרונה: {new Date(configured.checkedAt).toLocaleString('he-IL')}</p>}
         {configured.stale && <p className="diagnostics-notice">דיווח השירות ישן. ממשיכים לבדוק, אך אין אישור להתקדמות חדשה ואין לשלוח בקשה נוספת כרגע.</p>}
-        <div className="diagnostics-actions"><button className="outline-button" disabled={disabled} onClick={() => void request('check')}><RefreshCw size={16}/>{configured.mode === 'auto' ? 'בדיקה ועדכון אוטומטי' : 'בדיקת גרסה חדשה'}</button>{configured.phase === 'available' && <button className="outline-button" disabled={disabled} onClick={() => setConfirm(true)}><Download size={16}/>התקנת הגרסה הזמינה</button>}</div>
-        {confirm && <div className="diagnostics-notice"><p>ההתקנה תשמור גיבוי ותנתק לרגע את האפליקציה. להתחיל כעת?</p><button className="outline-button" disabled={disabled} onClick={() => void request('install')}>כן, התקנה עכשיו</button><button className="text-button" disabled={busy} onClick={() => setConfirm(false)}>ביטול</button></div>}
+        {!repairRequired && <div className="diagnostics-actions"><button className="outline-button" disabled={disabled} onClick={() => void request('check')}><RefreshCw size={16}/>{configured.mode === 'auto' ? 'בדיקה ועדכון אוטומטי' : 'בדיקת גרסה חדשה'}</button>{configured.phase === 'available' && <button className="outline-button" disabled={disabled} onClick={() => setConfirm(true)}><Download size={16}/>התקנת הגרסה הזמינה</button>}</div>}
+        {confirm && !repairRequired && <div className="diagnostics-notice"><p>ההתקנה כוללת גיבוי ובדיקת תקינות, וייתכן שהאפליקציה לא תהיה זמינה במהלכה. השירות ממשיך גם אם סוגרים את הדפדפן. להתחיל כעת?</p><button className="outline-button" disabled={disabled} onClick={() => void request('install')}>כן, התקנה עכשיו</button><button className="text-button" disabled={busy} onClick={() => setConfirm(false)}>ביטול</button></div>}
       </>}
       {notice && <p role="status">{notice}</p>}
       <div className="diagnostics-actions"><button className="text-button" disabled={refreshing} onClick={refresh}><RefreshCw size={16}/>{refreshing ? 'מרעננים את המצב…' : accessDenied ? 'בדיקת הרשאה מחדש' : 'רענון המצב'}</button></div>

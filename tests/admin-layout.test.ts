@@ -55,3 +55,10 @@ test('long, filtered, and cleared group lists retain native labelled keyboard co
     assert.equal((html.match(/checked=""/g) || []).length, visible.length ? 1 : 0);
   }
 });
+
+// Tablet instructions must remain available on the device being set up.
+test('child login details are not hidden by responsive styles', () => {
+  for (const rule of rules('.child-login-details'))
+    assert.doesNotMatch(rule, /display:\s*none|visibility:\s*hidden/);
+  assert.match(rules('.child-login-details').join(''), /overflow-wrap:\s*anywhere/);
+});

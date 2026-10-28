@@ -9,9 +9,45 @@ import sqlite3
 import subprocess
 import sys
 import contextlib
+import re
+import unicodedata
 
 
-def reset(path, username, password):
+def account_name_key(value):
+    """Mirror src/account-name.ts; never use locale rules or Unicode casefold.
+
+    Only ASCII spaces are trimmed/collapsed. Reject characters unknown to this
+    Python Unicode database rather than guessing a different account identity.
+    """
+    name = re.sub(' +', ' ', unicodedata.normalize('NFC', value).strip(' '))
+    full_categories = [unicodedata.category(character) for character in name]
+    if 'Cn' in full_categories:
+        raise ValueError('Account name contains characters unsupported by this Python Unicode database; use a compatible local recovery runtime')
+    categories = [category[0] for category in full_categories]
+    if (not 1 <= len(name) <= 60 or
+            any(category not in 'LMN' and character not in ' ._-'
+                for character, category in zip(name, categories)) or
+            not any(category in 'LN' for category in categories)):
+        raise ValueError('Invalid account name')
+    return unicodedata.normalize('NFC', name.lower())
+
+
+def parent_account(db, name_key):
+    # Recovery never upgrades an old database or falls back to a legacy alias.
+    try:
+        versions = db.execute('SELECT version FROM schema_version').fetchall()
+    except sqlite3.Error:
+        raise ValueError('Account recovery requires database schema 2; use the recovery tool matching the installed release') from None
+    if versions != [(2,)]:
+        raise ValueError('Account recovery requires database schema 2; use the recovery tool matching the installed release')
+    row = db.execute("SELECT family_id,id FROM users WHERE name_key=? AND role='parent'", (name_key,)).fetchone()
+    if row is None:
+        raise ValueError('Parent account not found; check the account name or use the parent UI for child passwords')
+    return row
+
+
+def reset(path, name, password):
+    name_key = account_name_key(name)
     if not 14 <= len(password.encode('utf-16-le')) // 2 <= 256:
         raise ValueError('Use 14 to 256 characters; spaces and memorable passphrases are supported')
     salt = os.urandom(16)
@@ -21,9 +57,7 @@ def reset(path, username, password):
     db.execute('PRAGMA foreign_keys=ON')
     try:
         with db:
-            row = db.execute("SELECT family_id,id FROM users WHERE username=? AND role='parent'", (username.strip().lower(),)).fetchone()
-            if row is None:
-                raise ValueError('Account not found; check the username')
+            row = parent_account(db, name_key)
             db.execute('UPDATE users SET password=? WHERE family_id=? AND id=?', (stored, *row))
             db.execute('DELETE FROM sessions WHERE family_id=? AND user_id=?', row)
             if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='paired_devices'").fetchone():
@@ -36,7 +70,7 @@ def main():
     if not hasattr(os, 'geteuid') or os.geteuid() != 0:
         raise ValueError('Owner-only local recovery requires sudo on the Pi')
     p = argparse.ArgumentParser(description='Reset one local account without changing conversations or WhatsApp keys')
-    p.add_argument('username')
+    p.add_argument('name', help='The parent account name used for display and login')
     p.add_argument('--data-dir', default='/var/lib/yachad')
     p.add_argument('--no-restart', action='store_true')
     args = p.parse_args()
@@ -44,8 +78,7 @@ def main():
     # Check account existence before asking for a password; do not create a database on a typo.
     db = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True)
     try:
-        if db.execute("SELECT 1 FROM users WHERE username=? AND role='parent'", (args.username.strip().lower(),)).fetchone() is None:
-            raise ValueError('Parent account not found; use the parent UI for child passwords')
+        parent_account(db, account_name_key(args.name))
     finally:
         db.close()
     def secret(label):
@@ -87,7 +120,7 @@ def main():
                 stack.callback(os.close, guard_fd)
                 if not stat.S_ISREG(os.fstat(guard_fd).st_mode): raise ValueError('Unsafe data lock')
                 fcntl.flock(guard_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            reset(path, args.username, password)
+            reset(path, args.name, password)
             saved = True
         finally:
             # Release data guard before starting Node, while retaining worker lock.

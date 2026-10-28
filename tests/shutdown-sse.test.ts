@@ -33,7 +33,7 @@ async function fixture(preClose?: () => Promise<void>, captureResponse?: (respon
   const release = () => released ||= releaseLock();
   const { app, store, service } = await createApp(config, { boot: false });
   const family = await store.createFamily('Synthetic shutdown fixture', {
-    username: 'shutdown-parent', password: randomBytes(24).toString('hex'),
+    name: 'shutdown-parent', password: randomBytes(24).toString('hex'),
   });
   const session = store.createSession(store.user(store.one(
     'SELECT * FROM users WHERE family_id=? AND id=?', family.familyId, family.parentId,

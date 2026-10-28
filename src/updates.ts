@@ -48,6 +48,10 @@ export async function updateStatus(config: Config, user: User) {
 export async function requestUpdate(config: Config, user: User, action: 'check' | 'install' | 'set_mode', mode?: 'notify'|'auto') {
   const status = await updateStatus(config, user);
   if (!status.configured || !status.enabled || status.stale) return 'unavailable';
+  // Neither a queued install nor a mode/check request can repair these states.
+  // In automatic mode even "check" may install, so reject every POST here;
+  // GET status remains readable; only the root worker's recovery path clears it.
+  if (status.phase === 'recovery_required' || status.phase === 'rollback_pending_health') return 'unavailable';
   if(action==='set_mode'&&(!status.modeControlAllowed||!mode))return 'mode_locked';
   if(status.lastModeRequest?.state==='pending')return 'pending';
   if(status.lastRequest?.state==='running')return 'pending';
