@@ -27,15 +27,17 @@ New-Item -ItemType Directory (Join-Path $installerRoot 'artifacts') -Force | Out
 & (Join-Path $installerRoot 'Yahad.Install.Tests/bin/Release/net10.0-windows/Yahad.Install.Tests.exe') --report (Join-Path $installerRoot 'artifacts/test-results.json')
 if ($LASTEXITCODE -ne 0) { throw 'Fixture tests failed' }
 if ($Publish) {
-    foreach ($project in @('Yahad.Setup', 'Yahad.Host.Slice', 'Yahad.Platform')) {
+    foreach ($project in @('Yahad.Setup', 'Yahad.Host.Slice')) {
         & $DotNet publish (Join-Path $installerRoot "$project/$project.csproj") -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -o (Join-Path $installerRoot "artifacts/$project") --nologo "-p:RestoreConfigFile=$restoreConfig"
         if ($LASTEXITCODE -ne 0) { throw "Publish failed: $project" }
     }
-    # Build-owned app-private helper for local synthetic app tests. Never a live
-    # service location and never installed into a global runtime directory.
+    # Folder publication exposes all runtime assets to the package auditor.
+    & $DotNet publish (Join-Path $installerRoot 'Yahad.Platform/Yahad.Platform.csproj') -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:DebugType=None -o (Join-Path $installerRoot 'artifacts/Yahad.Platform.Bundle') --nologo "-p:RestoreConfigFile=$restoreConfig"
+    if ($LASTEXITCODE -ne 0) { throw 'Private helper publication failed' }
     $nativeFolder = Join-Path (Split-Path $installerRoot) 'native'
     New-Item -ItemType Directory $nativeFolder -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $installerRoot 'artifacts/Yahad.Platform/Yahad.Platform.exe') -Destination (Join-Path $nativeFolder 'Yahad.Platform.exe')
+    Copy-Item -Path (Join-Path $installerRoot 'artifacts/Yahad.Platform.Bundle/*') -Destination $nativeFolder -Recurse -Force
+
 }
 } finally {
     foreach ($name in $buildEnvironmentNames) { [Environment]::SetEnvironmentVariable($name, $previousBuildEnvironment[$name], 'Process') }

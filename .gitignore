@@ -1,5 +1,5 @@
 node_modules/
-native/*.exe
+/native/
 dist/
 data/
 .env
