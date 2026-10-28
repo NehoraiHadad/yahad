@@ -200,6 +200,7 @@ await Check("occupied loopback port is a recoverable conflict", () =>
 await NativeBoundaryTests.Run(root, Check);
 await InstallerPlanningTests.Run(Check);
 await AppLifecycleTests.Run(Check);
+await UpdateRecoveryTests.Run(Check);
 var report = JsonSerializer.Serialize(new { platform = "Windows x64", kind = "synthetic-nonprivileged", passed = results.Count - failed, failed, tests = results }, new JsonSerializerOptions { WriteIndented = true });
 if (args is ["--report", var reportPath]) File.WriteAllText(reportPath, report);
 Console.WriteLine($"{results.Count - failed} passed; {failed} failed. Synthetic fixtures only. Session: {root}");
