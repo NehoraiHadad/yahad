@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, csrf } from './api';
-import { newClientId } from './clientId';
+import { api, csrf, ApiError } from './api';
 import type { UsageStatus } from '../src/usage';
 
-export type UsageReason = 'checking' | 'hidden' | 'idle' | 'offline' | 'exhausted' | 'setup' | '';
+export type UsageReason = 'checking' | 'hidden' | 'idle' | 'offline' | 'exhausted' | 'setup' | 'tabs' | 'unavailable' | '';
 export function useUsageBudget(child: boolean, identity: string) {
   const [status, setStatus] = useState<UsageStatus | null>(null);
   const [reason, setReason] = useState<UsageReason>(child ? 'checking' : '');
@@ -17,11 +16,17 @@ export function useUsageBudget(child: boolean, identity: string) {
     if (!child) return;
     let alive = true, seq = 0, revision = 0, last = performance.now(), deadline = 0;
     let idle = false, exhausted = false, idleMs = 300000, latest: UsageStatus | null = null;
-    const tab = newClientId(); // per mount, deliberately not shared in storage
+    let tab: string | null = null, opening = false;
     const visible = () => document.visibilityState === 'visible' && document.hasFocus();
     const block = (why: UsageReason) => {
       if (!why && suspendedRef.current) activation.current++;
       suspendedRef.current = !!why; setReason(why);
+    };
+    const failed = (error: unknown) => {
+      deadline = 0;
+      if (error instanceof ApiError && error.code === 'USAGE_TAB_EXPIRED') { tab = null; block('checking'); }
+      else if (error instanceof ApiError) { setStatus(null); block(error.code === 'USAGE_TAB_LIMIT' ? 'tabs' : 'unavailable'); }
+      else block('offline');
     };
     const beat = (resume = false) => {
       if (!alive) return;
@@ -32,6 +37,17 @@ export function useUsageBudget(child: boolean, identity: string) {
       const why: UsageReason = !navigator.onLine ? 'offline' : !visible() ? 'hidden' : idle ? 'idle' : exhausted ? 'exhausted' : 'checking';
       // A response, never focus/online alone, authorizes revealing content.
       if (!active || deadline <= performance.now() || resume) block(why);
+      if (!tab) {
+        if (!active || opening) return;
+        opening = true;
+        // Admission cannot bill time. A lost/unmounted response reserves at most
+        // one slot for 15s; late responses cannot activate an unmounted client.
+        void api<{ tab: string }>('/usage/open', 'POST', {}).then(value => {
+          opening = false; if (!alive) return;
+          tab = value.tab; seq = 0; beat();
+        }).catch(error => { opening = false; if (alive) failed(error); });
+        return;
+      }
       void api<UsageStatus>('/usage/heartbeat', 'POST', { tab, seq: ++seq, active }).then(value => {
         if (!alive || request !== revision) return;
         latest = value; setStatus(value); idleMs = value.idleMs; exhausted = value.exhausted;
@@ -40,7 +56,7 @@ export function useUsageBudget(child: boolean, identity: string) {
         // time only to expire permission, never to bill time or reset a day.
         deadline = sent + Math.max(0, lease);
         block(value.timezoneConfirmed === false && value.minutes !== null ? 'setup' : value.exhausted ? 'exhausted' : !active ? why : deadline > performance.now() ? '' : 'offline');
-      }).catch(() => { if (alive && request === revision) { deadline = 0; block('offline'); } });
+      }).catch(error => { if (alive && request === revision) failed(error); });
     };
     trigger.current = beat;
     const activity = () => { if (visible() && !idle) last = performance.now(); };
@@ -50,6 +66,7 @@ export function useUsageBudget(child: boolean, identity: string) {
     const failure = () => { deadline = 0; block('checking'); beat(); };
     const pagehide = () => {
       deadline = 0; block('hidden'); revision++;
+      if (!tab) return;
       // Best effort only. The server expires the last lease within 15 seconds.
       void fetch('/api/usage/heartbeat', { method: 'POST', credentials: 'same-origin', keepalive: true,
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },

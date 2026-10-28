@@ -39,3 +39,16 @@ export function migrateUsageCalendar(db: DatabaseSync) {
     throw error;
   }
 }
+
+/** Pending admissions are not billable leases. Schema-4 code would include their
+ * reservation deadlines in settlement, so it must refuse this policy version. */
+export function migrateUsageAdmission(db: DatabaseSync) {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.exec('UPDATE schema_version SET version=5 WHERE version=4');
+    db.exec('COMMIT');
+  } catch (error) {
+    if (db.isTransaction) db.exec('ROLLBACK');
+    throw error;
+  }
+}

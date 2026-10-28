@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { createApp } from '../src/server.js';
 import type { Config } from '../src/config.js';
+import type { Session } from '../src/store.js';
 const dataDir = mkdtempSync(join(tmpdir(), 'yahad-usage-preview-'));
 const config: Config = { dataDir, masterKey: randomBytes(32), connector: 'mock', realAllowed: false,
   host: '127.0.0.1', port: 4173, origin: 'http://127.0.0.1:4173', secureCookie: false,
@@ -14,18 +15,29 @@ const family = await store.createFamily('משפחת הדגמה', { name: 'הור
   { name: 'ילד הדגמה', password: randomBytes(24).toString('hex') });
 await service.connect(family.familyId);
 for (const g of store.groups(family.familyId)) store.grant(family.familyId, family.childId, g.id, true);
+let childSession: Session | undefined;
 app.get('/__qa/unlock.js', async (_req, reply) => reply.type('application/javascript')
   .send("localStorage.removeItem('yachad-locked');location.replace('/');"));
 app.get<{ Params: { role: string } }>('/__qa/:role', async (req, reply) => {
   const id = req.params.role === 'parent' ? family.parentId : family.childId;
   const session = store.createSession(store.user(store.one('SELECT * FROM users WHERE id=?', id)));
+  if (id === family.childId) childSession = store.session(session.sid)!;
   reply.setCookie('sid', session.sid, { httpOnly: true, sameSite: 'strict', path: '/' });
   return reply.type('text/html').send('<!doctype html><meta charset="utf-8"><title>Synthetic usage QA</title><script src="/__qa/unlock.js"></script>');
 });
 // Synthetic-only controls permit checking an open child's suspension without
 // switching the child's account or handling any real session credentials.
 app.post<{ Params: { action: string } }>('/__qa/control/:action', async req => {
-  if (req.params.action === 'stop') store.usage.setPolicy(family.familyId, family.childId, 0);
+  if (req.params.action === 'occupy-tabs' && childSession) {
+    store.usage.setTimezone(family.familyId, 'Asia/Jerusalem');
+    store.usage.setPolicy(family.familyId, family.childId, 37);
+    for (let i = 0; i < 32; i++) {
+      const { tab } = store.usage.open(childSession);
+      store.usage.heartbeat(childSession, tab, 1, true);
+    }
+  }
+  else if (req.params.action === 'release-tabs' && childSession) store.usage.pauseSession(childSession.sid);
+  else if (req.params.action === 'stop') store.usage.setPolicy(family.familyId, family.childId, 0);
   else {
     const status = store.usage.status(family.familyId, family.childId);
     store.usage.bonus(family.familyId, family.childId, randomBytes(24).toString('hex'), status.day, 4);

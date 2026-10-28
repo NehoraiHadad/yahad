@@ -11,7 +11,7 @@ import { MockConnector } from '../src/connectors/mock.js';
 import type { Config } from '../src/config.js';
 import { DATABASE_SCHEMA } from '../src/database-schema.js';
 import { DatabaseSync } from 'node:sqlite';
-import { migrateUsage, migrateUsageCalendar } from '../src/usage-schema.js';
+import { migrateUsage, migrateUsageCalendar, migrateUsageAdmission } from '../src/usage-schema.js';
 
 async function fixture(options: { now?: number; timezone?: string | null } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'yahad-usage-synthetic-'));
@@ -64,7 +64,7 @@ test('children start unlimited; arbitrary, zero and unlimited policies remain in
 test('leases bill the union across tabs and sessions; reordered, duplicate and stale pauses cannot extend/cancel', async () => {
   const f = await fixture();
   try {
-    const u = f.store.usage, a = randomUUID(), b = randomUUID(), second = f.session(f.f.childId);
+    const u = f.store.usage, second = f.session(f.f.childId), a = u.open(f.child).tab, b = u.open(second).tab;
     u.setPolicy(f.f.familyId, f.f.childId, 37);
     u.heartbeat(f.child, a, 1, true);
     f.advance(4000); u.heartbeat(second, b, 1, true);
@@ -89,7 +89,7 @@ test('leases bill the union across tabs and sessions; reordered, duplicate and s
 test('untrusted elapsed fields are rejected; pause halts at server time; crash/network tail is bounded', async () => {
   const f = await fixture();
   try {
-    const u = f.store.usage, tab = randomUUID();
+    const u = f.store.usage, tab = u.open(f.child).tab;
     u.setPolicy(f.f.familyId, f.f.childId, 3);
     assert.equal((await f.req(f.child, '/api/usage/heartbeat', 'POST', { tab, seq: 1, active: true, elapsed: 1 })).statusCode, 400);
     u.heartbeat(f.child, tab, 1, true); f.advance(5000); u.heartbeat(f.child, tab, 2, false);
@@ -98,7 +98,7 @@ test('untrusted elapsed fields are rejected; pause halts at server time; crash/n
     assert.equal(u.status(f.f.familyId, f.f.childId).usedMs, 20000);
     assert.throws(() => u.require(f.child), /USAGE_PAUSED/);
     // A new mount gets a new tab, never a client-supplied usage baseline.
-    u.heartbeat(f.child, randomUUID(), 1, true); f.advance(2000);
+    u.heartbeat(f.child, u.open(f.child).tab, 1, true); f.advance(2000);
     assert.equal(u.status(f.f.familyId, f.f.childId).usedMs, 22000);
     const high = f.now; f.at(high - 1);
     assert.throws(() => u.heartbeat(f.child, tab, 4, true), /USAGE_CLOCK/);
@@ -111,7 +111,7 @@ test('untrusted elapsed fields are rejected; pause halts at server time; crash/n
 test('policy changes settle atomically; today-only bonuses are idempotent and cannot move to a different day', async () => {
   const f = await fixture();
   try {
-    const u = f.store.usage, tab = randomUUID(), id = randomUUID();
+    const u = f.store.usage, tab = u.open(f.child).tab, id = randomUUID();
     u.setPolicy(f.f.familyId, f.f.childId, 37);
     u.heartbeat(f.child, tab, 1, true); f.advance(5500);
     const zero = u.setPolicy(f.f.familyId, f.f.childId, 0);
@@ -137,7 +137,7 @@ test('midnight splits a lease by family timezone; DST creates 23/25-hour days an
     // No earlier policy was inserted; synthetic session expiry remains adequate.
     const u = new UsageBudgets(f.store, () => f.now), s = { ...f.child, expires: Number.MAX_SAFE_INTEGER };
     u.setPolicy(f.f.familyId, f.f.childId, 2);
-    u.heartbeat(s, randomUUID(), 1, true);
+    u.heartbeat(s, u.open(s).tab, 1, true);
     f.advance(10000);
     const status = u.status(f.f.familyId, f.f.childId);
     assert.equal(status.day, '2026-03-08'); assert.equal(status.usedMs, 5000);
@@ -154,7 +154,7 @@ test('restart preserves ledger and bonus, settles only bounded tail, and require
   const f = await fixture();
   let reopened: Store | undefined;
   try {
-    const u = f.store.usage, tab = randomUUID();
+    const u = f.store.usage, tab = u.open(f.child).tab;
     const policy = u.setPolicy(f.f.familyId, f.f.childId, 12);
     u.bonus(f.f.familyId, f.f.childId, randomUUID(), policy.day, 4);
     u.heartbeat(f.child, tab, 1, true); f.advance(60000);
@@ -165,7 +165,7 @@ test('restart preserves ledger and bonus, settles only bounded tail, and require
     assert.equal(status.leaseUntil, 0); assert.throws(() => reopened!.usage.require(f.child), /USAGE_PAUSED/);
     reopened.usage.heartbeat(f.child, tab, 1, true);
     assert.throws(() => reopened!.usage.require(f.child), /USAGE_PAUSED/, 'pre-restart replay cannot renew');
-    reopened.usage.heartbeat(f.child, randomUUID(), 1, true);
+    reopened.usage.heartbeat(f.child, reopened.usage.open(f.child).tab, 1, true);
     assert.doesNotThrow(() => reopened!.usage.require(f.child));
     f.advance(-1000);
     const rollback = new Store(f.config, { usageClock: () => f.now });
@@ -201,7 +201,7 @@ test('central HTTP gate blocks content, ranges and side effects with typed 403 w
     const bonus = await f.req(f.parent, '/api/parent/usage/' + f.f.childId + '/bonus', 'POST', { requestId: randomUUID(), day: usage.json().day, minutes: 4 });
     assert.equal(bonus.statusCode, 200);
     assert.equal((await f.req(f.child, '/api/groups')).json().error, 'USAGE_PAUSED');
-    const heartbeat = await f.req(f.child, '/api/usage/heartbeat', 'POST', { tab: randomUUID(), seq: 1, active: true });
+    const heartbeat = await f.req(f.child, '/api/usage/heartbeat', 'POST', { tab: f.store.usage.open(f.child).tab, seq: 1, active: true });
     assert.equal(heartbeat.statusCode, 200);
     assert.equal((await f.req(f.child, '/api/groups')).statusCode, 200);
     assert.equal((await f.req(f.child, '/api/logout', 'POST')).statusCode, 200);
@@ -212,7 +212,7 @@ test('central HTTP gate blocks content, ranges and side effects with typed 403 w
 test('expiry is precise and cannot bill more than quota; bounded late heartbeat cannot revive yesterday bonus', async () => {
   const f = await fixture();
   try {
-    const u = f.store.usage, tab = randomUUID(); u.setPolicy(f.f.familyId, f.f.childId, 1);
+    const u = f.store.usage, tab = u.open(f.child).tab; u.setPolicy(f.f.familyId, f.f.childId, 1);
     for (let seq = 1; seq <= 12; seq++) { u.heartbeat(f.child, tab, seq, true); f.advance(5000); }
     const status = u.status(f.f.familyId, f.f.childId); assert.equal(status.usedMs, 60000); assert.equal(status.exhausted, true);
     assert.throws(() => u.require(f.child), /USAGE_EXHAUSTED/);
@@ -221,9 +221,9 @@ test('expiry is precise and cannot bill more than quota; bounded late heartbeat 
 });
 
 test('schema and local recovery/package contract agree; UI preserves mounted drafts through quota suspension', () => {
-  assert.equal(DATABASE_SCHEMA, 4);
+  assert.equal(DATABASE_SCHEMA, 5);
   const recovery = readFileSync(new URL('../scripts/recover-account.py', import.meta.url), 'utf8');
-  assert.match(recovery, /DATABASE_SCHEMA = 4/);
+  assert.match(recovery, /DATABASE_SCHEMA = 5/);
   const release = readFileSync(new URL('../scripts/release.mjs', import.meta.url), 'utf8');
   assert.match(release, /databaseSchema:DATABASE_SCHEMA/);
   const main = readFileSync(new URL('../web/main.tsx', import.meta.url), 'utf8');
@@ -242,12 +242,12 @@ test('async photo and attachment-marker sends recheck the budget before later di
     let begin!: () => void, release!: () => void;
     let started = new Promise<void>(r => begin = r), pending = new Promise<void>(r => release = r);
     f.service.groupPhoto = async () => { begin(); await pending; return { bytes: Buffer.alloc(16), mime: 'image/png' }; };
-    u.setPolicy(f.f.familyId, f.f.childId, 37); u.heartbeat(f.child, randomUUID(), 1, true);
+    u.setPolicy(f.f.familyId, f.f.childId, 37); u.heartbeat(f.child, u.open(f.child).tab, 1, true);
     const photo = f.req(f.child, '/api/groups/' + f.group + '/photo'); const photoResult = photo.then(r => r);
     await started; u.setPolicy(f.f.familyId, f.f.childId, 0); release();
     assert.equal((await photoResult).json().error, 'USAGE_EXHAUSTED');
     await f.service.connect(f.f.familyId);
-    u.setPolicy(f.f.familyId, f.f.childId, 37); u.heartbeat(f.child, randomUUID(), 1, true);
+    u.setPolicy(f.f.familyId, f.f.childId, 37); u.heartbeat(f.child, u.open(f.child).tab, 1, true);
     f.store.setIdentityLabel(f.f.familyId, f.f.childId, 'Synthetic signature');
     let sends = 0;
     started = new Promise<void>(r => begin = r); pending = new Promise<void>(r => release = r);
@@ -303,10 +303,10 @@ test('session cleanup settles before discarding orphan leases; graceful shutdown
   const f = await fixture();
   try {
     f.store.usage.setPolicy(f.f.familyId, f.f.childId, 37);
-    f.store.usage.heartbeat(f.child, randomUUID(), 1, true); f.advance(5000);
+    f.store.usage.heartbeat(f.child, f.store.usage.open(f.child).tab, 1, true); f.advance(5000);
     await f.app.close(); f.advance(60000);
     assert.equal(f.store.usage.status(f.f.familyId, f.f.childId).usedMs, 5000);
-    f.store.usage.heartbeat(f.child, randomUUID(), 1, true); f.advance(5000);
+    f.store.usage.heartbeat(f.child, f.store.usage.open(f.child).tab, 1, true); f.advance(5000);
     f.store.run('DELETE FROM sessions'); f.store.usage.cleanExpiredSessions();
     assert.equal(f.store.usage.status(f.f.familyId, f.f.childId).usedMs, 10000);
     assert.equal(f.store.all('SELECT * FROM usage_leases').length, 0);
@@ -316,7 +316,7 @@ test('session cleanup settles before discarding orphan leases; graceful shutdown
 test('unconfirmed families remain unlimited and unmetered until an explicit parent timezone choice', async () => {
   const f = await fixture({ timezone: null });
   try {
-    const u = f.store.usage, tab = randomUUID();
+    const u = f.store.usage, tab = u.open(f.child).tab;
     assert.equal(u.status(f.f.familyId, f.f.childId).timezoneConfirmed, false);
     u.heartbeat(f.child, tab, 1, true); f.advance(10000);
     assert.equal(u.status(f.f.familyId, f.f.childId).usedMs, 0);
@@ -337,7 +337,7 @@ test('timezone changes extend the current period to a future target midnight wit
   const f = await fixture({ now: Date.parse('2026-10-28T12:00:00Z') });
   let reopened: Store | undefined;
   try {
-    const u = f.store.usage, tab = randomUUID();
+    const u = f.store.usage, tab = u.open(f.child).tab;
     const original = u.setPolicy(f.f.familyId, f.f.childId, 1), bonusId = randomUUID();
     u.bonus(f.f.familyId, f.f.childId, bonusId, original.day, 7, original.dayKey);
     u.heartbeat(f.child, tab, 1, true); f.advance(5000);
@@ -371,7 +371,7 @@ test('timezone changes extend the current period to a future target midnight wit
 test('an exhausted child cannot regain time at the old midnight while a calendar transition is pending', async () => {
   const f = await fixture({ now: Date.parse('2026-10-28T12:00:00Z') });
   try {
-    const u = f.store.usage, tab = randomUUID(); u.setPolicy(f.f.familyId, f.f.childId, 1);
+    const u = f.store.usage, tab = u.open(f.child).tab; u.setPolicy(f.f.familyId, f.f.childId, 1);
     for (let seq = 1; seq <= 12; seq++) { u.heartbeat(f.child, tab, seq, true); f.advance(5000); }
     u.setTimezone(f.f.familyId, 'America/New_York'); const before = u.status(f.f.familyId, f.f.childId);
     f.at(Date.parse('2026-10-29T00:00:01Z'));
@@ -407,5 +407,96 @@ test('schema-3 to 4 calendar DDL and version bump are atomic', () => {
     assert.equal(db.prepare("SELECT 1 FROM sqlite_master WHERE name='usage_calendar'").get(), undefined);
     db.exec('DROP TRIGGER synthetic_failure'); migrateUsageCalendar(db);
     assert.equal(db.prepare('SELECT version FROM schema_version').get()?.version, 4);
+  } finally { db.close(); }
+});
+
+test('64 sequential remounts reuse bounded slots without relogin; retired heartbeats never recreate rows', async () => {
+  const f = await fixture();
+  try {
+    const u = f.store.usage; u.setPolicy(f.f.familyId, f.f.childId, 37);
+    const retired: string[] = [];
+    for (let mount = 0; mount < 64; mount++) {
+      const opened = await f.req(f.child, '/api/usage/open', 'POST', {});
+      assert.equal(opened.statusCode, 200, `mount ${mount + 1}`);
+      const { tab } = opened.json();
+      assert.ok(!retired.includes(tab));
+      assert.equal((await f.req(f.child, '/api/usage/heartbeat', 'POST', { tab, seq: 1, active: true })).statusCode, 200);
+      f.advance(1000); u.heartbeat(f.child, tab, 2, false); retired.push(tab);
+      assert.ok(f.store.one('SELECT COUNT(*) AS n FROM usage_leases').n <= 32);
+    }
+    const current = u.open(f.child).tab;
+    assert.equal(u.status(f.f.familyId, f.f.childId, f.child.sid).leaseUntil, 0, 'admission alone grants no content lease');
+    for (const tab of retired) for (const active of [true, false]) {
+      const replay = await f.req(f.child, '/api/usage/heartbeat', 'POST', { tab, seq: 999999, active });
+      assert.equal(replay.statusCode, 403); assert.equal(replay.json().error, 'USAGE_TAB_EXPIRED');
+    }
+    f.advance(5000);
+    const status = u.status(f.f.familyId, f.f.childId);
+    assert.equal(status.usedMs, 64000); assert.equal(status.remainingMs, 37 * 60000 - 64000);
+    assert.equal(f.store.one('SELECT COUNT(*) AS n FROM usage_leases').n, 1);
+    u.heartbeat(f.child, current, 1, true); assert.doesNotThrow(() => u.require(f.child));
+  } finally { await f.close(); }
+});
+
+test('32 concurrent tab leases enforce capacity; pausing or expiry frees capacity without stale revival', async () => {
+  const f = await fixture();
+  try {
+    const u = f.store.usage; u.setPolicy(f.f.familyId, f.f.childId, 37);
+    const tabs = Array.from({ length: 32 }, () => { const { tab } = u.open(f.child); u.heartbeat(f.child, tab, 1, true); return tab; });
+    const blocked = await f.req(f.child, '/api/usage/open', 'POST', {});
+    assert.equal(blocked.statusCode, 403); assert.equal(blocked.json().error, 'USAGE_TAB_LIMIT');
+    f.advance(1000); u.heartbeat(f.child, tabs[1], 2, true);
+    u.heartbeat(f.child, tabs[0], 2, false);
+    const replacement = u.open(f.child).tab; u.heartbeat(f.child, replacement, 1, true);
+    assert.throws(() => u.heartbeat(f.child, tabs[0], 9999, true), /USAGE_TAB_EXPIRED/);
+    assert.throws(() => u.heartbeat(f.siblingSession, replacement, 2, true), /USAGE_TAB_EXPIRED/);
+    const second = f.session(f.f.childId);
+    assert.throws(() => u.heartbeat(second, replacement, 2, true), /USAGE_TAB_EXPIRED/);
+    const own = u.open(second).tab; u.heartbeat(second, own, 1, true);
+    f.advance(1000); u.heartbeat(f.child, replacement, 3, false);
+    u.heartbeat(f.child, replacement, 2, true);
+    assert.equal(f.store.one('SELECT until FROM usage_leases WHERE tab=?', replacement).until, 0, 'retained sequence rejects reordered activation');
+    f.advance(16000); const fresh = u.open(f.child).tab;
+    u.heartbeat(f.child, fresh, 1, true);
+    assert.equal(u.status(f.f.familyId, f.f.childId).usedMs, 16000, 'concurrent windows bill only union');
+    assert.ok(f.store.one('SELECT COUNT(*) AS n FROM usage_leases WHERE session_hash=(SELECT session_hash FROM usage_leases WHERE tab=?)', fresh).n <= 32);
+  } finally { await f.close(); }
+});
+
+test('lost admissions reserve bounded slots briefly but cannot bill or grant access, including across restart', async () => {
+  const f = await fixture(); let reopened: Store | undefined;
+  try {
+    const u = f.store.usage; u.setPolicy(f.f.familyId, f.f.childId, 37);
+    assert.equal((await f.req(f.parent, '/api/usage/open', 'POST', {})).statusCode, 403);
+    assert.equal((await f.req(f.child, '/api/usage/open', 'POST', { tab: randomUUID() })).statusCode, 400);
+    const pending = Array.from({ length: 32 }, () => u.open(f.child).tab);
+    assert.throws(() => u.open(f.child), /USAGE_TAB_LIMIT/);
+    assert.throws(() => u.require(f.child), /USAGE_PAUSED/);
+    f.advance(15000);
+    assert.equal(u.status(f.f.familyId, f.f.childId).usedMs, 0);
+    assert.throws(() => u.heartbeat(f.child, pending[0], 1, true), /USAGE_TAB_EXPIRED/);
+    const next = u.open(f.child).tab;
+    reopened = new Store(f.config, { usageClock: () => f.now });
+    assert.throws(() => reopened!.usage.heartbeat(f.child, next, 1, true), /USAGE_TAB_EXPIRED/);
+    for (let mount = 0; mount < 40; mount++) {
+      const tab = reopened.usage.open(f.child).tab;
+      reopened.usage.heartbeat(f.child, tab, 1, true); f.advance(1000);
+      reopened.usage.heartbeat(f.child, tab, 2, false);
+    }
+    assert.equal(reopened.usage.status(f.f.familyId, f.f.childId).usedMs, 40000);
+  } finally { reopened?.close(); await f.close(); }
+});
+
+test('schema-4 to 5 admission policy boundary advances atomically without rewriting leases', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec(`CREATE TABLE schema_version(version INTEGER); INSERT INTO schema_version VALUES(4);
+      CREATE TABLE usage_leases(tab TEXT,seq INTEGER,until INTEGER); INSERT INTO usage_leases VALUES('retained',77,1234);
+      CREATE TRIGGER synthetic_failure BEFORE UPDATE ON schema_version BEGIN SELECT RAISE(ABORT,'synthetic admission failure'); END;`);
+    assert.throws(() => migrateUsageAdmission(db), /synthetic admission failure/);
+    assert.equal(db.prepare('SELECT version FROM schema_version').get()?.version, 4);
+    db.exec('DROP TRIGGER synthetic_failure'); migrateUsageAdmission(db);
+    assert.equal(db.prepare('SELECT version FROM schema_version').get()?.version, 5);
+    assert.deepEqual({ ...db.prepare('SELECT * FROM usage_leases').get() }, { tab: 'retained', seq: 77, until: 1234 });
   } finally { db.close(); }
 });

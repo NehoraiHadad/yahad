@@ -103,7 +103,7 @@ test('read-state persists across reopen, and additive initialization does not ba
    try {
      assert.equal(unreadCount(upgraded, user, first), 0);
      assert.ok(upgraded.getMessage(f.family.familyId, first, 'persist'));
-     assert.equal(upgraded.one('SELECT version FROM schema_version').version, 4);
+     assert.equal(upgraded.one('SELECT version FROM schema_version').version, 5);
    } finally { upgraded.close(); }
  } finally { await f.close(); }
 });

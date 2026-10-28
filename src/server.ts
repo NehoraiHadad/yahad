@@ -242,6 +242,11 @@ export async function createApp(
     if (req.session.user.role !== 'child') throw new AppError(403, 'CHILD_ONLY');
     return store.usage.status(req.session.user.familyId, req.session.user.id, req.session.sid);
   });
+  app.post('/api/usage/open', async req => {
+    if (req.session.user.role !== 'child') throw new AppError(403, 'CHILD_ONLY');
+    z.object({}).strict().parse(req.body);
+    return store.usage.open(req.session);
+  });
   app.post('/api/usage/heartbeat', async req => {
     if (req.session.user.role !== 'child') throw new AppError(403, 'CHILD_ONLY');
     const data = z.object({ tab: z.uuid(), seq: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER), active: z.boolean() }).strict().parse(req.body);

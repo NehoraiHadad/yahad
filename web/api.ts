@@ -14,6 +14,8 @@ export function isTransientApiError(error: unknown) {
     error.code !== 'LOGIN_WAIT' && (error.status === 408 || error.status === 429 || error.status >= 500 && error.status < 600);
 }
 const errors: Record<string, string> = {
+  USAGE_TAB_LIMIT: 'יותר מדי חלונות פעילים בחשבון הזה. סגרו חלון אחר ונסו שוב בעוד כמה שניות.',
+  USAGE_TAB_EXPIRED: 'החלון דורש בדיקה מחדש לפני המשך השימוש.',
   USAGE_EXHAUSTED: 'מכסת הזמן להיום הסתיימה. ההורה יכול להוסיף זמן.',
   USAGE_PAUSED: 'זמן השימוש מושהה. יש לחזור לחלון פעיל ולבדוק את המכסה.',
   USAGE_CLOCK: 'שעון השרת דורש בדיקה. זמן השימוש מושהה.',

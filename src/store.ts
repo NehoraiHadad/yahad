@@ -3,7 +3,7 @@ import { DatabaseSync, backup } from 'node:sqlite';
 import { initializeChatReadState, recordUnread } from './chat-read-state.js';
 import { Diagnostics } from './diagnostics.js';
 import { DATABASE_SCHEMA, USERS_TABLE, migrateAccountNames } from './db.js';
-import { migrateUsage, migrateUsageCalendar } from './usage-schema.js';
+import { migrateUsage, migrateUsageCalendar, migrateUsageAdmission } from './usage-schema.js';
 import { UsageBudgets } from './usage.js';
 import { normalizeAccountName, accountNameKey } from './account-name.js';
 import {
@@ -71,6 +71,7 @@ export class Store {
  CREATE TABLE IF NOT EXISTS schema_version(version INTEGER NOT NULL); INSERT INTO schema_version SELECT ${DATABASE_SCHEMA} WHERE NOT EXISTS(SELECT 1 FROM schema_version);`);
       migrateUsage(this.db);
       migrateUsageCalendar(this.db);
+      migrateUsageAdmission(this.db);
       this.usage = new UsageBudgets(this, options.usageClock);
       this.usage.restart();
       this.run('INSERT OR IGNORE INTO instance_metadata VALUES(?,?)', 'connector', config.connector);

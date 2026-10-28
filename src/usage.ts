@@ -1,9 +1,11 @@
 import type { Store, Session } from './store.js';
 import { hash } from './crypto.js';
+import { randomUUID } from 'node:crypto';
 
 export const USAGE_LEASE_MS = 15_000;
 export const USAGE_HEARTBEAT_MS = 5_000;
 export const USAGE_IDLE_MS = 5 * 60_000;
+export const USAGE_TAB_LIMIT = 32;
 export class UsageError extends Error {
   readonly status = 403;
   constructor(readonly code: string) { super(code); }
@@ -66,7 +68,7 @@ export class UsageBudgets {
     if (now < p.cursor) throw new UsageError('USAGE_CLOCK');
     // All leases start at/before the previous settlement cursor. Their union is
     // therefore a single interval ending at the latest expiry (never their sum).
-    const until = this.store.one('SELECT MAX(until) AS n FROM usage_leases WHERE family_id=? AND child_id=?', f, c)?.n || 0;
+    const until = this.store.one('SELECT MAX(until) AS n FROM usage_leases WHERE family_id=? AND child_id=? AND seq>=0', f, c)?.n || 0;
     let start = p.cursor, end = Math.min(now, until);
     while (start < end && this.calendar(f, start).timezoneConfirmed) {
       const calendar = this.calendar(f, start), day = calendar.dayKey, stop = Math.min(end, calendar.resetAt);
@@ -85,7 +87,7 @@ export class UsageBudgets {
     const d = this.store.one('SELECT * FROM usage_days WHERE family_id=? AND child_id=? AND day=?', f, c, dayKey);
     const usedMs = d?.used_ms || 0, bonusMs = d?.bonus_ms || 0, minutes = p?.minutes ?? null;
     const remainingMs = minutes === null ? null : Math.max(0, minutes * 60000 + bonusMs - usedMs);
-    const leaseUntil = sid ? this.store.one('SELECT MAX(until) AS n FROM usage_leases WHERE family_id=? AND child_id=? AND session_hash=?', f, c, hash(sid))?.n || 0 : 0;
+    const leaseUntil = sid ? this.store.one('SELECT MAX(until) AS n FROM usage_leases WHERE family_id=? AND child_id=? AND session_hash=? AND seq>=0', f, c, hash(sid))?.n || 0 : 0;
     return { day, dayKey, timezone, timezoneConfirmed, pendingTimezone, timezoneChangesAt, minutes, usedMs, bonusMs, remainingMs, exhausted: remainingMs === 0,
       serverNow: now, resetAt: calendar.resetAt, leaseUntil, heartbeatMs: USAGE_HEARTBEAT_MS, idleMs: USAGE_IDLE_MS };
   }
@@ -93,20 +95,36 @@ export class UsageBudgets {
     const now = this.clock();
     return this.store.tx(() => { this.settle(f, c, now); return this.snapshot(f, c, now, sid); });
   }
+  open(s: Session) {
+    const f = s.user.familyId, c = s.user.id, now = this.clock(), sh = hash(s.sid);
+    return this.store.tx(() => {
+      this.settle(f, c, now);
+      // Admission is separate from heartbeat. Only a server-issued identity may
+      // activate, so recycling a stopped/expired row never makes an old delayed
+      // heartbeat eligible for insertion again. Pending admissions reserve a
+      // slot briefly but seq=-1 excludes them from billing and content leases.
+      const retired = this.store.one('SELECT tab FROM usage_leases WHERE family_id=? AND child_id=? AND session_hash=? AND until<=? LIMIT 1', f, c, sh, now);
+      if (retired) this.store.run('DELETE FROM usage_leases WHERE family_id=? AND child_id=? AND session_hash=? AND tab=?', f, c, sh, retired.tab);
+      else if (this.store.one('SELECT COUNT(*) AS n FROM usage_leases WHERE session_hash=?', sh).n >= USAGE_TAB_LIMIT)
+        throw new UsageError('USAGE_TAB_LIMIT');
+      const tab = randomUUID();
+      this.store.run('INSERT INTO usage_leases VALUES(?,?,?,?,-1,?)', f, c, sh, tab, Math.min(now + USAGE_LEASE_MS, s.expires));
+      return { tab };
+    });
+  }
   heartbeat(s: Session, tab: string, seq: number, active: boolean) {
     const f = s.user.familyId, c = s.user.id, now = this.clock(), sh = hash(s.sid);
     return this.store.tx(() => {
       this.settle(f, c, now);
-      const previous = this.store.one('SELECT seq FROM usage_leases WHERE family_id=? AND child_id=? AND session_hash=? AND tab=?', f, c, sh, tab);
-      if (!previous && this.store.one('SELECT COUNT(*) AS n FROM usage_leases WHERE session_hash=?', sh).n >= 32)
-        throw new UsageError('USAGE_TAB_LIMIT');
-      // Tombstones retain sequence even after pause/expiry; stale pause can never
-      // cancel a newer activation, nor can replay extend the same lease.
-      if (!previous || seq > previous.seq) {
+      const previous = this.store.one('SELECT seq,until FROM usage_leases WHERE family_id=? AND child_id=? AND session_hash=? AND tab=?', f, c, sh, tab);
+      if (!previous || previous.seq === -1 && previous.until <= now) throw new UsageError('USAGE_TAB_EXPIRED');
+      // Retained identities preserve sequence. Replaced identities are rejected
+      // forever; a heartbeat can never allocate a row or renew an old identity.
+      if (seq > previous.seq) {
         const status = this.snapshot(f, c, now);
         const needsTimezone = !status.timezoneConfirmed && status.minutes !== null;
         const until = active && !status.exhausted && !needsTimezone ? Math.min(now + USAGE_LEASE_MS, s.expires, now + (status.remainingMs ?? USAGE_LEASE_MS)) : 0;
-        this.store.run(`INSERT INTO usage_leases VALUES(?,?,?,?,?,?) ON CONFLICT(family_id,child_id,session_hash,tab) DO UPDATE SET seq=excluded.seq,until=excluded.until`, f, c, sh, tab, seq, until);
+        this.store.run('UPDATE usage_leases SET seq=?,until=? WHERE family_id=? AND child_id=? AND session_hash=? AND tab=?', seq, until, f, c, sh, tab);
       }
       return this.snapshot(f, c, now, s.sid);
     });
@@ -126,7 +144,7 @@ export class UsageBudgets {
       if (minutes !== null && !this.calendar(f, now).timezoneConfirmed) throw new UsageError('USAGE_TIMEZONE_REQUIRED');
       this.store.run('UPDATE usage_policy SET minutes=? WHERE family_id=? AND child_id=?', minutes, f, c);
       // Reconcile every active device before it can reveal content again.
-      this.store.run('UPDATE usage_leases SET until=0 WHERE family_id=? AND child_id=?', f, c);
+      this.store.run('UPDATE usage_leases SET until=0 WHERE family_id=? AND child_id=? AND seq>=0', f, c);
       return this.snapshot(f, c, now);
     });
   }

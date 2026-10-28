@@ -31,7 +31,7 @@ test('existing schema2 gains unread and throttle tables without changing credent
     try {
       const { store, app } = upgraded;
       const ready = await app.inject({ url: '/health/ready' });
-      assert.equal(ready.statusCode, 200); assert.equal(ready.json().databaseSchema, 4);
+      assert.equal(ready.statusCode, 200); assert.equal(ready.json().databaseSchema, 5);
       assert.equal(store.one('SELECT password FROM users WHERE id=?', child.id).password, originalHash);
       assert.equal(store.session(session.sid)?.user.id, child.id);
       assert.deepEqual(store.all('SELECT * FROM grants'), originalGrants);
