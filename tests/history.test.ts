@@ -263,9 +263,106 @@ test('a replacement connector shares the family ingestion bound while a disposed
 test('history requests share a family rate bound even across different groups and empty replies',async()=>{
   const f=await fixture();try{
     for(let i=0;i<7;i++){
-      const group='rate-'+i+'@g.us';f.store.syncGroups(f.a.familyId,[{id:group,title:'Synthetic rate '+i}]);await f.service.grant(f.a.familyId,f.a.childId,group,true);f.seed(message('anchor-'+i,group));
+      const group='90000'+i+'@g.us';f.store.syncGroups(f.a.familyId,[{id:group,title:'Synthetic rate '+i}]);await f.service.grant(f.a.familyId,f.a.childId,group,true);f.seed(message('anchor-'+i,group));
       const result=await f.req(group,'POST',{});assert.equal(result.statusCode,i<6?200:429);if(i<6)f.c.hooks.historyEmpty!('request-one');
     }
     assert.equal(f.c.calls.length,6);
   }finally{await f.close();}
+});
+
+test('provider discovery precedes private message admission and ignores broadcasts, stale events and contacts without chats',async()=>{
+ const f=adapterFixture(); const discovered:any[]=[];
+ f.h.discoverDirect=chats=>{discovered.push(...chats);for(const c of chats)f.allowed.add(c.id);};
+ await f.connector.start();try{
+  const direct='15550001111@s.whatsapp.net', lid='123456789@lid';
+  f.emit('contacts.upsert',[{id:direct,name:'Contact only'}]);assert.equal(discovered.length,0);
+  f.emit('messaging-history.set',{chats:[{id:direct,name:'Synthetic direct'}],messages:[raw('direct-old',direct)]});
+  await f.connector.ingestion!.settled();
+  assert.equal(f.received[0].groupId,direct);assert.equal(f.received[0].history!==undefined,true);
+  f.emit('messages.upsert',{type:'notify',messages:[raw('lid-live',lid),raw('status','status@broadcast')]});
+  await f.connector.ingestion!.settled();
+  assert.deepEqual(f.received.map(m=>m.id),['direct-old','lid-live']);
+  f.emit('contacts.upsert',[{id:direct,name:'Updated name'}]);assert.equal(discovered.at(-1).title,'Updated name');
+  const before=discovered.length;await f.connector.stop();f.emit('chats.upsert',[{id:'999@s.whatsapp.net',name:'Late'}]);
+  assert.equal(discovered.length,before);
+ }finally{await f.connector.stop();}
+});
+
+test('initial history waits for verified group membership instead of discarding catalog-race messages',async()=>{
+ const f=adapterFixture(); f.allowed.delete(g);let finish!:(v:any)=>void;
+ f.h.discoverGroups=groups=>{for(const x of groups)f.allowed.add(x.id);};
+ f.sock.groupFetchAllParticipating=()=>new Promise(r=>finish=r);
+ await f.connector.start();try{
+  f.emit('messaging-history.set',{messages:[raw('initial'),raw('departed',other)]});
+  assert.equal(f.received.length,0);
+  finish({[g]:{id:g,subject:'Verified member'}});
+  await new Promise<void>(r=>setImmediate(r));await f.connector.ingestion!.settled();
+  assert.deepEqual(f.received.map(m=>m.id),['initial']);
+ }finally{await f.connector.stop();}
+});
+
+test('late verified group fetch cannot reintroduce chats after connector stop',async()=>{
+ const f=adapterFixture();f.allowed.delete(g);let finish!:(v:any)=>void;let calls=0;
+ f.h.discoverGroups=()=>{calls++;};f.sock.groupFetchAllParticipating=()=>new Promise(r=>finish=r);
+ await f.connector.start();
+ f.emit('messaging-history.set',{messages:[raw('initial')]});await f.connector.stop();
+ finish({[g]:{id:g,subject:'Late'}});
+ await new Promise<void>(r=>setImmediate(r));
+ assert.equal(calls,0);assert.equal(f.received.length,0);
+});
+
+test('private original keys work end to end for send, read, media normalization and history requests',async()=>{
+ const f=adapterFixture(),direct='15550002222@s.whatsapp.net';f.allowed.add(direct);
+ const sent:any[]=[],reads:any[]=[];
+ f.sock.sendMessage=async(jid:string,content:any,options:any)=>{sent.push({jid,content,options});return raw(options.messageId,jid,Date.now(),true);};
+ f.sock.readMessages=async(keys:any)=>{reads.push(keys);};
+ await f.connector.start();try{
+  const outgoing=await f.connector.send({groupId:direct,id:'sent-direct',text:'Synthetic private text',kind:'text'});
+  assert.equal(outgoing.groupId,direct);
+  const old=message('old-direct',direct);
+  assert.equal(f.connector.historyAnchor(direct,old),true);
+  assert.equal(await f.connector.history(direct,old),'provider-request');
+  await f.connector.read(direct,[old]);assert.equal(reads[0][0].remoteJid,direct);
+  assert.equal(sent[0].jid,direct);
+  f.emit('messages.upsert',{type:'notify',messages:[{...raw('media-direct',direct),message:{imageMessage:{caption:'Synthetic caption',mimetype:'image/jpeg'}}}]});
+  await f.connector.ingestion!.settled();
+  assert.equal(f.received.at(-1)?.kind,'image');
+  assert.equal(f.received.at(-1)?.groupId,direct);
+ }finally{await f.connector.stop();}
+});
+
+test('initial history rechecks stale known group membership before retaining messages',async()=>{
+ const f=adapterFixture();let finish!:(v:any)=>void;
+ f.h.discoverGroups=groups=>{f.allowed.clear();for(const x of groups)f.allowed.add(x.id);};
+ f.sock.groupFetchAllParticipating=()=>new Promise(r=>finish=r);
+ await f.connector.start();try{
+  f.emit('messaging-history.set',{messages:[raw('stale-known')]});
+  assert.equal(f.received.length,0);finish({});
+  await new Promise<void>(r=>setImmediate(r));await f.connector.ingestion!.settled();
+  assert.equal(f.received.length,0);
+ }finally{await f.connector.stop();}
+});
+
+test('live ingress also waits initial membership and stale fetches cannot return an empty authoritative catalog',async()=>{
+ const f=adapterFixture();let finish!:(v:any)=>void;
+ f.h.discoverGroups=groups=>{f.allowed.clear();for(const x of groups)f.allowed.add(x.id);};
+ f.sock.groupFetchAllParticipating=()=>new Promise(r=>finish=r);
+ await f.connector.start();
+ f.emit('messages.upsert',{type:'notify',messages:[raw('stale-live')]});assert.equal(f.received.length,0);
+ finish({});await new Promise<void>(r=>setImmediate(r));assert.equal(f.received.length,0);
+ const pending=f.connector.groups();await f.connector.stop();finish({});
+ await assert.rejects(pending,/Stale conversation catalog/);
+});
+
+test('only explicit Baileys notify arrivals are live; append/replay rows stay history and requestId duplicates stay suppressed',async()=>{
+ const f=adapterFixture();await f.connector.start();try{
+  f.emit('messages.upsert',{type:'notify',messages:[raw('live-notify')]});
+  f.emit('messages.upsert',{type:'append',messages:[raw('offline-append')]});
+  f.emit('messages.upsert',{messages:[raw('unknown-type')]});
+  f.emit('messages.upsert',{type:'notify',requestId:'phone-response',messages:[raw('duplicate-response')]});
+  await f.connector.ingestion!.settled();
+  assert.deepEqual(f.received.map(m=>[m.id,!!m.history]),[
+   ['live-notify',false],['offline-append',true],['unknown-type',true],
+  ]);
+ }finally{await f.connector.stop();}
 });

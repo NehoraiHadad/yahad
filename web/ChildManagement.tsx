@@ -29,14 +29,14 @@ export function ChildManagement(props: Props) {
   return <section className="child-management parent-card" aria-labelledby="children-title" aria-busy={!data && !stale}>
     <header className="children-heading">
       <div><span className="eyebrow">המרחב המשפחתי</span><h2 id="children-title" tabIndex={-1}>הילדים שלכם <span className="children-count">{data ? children.length : '—'}</span></h2>
-        <p>בוחרים ילד או ילדה, ומנהלים את הקבוצות והחשבון שלהם במקום אחד.</p></div>
+        <p>בוחרים ילד או ילדה, ומנהלים את השיחות והחשבון שלהם במקום אחד.</p></div>
       <button type="button" className="primary" disabled={busy || stale || !data} onClick={onAdd}><Plus size={18}/> הוספת ילד או ילדה</button>
     </header>
     {!data ? <div className="child-workspace-empty" role={stale ? 'alert' : 'status'}>
       {stale ? <><h3>לא הצלחנו לטעון את הילדים</h3><p>לא בוצעו שינויים. בדקו את החיבור ונסו שוב.</p><button type="button" className="outline-button" onClick={props.onRetry}>ניסיון נוסף</button></>
-        : <><LoaderCircle className="spin" size={24}/><p>טוענים את הילדים והקבוצות שלהם…</p></>}
+        : <><LoaderCircle className="spin" size={24}/><p>טוענים את הילדים והשיחות שלהם…</p></>}
     </div> : !children.length ? <div className="child-workspace-empty">
-      <Users size={32}/><h3>כאן יופיעו הילדים שלכם</h3><p>הוסיפו חשבון ראשון. לאחר מכן בחרו עבורו קבוצות — אף קבוצה לא מאושרת אוטומטית.</p>
+      <Users size={32}/><h3>כאן יופיעו הילדים שלכם</h3><p>הוסיפו חשבון ראשון. לאחר מכן בחרו עבורו שיחות — אף שיחה לא מאושרת אוטומטית.</p>
       <button type="button" className="outline-button" disabled={busy || stale} onClick={onAdd}><Plus size={18}/> הוספת החשבון הראשון</button>
     </div> : <div className="child-workspace">
       <nav className="child-roster" aria-label="בחירת ילד או ילדה">
@@ -47,10 +47,10 @@ export function ChildManagement(props: Props) {
             onClick={() => onSelect(account.id)} aria-label={`ניהול החשבון של ${childLabel(account)}`}>
             <span className="child-card-top"><span className="child-initial" aria-hidden="true">{Array.from(account.name)[0]}</span>
               <strong dir="auto">{childLabel(account)}</strong>{selected === account.id && <Check size={17} aria-hidden="true"/>}</span>
-            <span className="child-card-count">{account.groups.length === 1 ? 'קבוצה אחת מאושרת' : `${account.groups.length} קבוצות מאושרות`}</span>
-            <span className={'child-readiness ' + (!account.groups.length ? 'needs-groups' : '')}>{stale ? 'ממתינים לרענון' : account.ready ? 'מוכן לכניסה בטאבלט' : !account.groups.length ? 'צריך לבחור קבוצות' : 'ממתין לחיבור החשבון'}</span>
+            <span className="child-card-count">{account.groups.length === 1 ? 'שיחה אחת מאושרת' : `${account.groups.length} שיחות מאושרות`}</span>
+            <span className={'child-readiness ' + (!account.groups.length ? 'needs-groups' : '')}>{stale ? 'ממתינים לרענון' : account.ready ? 'מוכן לכניסה בטאבלט' : !account.groups.length ? 'צריך לבחור שיחות' : 'ממתין לחיבור החשבון'}</span>
             {!!account.groups.length && <span className="child-card-groups">{account.groups.slice(0, 2).map(group => group.title).join(' · ')}{account.groups.length > 2 ? ` · ועוד ${account.groups.length - 2}` : ''}</span>}
-            <span className="child-card-link">{selected === account.id ? 'החשבון שנבחר' : 'ניהול קבוצות וחשבון'}<ChevronLeft size={15}/></span>
+            <span className="child-card-link">{selected === account.id ? 'החשבון שנבחר' : 'ניהול שיחות וחשבון'}<ChevronLeft size={15}/></span>
           </button>
         </li>)}</ul>
       </nav>
@@ -86,20 +86,20 @@ function ChildWorkspace({ data, selectedChild: child, busy, stale, createdChild,
         <button type="button" className="text-button" disabled={busy || stale || saving} onClick={() => onSettings(child.id, 'password')}>איפוס סיסמה</button>
       </div>
     </header>
-    {createdChild === child.id && <p className="setup-success" role="status">החשבון של <bdi>{child.name}</bdi> נוצר ונבחר. עכשיו בוחרים אילו קבוצות להציג בו.</p>}
-    {stale && <p className="child-sync-note" role="status">מציגים את המידע האחרון. שינוי קבוצות והגדרות יתאפשר אחרי אימות מול השרת.</p>}
+    {createdChild === child.id && <p className="setup-success" role="status">החשבון של <bdi>{child.name}</bdi> נוצר ונבחר. עכשיו בוחרים אילו שיחות להציג בו.</p>}
+    {stale && <p className="child-sync-note" role="status">מציגים את המידע האחרון. שינוי שיחות והגדרות יתאפשר אחרי אימות מול השרת.</p>}
     <section className="child-groups-section" aria-labelledby="selected-groups-title">
-      <div className="child-groups-heading"><div><h4 id="selected-groups-title">הקבוצות של <bdi>{child.name}</bdi></h4><p>{child.groups.length ? `${child.groups.length === 1 ? 'קבוצה אחת מאושרת' : `${child.groups.length} קבוצות מאושרות`} לחשבון הזה` : 'עדיין אין קבוצות מאושרות — בחרו מהרשימה למטה'}</p></div>
-        <button type="button" className="icon-button" aria-label="רענון רשימת קבוצות" title="רענון רשימת קבוצות" disabled={busy || stale || saving || data.state !== 'connected' || !!data.disconnect} onClick={onRefresh}><RefreshCw size={18}/></button></div>
+      <div className="child-groups-heading"><div><h4 id="selected-groups-title">השיחות של <bdi>{child.name}</bdi></h4><p>{child.groups.length ? `${child.groups.length === 1 ? 'שיחה אחת מאושרת' : `${child.groups.length} שיחות מאושרות`} לחשבון הזה` : 'עדיין אין שיחות מאושרות — בחרו מהרשימה למטה'}</p></div>
+        <button type="button" className="icon-button" aria-label="רענון רשימת שיחות" title="רענון רשימת שיחות" disabled={busy || stale || saving || data.state !== 'connected' || !!data.disconnect} onClick={onRefresh}><RefreshCw size={18}/></button></div>
       <p className="child-save-help">כל שינוי נשמר בנפרד. האישור חל רק על <bdi>{child.name}</bdi>, ולא על הילדים האחרים.</p>
       <div className={'child-save-feedback ' + (confirmed ? 'confirmed' : '')} role={change?.phase === 'settled' && !stale && !confirmed ? 'alert' : 'status'} aria-live="polite">
-        {change ? saving ? `שומרים את השינוי ב־${change.title} עבור ${child.name}…` : stale ? `לא ניתן לאמת את השינוי בקבוצה ${change.title} עבור ${child.name}. ממתינים לחיבור ולרענון לפני שינוי נוסף.`
-          : confirmed ? `${change.title} ${change.allowed ? 'אושרה' : 'הוסרה מהקבוצות המאושרות'} עבור ${child.name}.`
-          : `לא התקבל אישור לשינוי בקבוצה ${change.title} עבור ${child.name}. הרשימה מציגה את המצב האחרון מהשרת; אפשר לבדוק ולנסות שוב.` : 'הקבוצות המסומנות הן הקבוצות המאושרות לחשבון הזה.'}
+        {change ? saving ? `שומרים את השינוי ב־${change.title} עבור ${child.name}…` : stale ? `לא ניתן לאמת את השינוי בשיחה ${change.title} עבור ${child.name}. ממתינים לחיבור ולרענון לפני שינוי נוסף.`
+          : confirmed ? `${change.title} ${change.allowed ? 'אושרה' : 'הוסרה מהשיחות המאושרות'} עבור ${child.name}.`
+          : `לא התקבל אישור לשינוי בשיחה ${change.title} עבור ${child.name}. הרשימה מציגה את המצב האחרון מהשרת; אפשר לבדוק ולנסות שוב.` : 'השיחות המסומנות הן השיחות המאושרות לחשבון הזה.'}
       </div>
       <GroupPicker groups={data.groups} grants={data.grants} childId={child.id} childName={child.name} showFilters
         busy={busy || stale || saving} loading={false} onToggle={toggle} photoRetryKey={photoRetryKey}/>
-      <div className="small-note child-access-note"><ShieldCheck size={16}/><p>הסרת האישור מבטלת את הגישה של <bdi>{child.name}</bdi> לקבוצה, ואינה משנה את הגישה של הילדים האחרים או של ההורה. עותקים שכבר הורדו למכשיר אינם נמחקים מרחוק.</p></div>
+      <div className="small-note child-access-note"><ShieldCheck size={16}/><p>הסרת האישור מבטלת את הגישה של <bdi>{child.name}</bdi> לשיחה, ואינה משנה את הגישה של הילדים האחרים או של ההורה. עותקים שכבר הורדו למכשיר אינם נמחקים מרחוק.</p></div>
     </section>
     {children && <details className="child-more-settings"><summary>חתימה אוטומטית להודעות של <bdi>{child.name}</bdi></summary>{children}</details>}
   </div>;

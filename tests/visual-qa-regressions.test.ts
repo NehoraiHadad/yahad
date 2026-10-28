@@ -23,9 +23,9 @@ test('child name is bidi isolated in mixed Hebrew copy and singular grant counts
     data: { ...data, children: [{ id: 'a', name: 'Synthetic Jr.' }] }, selected: 'a', busy: false, stale: false, createdChild: 'a',
     onSelect() {}, onAdd() {}, onSettings() {}, onRefresh() {}, onRetry() {}, onGrant: async () => true,
   }));
-  assert.match(html, /הקבוצות של <bdi>Synthetic Jr\.<\/bdi>/);
-  assert.match(html, /קבוצה אחת מאושרת/);
-  assert.doesNotMatch(html, /1 קבוצות מאושרות/);
+  assert.match(html, /השיחות של <bdi>Synthetic Jr\.<\/bdi>/);
+  assert.match(html, /שיחה אחת מאושרת/);
+  assert.doesNotMatch(html, /1 שיחות מאושרות/);
   assert.match(html, /id="children-title" tabindex="-1"/);
 });
 

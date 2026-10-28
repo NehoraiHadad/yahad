@@ -30,10 +30,10 @@ OLD_SHA256 = '6b1523a207ecff1ad7bff19c80d85809f4e453125bf5b5ecece64463465a6cad'
 # Both enrollment baselines are exact reviewed bytes, never a version string or
 # whatever worker happens to be shipped alongside an untrusted application.
 DIRECT_WORKER_SHA256 = '22cd73dc810d08d90e1ec6af4e4b482bc60a0f42b44e1bf874c78682375264cd'
-SUPERVISOR_SHA256 = '31bb934e57a28b8a8aad9fc3e27f3eb19a2b9628164f3d5563d8885eaaeaf5ac'
+SUPERVISOR_SHA256 = 'a432cb808d9e56a58e87684e8899b00667949c3acef68ed3a2d4beb65065291e'
 SUPERVISOR = '/usr/local/lib/yachad-updater/updater-supervisor.py'
 TRANSPORT = '/usr/local/lib/yachad-updater/updater-transport.py'
-TRANSPORT_SHA256 = '77965b53ec5cd7cba536d65d0ed9aede16537fe513596e76dac3dbbe1ff71f24'
+TRANSPORT_SHA256 = 'bb81e88782aade42c8251a237ccd6c555d7c02452f718819f0c9c5d8229e4010'
 SOURCE_POLICY = '/etc/yachad/updater-source.json'
 KEY = '/etc/yachad/updater-signing.pub'
 LAUNCHER = b'''#!/usr/bin/env python3

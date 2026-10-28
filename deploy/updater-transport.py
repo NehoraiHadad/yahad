@@ -123,7 +123,7 @@ def policy(supervisor):
     fields = {'format', 'enabled', 'repository', 'channel', 'checkHours'} | ({'trust'} if https else set())
     if (set(value) != fields or type(value['format']) is not int or value['format'] not in (1, 2) or type(value['enabled']) is not bool or
             not isinstance(value['repository'], str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}', value['repository']) or
-            value['channel'] != 'stable' or type(value['checkHours']) is not int or not 1 <= value['checkHours'] <= 168 or
+            value['channel'] != 'stable' or type(value['checkHours']) not in (int, float) or not 1 / 12 <= value['checkHours'] <= 168 or
             https and (value['trust'] != 'github-https' or value['repository'] != PUBLIC_REPOSITORY or supervisor.trust_profile() != 'github-https')):
         raise TransportError('configuration')
     return value
@@ -361,6 +361,25 @@ def refresh(supervisor, command='run', *, fetch=download, now=time.time):
         selection = release_selection(raw, repository) if https else None
         if https and bound_install and release_target(selection['release'], repository) != supervisor.app_status().get('installTarget'):
             raise TransportError('target_changed')
+        # An already healthy exact app target and identical enrolled runtime need
+        # no archive downloads. This is only a scheduled no-op, never an install
+        # authorization; any changed target/runtime retains full app preflight.
+        if https and command == 'run' and urls is not None:
+            status = supervisor.app_status()
+            if (status.get('phase') in ('healthy', 'idle') and
+                    status.get('currentVersion') == selection['release']['tag_name'].lstrip('v') and
+                    status.get('installTarget') == release_target(selection['release'], repository)):
+                raw_runtime = fetch(urls[0], 8192)
+                if hashlib.sha256(raw_runtime).hexdigest() == before.get('manifestSha256'):
+                    with supervisor.locked():
+                        eligible(supervisor, command, selected, now()*1000, intent)
+                        supervisor.require_quiet_app()
+                        journal = supervisor.journal()
+                        current_status = supervisor.app_status()
+                        previous = saved_status(supervisor)
+                        if (journal['phase'] == 'stable' and journal['active'] == before and
+                                current_status == status and previous and previous['attempt'] == attempt):
+                            return save(supervisor, checked_at, attempt, 'unchanged', version=before['version'])
         if https: selection = preflight_app(selection, fetch)
         if urls is None:
             result = finish(supervisor, checked_at, attempt, 'unavailable')

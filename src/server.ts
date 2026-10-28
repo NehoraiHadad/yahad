@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import { CredentialThrottle } from './credential-throttle.js';
 import { performance } from 'node:perf_hooks';
 import cookie from '@fastify/cookie';
 import multipart from '@fastify/multipart';
@@ -13,6 +14,7 @@ import { hash, verifyPassword, passwordHash } from './crypto.js';
 import { timingSafeEqual, randomUUID } from 'node:crypto';
 import type { Config } from './config.js';
 import { Store, type Session } from './store.js';
+import { unreadCount, markLocallyViewed } from './chat-read-state.js';
 import { ChatService, AppError, deny } from './service.js';
 import { voiceToOpus } from './media.js';
 import { updateStatus, requestUpdate, updateTargetSchema } from './updates.js';
@@ -56,8 +58,14 @@ export async function createApp(
   await app.register(multipart, {
     limits: { fileSize: config.maxMedia, files: 1, fields: 5, fieldSize: 15000, parts: 7 },
   });
-  const loginAttempts = new Map<string, { n: number; until: number }>();
+  const credentialThrottle = new CredentialThrottle(store);
   let activeLogins = 0;
+  const limitedVerify = async (password: string, stored: string) => {
+    if (activeLogins >= 3) throw new AppError(429, 'SLOW_DOWN');
+    activeLogins++;
+    try { return await verifyPassword(password, stored); }
+    finally { activeLogins--; }
+  };
   const sends = new Map<string, number[]>();
   const pending = new Set<string>();
   const activeUploads = new Set<string>();
@@ -158,7 +166,7 @@ export async function createApp(
     if (settingUp) throw new AppError(409, 'SETUP_BUSY');
     const data = z.object({ familyName: z.string().trim().min(1).max(80),
       name: accountNameSchema,
-      password: z.string().min(14).max(256), confirmation: z.string().max(256) }).strict().parse(req.body);
+      password: z.string().min(4).max(256), confirmation: z.string().max(256) }).strict().parse(req.body);
     if (data.password !== data.confirmation) throw new AppError(400, 'PASSWORD_MISMATCH');
     settingUp = true;
     try {
@@ -178,32 +186,15 @@ export async function createApp(
     const input = z
       .object({ name: accountNameSchema, password: z.string().max(256) }).strict()
       .parse(req.body);
-    const now = Date.now();
-    if (loginAttempts.size > 10000) {
-      for (const [k, v] of loginAttempts) if (v.until < now) loginAttempts.delete(k);
-      if (loginAttempts.size > 10000) throw new AppError(429, 'SLOW_DOWN');
-    }
-    const keys = [`ip:${req.ip}`, `user:${accountNameKey(input.name)}`];
-    for (const k of keys) {
-      const a = loginAttempts.get(k);
-      if (a && a.until > now && a.n >= 8) throw new AppError(429, 'SLOW_DOWN');
-    }
-    if (activeLogins >= 3) throw new AppError(429, 'SLOW_DOWN');
-    for (const k of keys) {
-      const a = loginAttempts.get(k);
-      loginAttempts.set(k, { n: a && a.until > now ? a.n + 1 : 1, until: now + 15 * 60_000 });
-    }
     const row = store.one('SELECT * FROM users WHERE name_key=?', accountNameKey(input.name));
-    activeLogins++;
-    let valid = false;
-    try {
-      valid = await verifyPassword(
-        input.password,
-        row?.password || '00000000000000000000000000000000:' + '00'.repeat(64),
-      );
-    } finally {
-      activeLogins--;
+    if (activeLogins >= 3) throw new AppError(429, 'SLOW_DOWN');
+    const credentialKey = row ? `account:${row.family_id}:${row.id}` : `unknown:${accountNameKey(input.name)}`;
+    if (!credentialThrottle.reserve(credentialKey, req.ip)) {
+      reply.header('Retry-After', '900');
+      throw new AppError(429, 'LOGIN_WAIT');
     }
+    const valid = await limitedVerify(input.password,
+      row?.password || '00000000000000000000000000000000:' + '00'.repeat(64));
     if (!row || !valid) throw new AppError(401, 'INVALID_CREDENTIALS');
     // Password verification yields. Do not finish a stale-name login after a
     // concurrent rename (or accept a password replaced while verification ran).
@@ -212,7 +203,7 @@ export async function createApp(
     if (!authenticated) throw new AppError(401, 'INVALID_CREDENTIALS');
     if (req.cookies.sid) store.run('DELETE FROM sessions WHERE id=?', hash(req.cookies.sid));
     const session = store.createSession(store.user(authenticated));
-    for (const k of keys) loginAttempts.delete(k);
+    credentialThrottle.clear(credentialKey);
     reply.setCookie('sid', session.sid, {
       httpOnly: true,
       secure: config.secureCookie,
@@ -244,7 +235,7 @@ export async function createApp(
   });
   app.post('/api/password', async (req) => {
     const data = z
-      .object({ current: z.string().max(256), next: z.string().min(14).max(256), confirmation: z.string().max(256) })
+      .object({ current: z.string().max(256), next: z.string().min(4).max(256), confirmation: z.string().max(256) })
       .parse(req.body);
     if (data.next !== data.confirmation) throw new AppError(400, 'PASSWORD_MISMATCH');
     const s = req.session,
@@ -253,9 +244,12 @@ export async function createApp(
         s.user.familyId,
         s.user.id,
       );
-    if (!(await verifyPassword(data.current, row.password)))
+    if (!credentialThrottle.reserve(`account:${s.user.familyId}:${s.user.id}`, req.ip))
+      throw new AppError(429, 'LOGIN_WAIT');
+    if (!(await limitedVerify(data.current, row.password)))
       throw new AppError(403, 'WRONG_PASSWORD');
     const next = await passwordHash(data.next);
+    credentialThrottle.clear(`account:${s.user.familyId}:${s.user.id}`);
     store.run(
       'UPDATE users SET password=? WHERE family_id=? AND id=?',
       next,
@@ -284,6 +278,7 @@ export async function createApp(
       .map((g) => ({
         ...g,
         canRead: store.allowed(s.user, g.id),
+        unreadCount: unreadCount(store, s.user, g.id),
         last: (() => {
           if (!store.allowed(s.user, g.id)) return undefined;
           const m = store.messages(f, g.id, undefined, 1)[0];
@@ -635,6 +630,16 @@ export async function createApp(
     await service.connector(s.user.familyId).presence(g, active);
     return { ok: true };
   });
+  // This endpoint changes only this authenticated account's local unread state.
+  // It never sends a WhatsApp read receipt or marks unseen messages in bulk.
+  app.post<{ Params: { g: string } }>('/api/groups/:g/viewed', async (req) => {
+    const s = req.session, g = req.params.g;
+    group(s, g);
+    const { ids } = z.object({ ids: z.array(z.string().min(1).max(180)).max(80) }).parse(req.body);
+    for (const id of ids) getMessage(s, g, id);
+    if (markLocallyViewed(store, s.user, g, ids)) service.notify(s.user.familyId, g);
+    return { ok: true, unreadCount: unreadCount(store, s.user, g) };
+  });
   app.post<{ Params: { g: string } }>('/api/groups/:g/read', async (req) => {
     const s = req.session,
       g = req.params.g;
@@ -789,7 +794,7 @@ export async function createApp(
   app.post('/api/parent/child-password', async (req) => {
     parent(req.session);
     const data = z
-      .object({ childId: z.uuid(), password: z.string().min(14).max(256), confirmation: z.string().max(256) })
+      .object({ childId: z.uuid(), password: z.string().min(4).max(256), confirmation: z.string().max(256) })
       .parse(req.body);
     if (data.password !== data.confirmation) throw new AppError(400, 'PASSWORD_MISMATCH');
     const f = req.session.user.familyId;
@@ -804,6 +809,7 @@ export async function createApp(
       throw deny();
     const pw = await passwordHash(data.password);
     store.run('UPDATE users SET password=? WHERE family_id=? AND id=?', pw, f, data.childId);
+    credentialThrottle.clear(`account:${f}:${data.childId}`);
     store.run('DELETE FROM sessions WHERE family_id=? AND user_id=?', f, data.childId);
     service.notify(f, undefined, 'session');
     return { ok: true };
@@ -812,7 +818,7 @@ export async function createApp(
   app.post('/api/parent/children', async (req) => {
     parent(req.session);
     const data = z.object({ name: accountNameSchema,
-      password: z.string().min(14).max(256), confirmation: z.string().max(256) }).strict().parse(req.body);
+      password: z.string().min(4).max(256), confirmation: z.string().max(256) }).strict().parse(req.body);
     if (data.password !== data.confirmation) throw new AppError(400, 'PASSWORD_MISMATCH');
     if (addingChild) throw new AppError(429, 'SLOW_DOWN');
     addingChild = true;
@@ -843,7 +849,9 @@ export async function createApp(
       s.user.familyId,
       s.user.id,
     );
-    if (!(await verifyPassword(password, row.password))) throw new AppError(403, 'WRONG_PASSWORD');
+    if (!credentialThrottle.reserve(`account:${s.user.familyId}:${s.user.id}`, req.ip))
+      throw new AppError(429, 'LOGIN_WAIT');
+    if (!(await limitedVerify(password, row.password))) throw new AppError(403, 'WRONG_PASSWORD');
     await service.disconnect(s.user.familyId, true);
     await store.diagnostics.forget(s.user.familyId);
     store.run('DELETE FROM families WHERE id=?', s.user.familyId);
@@ -915,7 +923,7 @@ export async function createApp(
   });
   const cleanup = setInterval(() => {
     store.run('DELETE FROM sessions WHERE expires<?', Date.now());
-    for (const [k, v] of loginAttempts) if (v.until < Date.now()) loginAttempts.delete(k);
+    store.run('DELETE FROM credential_attempts WHERE until<=?', Date.now());
     for (const [k, v] of sends) if (!v.some((t) => t > Date.now() - 60000)) sends.delete(k);
   }, 60000);
   cleanup.unref();

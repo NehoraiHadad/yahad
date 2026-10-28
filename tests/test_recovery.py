@@ -59,7 +59,7 @@ class RecoveryTests(unittest.TestCase):
     def test_parent_only_reset_revokes_sessions_and_preserves_other_data(self):
         before = self.snapshot()
         for name, password in [('ילד', 'a random long phrase'), ('missing', 'a random long phrase'),
-                               ('הורה Élan', '12345678'), ('הורה Élan', '\U0001f600' * 200)]:
+                               ('הורה Élan', '123'), ('הורה Élan', '\U0001f600' * 200)]:
             with self.subTest(name=name, password_length=len(password)):
                 with self.assertRaises(ValueError):
                     recovery.reset(self.path, name, password)
@@ -79,10 +79,21 @@ class RecoveryTests(unittest.TestCase):
         with closing(sqlite3.connect(self.path)) as db:
             self.assertEqual(db.execute('PRAGMA foreign_key_check').fetchall(), [])
 
+    def test_short_code_recovery_clears_only_own_account_budget(self):
+        account_key = hashlib.sha256(b'account:f:p').hexdigest()
+        with closing(sqlite3.connect(self.path)) as db:
+            db.execute('CREATE TABLE credential_attempts(key TEXT PRIMARY KEY,n INTEGER,until INTEGER)')
+            db.executemany('INSERT INTO credential_attempts VALUES(?,8,9999999999999)', [(account_key,), ('network',), ('other-account',)])
+            db.commit()
+        recovery.reset(self.path, 'הורה Élan', '1234')
+        self.assertEqual([row[0] for row in self.rows('credential_attempts')], ['network', 'other-account'])
+        salt, derived = self.rows('users')[0][-1].split(':')
+        self.assertEqual(hashlib.scrypt(b'1234', salt=bytes.fromhex(salt), n=16384, r=8, p=1, dklen=64).hex(), derived)
+
     def test_password_length_remains_utf16_not_python_codepoints(self):
         with self.assertRaises(ValueError):
-            recovery.reset(self.path, 'הורה Élan', '\U0001f600' * 6)
-        recovery.reset(self.path, 'הורה Élan', '\U0001f600' * 7)
+            recovery.reset(self.path, 'הורה Élan', '\U0001f600' * 1)
+        recovery.reset(self.path, 'הורה Élan', '\U0001f600' * 2)
         self.assertNotEqual(self.rows('users')[0][-1], 'parent-old')
 
     def test_failed_revocation_rolls_password_and_sessions_back_together(self):

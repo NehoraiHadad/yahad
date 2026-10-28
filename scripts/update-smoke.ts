@@ -34,7 +34,7 @@ try {
   const seed = new Store(upgradeConfig), password = 'synthetic release passphrase only';
   const family = await seed.createFamily('Synthetic', { name: 'parent-smoke', password }, { name: 'child-smoke', password });
   const child = seed.user(seed.one('SELECT * FROM users WHERE id=?', family.childId));
-  const session = seed.createSession(child), group = 'synthetic-smoke@g.us';
+  const session = seed.createSession(child), group = '15550000001-15550000002@g.us';
   seed.syncGroups(family.familyId, [{ id: group, title: 'Synthetic group' }]);
   seed.grant(family.familyId, family.childId, group, true);
   seed.authSet(family.familyId, 'synthetic-auth', 'not a provider credential');

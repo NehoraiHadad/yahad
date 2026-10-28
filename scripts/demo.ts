@@ -13,7 +13,7 @@ try {
 if (process.env.CONNECTOR && process.env.CONNECTOR !== 'mock') throw new Error('Demo is mock-only');
 if (!process.env.DEMO_PARENT_PASSWORD || !process.env.DEMO_CHILD_PASSWORD)
   throw new Error(
-    'Set unique local DEMO_PARENT_PASSWORD and DEMO_CHILD_PASSWORD; 14+ characters each',
+    'Set unique local DEMO_PARENT_PASSWORD and DEMO_CHILD_PASSWORD; 4+ characters each',
   );
 if (process.env.DEMO_PARENT_PASSWORD === process.env.DEMO_CHILD_PASSWORD)
   throw new Error('Use separate demo passwords');

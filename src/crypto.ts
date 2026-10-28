@@ -25,7 +25,7 @@ export function open(key: Buffer, data: Uint8Array, aad: string): Buffer {
   return Buffer.concat([d.update(b.subarray(28)), d.final()]);
 }
 export async function passwordHash(password: string) {
-  if (password.length < 14 || password.length > 256) throw new Error('Use 14–256 characters');
+  if (password.length < 4 || password.length > 256) throw new Error('Use 4–256 characters');
   const salt = randomBytes(16);
   const derived = (await scrypt(password, salt, 64)) as Buffer;
   return salt.toString('hex') + ':' + derived.toString('hex');

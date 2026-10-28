@@ -11,7 +11,7 @@ export class ApiNetworkError extends Error {}
 /** Only background reads may quietly retry these failures; auth errors remain explicit. */
 export function isTransientApiError(error: unknown) {
   return error instanceof ApiNetworkError || error instanceof ApiError &&
-    (error.status === 408 || error.status === 429 || error.status >= 500 && error.status < 600);
+    error.code !== 'LOGIN_WAIT' && (error.status === 408 || error.status === 429 || error.status >= 500 && error.status < 600);
 }
 const errors: Record<string, string> = {
   UPDATES_MODE_LOCKED: 'שליטה במצב העדכון טרם אושרה בהגדרה המקומית של רכיב העדכון.',
@@ -24,6 +24,7 @@ const errors: Record<string, string> = {
   UPDATES_UNAVAILABLE: 'שירות העדכון אינו זמין או שהחשבון אינו מורשה לנהל אותו.',
   SIGN_IN_REQUIRED: 'החיבור הסתיים. צריך להיכנס שוב.',
   INVALID_CREDENTIALS: 'השם או הסיסמה אינם נכונים.',
+  LOGIN_WAIT: 'היו יותר מדי ניסיונות כניסה. המתינו עד 15 דקות ונסו שוב. תקלה בחשבון אחד אינה מחייבת איפוס של שאר החשבונות.',
   SLOW_DOWN: 'רגע קטן, ננסה שוב בעוד כמה דקות.',
   NOT_FOUND: 'השיחה או ההודעה כבר אינן זמינות.',
   PARENT_ONLY: 'הפעולה זמינה להורה בלבד.',

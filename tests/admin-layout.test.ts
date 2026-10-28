@@ -41,7 +41,7 @@ test('admin group list keeps bounded internal scrolling on desktop and narrow sc
 });
 
 test('long, filtered, and cleared group lists retain native labelled keyboard controls', () => {
-  const groups = Array.from({ length: 180 }, (_, i) => ({ id: `synthetic-${i}@g.us`, title: `קבוצה ${i}` }));
+  const groups = Array.from({ length: 180 }, (_, i) => ({ id: `synthetic-${i}@g.us`, title: `שיחה ${i}` }));
   const render = (visible: typeof groups) => renderToStaticMarkup(React.createElement(GroupPicker, {
     groups: visible, grants: [{ user_id: 'synthetic-child', group_id: groups[179].id }],
     childId: 'synthetic-child', busy: false, loading: false, onToggle() {},
@@ -49,7 +49,7 @@ test('long, filtered, and cleared group lists retain native labelled keyboard co
   for (const visible of [groups, [groups[179]], [], groups]) {
     const html = render(visible);
     assert.equal((html.match(/<label class="approval-row /g) || []).length, visible.length);
-    assert.equal((html.match(/<input type="checkbox" aria-label="אישור קבוצה /g) || []).length, visible.length);
+    assert.equal((html.match(/<input type="checkbox" aria-label="אישור שיחה /g) || []).length, visible.length);
     assert.match(html, /class="approval-list scrollable-group-list"[^>]*tabindex="0"/);
     assert.doesNotMatch(html, /<input[^>]*(?:hidden=|tabindex="-1"|disabled="")/);
     assert.equal((html.match(/checked=""/g) || []).length, visible.length ? 1 : 0);
@@ -58,7 +58,10 @@ test('long, filtered, and cleared group lists retain native labelled keyboard co
 
 // Tablet instructions must remain available on the device being set up.
 test('child login details are not hidden by responsive styles', () => {
-  for (const rule of rules('.child-login-details'))
+  for (const rule of rules('.tablet-login-field'))
     assert.doesNotMatch(rule, /display:\s*none|visibility:\s*hidden/);
-  assert.match(rules('.child-login-details').join(''), /overflow-wrap:\s*anywhere/);
+  assert.match(rules('.tablet-login-field input').join(''), /min-width:\s*0/);
+  assert.match(rules('.tablet-login-field input').join(''), /width:\s*100%/);
+  assert.match(rules('.tablet-setup bdi').join(''), /overflow-wrap:\s*anywhere/);
+  assert.match(rules('.tablet-setup-steps').join(''), /grid-template-columns:\s*1fr/);
 });

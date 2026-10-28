@@ -1,3 +1,4 @@
+import { conversationKind } from '../conversation-id.js';
 import { fetchGroupPhoto } from '../group-photos.js';
 import { IngestionQueue } from './ingestion.js';
 import makeWASocket, {
@@ -103,7 +104,7 @@ function stripEmbeddedContext(value: any): any {
 export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
   const groupId = raw.key.remoteJid,
     id = raw.key.id;
-  if (!groupId?.endsWith('@g.us') || !id) return;
+  if (!groupId || !conversationKind(groupId) || !id) return;
   const content = normalizeMessageContent(raw.message);
   if (!content) return;
   const base: Incoming = {
@@ -299,6 +300,25 @@ export class BaileysConnector implements Connector {
     });
     this.sock = sock;
     const valid = () => !this.stopping && generation === this.generation;
+    let membershipReady = false, membershipPromise: Promise<void> | undefined;
+    const discoverMembership = () => membershipPromise ||= this.groups().then(() => {
+      if (valid()) membershipReady = true;
+    }).finally(() => { membershipPromise = undefined; });
+    // Register provider-discovered direct chats before admitting their messages.
+    // No client API can use this path, and no child grants are created.
+    const discover = (chats: {id?: string | null; name?: string | null; conversation?: string | null}[]) => {
+      if (!valid()) return;
+      const safe = chats.filter(c => c.id && conversationKind(c.id) === 'direct')
+        .map(c => ({id: c.id!, title: (c.name || c.conversation || 'שיחה פרטית').slice(0,200), kind: 'direct' as const}));
+      if (safe.length) this.hooks.discoverDirect?.(safe);
+    };
+    sock.ev.on('chats.upsert', chats => discover(chats));
+    sock.ev.on('chats.update', chats => discover(chats));
+    const contactNames = (contacts: {id: string; name?: string; notify?: string}[]) =>
+      discover(contacts.filter(c => this.hooks.allowed(c.id)).map(c => ({id:c.id,name:c.name || c.notify})));
+    sock.ev.on('contacts.upsert', contactNames);
+    sock.ev.on('contacts.update', contacts => contactNames(contacts.filter(c => typeof c.id === 'string') as {id:string;name?:string;notify?:string}[]));
+
     sock.ev.on('creds.update', () => {
       if (valid()) auth.save();
     });
@@ -309,6 +329,7 @@ export class BaileysConnector implements Connector {
         this.attempt = 0;
         auth.save();
         this.hooks.state('connected');
+        void discoverMembership().catch(() => {});
       }
       if (u.connection === 'close') {
         this.sock = undefined;
@@ -345,7 +366,10 @@ export class BaileysConnector implements Connector {
     this.ingestion = queue;
     const prepare = function* (this: BaileysConnector, messages: WAMessage[], history: boolean, requestId?: string): Generator<Incoming> {
       for (const raw of messages) {
-        if (!valid() || !raw?.key?.remoteJid || !this.hooks.allowed(raw.key.remoteJid)) continue;
+        if (!valid() || !raw?.key?.remoteJid) continue;
+        if (conversationKind(raw.key.remoteJid) === 'direct' && !this.hooks.allowed(raw.key.remoteJid))
+          discover([{id:raw.key.remoteJid, name:raw.key.fromMe ? undefined : raw.pushName}]);
+        if (!this.hooks.allowed(raw.key.remoteJid)) continue;
         try {
           const m = normalizeIncoming(raw);
           if (!m) continue;
@@ -372,11 +396,39 @@ export class BaileysConnector implements Connector {
       }
     }.bind(this);
     const process = (messages: WAMessage[], history = false, requestId?: string) => queue.submit(prepare(messages, history, requestId), history, requestId);
-    sock.ev.on('messages.upsert', event => { if (!(event as any).requestId) process(event.messages); });
+    let deferredHistory = false;
+    const processWithMembership = (messages: WAMessage[], history: boolean, requestId?: string) => {
+      if (!valid()) return;
+      if (!this.hooks.discoverGroups || !messages.some(m => m.key?.remoteJid && conversationKind(m.key.remoteJid) === 'group' && (!membershipReady || !this.hooks.allowed(m.key.remoteJid))))
+        return process(messages, history, requestId);
+      // Only one bounded initial-history batch may wait for membership discovery.
+      // Never authorize a group merely because old history mentions it.
+      const accepted: WAMessage[] = [];
+      let bytes = 0;
+      for (const m of messages) {
+        if (!m.key?.remoteJid || !conversationKind(m.key.remoteJid)) continue;
+        const size = Buffer.byteLength(stringify(m));
+        if (deferredHistory || accepted.length >= 2048 || bytes + size > 16 * 1024 * 1024) {
+          if (m.key?.remoteJid) this.hooks.history?.({groupId:m.key.remoteJid,phase:'overload',received:1,processed:0,history,requestId});
+          continue;
+        }
+        accepted.push(m); bytes += size;
+      }
+      if (!accepted.length) return;
+      deferredHistory = true;
+      void discoverMembership().then(() => { if (valid()) process(accepted, history, requestId); })
+        .catch(() => { if (valid()) for (const m of accepted) if (m.key?.remoteJid) this.hooks.history?.({groupId:m.key.remoteJid,phase:'error',received:1,processed:0,history,requestId}); })
+        .finally(() => { deferredHistory = false; });
+    };
+    // Baileys append includes offline/replayed history; only explicit notify is
+    // live arrival. Retain append without inventing local unread notifications.
+    sock.ev.on('messages.upsert', event => { if (!event.requestId) processWithMembership(event.messages, event.type !== 'notify'); });
     sock.ev.on('messaging-history.set', event => {
+      discover(event.chats || []);
+      contactNames(event.contacts || []);
       const id=typeof event.peerDataRequestSessionId==='string'&&event.peerDataRequestSessionId.length<=256?event.peerDataRequestSessionId:undefined;
       if(valid()&&!event.messages.length&&id)this.hooks.historyEmpty?.(id);
-      process(event.messages,true,id);
+      processWithMembership(event.messages,true,id);
     });
     sock.ev.on('messages.update', (events) => {
       for (const { key, update } of events) {
@@ -445,11 +497,15 @@ export class BaileysConnector implements Connector {
     return parse(m.raw).key;
   }
   async groups() {
-    const groups = await this.require().groupFetchAllParticipating();
-    return Object.values(groups).map((g) => ({ id: g.id, title: g.subject }));
+    const sock = this.require(), generation = this.generation;
+    const groups = await sock.groupFetchAllParticipating();
+    const result = Object.values(groups).filter(g => conversationKind(g.id) === 'group').map(g => ({id:g.id,title:g.subject,kind:'group' as const}));
+    if (this.sock !== sock || this.stopping || this.generation !== generation) throw new Error('Stale conversation catalog');
+    this.hooks.discoverGroups?.(result);
+    return result;
   }
   async groupPhoto(group: string) {
-    if (!/^[0-9-]+@g\.us$/.test(group)) return;
+    if (!conversationKind(group)) return;
     const sock = this.require();
     try {
       const url = await sock.profilePictureUrl(group, 'preview', 5000);

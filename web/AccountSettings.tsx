@@ -146,10 +146,10 @@ export function AccountSettings({
             {!child && <label>סיסמה נוכחית
               <input disabled={busy || uncertain || unavailable} type="password" autoComplete="current-password" aria-describedby="account-settings-error" required value={current} onChange={e => setCurrent(e.target.value)} />
             </label>}
-            <label>סיסמה חדשה · לפחות 14 תווים
-              <input disabled={busy || uncertain || unavailable} type={show ? 'text' : 'password'} autoComplete="new-password" aria-describedby="account-password-help account-settings-error" required minLength={14} maxLength={256} value={next} onChange={e => setNext(e.target.value)} />
+            <label>סיסמה חדשה · לפחות 4 תווים
+              <input disabled={busy || uncertain || unavailable} type={show ? 'text' : 'password'} autoComplete="new-password" aria-describedby="account-password-help account-settings-error" required minLength={4} maxLength={256} value={next} onChange={e => setNext(e.target.value)} />
             </label>
-            <label>אישור הסיסמה החדשה<input disabled={busy || uncertain || unavailable} type={show ? 'text' : 'password'} autoComplete="new-password" aria-describedby="account-password-help account-settings-error" required minLength={14} maxLength={256} value={confirmation} onChange={e => setConfirmation(e.target.value)} /></label>
+            <label>אישור הסיסמה החדשה<input disabled={busy || uncertain || unavailable} type={show ? 'text' : 'password'} autoComplete="new-password" aria-describedby="account-password-help account-settings-error" required minLength={4} maxLength={256} value={confirmation} onChange={e => setConfirmation(e.target.value)} /></label>
             <label className="secret-toggle"><input type="checkbox" disabled={busy || uncertain || unavailable} checked={show} onChange={e => setShow(e.target.checked)} /> הצגת הסיסמה</label>
             <p id="account-password-help" className="muted">{passphraseHelp}</p>
             <p className="muted">שינוי סיסמה מנתק את כל החיבורים של החשבון. אפשר להשתמש במשפט סודי שקל לזכור.</p>

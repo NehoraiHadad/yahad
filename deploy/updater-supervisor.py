@@ -228,7 +228,7 @@ class Supervisor:
         if (not isinstance(value, dict) or set(value) != {'format', 'trust', 'enabled', 'repository', 'channel', 'checkHours'} or
                 type(value['format']) is not int or value['format'] != 2 or value['trust'] != 'github-https' or
                 type(value['enabled']) is not bool or value['repository'] != PUBLIC_REPOSITORY or
-                value['channel'] != 'stable' or type(value['checkHours']) is not int or not 1 <= value['checkHours'] <= 168 or
+                value['channel'] != 'stable' or type(value['checkHours']) not in (int, float) or not 1 / 12 <= value['checkHours'] <= 168 or
                 os.path.lexists(self.key)):
             raise SupervisorError('configuration')
         return 'github-https'

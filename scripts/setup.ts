@@ -50,8 +50,8 @@ try {
     const parent = normalizeAccountName(await ask('Parent name (also used to sign in): ')),
       child = normalizeAccountName(await ask('Child name (also used to sign in): '));
     if (accountNameKey(parent) === accountNameKey(child)) throw new Error('Account names must differ');
-    const pp = await ask('Parent password, 14+ characters: ', true),
-      cp = await ask('Child passphrase, 14+ characters: ', true);
+    const pp = await ask('Parent password, 4+ characters: ', true),
+      cp = await ask('Child passphrase, 4+ characters: ', true);
     if (pp !== await ask('Confirm parent password: ', true) || cp !== await ask('Confirm child passphrase: ', true))
       throw new Error('Passwords do not match');
     if (pp === cp) throw new Error('Use separate passwords');

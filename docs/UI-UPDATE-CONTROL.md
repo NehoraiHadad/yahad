@@ -30,7 +30,7 @@ Network failure, stale status, local-policy rejection and pending write failure
 do not imply success. The panel still offers explicit refresh/check/install.
 
 The worker normally wakes about every five minutes; release checks default to
-six hours. Choosing notify stops future automatic installs after acknowledgment;
+five minutes for new configurations (existing configurations retain their interval). Choosing notify stops future automatic installs after acknowledgment;
 it does not cancel an install/rollback already in progress. Keep the request timer
 running in notify mode so checks/manual installs and mode requests are consumed.
 Backup expiry remains separate: at most seven update backups and seven days;

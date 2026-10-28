@@ -189,12 +189,17 @@ class GithubRuntimeTests(unittest.TestCase):
         self.assertEqual(self.fixture.calls, [])
         self.assertEqual(json.loads(self.u.journal_path.read_bytes())['active']['version'], '1.0.0')
 
+    def test_five_minute_https_policy_is_valid(self):
+        write(self.u.root / 'etc/yachad/updater-source.json', json_bytes(policy(checkHours=1/12)))
+        self.assertEqual(self.u.trust_profile(), 'github-https')
+        self.assertEqual(t.policy(self.u)['checkHours'] * 3600, 300)
+
     def test_profile_is_exact_fixed_source_not_a_general_url_or_script(self):
         path = self.u.root / 'etc/yachad/updater-source.json'
         original = path.read_bytes()
         changes = [{'repository':'other/repository'}, {'repository':'NehoraiHadad/yahad/extra'},
                    {'format':True}, {'trust':'none'}, {'trust':'signature'}, {'enabled':1},
-                   {'channel':'nightly'}, {'checkHours':True}, {'checkHours':0}, {'checkHours':169},
+                   {'channel':'nightly'}, {'checkHours':1/13}, {'checkHours':float('inf')}, {'checkHours':float('nan')}, {'checkHours':True}, {'checkHours':0}, {'checkHours':169},
                    {'url':'https://github.com/attacker/release'}, {'command':'run.sh'},
                    {'publicKeyFile':'/attacker/key'}]
         for change in changes:
@@ -372,6 +377,53 @@ class GithubTransportTests(unittest.TestCase):
         path = self.u.root / 'data/update-request.json'
         write(path, json_bytes(value))
         return path, value
+
+    def test_healthy_same_target_checks_only_metadata(self):
+        self.refresh()
+        write(self.u.state / 'status.json', json_bytes(dict(phase='healthy', releaseTrust='github-https',
+              installTarget=self.target, currentVersion='0.6.0', latestVersion='0.6.0')))
+        self.calls.clear()
+        result = t.refresh(self.u, fetch=self.fetch, now=lambda:23000)
+        self.assertEqual(result['result'], 'unchanged')
+        self.assertNotIn('selection', result)
+        self.assertEqual(self.calls, ['https://api.github.com/repos/NehoraiHadad/yahad/releases/latest', self.assets[2]['url']])
+
+    def test_changed_target_does_not_skip_app_preflight(self):
+        self.refresh()
+        write(self.u.state / 'status.json', json_bytes(dict(phase='healthy', releaseTrust='github-https',
+              installTarget=self.target, currentVersion='0.6.0', latestVersion='0.6.0')))
+        self.release['id'] += 1
+        self.calls.clear()
+        result = t.refresh(self.u, fetch=self.fetch, now=lambda:23000)
+        self.assertIn('selection', result)
+        self.assertIn(self.assets[1]['url'], self.calls)
+
+    def test_changed_runtime_manifest_keeps_full_preflight(self):
+        self.refresh()
+        write(self.u.state / 'status.json', json_bytes(dict(phase='healthy', releaseTrust='github-https',
+              installTarget=self.target, currentVersion='0.6.0', latestVersion='0.6.0')))
+        self.payloads[3] += b' '
+        self.calls.clear()
+        result = t.refresh(self.u, fetch=self.fetch, now=lambda:23000)
+        self.assertIn(self.assets[1]['url'], self.calls)
+        self.assertEqual(result['error'], 'downgrade')
+        self.assertNotIn('selection', result)
+
+    def test_pending_request_during_metadata_shortcut_is_not_consumed(self):
+        self.refresh()
+        status = dict(phase='healthy', releaseTrust='github-https', installTarget=self.target,
+                      currentVersion='0.6.0', latestVersion='0.6.0')
+        write(self.u.state / 'status.json', json_bytes(status))
+        self.calls.clear()
+        def raced_fetch(url, *args):
+            value = self.fetch(url, *args)
+            if url == self.assets[2]['url']: self.queue(action='check')
+            return value
+        result = t.refresh(self.u, fetch=raced_fetch, now=lambda:23000)
+        self.assertEqual(result['result'], 'deferred')
+        self.assertNotIn('selection', result)
+        self.assertNotIn(self.assets[1]['url'], self.calls)
+        self.assertTrue((self.u.root / 'data/update-request.json').exists())
 
     def test_https_downloads_two_runtime_assets_and_returns_compact_same_release_selection(self):
         result = self.refresh()

@@ -475,3 +475,10 @@ test('definite pending response follows the actual competing Y request instead o
   assert.doesNotMatch(h.html(), /הבקשה הזאת לא נוספה לתור|התקנת גרסה 0\.4\.0/);
   h.toggle(); h.toggle(); assert.deepEqual(h.calls, ['POST']);
 });
+
+
+test('app check timestamp does not claim to be the background transport check time', () => {
+  const source = readFileSync(new URL('../web/UpdatesPanel.tsx', import.meta.url), 'utf8');
+  assert.match(source, /בדיקת גרסה אחרונה של רכיב האפליקציה:/);
+  assert.match(source, /בדיקות רקע של מנגנון העדכון עשויות להתבצע בלי לשנות/);
+});

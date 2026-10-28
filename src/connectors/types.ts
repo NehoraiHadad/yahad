@@ -17,6 +17,8 @@ export interface Capabilities {
   editWindowMs: number;
 }
 export interface ChatGroup {
+  kind?: 'group' | 'direct';
+  lastMessageTime?: number;
   id: string;
   title: string;
 }
@@ -81,6 +83,9 @@ export type ConnectionState =
   | 'needs_pairing'
   | 'conflict';
 export interface ConnectorHooks {
+  /** Only authenticated provider events may discover direct conversations. */
+  discoverDirect?: (chats: ChatGroup[]) => void;
+  discoverGroups?: (chats: ChatGroup[]) => void;
   historyEmpty?: (requestId: string) => void;
   retentionToken?: (group: string) => string | undefined;
   history?: (notice: HistoryNotice) => void;

@@ -55,13 +55,13 @@ test('filter controls expose the unified account name, blank stale selection, an
   assert.ok(html.includes('ממתינים לאימות'));
 });
 
-test('all-mode copy describes the known group catalog rather than promising private conversations', () => {
+test('all-mode copy describes synced groups and private chats without expanding child access', () => {
   const html = renderToStaticMarkup(React.createElement(ParentChatFilter, {
     filter: { mode: 'all', childId: 'a' }, overview: fixture(), verified: true, onChange() {},
   }));
-  assert.ok(html.includes('כל הקבוצות שסונכרנו'));
-  assert.ok(html.includes('לא שיחות פרטיות'));
-  assert.ok(html.includes('גם בקבוצות שלא אושרו לילדים'));
+  assert.ok(html.includes('הקבוצות והשיחות הפרטיות שסונכרנו'));
+  assert.ok(!html.includes('לא שיחות פרטיות'));
+  assert.ok(html.includes('גם בשיחות שלא אושרו לילדים'));
   assert.ok(html.includes('הרשאות הילדים אינן משתנות'));
   assert.equal(html.includes('<select'), false);
   assert.match(parentEmptyMessage({ mode: 'all', childId: '' }, fixture(), true), /ניהול ההורה/);
@@ -123,8 +123,10 @@ test('chat wiring invalidates asynchronous responses and uses filtered groups fo
   assert.match(chat, /source\.onerror = \(\) => \{\s*setOnline\(false\);\s*listGeneration\.current\.invalidate\(\);\s*groupDataGeneration\.current\.invalidate\(\);\s*invalidateFilter\(\)/);
   assert.match(chat, /selectedRef\.current !== g \|\| generation !== requestGeneration\.current/);
   assert.match(chat, /me\.user\.role === 'parent' && <ParentChatFilter/);
-  assert.match(source, /onClick=\{openChat\}/);
-  assert.ok(!/disabled=\{[^}]*\}[^>]*onClick=\{openChat\}/.test(source));
+  assert.match(source, /openChat=\{openChat\}/);
+  const tabletPanel = readFileSync(new URL('../web/ChildTabletSetup.tsx', import.meta.url), 'utf8');
+  assert.match(tabletPanel, /onClick=\{openChat\}/);
+  assert.ok(!/disabled=\{[^}]*\}[^>]*onClick=\{openChat\}/.test(tabletPanel));
 });
 
 
