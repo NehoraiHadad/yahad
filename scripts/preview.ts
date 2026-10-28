@@ -31,8 +31,8 @@ const secret = randomBytes(32).toString('hex');
 if (!firstRun) {
 const f = await store.createFamily(
   'משפחת דוגמה',
-  { username: 'parent', password: secret },
-  { username: 'child', password: randomBytes(32).toString('hex') },
+  { name: 'הורה לדוגמה', password: secret },
+  { name: 'ילד לדוגמה', password: randomBytes(32).toString('hex') },
 );
 await service.connect(f.familyId);
 for (const g of ['120363001@g.us', '120363002@g.us', '120363003@g.us'])

@@ -14,6 +14,7 @@ export type LocalUpdateRequest = {
 
 const activePhases = new Set(['checking', 'downloading', 'verifying', 'building', 'preparing',
   'stopping', 'backing_up', 'activating', 'checking_health', 'rolling_back']);
+const repairPhases = new Set(['recovery_required', 'rollback_pending_health']);
 const failedPhases = new Set(['failed', 'rolled_back', 'incompatible', 'recovery_required', 'rollback_pending_health']);
 export const updatePhases: Record<string, string> = {
   idle: 'אין עדכון ממתין', available: 'גרסה חדשה זמינה', checking: 'בודקים גרסה חדשה ב־GitHub',
@@ -23,8 +24,8 @@ export const updatePhases: Record<string, string> = {
   activating: 'מפעילים את הגרסה החדשה', checking_health: 'בודקים שהאפליקציה תקינה',
   healthy: 'העדכון הושלם בהצלחה', rolled_back: 'חזרנו לגרסה הקודמת', failed: 'הפעולה לא הושלמה',
   incompatible: 'הגרסה אינה מתאימה למערכת', rolling_back: 'חוזרים לגרסה הקודמת',
-  recovery_required: 'נדרשת בדיקה מקומית לפני המשך עדכון',
-  rollback_pending_health: 'הגרסה הקודמת ממתינה לבדיקת תקינות',
+  recovery_required: 'העדכון נעצר — נדרש תיקון',
+  rollback_pending_health: 'החזרה לגרסה הקודמת עדיין לא אושרה כתקינה',
 };
 
 export function updateActionLabel(action: UpdateAction, mode?: 'auto' | 'notify') {
@@ -59,7 +60,20 @@ export function reconcileUpdateRequest(data: UpdateStatus, local: LocalUpdateReq
   return local?.queuedId ? { ...local, state: 'uncertain' as const } : local;
 }
 
+export function updateNeedsRepair(data: ConfiguredUpdate) {
+  return repairPhases.has(data.phase);
+}
+
 export function updateProgress(data: ConfiguredUpdate, local: LocalUpdateRequest | null = null) {
+  // A repair barrier is authoritative even if an older queue/journal still says running.
+  if (updateNeedsRepair(data)) return { kind: 'failure', active: false, title: updatePhases[data.phase],
+    action: undefined, detail: data.phase === 'recovery_required'
+      ? 'לא ניתן להמשיך אוטומטית בבטחה. נדרש תיקון במחשב שבו מותקנת האפליקציה. אין כאן אישור שהאפליקציה חזרה לפעול כראוי. רענון המצב רק בודק אם התקבל דיווח חדש; הוא לא מתחיל עדכון נוסף.'
+      : 'שירות העדכון עדיין לא אישר שהגרסה הקודמת פועלת כראוי. נדרשת בדיקה במחשב שבו מותקנת האפליקציה לפני המשך עדכונים; אין לשלוח התקנה נוספת.' } as const;
+  if (!Object.hasOwn(updatePhases, data.phase)) return { kind: 'unknown', active: true,
+    title: 'אין דיווח מצב מוכר מהשירות', action: undefined,
+    detail: 'אין כרגע אישור להתקדמות, להצלחה או לכשל. נבדוק שוב את המצב בלבד, בלי לשלוח בקשת עדכון נוספת.' } as const;
+
   // A timer-driven run may be newer than the retained manual-request journal.
   const last = data.lastRequest && (data.lastRequest.state === 'running' || !data.checkedAt ||
     (data.lastRequest.finishedAt !== null && data.checkedAt <= data.lastRequest.finishedAt)) ? data.lastRequest : null;
@@ -79,7 +93,7 @@ export function updateProgress(data: ConfiguredUpdate, local: LocalUpdateRequest
   if (last?.state === 'running' || activePhases.has(data.phase)) return { kind: 'running', active: true,
     title: activePhases.has(data.phase) ? updatePhases[data.phase] : 'שירות העדכון מטפל בבקשה',
     action: last?.state === 'running' ? updateActionLabel(last.action, data.mode) : undefined,
-    detail: 'זהו השלב האחרון שדווח בפועל. המצב מתעדכן אוטומטית, גם כשהחלונית סגורה; אין צורך ללחוץ שוב.' } as const;
+    detail: 'זהו השלב האחרון שדווח בפועל. שירות העדכון ממשיך במחשב גם אם סוגרים את הדפדפן. השאירו את המחשב פועל; בפתיחה מחדש בודקים את המצב מהשירות, בלי להתחיל שוב.' } as const;
   if (last?.state === 'failed' || failedPhases.has(data.phase)) return { kind: 'failure', active: false,
     title: last?.error === 'expired' ? 'תוקף הבקשה פג לפני הטיפול' : failedPhases.has(data.phase) ? updatePhases[data.phase] : 'הפעולה לא הושלמה',
     action: last?.state === 'failed' ? updateActionLabel(last.action, data.mode) : undefined,
@@ -97,7 +111,7 @@ export function updateProgress(data: ConfiguredUpdate, local: LocalUpdateRequest
 
 export function updateActionsDisabled(data: ConfiguredUpdate | null, local: LocalUpdateRequest | null,
   unavailable: boolean, busy: boolean) {
-  return !data || busy || unavailable || !data.enabled || data.stale || !!local || updateProgress(data).active;
+  return !data || busy || unavailable || !data.enabled || data.stale || updateNeedsRepair(data) || !!local || updateProgress(data).active;
 }
 
 export function updatePollDelay(failures: number, active: boolean) {

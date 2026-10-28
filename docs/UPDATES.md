@@ -15,7 +15,8 @@
 - הכנה נעשית כשהגרסה הישנה עוד פועלת: חילוץ, `npm ci --omit=dev --ignore-scripts` ובדיקת smoke עם נתונים זמניים. קוד החבילה ו־npm רצים כמשתמש build נפרד שאינו קורא את נתוני המשפחה. כל תלות עדיין חלק מסיכון שרשרת האספקה; חתימת release אינה ביקורת קוד לתלויות.
 - לאחר מכן: עצירת השירות, גיבוי מוצפן מוצלח, החלפת current אטומית, הפעלה ובדיקת `/health/ready` ב־loopback מול מספר הגרסה. Caddy חוסם `/health/*` מגישת הטאבלט. קישור WhatsApp אינו תנאי readiness, כי ניתוק חיצוני אינו בהכרח כשל גרסה.
 - בכשל אחרי העצירה: ניסיון להחזיר את קישור הקוד הקודם ולהפעיל אותו. גם `ExecStopPost` ומצב תחזוקה מתמשך מאפשרים ניסיון התאוששות אחרי timeout/קריסת worker. אם השחזור נכשל, מוצג כשל ודורשת התערבות מקומית. **לא מובטח recovery מכל תקלה/הפסקת חשמל.**
-- אין migration אוטומטי: מותר כרגע רק databaseSchema=1. publisher אחראי לשחרר רק שינויים תואמי נתונים; שינוי סמנטי שאינו משתקף במספר סכמה אינו ניתן לזיהוי כללי. rollback מחליף קוד ואינו משחזר אוטומטית DB ישן או מוחק הודעות חדשות. שינוי סכמה דורש פריסה מתוכננת. גרסה שנכשלה אינה מותקנת שוב אוטומטית שוב ושוב; לחיצת התקנה מפורשת מאפשרת ניסיון נוסף.
+- גרסת השם האחיד משתמשת בסכמה 2. היישום מבצע הגירה אטומית מ־1 ל־2, ורק worker תואם רשאי להפעילה. worker שכבר מותקן ותומך בסכמה 1 בלבד **אינו יכול לשדרג את עצמו מתוך ארכיון האפליקציה**; נדרש bootstrap מקומי מורשה מראש. ראו [SCHEMA-UPGRADES.md](SCHEMA-UPGRADES.md).
+- rollback מחזיר קוד רק אם סכמת ה־DB עדיין זהה לזו שהקוד הקודם הפעיל. אם ההגירה ל־2 הסתיימה ואז health נכשל, השירות נעצר ב־`recovery_required`: אין הפעלת קוד ישן על DB חדש ואין שחזור אוטומטי של גיבוי שעלול למחוק הודעות או להחזיר חומר אימות ישן. גם boot recovery שומר על המחסום. גרסה שנכשלה אינה מותקנת שוב ושוב אוטומטית; לחיצת התקנה מפורשת אינה עוקפת התאוששות נדרשת.
 - אחרי הצלחה נשמרות גרסת הקוד הפעילה והקודמת. גיבויי טרום־עדכון: AES-GCM, עד 7 עותקים ו־7 ימים; מצרפים גם timer מחיקה יומי. זמן ההשבתה כולל גיבוי של כל הנתונים ולכן אינו בהכרח קצר בכרטיס איטי.
 
 ## התקנה חד־פעמית על Pi מזוהה
@@ -32,7 +33,7 @@ sudo install -o root -g root -m 0644 deploy/updater.py /usr/local/lib/yachad-upd
 sudo install -o root -g root -m 0600 deploy/updates.json.example /etc/yachad/updates.json
 ```
 
-`/opt/yachad/releases` צריך להיות root-owned, ולמשתמש yachad הרשאת קריאה בקוד בלבד. משתמש build אינו חבר בקבוצת yachad. `updater.py` מותקן מחוץ לספריית הגרסה ואינו מוחלף אוטומטית בידי release; שינויים במנגנון המיוחס דורשים עדכון מנהל מקומי.
+`/opt/yachad/releases` צריך להיות root-owned, ולמשתמש yachad הרשאת קריאה בקוד בלבד. משתמש build אינו חבר בקבוצת yachad. בהתקנות הישנות `updater.py` מותקן מחוץ לספריית הגרסה ואינו מוחלף בידי ארכיון האפליקציה. לאחר bootstrap מורשה של המנגנון החדש, launcher/supervisor נשארים קבועים ו־runtime של worker יכול להתעדכן מחבילה חתומה נפרדת. מפתח אמון חדש, שינוי supervisor או גבולות ההרשאה עדיין דורשים פעולה מקומית מורשית; ראו [SCHEMA-UPGRADES.md](SCHEMA-UPGRADES.md).
 
 יוצרים סיסמת גיבוי אקראית **מקומית בלבד**, בלי להעביר לצ׳אט, ולא דורסים קובץ קיים:
 
@@ -48,7 +49,7 @@ sudo bash -euc 'test ! -e /etc/yachad/update-backup-passphrase; test ! -L /etc/y
 sudo -u yachad python3 - <<'PY'
 import sqlite3
 db=sqlite3.connect('file:/var/lib/yachad/app.sqlite?mode=ro',uri=True)
-for row in db.execute("SELECT family_id,id,username FROM users WHERE role='parent'"):
+for row in db.execute("SELECT family_id,id FROM users WHERE role='parent'"):
  print(row)
 PY
 ```

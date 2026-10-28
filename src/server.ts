@@ -6,6 +6,8 @@ import serveStatic from '@fastify/static';
 import { resolve } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
 import { z } from 'zod';
+import { DATABASE_SCHEMA } from './db.js';
+import { normalizeAccountName, accountNameKey } from './account-name.js';
 import QRCode from 'qrcode';
 import { hash, verifyPassword, passwordHash } from './crypto.js';
 import { timingSafeEqual, randomUUID } from 'node:crypto';
@@ -16,6 +18,10 @@ import { voiceToOpus } from './media.js';
 import { updateStatus, requestUpdate } from './updates.js';
 import type { ConnectorHooks, Connector, StoredMessage, Kind } from './connectors/types.js';
 const textSchema = z.string().trim().max(12000);
+const accountNameSchema = z.string().max(240).transform((value, ctx) => {
+  try { return normalizeAccountName(value); }
+  catch { ctx.addIssue({ code: 'custom', message: 'Invalid account name' }); return z.NEVER; }
+});
 const sendSchema = z.object({
   clientId: z.uuid(),
   text: textSchema.default(''),
@@ -150,13 +156,13 @@ export async function createApp(
         !timingSafeEqual(Buffer.from(hash(capability)), Buffer.from(hash(bootstrap.token))) ||
         store.one('SELECT 1 FROM families LIMIT 1')) throw new AppError(403, 'SETUP_CLOSED');
     if (settingUp) throw new AppError(409, 'SETUP_BUSY');
-    const data = z.object({ name: z.string().trim().min(1).max(80),
-      username: z.string().trim().toLowerCase().regex(/^[a-z0-9._-]{3,60}$/),
+    const data = z.object({ familyName: z.string().trim().min(1).max(80),
+      name: accountNameSchema,
       password: z.string().min(14).max(256), confirmation: z.string().max(256) }).strict().parse(req.body);
     if (data.password !== data.confirmation) throw new AppError(400, 'PASSWORD_MISMATCH');
     settingUp = true;
     try {
-      const family = await store.createFamily(data.name, data, undefined, true);
+      const family = await store.createFamily(data.familyName, data, undefined, true);
       // Consume the capability only after durable creation; restarting never reopens setup.
       options.bootstrap = undefined;
       // The capability authorizes this first parent; continue directly into the
@@ -170,14 +176,14 @@ export async function createApp(
   app.post('/api/login', async (req, reply) => {
     if (req.headers.origin !== config.origin) throw new AppError(403, 'ORIGIN_DENIED');
     const input = z
-      .object({ username: z.string().min(1).max(80), password: z.string().max(256) })
+      .object({ name: accountNameSchema, password: z.string().max(256) }).strict()
       .parse(req.body);
     const now = Date.now();
     if (loginAttempts.size > 10000) {
       for (const [k, v] of loginAttempts) if (v.until < now) loginAttempts.delete(k);
       if (loginAttempts.size > 10000) throw new AppError(429, 'SLOW_DOWN');
     }
-    const keys = [`ip:${req.ip}`, `user:${input.username.toLowerCase()}`];
+    const keys = [`ip:${req.ip}`, `user:${accountNameKey(input.name)}`];
     for (const k of keys) {
       const a = loginAttempts.get(k);
       if (a && a.until > now && a.n >= 8) throw new AppError(429, 'SLOW_DOWN');
@@ -187,7 +193,7 @@ export async function createApp(
       const a = loginAttempts.get(k);
       loginAttempts.set(k, { n: a && a.until > now ? a.n + 1 : 1, until: now + 15 * 60_000 });
     }
-    const row = store.one('SELECT * FROM users WHERE username=?', input.username.toLowerCase());
+    const row = store.one('SELECT * FROM users WHERE name_key=?', accountNameKey(input.name));
     activeLogins++;
     let valid = false;
     try {
@@ -199,8 +205,13 @@ export async function createApp(
       activeLogins--;
     }
     if (!row || !valid) throw new AppError(401, 'INVALID_CREDENTIALS');
+    // Password verification yields. Do not finish a stale-name login after a
+    // concurrent rename (or accept a password replaced while verification ran).
+    const authenticated = store.one('SELECT * FROM users WHERE family_id=? AND id=? AND name_key=? AND password=?',
+      row.family_id, row.id, accountNameKey(input.name), row.password);
+    if (!authenticated) throw new AppError(401, 'INVALID_CREDENTIALS');
     if (req.cookies.sid) store.run('DELETE FROM sessions WHERE id=?', hash(req.cookies.sid));
-    const session = store.createSession(store.user(row));
+    const session = store.createSession(store.user(authenticated));
     for (const k of keys) loginAttempts.delete(k);
     reply.setCookie('sid', session.sid, {
       httpOnly: true,
@@ -268,10 +279,14 @@ export async function createApp(
       f = s.user.familyId;
     return store
       .groups(f)
-      .filter((g) => store.allowed(s.user, g.id))
+      // Catalog visibility is not content permission: parents already have this
+      // family-scoped metadata in /parent/overview. Children still see grants only.
+      .filter((g) => s.user.role === 'parent' || store.allowed(s.user, g.id))
       .map((g) => ({
         ...g,
+        canRead: store.allowed(s.user, g.id),
         last: (() => {
+          if (!store.allowed(s.user, g.id)) return undefined;
           const m = store.messages(f, g.id, undefined, 1)[0];
           return m ? service.public(f, m) : undefined;
         })(),
@@ -640,7 +655,7 @@ export async function createApp(
     try {
       store.one('SELECT 1');
       const info = JSON.parse(readFileSync(resolve('package.json'), 'utf8'));
-      return { ok: true, version: String(info.version), databaseSchema: 1 };
+      return { ok: true, version: String(info.version), databaseSchema: DATABASE_SCHEMA };
     } catch { return reply.code(503).send({ ok: false }); }
   });
   app.get('/api/parent/overview', async (req) => {
@@ -649,7 +664,7 @@ export async function createApp(
     const f = s.user.familyId;
     return {
       children: store
-        .all('SELECT id,display,username FROM users WHERE family_id=? AND role=?', f, 'child')
+        .all('SELECT id,name FROM users WHERE family_id=? AND role=?', f, 'child')
         .map((u) => ({ ...u, senderLabel: store.identityLabel(f, u.id) })),
       groups: store.groups(f),
       grants: store.all('SELECT user_id,group_id FROM grants WHERE family_id=?', f),
@@ -743,6 +758,24 @@ export async function createApp(
     service.notify(s.user.familyId, undefined, 'identity');
     return { ok: true };
   });
+  app.put('/api/parent/child-profile', async (req) => {
+    const s = req.session;
+    parent(s);
+    const data = z.object({ childId: z.uuid(), name: accountNameSchema }).strict().parse(req.body);
+    const child = store.one('SELECT id FROM users WHERE family_id=? AND id=? AND role=?',
+      s.user.familyId, data.childId, 'child');
+    if (!child) throw deny();
+    const key = accountNameKey(data.name);
+    store.tx(() => {
+      if (store.one('SELECT 1 FROM users WHERE name_key=? AND id!=?', key, child.id))
+        throw new AppError(409, 'NAME_UNAVAILABLE');
+      // Only the name changes. Durable IDs, credentials, sessions and grants stay intact.
+      store.run('UPDATE users SET name=?,name_key=? WHERE family_id=? AND id=? AND role=?',
+        data.name, key, s.user.familyId, child.id, 'child');
+    });
+    service.notify(s.user.familyId, undefined, 'identity');
+    return { ok: true, child: { id: child.id, name: data.name } };
+  });
   app.post('/api/parent/child-password', async (req) => {
     parent(req.session);
     const data = z
@@ -768,8 +801,7 @@ export async function createApp(
   let addingChild = false;
   app.post('/api/parent/children', async (req) => {
     parent(req.session);
-    const data = z.object({ username: z.string().trim().toLowerCase().regex(/^[a-z0-9._-]{3,60}$/),
-      display: z.string().trim().min(1).max(40).refine(x => !/[\x00-\x1f\u202a-\u202e\u2066-\u2069]/.test(x)),
+    const data = z.object({ name: accountNameSchema,
       password: z.string().min(14).max(256), confirmation: z.string().max(256) }).strict().parse(req.body);
     if (data.password !== data.confirmation) throw new AppError(400, 'PASSWORD_MISMATCH');
     if (addingChild) throw new AppError(429, 'SLOW_DOWN');
@@ -777,11 +809,11 @@ export async function createApp(
     try {
       const pw = await passwordHash(data.password), f = req.session.user.familyId, id = randomUUID();
       store.tx(() => {
-        if (store.one('SELECT 1 FROM users WHERE username=?', data.username)) throw new AppError(409, 'USERNAME_UNAVAILABLE');
+        if (store.one('SELECT 1 FROM users WHERE name_key=?', accountNameKey(data.name))) throw new AppError(409, 'NAME_UNAVAILABLE');
         if (store.one("SELECT count(*) AS n FROM users WHERE family_id=? AND role='child'", f).n >= 20)
           throw new AppError(409, 'CHILD_LIMIT');
-        store.run('INSERT INTO users(id,family_id,username,display,role,password) VALUES(?,?,?,?,?,?)',
-          id, f, data.username, data.display, 'child', pw);
+        store.run('INSERT INTO users(id,family_id,name,name_key,role,password) VALUES(?,?,?,?,?,?)',
+          id, f, data.name, accountNameKey(data.name), 'child', pw);
       });
       service.notify(f, undefined, 'identity');
       return { ok: true, id };

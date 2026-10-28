@@ -50,7 +50,7 @@ cd /opt/yachad/current
 sudo -u yachad env SETUP_WRITE_ENV=false DATA_DIR=/var/lib/yachad MASTER_KEY_FILE=/etc/yachad/master.key APP_ORIGIN=https://ACTUAL_PRIVATE_LAN_IP COOKIE_SECURE=true node --import tsx scripts/setup.ts
 ```
 
-בתיקיית קוד מוגנת משאירים `SETUP_WRITE_ENV=false`. בוחרים שני usernames וסיסמאות נפרדות בהזנה מקומית. לא בצ׳אט ולא בקובץ שירות.
+בתיקיית קוד מוגנת משאירים `SETUP_WRITE_ENV=false`. בוחרים שני שמות חשבון ייחודיים (גם בעברית) וסיסמאות נפרדות בהזנה מקומית. לא בצ׳אט ולא בקובץ שירות.
 
 מעתיקים את `deploy/yachad.service` אל `/etc/systemd/system/` ומוודאים ש־`/usr/bin/env node` מוצא Node 24 ב־PATH של השירות. לאחר סקירה:
 

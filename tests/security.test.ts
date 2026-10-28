@@ -34,13 +34,13 @@ async function fixture() {
   const password = randomBytes(24).toString('base64url');
   const a = await store.createFamily(
     'A',
-    { username: 'parent-a', password },
-    { username: 'child-a', password: password + 'child' },
+    { name: 'parent-a', password },
+    { name: 'child-a', password: password + 'child' },
   );
   const b = await store.createFamily(
     'B',
-    { username: 'parent-b', password },
-    { username: 'child-b', password: password + 'child' },
+    { name: 'parent-b', password },
+    { name: 'child-b', password: password + 'child' },
   );
   const { app, service } = await createApp(config, { store, factory: (h) => new QuietMock(h) });
   await service.connect(a.familyId);
@@ -285,22 +285,22 @@ test('login uses salted passwords, expiring HttpOnly sessions and throttles', as
   const f = await fixture();
   try {
     const r = await f.req(null, '/api/login', 'POST', {
-      username: 'parent-a',
+      name: 'parent-a',
       password: f.password,
     });
     assert.equal(r.statusCode, 200);
     assert.match(r.headers['set-cookie'] as string, /HttpOnly/);
     assert.match(r.headers['set-cookie'] as string, /SameSite=Strict/);
-    const pw = f.store.one('SELECT password FROM users WHERE username=?', 'parent-a').password;
+    const pw = f.store.one('SELECT password FROM users WHERE name=?', 'parent-a').password;
     assert.ok(!pw.includes(f.password));
     for (let i = 0; i < 8; i++)
       assert.equal(
-        (await f.req(null, '/api/login', 'POST', { username: 'nobody', password: 'wrong' }))
+        (await f.req(null, '/api/login', 'POST', { name: 'nobody', password: 'wrong' }))
           .statusCode,
         401,
       );
     assert.equal(
-      (await f.req(null, '/api/login', 'POST', { username: 'nobody', password: 'wrong' }))
+      (await f.req(null, '/api/login', 'POST', { name: 'nobody', password: 'wrong' }))
         .statusCode,
       429,
     );
@@ -596,11 +596,11 @@ test('one child revocation preserves another child grant within the same family'
       f.a.childId,
     );
     f.store.run(
-      'INSERT INTO users(id,family_id,username,display,role,password) VALUES(?,?,?,?,?,?)',
+      'INSERT INTO users(id,family_id,name,name_key,role,password) VALUES(?,?,?,?,?,?)',
       cid,
       f.a.familyId,
       'second-child',
-      'אני',
+      'second-child',
       'child',
       source.password,
     );

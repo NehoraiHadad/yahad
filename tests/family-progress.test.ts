@@ -5,8 +5,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { FamilyProgress, ChildGroupSummary, familyProgress, type FamilyOverview } from '../web/FamilyProgress.js';
 
 const overview = (): FamilyOverview => ({ state: 'connected', children: [
-  { id: 'a', display: 'ילד לדוגמה', username: 'child' },
-  { id: 'b', display: 'ילדה לדוגמה', username: 'child2' },
+  { id: 'a', name: 'ילד לדוגמה' },
+  { id: 'b', name: 'ילדה לדוגמה' },
 ], groups: [{ id: 'g1', title: 'משפחה' }, { id: 'g2', title: 'משפחה' }, { id: 'g3', title: 'כיתה' }],
   grants: [{ user_id: 'a', group_id: 'g1' }, { user_id: 'a', group_id: 'g2' }, { user_id: 'b', group_id: 'g3' }] });
 
@@ -14,7 +14,7 @@ test('setup is derived from persisted overview after interruptions/reload, never
   const data = overview();
   assert.equal(familyProgress(data).next, 'login');
   assert.equal(familyProgress(data).completed, 3);
-  data.children.push({ id: 'c', display: 'חדש', username: 'child3' });
+  data.children.push({ id: 'c', name: 'חדש' });
   const interrupted = familyProgress(JSON.parse(JSON.stringify(data)));
   assert.equal(interrupted.next, 'groups');
   assert.equal(interrupted.pendingChild?.id, 'c');

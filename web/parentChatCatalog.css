@@ -1,0 +1,9 @@
+.catalog-conversation { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+.catalog-explanation { margin: auto; padding: 28px; max-width: 560px; overflow: auto; text-align: center; line-height: 1.7; }
+.catalog-explanation > svg { color: var(--accent); }
+.catalog-explanation h2 { font-size: 22px; }
+.catalog-explanation p { overflow-wrap: anywhere; }
+.catalog-explanation .small-button { white-space: normal; min-height: 44px; }
+.group-row.catalog-only .group-preview { color: var(--muted); }
+.group-search .clear-group-search { flex-shrink: 0; }
+.group-search input { min-width: 0; }

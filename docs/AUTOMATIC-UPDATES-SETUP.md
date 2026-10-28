@@ -2,6 +2,10 @@
 
 > Legacy signature-pinned installation reference. The current owner chose [GitHub HTTPS setup](GITHUB-UPDATES-SETUP.md) for this new installation, with no signing-key requirement. Do not apply the trust/keygen steps below to that profile or migrate an existing pinned installation silently. Parent UI control still requires the matching root worker and local gate.
 
+For the current single-name/schema-2 migration and worker-bootstrap boundary,
+see [SCHEMA-UPGRADES.md](SCHEMA-UPGRADES.md). This historical setup guide is not
+a migration recipe.
+
 Read [HISTORY.md](HISTORY.md) for the 0.3.1 history limits and real-account acceptance gate before rollout.
 
 This is an **owner-operated runbook**, not a record of work already done on the Pi.
@@ -161,7 +165,7 @@ Find parent IDs from the correct live store, read-only:
 sudo -u yachad python3 - <<'PY'
 import sqlite3
 with sqlite3.connect('file:/var/lib/yachad/live/app.sqlite?mode=ro', uri=True) as db:
-    for row in db.execute("SELECT family_id,id,username FROM users WHERE role='parent'"):
+    for row in db.execute("SELECT family_id,id FROM users WHERE role='parent'"):
         print(row)
 PY
 sudoedit /etc/yachad/updates.json
@@ -281,8 +285,10 @@ WhatsApp connection, and exits on Ctrl+C/timeout. Stop it, then start the normal
 configured service. Reloading after removing the fragment requires reopening the
 original local link if it is still valid. Never make a public setup listener.
 
-Parents add children in the parent screen with a display name, unique username,
-confirmed passphrase, then choose allowed groups. New children start with no
+In the current schema-2 app, parents add children with one unique name used for
+both display and login (Hebrew is supported), a confirmed passphrase, then
+choose allowed groups. The historical schema-1 app used separate fields; do not
+apply its account SQL or API examples to schema 2. New children start with no
 group access. Each account needs a different secret. Spaces, Unicode and
 memorable random-word phrases are supported; the 14–256 character policy stays
 in force. Password managers on personal devices reduce repeated typing. Shared

@@ -3,6 +3,7 @@ import { generateKeyPairSync, createHash, sign } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync, readdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { DATABASE_SCHEMA, DATABASE_MIGRATIONS_FROM } from '../src/database-schema.ts';
 const [command, output, keyFile] = process.argv.slice(2);
 if (command === 'keygen') {
   if (!output || existsSync(output) || existsSync(output + '.pub')) throw new Error('Choose a new private key path');
@@ -39,7 +40,7 @@ with zipfile.ZipFile(sys.argv[1],'x',compression=zipfile.ZIP_DEFLATED) as out:
   out.write(p,name)
 `,archive],{stdio:['ignore','ignore','ignore']});
   const data=readFileSync(archive);
-  const manifest=Buffer.from(JSON.stringify({format:1,version,databaseSchema:1,archive:'yachad-app.zip',bytes:data.length,sha256:createHash('sha256').update(data).digest('hex')})+'\n');
+  const manifest=Buffer.from(JSON.stringify({format:2,version,databaseSchema:DATABASE_SCHEMA,databaseMigrationsFrom:DATABASE_MIGRATIONS_FROM,minimumUpdaterProtocol:2,archive:'yachad-app.zip',bytes:data.length,sha256:createHash('sha256').update(data).digest('hex')})+'\n');
   writeFileSync(join(dir,'yachad-release.json'),manifest,{mode:0o600,flag:'wx'});
   if (signed) writeFileSync(join(dir,'yachad-release.sig'),sign(null,manifest,readFileSync(keyFile)),{mode:0o600,flag:'wx'});
   console.log(`Release ${version} packaged locally (${signed?'signed; three assets':'GitHub HTTPS trust; two assets'}). Upload to matching stable v${version} only after approval.`);

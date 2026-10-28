@@ -1,5 +1,7 @@
 import { DatabaseSync, backup } from 'node:sqlite';
 import { Diagnostics } from './diagnostics.js';
+import { DATABASE_SCHEMA, USERS_TABLE, migrateAccountNames } from './db.js';
+import { normalizeAccountName, accountNameKey } from './account-name.js';
 import {
   mkdirSync,
   chmodSync,
@@ -18,8 +20,7 @@ export interface User {
   id: string;
   familyId: string;
   role: 'parent' | 'child';
-  username: string;
-  display: string;
+  name: string;
 }
 export interface Session {
   user: User;
@@ -40,10 +41,16 @@ export class Store {
     mkdirSync(join(config.dataDir, 'media'), { mode: 0o700, recursive: true });
     this.db = new DatabaseSync(join(config.dataDir, 'app.sqlite'));
     chmodSync(join(config.dataDir, 'app.sqlite'), 0o600);
-    this.db
-      .exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA secure_delete=ON; PRAGMA busy_timeout=5000;
+    try {
+      this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA secure_delete=ON; PRAGMA busy_timeout=5000;');
+      const metadataExists = this.one("SELECT 1 FROM sqlite_master WHERE type='table' AND name='instance_metadata'");
+      const previousConnector = metadataExists && this.one('SELECT value FROM instance_metadata WHERE key=?', 'connector')?.value;
+      if (previousConnector && previousConnector !== config.connector)
+        throw new Error('Use a separate data directory when switching from demo to real WhatsApp');
+      migrateAccountNames(this.db);
+      this.db.exec(`
  CREATE TABLE IF NOT EXISTS families(id TEXT PRIMARY KEY,name TEXT NOT NULL,linked INTEGER NOT NULL DEFAULT 0);
- CREATE TABLE IF NOT EXISTS users(id TEXT NOT NULL,family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE,username TEXT NOT NULL UNIQUE,display TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('parent','child')),password TEXT NOT NULL,PRIMARY KEY(family_id,id));
+ ${USERS_TABLE.replace('CREATE TABLE users', 'CREATE TABLE IF NOT EXISTS users')};
  CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,family_id TEXT NOT NULL,user_id TEXT NOT NULL,csrf TEXT NOT NULL,expires INTEGER NOT NULL,last INTEGER NOT NULL,FOREIGN KEY(family_id,user_id) REFERENCES users(family_id,id) ON DELETE CASCADE);
  CREATE TABLE IF NOT EXISTS groups(family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE,id TEXT NOT NULL,title TEXT NOT NULL,PRIMARY KEY(family_id,id));
  CREATE TABLE IF NOT EXISTS grants(family_id TEXT NOT NULL,user_id TEXT NOT NULL,group_id TEXT NOT NULL,PRIMARY KEY(family_id,user_id,group_id),FOREIGN KEY(family_id,user_id) REFERENCES users(family_id,id) ON DELETE CASCADE,FOREIGN KEY(family_id,group_id) REFERENCES groups(family_id,id) ON DELETE CASCADE);
@@ -55,17 +62,12 @@ export class Store {
  CREATE TABLE IF NOT EXISTS family_connections(family_id TEXT PRIMARY KEY REFERENCES families(id) ON DELETE CASCADE,state TEXT NOT NULL,changed INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS identity_labels(family_id TEXT NOT NULL,user_id TEXT NOT NULL,value BLOB NOT NULL,PRIMARY KEY(family_id,user_id),FOREIGN KEY(family_id,user_id) REFERENCES users(family_id,id) ON DELETE CASCADE);
  CREATE TABLE IF NOT EXISTS instance_metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS schema_version(version INTEGER NOT NULL); INSERT INTO schema_version SELECT 1 WHERE NOT EXISTS(SELECT 1 FROM schema_version);`);
-    const previousConnector = this.one(
-      'SELECT value FROM instance_metadata WHERE key=?',
-      'connector',
-    )?.value;
-    if (previousConnector && previousConnector !== config.connector)
-      throw new Error('Use a separate data directory when switching from demo to real WhatsApp');
-    this.run('INSERT OR IGNORE INTO instance_metadata VALUES(?,?)', 'connector', config.connector);
-    if (this.one('SELECT version FROM schema_version')?.version !== 1)
-      throw new Error('Unsupported database schema');
-    this.cleanOrphans();
+ CREATE TABLE IF NOT EXISTS schema_version(version INTEGER NOT NULL); INSERT INTO schema_version SELECT ${DATABASE_SCHEMA} WHERE NOT EXISTS(SELECT 1 FROM schema_version);`);
+      this.run('INSERT OR IGNORE INTO instance_metadata VALUES(?,?)', 'connector', config.connector);
+      if (this.one('SELECT version FROM schema_version')?.version !== DATABASE_SCHEMA)
+        throw new Error('Unsupported database schema');
+      this.cleanOrphans();
+    } catch (error) { this.db.close(); throw error; }
   }
   one(sql: string, ...args: any[]): any {
     return this.db.prepare(sql).get(...args);
@@ -90,8 +92,8 @@ export class Store {
   }
   async createFamily(
     name: string,
-    parent: { username: string; password: string },
-    child?: { username: string; password: string },
+    parent: { name: string; password: string },
+    child?: { name: string; password: string },
     firstRun = false,
   ) {
     const fid = randomUUID(),
@@ -104,15 +106,15 @@ export class Store {
       if (firstRun && this.one('SELECT 1 FROM families LIMIT 1')) throw new Error('Already configured');
       this.run('INSERT INTO families(id,name) VALUES(?,?)', fid, name);
       for (const u of [
-        { ...parent, id: pid, role: 'parent', display: 'הורה', pw: ph },
-        ...(child ? [{ ...child, id: cid, role: 'child', display: 'אני', pw: ch! }] : []),
+        { ...parent, name: normalizeAccountName(parent.name), id: pid, role: 'parent', pw: ph },
+        ...(child ? [{ ...child, name: normalizeAccountName(child.name), id: cid, role: 'child', pw: ch! }] : []),
       ])
         this.run(
-          'INSERT INTO users(id,family_id,username,display,role,password) VALUES(?,?,?,?,?,?)',
+          'INSERT INTO users(id,family_id,name,name_key,role,password) VALUES(?,?,?,?,?,?)',
           u.id,
           fid,
-          u.username,
-          u.display,
+          u.name,
+          accountNameKey(u.name),
           u.role,
           u.pw,
         );
@@ -124,8 +126,7 @@ export class Store {
       id: row.id,
       familyId: row.family_id,
       role: row.role,
-      username: row.username,
-      display: row.display,
+      name: row.name,
     };
   }
   createSession(user: User) {

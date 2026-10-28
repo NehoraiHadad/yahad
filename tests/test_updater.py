@@ -125,9 +125,12 @@ class UpdaterTests(unittest.TestCase):
                     return out.getvalue()
                 if fail_backup and 'scripts/update-backup.ts' in args:
                     raise u.UpdateError('backup')
+                if 'scripts/update-backup.ts' in args:
+                    directory=pathlib.Path(c['backupDirectory']);directory.mkdir(exist_ok=True)
+                    backup=directory/'yachad-12345.backup';backup.write_bytes(b'synthetic encrypted fixture');backup.chmod(0o600)
                 return b'OK'
             def schema(self): return 1
-            def health(self,expected=None):
+            def health(self,expected=None,expected_schema=None):
                 effects.append(('health',expected))
                 if fail_health and expected=='0.2.0': raise u.UpdateError('health')
         worker=FakeWorker(c)

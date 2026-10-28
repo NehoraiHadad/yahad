@@ -6,6 +6,11 @@ import { UpdateProgressStatus, RejectedUpdateRequest, submitUpdateRequest, readU
 import { createUpdatePoller, observesRequest, reconcileUpdateRequest, updateActionsDisabled, updatePhases, updatePollDelay,
   updateProgress, type ConfiguredUpdate, type LocalUpdateRequest } from '../web/updateProgress.js';
 import { setCsrf } from '../web/api.js';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import vm from 'node:vm';
+import ts from 'typescript';
+import * as progressModule from '../web/updateProgress.js';
 
 const before = '11111111-1111-4111-8111-111111111111';
 const requestId = '22222222-2222-4222-8222-222222222222';
@@ -123,7 +128,8 @@ test('reconnect preserves the last worker stage and disables repeat actions with
   const data = { ...base, phase: 'checking_health' as const, lastRequest: journal('running') };
   const html = renderToStaticMarkup(React.createElement(UpdateProgressStatus, { data, reconnecting: true }));
   assert.ok(html.includes(updatePhases.checking_health));
-  assert.match(html, /לא תוצאת כשל/); assert.match(html, /ננסה שוב אוטומטית/);
+  assert.match(html, /המצב העדכני אינו זמין/); assert.match(html, /אין כרגע אישור להתקדמות, להצלחה או לכשל חדש/);
+  assert.match(html, /לא נשלח שוב בקשת עדכון/);
   assert.equal(updateActionsDisabled(data, null, true, false), true);
   assert.equal(updateProgress(base, { ...local, state: 'uncertain' }).kind, 'unknown');
   assert.equal(updateActionsDisabled(base, { ...local, state: 'uncertain' }, false, false), true);
@@ -229,4 +235,107 @@ test('status transport distinguishes 401/403 access loss from retryable 503 and 
     if (windowDescriptor) Object.defineProperty(globalThis, 'window', windowDescriptor);
     else Reflect.deleteProperty(globalThis, 'window');
   }
+});
+
+
+test('repair-required states override stale running journals and queues and never offer a blind retry', () => {
+  for (const phase of ['recovery_required', 'rollback_pending_health'] as const) {
+    for (const state of ['running', 'succeeded', 'failed'] as const) {
+      const data = { ...base, phase, lastRequest: journal(state),
+        queuedRequest: { id: requestId, action: 'install' as const, createdAt: 2000 } };
+      const progress = updateProgress(data, local);
+      assert.equal(progress.kind, 'failure'); assert.equal(progress.active, false);
+      assert.equal(progress.title, updatePhases[phase]);
+      assert.equal(updateActionsDisabled(data, null, false, false), true);
+      assert.match(progress.detail, /נדרש|נדרשת/);
+      assert.doesNotMatch(progress.detail, /המידע נשמר בבטחה|חזרנו לגרסה הקודמת|נסו שוב/);
+    }
+  }
+  const recovery = updateProgress({ ...base, phase: 'recovery_required' });
+  assert.match(recovery.detail, /לא ניתן להמשיך אוטומטית בבטחה/);
+  assert.match(recovery.detail, /לא מתחיל עדכון נוסף/);
+});
+
+test('reopening uses reported worker state, while stale success and unknown phases are not current success', () => {
+  const running = { ...base, phase: 'building' as const, lastRequest: journal('running') };
+  const initial = updateProgress(running);
+  const reopened = updateProgress(structuredClone(running));
+  assert.deepEqual(reopened, initial);
+  assert.match(reopened.detail, /גם אם סוגרים את הדפדפן/);
+  assert.match(reopened.detail, /בפתיחה מחדש בודקים את המצב מהשירות/);
+  const stale = { ...base, phase: 'healthy' as const, stale: true, lastRequest: journal('succeeded') };
+  for (const data of [stale, { ...stale, stale: false }]) {
+    const html = renderToStaticMarkup(React.createElement(UpdateProgressStatus, { data, reconnecting: true }));
+    assert.match(html, /המצב העדכני אינו זמין<\/b>/);
+    assert.ok(html.includes('הדיווח האחרון שהתקבל: העדכון הושלם בהצלחה'));
+    assert.ok(!html.includes('שירות העדכון אישר שהגרסה החדשה פעילה'));
+  }
+  const unknown = { ...base, phase: 'future_unknown', lastRequest: journal('succeeded') } as unknown as ConfiguredUpdate;
+  assert.equal(updateProgress(unknown).kind, 'unknown');
+  assert.equal(updateActionsDisabled(unknown, null, false, false), true);
+  assert.doesNotMatch(updateProgress(unknown).title, /הושלם|חזרנו/);
+});
+
+test('unrecognized or malformed status cannot replace the last real report with invented progress', async () => {
+  const original = globalThis.fetch;
+  try {
+    for (const payload of [null, {}, { configured: 'yes' }, { ...base, phase: 'unknown_future' }]) {
+      globalThis.fetch = (async () => new Response(JSON.stringify(payload))) as typeof fetch;
+      await assert.rejects(readUpdateStatus(new AbortController().signal), /Status unavailable/);
+    }
+  } finally { globalThis.fetch = original; }
+});
+
+
+// Drive the actual component tree/handlers with deterministic hooks. Transport,
+// poll cleanup and retry behavior are covered above; this is not a browser test.
+function panelHarness(data: ConfiguredUpdate, reconnecting = false) {
+  const slots: any[] = [true, data, true, false, false, '', '', reconnecting, true, false, 'auto', null];
+  let cursor = 0;
+  const calls: string[] = [];
+  const module = { exports: {} as any }, require = createRequire(import.meta.url);
+  const code = ts.transpileModule(readFileSync(new URL('../web/UpdatesPanel.tsx', import.meta.url), 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  vm.runInNewContext(code, {
+    module, exports: module.exports, AbortController, setTimeout, clearTimeout,
+    fetch: async (_url: string, init?: RequestInit) => { calls.push(init?.method || 'GET'); throw new Error('unexpected transport'); },
+    require: (name: string) => name === 'react' ? {
+      useState(initial: any) { const index = cursor++; if (!(index in slots)) slots[index] = initial; return [slots[index], (value: any) => { slots[index] = typeof value === 'function' ? value(slots[index]) : value; }]; },
+      useRef(initial: any) { const index = cursor++; return slots[index] ||= { current: initial }; },
+      useEffect() {},
+    } : name === './api' ? { csrf: 'synthetic' } : name === './updateProgress' ? progressModule : require(name),
+  });
+  const render = () => { cursor = 0; return module.exports.UpdatesPanel(); };
+  const nodes = (node: any): any[] => !node || typeof node !== 'object' ? [] : [node, ...[node.props?.children].flat(Infinity).flatMap(nodes)];
+  const buttons = () => nodes(render()).filter(node => node.type === 'button');
+  return { calls, html: () => renderToStaticMarkup(render()), buttons,
+    toggle: () => buttons().find(node => node.props.className === 'diagnostics-toggle')!.props.onClick(),
+    refresh: () => buttons().find(node => node.props.className === 'text-button')!.props.onClick(),
+  };
+}
+
+test('actual panel hides recovery mutations including already-open confirmations and preserves repair state on reopen', () => {
+  for (const phase of ['recovery_required', 'rollback_pending_health'] as const) {
+    const h = panelHarness({ ...base, phase, lastRequest: journal('failed') });
+    assert.equal(h.buttons().length, 2, 'only disclosure and read-only refresh remain');
+    assert.doesNotMatch(h.html(), /כן, התקנה עכשיו|אישור שינוי מצב העדכונים|בדיקה ועדכון אוטומטי/);
+    assert.ok(h.html().includes(updatePhases[phase]));
+    h.refresh(); h.refresh();
+    h.toggle(); assert.equal(h.buttons().length, 1, 'closing removes the body but not its actual status');
+    h.toggle(); assert.ok(h.html().includes(updatePhases[phase]));
+    assert.equal(h.buttons().length, 2);
+    assert.deepEqual(h.calls, [], 'disclosure and refresh cannot post an update or replay a prior confirmation');
+  }
+});
+
+test('actual panel treats an unavailable current status as unknown even when last report was healthy', () => {
+  const h = panelHarness({ ...base, phase: 'healthy', lastRequest: journal('succeeded') }, true);
+  assert.ok(h.html().includes('המצב העדכני אינו זמין'));
+  assert.ok(h.html().includes('הדיווח האחרון שהתקבל: העדכון הושלם בהצלחה'));
+  for (const button of h.buttons().filter(node => node.props.className === 'outline-button'))
+    assert.equal(button.props.disabled, true, 'no mutating action while disconnected');
+  h.toggle(); h.toggle();
+  assert.ok(h.html().includes('המצב העדכני אינו זמין'));
+  assert.deepEqual(h.calls, []);
 });

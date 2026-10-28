@@ -17,7 +17,7 @@ class Quiet extends MockConnector{override async approved(){}}
 async function fixture(){
  const dir=mkdtempSync(join(tmpdir(),'yachad-stickers-')),config:Config={dataDir:dir,masterKey:randomBytes(32),connector:'mock',realAllowed:false,host:'127.0.0.1',port:3000,origin:'http://localhost:3000',secureCookie:false,maxMedia:1048576,maxStorage:67108864,childIdleMs:900000,sessionMs:3600000,diagnosticsEnabled:false};
  const {app,store,service}=await createApp(config,{boot:false,factory:h=>new Quiet(h)});const password=randomBytes(24).toString('hex');
- const a=await store.createFamily('A',{username:'parent-a',password},{username:'child-a',password}),b=await store.createFamily('B',{username:'parent-b',password},{username:'child-b',password});
+ const a=await store.createFamily('A',{name:'parent-a',password},{name:'child-a',password}),b=await store.createFamily('B',{name:'parent-b',password},{name:'child-b',password});
  await service.connect(a.familyId);await service.grant(a.familyId,a.childId,group,true);
  const session=(id:string)=>store.createSession(store.user(store.one('SELECT * FROM users WHERE id=?',id)));
  const child=session(a.childId),other=session(b.childId);

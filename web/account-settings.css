@@ -1,0 +1,8 @@
+.account-settings-actions { display:flex; gap:8px; }
+.account-settings-actions button { flex:1; border:1px solid var(--border, #dce4de); border-radius:10px; padding:10px; background:transparent; color:var(--text, #29423b); }
+.account-settings-actions button[aria-pressed="true"] { background:var(--primary, #2d6a54); border-color:var(--primary, #2d6a54); color:white; }
+.account-settings-form { display:flex; flex-direction:column; gap:16px; }
+.account-settings-form p { margin:0; line-height:1.7; font-size:13px; }
+.account-settings-form [role="status"] { color:var(--text, #29423b); padding:10px 12px; border-inline-start:3px solid var(--primary, #2d6a54); }
+.account-settings-form > span:empty { display:none; }
+
