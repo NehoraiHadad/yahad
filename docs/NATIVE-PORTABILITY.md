@@ -1,5 +1,7 @@
 # Native app portability increment
 
+Current dependency/lifecycle/access checkpoint: [Private runtime packaging and stage-one handoff](NATIVE-RUNTIME-PACKAGING.md). Earlier counts below describe their respective increments.
+
 This follows the initial installer feasibility slice. It adds actual Windows mock-app execution and build-only Linux candidate packaging. It is **not a production installer or a complete Windows port**.
 
 Working directory: `C:/projects/yahad-native-install`, a separate worktree of the official clone at `C:/projects/yahad`. The latter directory was inspected empty before cloning. The verified local bundle imported `15e05a0b61267f9f8486bc7d72059221fe0dfcb0` on the same `feat/native-installer-slice` branch, based on released v0.5.2. The original task checkout and its artifacts remain preserved.

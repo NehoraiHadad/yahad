@@ -1,5 +1,7 @@
 # Next-release native installation plan
 
+Current dependency/lifecycle/access checkpoint: [Private runtime packaging and stage-one handoff](NATIVE-RUNTIME-PACKAGING.md). Earlier counts below describe their respective increments.
+
 Current continuation: see [native app portability and dependency status](NATIVE-PORTABILITY.md). The feasibility-only results below describe the first increment.
 
 Status: feasibility implementation, not production acceptance. The released v0.5.2 and its installer remain unchanged. No release version/schema change is made here. Quotas, session accounting, schema migration and recovery compatibility belong to the separate quota task.

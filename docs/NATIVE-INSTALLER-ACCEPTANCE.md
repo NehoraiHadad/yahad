@@ -1,5 +1,7 @@
 # Native installer acceptance gates
 
+Current dependency/lifecycle/access checkpoint: [Private runtime packaging and stage-one handoff](NATIVE-RUNTIME-PACKAGING.md). Earlier counts below describe their respective increments.
+
 Current continuation: see [native app portability and dependency status](NATIVE-PORTABILITY.md). The feasibility-only results below describe the first increment.
 
 Only synthetic, nonprivileged Windows x64 fixture checks have run in this branch. A passing fixture is not a successful installation or a supported-platform claim. “Target” below means intended validation target, not shipped support.
