@@ -1,5 +1,7 @@
 # Native app portability increment
 
+Latest private FFmpeg/Caddy and recovery checkpoint: [Private dependency and recovery checkpoint](NATIVE-DEPENDENCIES-CHECKPOINT.md).
+
 Current dependency/lifecycle/access checkpoint: [Private runtime packaging and stage-one handoff](NATIVE-RUNTIME-PACKAGING.md). Earlier counts below describe their respective increments.
 
 This follows the initial installer feasibility slice. It adds actual Windows mock-app execution and build-only Linux candidate packaging. It is **not a production installer or a complete Windows port**.

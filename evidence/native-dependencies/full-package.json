@@ -1,0 +1,14 @@
+{
+  "kind": "windows-runtime-candidate",
+  "profile": "full",
+  "target": "win-x64",
+  "fileCount": 9293,
+  "peCount": 204,
+  "payloadBytes": 501235797,
+  "archiveBytes": 187490067,
+  "archiveSha256": "2dd85186f7cbb27f41b1e7776c13f8528b47dab8e3ffb9e40c249010f9109f19",
+  "allExtractedFilesVerified": true,
+  "familyInstallationReady": false,
+  "releaseSignatureVerified": false,
+  "output": "C:\\projects\\yahad-native-install\\installer\\.scratch\\windows-full-unpacked-20261028"
+}

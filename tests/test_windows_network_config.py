@@ -13,7 +13,7 @@ class NetworkConfigTests(unittest.TestCase):
             with self.subTest(address=address),self.assertRaises(ValueError): caddyfile(address,3000)
 
     def test_backend_port_cannot_create_an_extra_listener_or_inject_config(self):
-        for port in (0,443,65536,True,'3000\n}'): 
+        for port in (0,443,65536,True,'3000\n}'):
             with self.subTest(port=port),self.assertRaises(ValueError): caddyfile('10.1.2.3',port)
 
 

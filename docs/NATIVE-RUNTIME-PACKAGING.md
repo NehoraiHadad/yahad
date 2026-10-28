@@ -1,5 +1,7 @@
 # Private runtime packaging and stage-one handoff
 
+Latest private FFmpeg/Caddy and recovery checkpoint: [Private dependency and recovery checkpoint](NATIVE-DEPENDENCIES-CHECKPOINT.md).
+
 This increment adds an auditable Windows runtime **candidate**, native host/update contracts and an installer-only LAN planning window. It is not a complete installer, a registered service or a claim of successful tablet access. Previous evidence remains in `NATIVE-PORTABILITY.md`; the current checkpoint supersedes its dependency status.
 
 ## Installation boundary

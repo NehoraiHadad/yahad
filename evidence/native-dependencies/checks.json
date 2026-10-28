@@ -1,0 +1,26 @@
+{
+  "codeCheckpoint": "6a74d68839964cfde46d91fdf83748c8703dc278",
+  "dotnet": {
+    "passed": 76,
+    "failed": 0,
+    "scope": "synthetic/native Windows fixture harness"
+  },
+  "pythonWindows": {
+    "passed": 36,
+    "failed": 0,
+    "scope": "synthetic archive/provenance/PE/network-plan checks",
+    "stageSubsetRerunAfterLicenseAddition": 12
+  },
+  "extractedRuntime": {
+    "passed": 5,
+    "failed": 0,
+    "skipped": 0,
+    "topLevelTests": 2,
+    "childTests": 3,
+    "durationMs": 18259.9383,
+    "report": "extracted-full-runtime.tap"
+  },
+  "actualInstallationPerformed": false,
+  "quotaSchema5Integrated": false,
+  "pendingApproval": false
+}
