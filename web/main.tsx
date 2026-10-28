@@ -692,7 +692,7 @@ function Chat({
             <Palette size={21} />
           </IconButton>
         </header>
-        {me.user.role === 'child' && <UsageIndicator status={budget.status}/>}
+        {me.user.role === 'child' && <UsageIndicator status={budget.status} paused={usageSuspended}/>}
         <div className="side-title">
           <div>
             <span className="eyebrow">קצת מילים, הרבה ביחד</span>

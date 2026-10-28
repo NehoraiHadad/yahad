@@ -14,7 +14,6 @@ const family = await store.createFamily('משפחת הדגמה', { name: 'הור
   { name: 'ילד הדגמה', password: randomBytes(24).toString('hex') });
 await service.connect(family.familyId);
 for (const g of store.groups(family.familyId)) store.grant(family.familyId, family.childId, g.id, true);
-store.usage.setTimezone(family.familyId, 'Asia/Jerusalem');
 app.get('/__qa/unlock.js', async (_req, reply) => reply.type('application/javascript')
   .send("localStorage.removeItem('yachad-locked');location.replace('/');"));
 app.get<{ Params: { role: string } }>('/__qa/:role', async (req, reply) => {

@@ -92,3 +92,12 @@ test('network error fails closed and pagehide uses higher-sequence best-effort p
   assert.ok(h.unload[0].seq > h.requests.at(-1)!.body.seq);
   h.close();
 });
+
+test('a legacy limited session awaiting timezone choice shows parent setup rather than logging out', async () => {
+  const h = harness(); h.flush();
+  await h.respond(0, { timezoneConfirmed: false, minutes: 37, leaseUntil: 0 });
+  assert.equal(h.flush().reason, 'setup'); assert.equal(h.flush().suspended, true);
+  h.flush().reconcile(); await h.respond(1, { timezoneConfirmed: true, minutes: 37 });
+  assert.equal(h.flush().suspended, false);
+  h.close();
+});

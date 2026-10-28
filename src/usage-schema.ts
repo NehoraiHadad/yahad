@@ -20,3 +20,22 @@ export function migrateUsage(db: DatabaseSync) {
     throw error;
   }
 }
+
+/** A scheduled calendar is an enforcement policy that schema-3 code must reject. */
+export function migrateUsageCalendar(db: DatabaseSync) {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS usage_calendar(
+      family_id TEXT PRIMARY KEY REFERENCES families(id) ON DELETE CASCADE,
+      era INTEGER NOT NULL DEFAULT 0 CHECK(era>=0),
+      pending_timezone TEXT,pending_at INTEGER,frozen_day TEXT,
+      CHECK((pending_timezone IS NULL AND pending_at IS NULL AND frozen_day IS NULL) OR
+        (pending_timezone IS NOT NULL AND pending_at IS NOT NULL AND frozen_day IS NOT NULL))
+    ); UPDATE schema_version SET version=4 WHERE version=3;`);
+    if (db.prepare('PRAGMA foreign_key_check').all().length) throw new Error('Calendar migration would break references');
+    db.exec('COMMIT');
+  } catch (error) {
+    if (db.isTransaction) db.exec('ROLLBACK');
+    throw error;
+  }
+}

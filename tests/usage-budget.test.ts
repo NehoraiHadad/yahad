@@ -11,19 +11,20 @@ import { MockConnector } from '../src/connectors/mock.js';
 import type { Config } from '../src/config.js';
 import { DATABASE_SCHEMA } from '../src/database-schema.js';
 import { DatabaseSync } from 'node:sqlite';
-import { migrateUsage } from '../src/usage-schema.js';
+import { migrateUsage, migrateUsageCalendar } from '../src/usage-schema.js';
 
-async function fixture() {
+async function fixture(options: { now?: number; timezone?: string | null } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'yahad-usage-synthetic-'));
   const config: Config = { dataDir: dir, masterKey: randomBytes(32), connector: 'mock', realAllowed: false,
     host: '127.0.0.1', port: 3000, origin: 'http://localhost:3000', secureCookie: false,
     maxMedia: 1048576, maxStorage: 64 * 1048576, childIdleMs: 900000, sessionMs: 365 * 86400000, diagnosticsEnabled: false };
-  let now = Date.now();
+  let now = options.now ?? Date.now();
   const store = new Store(config, { usageClock: () => now });
   const f = await store.createFamily('Synthetic', { name: 'parent-usage', password: 'synthetic parent' }, { name: 'child-usage', password: 'synthetic child' });
   const other = await store.createFamily('Other synthetic', { name: 'other-parent-usage', password: 'synthetic parent' }, { name: 'other-child-usage', password: 'synthetic child' });
   const sibling = randomUUID();
   store.run("INSERT INTO users VALUES(?,?,?,?,'child',?)", sibling, f.familyId, 'sibling-usage', 'sibling-usage', 'not-a-password');
+  if (options.timezone !== null) store.usage.setTimezone(f.familyId, options.timezone || 'UTC');
   const session = (id: string): Session => {
     const u = store.user(store.one('SELECT * FROM users WHERE id=?', id));
     const s = store.createSession(u);
@@ -122,7 +123,6 @@ test('policy changes settle atomically; today-only bonuses are idempotent and ca
     assert.equal(repeat.bonusMs, 420000);
     assert.throws(() => u.bonus(f.f.familyId, f.f.childId, id, zero.day, 8), /BONUS_CONFLICT/);
     assert.throws(() => u.bonus(f.f.familyId, f.f.childId, randomUUID(), '2000-01-01', 7), /BONUS_DAY_CHANGED/);
-    assert.throws(() => u.setTimezone(f.f.familyId, 'Asia/Jerusalem'), /TIMEZONE_IN_USE/);
     f.at(status.resetAt + 1);
     assert.equal(u.status(f.f.familyId, f.f.childId).bonusMs, 0);
     assert.equal(u.bonus(f.f.familyId, f.f.childId, id, zero.day, 7).bonusMs, 0, 'retry never regrants yesterday bonus');
@@ -131,11 +131,9 @@ test('policy changes settle atomically; today-only bonuses are idempotent and ca
 });
 
 test('midnight splits a lease by family timezone; DST creates 23/25-hour days and ignores browser dates', async () => {
-  const f = await fixture();
+  const f = await fixture({ now: Date.parse('2026-03-08T04:59:55Z'), timezone: 'America/New_York' });
   try {
     const zone = 'America/New_York';
-    const before = Date.parse('2026-03-08T04:59:55Z'); f.at(before);
-    f.store.usage.setTimezone(f.f.familyId, zone);
     // No earlier policy was inserted; synthetic session expiry remains adequate.
     const u = new UsageBudgets(f.store, () => f.now), s = { ...f.child, expires: Number.MAX_SAFE_INTEGER };
     u.setPolicy(f.f.familyId, f.f.childId, 2);
@@ -223,9 +221,9 @@ test('expiry is precise and cannot bill more than quota; bounded late heartbeat 
 });
 
 test('schema and local recovery/package contract agree; UI preserves mounted drafts through quota suspension', () => {
-  assert.equal(DATABASE_SCHEMA, 3);
+  assert.equal(DATABASE_SCHEMA, 4);
   const recovery = readFileSync(new URL('../scripts/recover-account.py', import.meta.url), 'utf8');
-  assert.match(recovery, /DATABASE_SCHEMA = 3/);
+  assert.match(recovery, /DATABASE_SCHEMA = 4/);
   const release = readFileSync(new URL('../scripts/release.mjs', import.meta.url), 'utf8');
   assert.match(release, /databaseSchema:DATABASE_SCHEMA/);
   const main = readFileSync(new URL('../web/main.tsx', import.meta.url), 'utf8');
@@ -313,4 +311,101 @@ test('session cleanup settles before discarding orphan leases; graceful shutdown
     assert.equal(f.store.usage.status(f.f.familyId, f.f.childId).usedMs, 10000);
     assert.equal(f.store.all('SELECT * FROM usage_leases').length, 0);
   } finally { await f.close(); }
+});
+
+test('unconfirmed families remain unlimited and unmetered until an explicit parent timezone choice', async () => {
+  const f = await fixture({ timezone: null });
+  try {
+    const u = f.store.usage, tab = randomUUID();
+    assert.equal(u.status(f.f.familyId, f.f.childId).timezoneConfirmed, false);
+    u.heartbeat(f.child, tab, 1, true); f.advance(10000);
+    assert.equal(u.status(f.f.familyId, f.f.childId).usedMs, 0);
+    assert.equal(f.store.all('SELECT * FROM usage_days').length, 0);
+    assert.doesNotThrow(() => u.require(f.child), 'unconfigured existing unlimited children are not locked out');
+    assert.throws(() => u.setPolicy(f.f.familyId, f.f.childId, 37), /USAGE_TIMEZONE_REQUIRED/);
+    const path = '/api/parent/usage-timezone';
+    assert.equal((await f.req(f.child, path, 'PUT', { timezone: 'Asia/Jerusalem' })).statusCode, 403);
+    assert.equal((await f.req(f.parent, path, 'PUT', { timezone: 'Asia/Jerusalem' })).statusCode, 200);
+    const status = u.setPolicy(f.f.familyId, f.f.childId, 37);
+    assert.equal(status.timezoneConfirmed, true); assert.equal(status.timezone, 'Asia/Jerusalem');
+    u.heartbeat(f.child, tab, 2, true); f.advance(5000);
+    assert.equal(u.status(f.f.familyId, f.f.childId).usedMs, 5000, 'no retroactive metering under an implicit UTC day');
+  } finally { await f.close(); }
+});
+
+test('timezone changes extend the current period to a future target midnight without early reset or bonus replay', async () => {
+  const f = await fixture({ now: Date.parse('2026-10-28T12:00:00Z') });
+  let reopened: Store | undefined;
+  try {
+    const u = f.store.usage, tab = randomUUID();
+    const original = u.setPolicy(f.f.familyId, f.f.childId, 1), bonusId = randomUUID();
+    u.bonus(f.f.familyId, f.f.childId, bonusId, original.day, 7, original.dayKey);
+    u.heartbeat(f.child, tab, 1, true); f.advance(5000);
+    u.setTimezone(f.f.familyId, 'America/New_York');
+    const scheduled = u.status(f.f.familyId, f.f.childId);
+    assert.equal(scheduled.pendingTimezone, 'America/New_York');
+    assert.equal(scheduled.timezoneChangesAt, Date.parse('2026-10-29T04:00:00Z'));
+    u.setTimezone(f.f.familyId, 'America/New_York');
+    assert.equal(u.status(f.f.familyId, f.f.childId).timezoneChangesAt, scheduled.timezoneChangesAt, 'lost-response retry cannot extend or advance the scheduled reset');
+    f.at(Date.parse('2026-10-29T00:00:01Z'));
+    const extended = u.status(f.f.familyId, f.f.childId);
+    assert.equal(extended.dayKey, original.dayKey); assert.equal(extended.bonusMs, 420000);
+    assert.equal(extended.usedMs, 15000, 'only bounded original lease tail is settled');
+    f.at(scheduled.timezoneChangesAt! - 5000); u.heartbeat(f.child, tab, 2, true); f.advance(10000);
+    const changed = u.status(f.f.familyId, f.f.childId);
+    assert.equal(changed.timezone, 'America/New_York'); assert.equal(changed.pendingTimezone, null);
+    assert.equal(changed.dayKey, '1:2026-10-29'); assert.equal(changed.usedMs, 5000); assert.equal(changed.bonusMs, 0);
+    assert.equal(u.bonus(f.f.familyId, f.f.childId, bonusId, original.day, 7, original.dayKey).bonusMs, 0);
+    assert.throws(() => u.bonus(f.f.familyId, f.f.childId, randomUUID(), changed.day, 1), /BONUS_DAY_CHANGED/, 'calendar era must be bound even when a visible date repeats');
+    u.bonus(f.f.familyId, f.f.childId, randomUUID(), changed.day, 1, changed.dayKey);
+    reopened = new Store(f.config, { usageClock: () => f.now });
+    assert.equal(reopened.usage.status(f.f.familyId, f.f.childId).dayKey, changed.dayKey);
+    assert.equal(reopened.usage.status(f.f.familyId, f.f.childId).bonusMs, 60000);
+    u.setTimezone(f.f.familyId, 'Asia/Jerusalem');
+    const again = u.status(f.f.familyId, f.f.childId);
+    assert.equal(again.dayKey, changed.dayKey); assert.equal(again.pendingTimezone, 'Asia/Jerusalem');
+    assert.ok(again.timezoneChangesAt! >= nextUsageDay(f.now, 'America/New_York'));
+  } finally { reopened?.close(); await f.close(); }
+});
+
+test('an exhausted child cannot regain time at the old midnight while a calendar transition is pending', async () => {
+  const f = await fixture({ now: Date.parse('2026-10-28T12:00:00Z') });
+  try {
+    const u = f.store.usage, tab = randomUUID(); u.setPolicy(f.f.familyId, f.f.childId, 1);
+    for (let seq = 1; seq <= 12; seq++) { u.heartbeat(f.child, tab, seq, true); f.advance(5000); }
+    u.setTimezone(f.f.familyId, 'America/New_York'); const before = u.status(f.f.familyId, f.f.childId);
+    f.at(Date.parse('2026-10-29T00:00:01Z'));
+    assert.throws(() => u.require(f.child), /USAGE_EXHAUSTED/);
+    f.at(before.timezoneChangesAt!);
+    assert.equal(u.status(f.f.familyId, f.f.childId).remainingMs, 60000);
+    assert.throws(() => u.require(f.child), /USAGE_PAUSED/);
+    u.heartbeat(f.child, tab, 13, true); assert.doesNotThrow(() => u.require(f.child));
+  } finally { await f.close(); }
+});
+
+test('legacy schema-3 quota data requires a visible choice and retains usage when the parent chooses Jerusalem', async () => {
+  const f = await fixture({ now: Date.parse('2026-10-28T12:00:00Z'), timezone: null });
+  try {
+    const u = f.store.usage, status = u.status(f.f.familyId, f.f.childId);
+    f.store.run('UPDATE usage_policy SET minutes=37 WHERE family_id=? AND child_id=?', f.f.familyId, f.f.childId);
+    f.store.run('INSERT INTO usage_days VALUES(?,?,?,?,?)', f.f.familyId, f.f.childId, status.day, 12000, 60000);
+    assert.throws(() => u.require(f.child), /USAGE_TIMEZONE_REQUIRED/);
+    u.setTimezone(f.f.familyId, 'Asia/Jerusalem'); const selected = u.status(f.f.familyId, f.f.childId);
+    assert.equal(selected.timezoneConfirmed, true); assert.equal(selected.pendingTimezone, 'Asia/Jerusalem');
+    assert.equal(selected.usedMs, 12000); assert.equal(selected.bonusMs, 60000);
+    assert.ok(selected.timezoneChangesAt! > f.now);
+  } finally { await f.close(); }
+});
+
+test('schema-3 to 4 calendar DDL and version bump are atomic', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec(`CREATE TABLE schema_version(version INTEGER); INSERT INTO schema_version VALUES(3); CREATE TABLE families(id TEXT PRIMARY KEY);
+      CREATE TRIGGER synthetic_failure BEFORE UPDATE ON schema_version BEGIN SELECT RAISE(ABORT,'synthetic calendar failure'); END;`);
+    assert.throws(() => migrateUsageCalendar(db), /synthetic calendar failure/);
+    assert.equal(db.prepare('SELECT version FROM schema_version').get()?.version, 3);
+    assert.equal(db.prepare("SELECT 1 FROM sqlite_master WHERE name='usage_calendar'").get(), undefined);
+    db.exec('DROP TRIGGER synthetic_failure'); migrateUsageCalendar(db);
+    assert.equal(db.prepare('SELECT version FROM schema_version').get()?.version, 4);
+  } finally { db.close(); }
 });

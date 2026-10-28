@@ -3,7 +3,7 @@ import { api, csrf } from './api';
 import { newClientId } from './clientId';
 import type { UsageStatus } from '../src/usage';
 
-export type UsageReason = 'checking' | 'hidden' | 'idle' | 'offline' | 'exhausted' | '';
+export type UsageReason = 'checking' | 'hidden' | 'idle' | 'offline' | 'exhausted' | 'setup' | '';
 export function useUsageBudget(child: boolean, identity: string) {
   const [status, setStatus] = useState<UsageStatus | null>(null);
   const [reason, setReason] = useState<UsageReason>(child ? 'checking' : '');
@@ -39,7 +39,7 @@ export function useUsageBudget(child: boolean, identity: string) {
         // Subtract full request latency conservatively; use monotonic browser
         // time only to expire permission, never to bill time or reset a day.
         deadline = sent + Math.max(0, lease);
-        block(value.exhausted ? 'exhausted' : !active ? why : deadline > performance.now() ? '' : 'offline');
+        block(value.timezoneConfirmed === false && value.minutes !== null ? 'setup' : value.exhausted ? 'exhausted' : !active ? why : deadline > performance.now() ? '' : 'offline');
       }).catch(() => { if (alive && request === revision) { deadline = 0; block('offline'); } });
     };
     trigger.current = beat;

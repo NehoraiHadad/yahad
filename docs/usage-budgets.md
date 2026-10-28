@@ -6,9 +6,11 @@ Based on released v0.5.2, `4c41d5ef80ea349d0f678ee9c572e4975a2d776d`. The applic
 
 In the selected child's workspace, the parent can enter any whole number of minutes from 0 to 1,000,000, select unlimited, inspect today's used/remaining/bonus minutes, and add minutes for today only. Existing children and newly created children are unlimited until the parent saves a limit. Zero means no base allowance; a same-day bonus can still provide time. All metered use during the current calendar day, including use while unlimited, appears in the daily summary and counts if a limit is subsequently set.
 
-The family calendar defaults to UTC, is shown to parent and child, and can be configured using an IANA zone such as `Asia/Jerusalem` before the first recorded use or bonus in that family. It is fixed after that point. This intentional restriction prevents changing a reset boundary to recover time or replay a bonus; timezone changes after metering has begun are a future migration/product decision. Browser locale and timezone never choose a quota day. Resets follow calendar midnight in the stored family timezone, including 23/25-hour DST days.
+The parent explicitly selects the family timezone from a Hebrew dropdown before metering or enabling a finite quota. Its first named option is Israel/Jerusalem with automatic daylight saving; there is no preselected silent UTC choice and no IANA text entry. Unconfigured unlimited children remain usable without being metered. An old limited schema-3 family whose calendar was never explicitly chosen is suspended with a parent-setup explanation until the parent chooses. Existing recorded usage/bonus is retained.
 
-The child sees a remaining-time indicator and a warning during the final two minutes. Exhaustion pauses chat access while keeping the session and quota controls available. A parent extension can unlock the same open window. Each renewal must obtain both a live server lease and a fresh conversation-permission snapshot before content is revealed again. A confirmed revocation removes the conversation and its local draft.
+Timezone is not permanently fixed. Once use or a bonus exists, a change is scheduled for the first midnight in the target zone at or after the old calendar's next midnight. The current allowance/bonus is retained through that boundary, extending the transition period rather than granting two resets within a short day. The parent sees the effective target date/time and this explanation. At the boundary a new calendar-era/day key begins; old bonus IDs cannot be replayed into the new period even when a visible local date repeats. Repeated requests for the same pending change retain its boundary; later changes first settle every child, then compact the completed calendar rule. Ordinary periods reset at family local midnight, including DST. Browser locale/timezone never chooses a billing day.
+
+The child sees a compact MM:SS remaining-time indicator (H:MM:SS for longer allowances). Its display projects server snapshots using a monotonic clock only while active and freezes while paused. Visual ticks have `aria-live="off"`; a separate polite warning changes only at the two-minute and one-minute thresholds. Exhaustion pauses chat access while keeping the session and quota controls available. A parent extension can unlock the same open window without login and without changing the recurring quota. Each renewal must obtain both a live server lease and a fresh conversation-permission snapshot before content is revealed again. A confirmed revocation removes the conversation and its local draft.
 
 An unsent local draft, attachment and recorded voice blob remain mounted through quota/network suspension; an active microphone recording is stopped. Renewal never sends a draft. Copied message-edit text is cleared during permission checks. Logout, account changes, leaving the conversation and refresh destroy local drafts; this feature adds no plaintext draft storage.
 
@@ -29,7 +31,7 @@ The ledger contains family/child IDs, calendar day, aggregate used/bonus millise
 Clock faults block child content while keeping startup, parent recovery, logout and session revocation available. Revocation/restart uses an already-settled high-water mark when the clock is behind, clears leases, and never grants future usage. A bonus retry acknowledged after midnight explains that it belongs to the previous day; it does not claim a new bonus today.
 
 - `src/usage.ts`: settlement, policy, bonus, family timezone, session and restart operations.
-- `src/usage-schema.ts`: transactional schema-2 to 3 migration and composite-family foreign keys.
+- `src/usage-schema.ts`: sequential transactional schema-2 to 3 to 4 migrations and composite-family foreign keys.
 - `src/server.ts`: central `/api/groups` request/response gates and group authorization; async send/media/photo rechecks; typed `403 USAGE_EXHAUSTED` / `USAGE_PAUSED`, distinct from logout `401`.
 - `GET /api/usage`, `POST /api/usage/heartbeat`: authenticated-child status and lease signals.
 - `GET/PUT /api/parent/usage/:child`, `POST /api/parent/usage/:child/bonus`, `PUT /api/parent/usage-timezone`: same-family parent management.
@@ -40,16 +42,16 @@ Requests cover lists, messages, search, history, photos, media/ranges, sends/upl
 
 ## Schema and release coordination
 
-`DATABASE_SCHEMA` is 3 and migration sources are `[1,2]`. Historical account-name migration is pinned to 2; Store then runs the separate usage migration. Existing accounts, grants, messages, credentials and sessions are preserved, with unlimited policy. The production update smoke has synthetic fixtures for both sources. Recovery now requires schema 3. Packaging imports the shared schema contract; the release manifest assertion is updated. Schema-2 application/recovery binaries refuse a schema-3 database rather than ignoring its policy.
+`DATABASE_SCHEMA` is 4 and migration sources are `[1,2,3]`. Historical account-name migration is pinned to 2, historical usage migration to 3, then the calendar migration advances to 4. Existing accounts, grants, messages, credentials and sessions are preserved. The schema-3 smoke fixture also preserves explicit timezone, used time, bonus and policy. Recovery requires schema 4. Packaging imports the shared schema contract. Schema-2 and intermediate schema-3 binaries refuse schema 4 rather than ignoring its scheduled-calendar policy.
 
-Do not downgrade code against this migrated database. Use the updater's existing tested migration/backup recovery contract. Linux lifecycle, ownership, symlink, service and full rollback acceptance must still be run on Linux before release; Windows tests do not establish that acceptance. The installer task is separate and must consume the eventual integrated schema-3 release contract.
+Do not downgrade code against this migrated database. Use the updater's existing tested migration/backup recovery contract. Linux lifecycle, ownership, symlink, service and full rollback acceptance must still be run on Linux before release; Windows tests do not establish that acceptance. The installer task is separate and must consume the eventual integrated schema-4 release contract.
 
 ## Reproduction
 
 Use Node 24 with the lockfile. `npm run typecheck`, `npm run build`, `npm test`, and:
 
 ```text
-node --import tsx scripts/update-smoke.ts --database-schema 3 --database-migrations-from "[1,2]"
+node --import tsx scripts/update-smoke.ts --database-schema 4 --database-migrations-from "[1,2,3]"
 node --import tsx --test --test-concurrency=1 tests/usage-budget.test.ts tests/usage-client.test.ts tests/usage-parent.test.ts tests/chat-catalog-transitions.test.ts tests/offline-draft.test.ts
 ```
 

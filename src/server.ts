@@ -260,8 +260,8 @@ export async function createApp(
   });
   app.post<{ Params: { c: string } }>('/api/parent/usage/:c/bonus', async req => {
     parent(req.session);
-    const data = z.object({ requestId: z.uuid(), day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), minutes: z.number().int().min(1).max(1000000) }).strict().parse(req.body);
-    const status = store.usage.bonus(req.session.user.familyId, req.params.c, data.requestId, data.day, data.minutes);
+    const data = z.object({ requestId: z.uuid(), day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), dayKey: z.string().max(100).optional(), minutes: z.number().int().min(1).max(1000000) }).strict().parse(req.body);
+    const status = store.usage.bonus(req.session.user.familyId, req.params.c, data.requestId, data.day, data.minutes, data.dayKey);
     service.notify(req.session.user.familyId, undefined, 'usage');
     return status;
   });
