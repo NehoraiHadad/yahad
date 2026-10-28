@@ -48,8 +48,8 @@ def parent_account(db, name_key):
 
 def reset(path, name, password):
     name_key = account_name_key(name)
-    if not 14 <= len(password.encode('utf-16-le')) // 2 <= 256:
-        raise ValueError('Use 14 to 256 characters; spaces and memorable passphrases are supported')
+    if not 4 <= len(password.encode('utf-16-le')) // 2 <= 256:
+        raise ValueError('Use 4 to 256 characters; spaces and memorable passphrases are supported')
     salt = os.urandom(16)
     derived = hashlib.scrypt(password.encode('utf8'), salt=salt, n=16384, r=8, p=1, dklen=64, maxmem=64*1024*1024)
     stored = salt.hex() + ':' + derived.hex()
@@ -60,6 +60,9 @@ def reset(path, name, password):
             row = parent_account(db, name_key)
             db.execute('UPDATE users SET password=? WHERE family_id=? AND id=?', (stored, *row))
             db.execute('DELETE FROM sessions WHERE family_id=? AND user_id=?', row)
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='credential_attempts'").fetchone():
+                key = hashlib.sha256(f'account:{row[0]}:{row[1]}'.encode('utf8')).hexdigest()
+                db.execute('DELETE FROM credential_attempts WHERE key=?', (key,))
             if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='paired_devices'").fetchone():
                 db.execute('DELETE FROM paired_devices WHERE family_id=? AND user_id=?', row)
     finally:
@@ -85,12 +88,12 @@ def main():
         if sys.stdin.isatty():
             return getpass.getpass(label)
         return sys.stdin.readline().rstrip('\r\n')
-    password = secret('New passphrase (14+ characters, spaces allowed, not displayed): ')
+    password = secret('New passphrase (4+ characters, spaces allowed, not displayed): ')
     confirmation = secret('Confirm new password: ')
     if password != confirmation:
         raise ValueError('Passwords do not match; nothing changed')
-    if not 14 <= len(password.encode('utf-16-le')) // 2 <= 256:
-        raise ValueError('Use 14 to 256 characters; nothing changed')
+    if not 4 <= len(password.encode('utf-16-le')) // 2 <= 256:
+        raise ValueError('Use 4 to 256 characters; nothing changed')
     # Do not contend with a running service, backup, setup, or upgrade. This
     # kernel lock is also held by the production service and offline helpers.
     import fcntl

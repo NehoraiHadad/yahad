@@ -132,7 +132,7 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(self.target.read_bytes(), u.LAUNCHER)
         policy = json.loads(self.path(u.SOURCE_POLICY).read_bytes())
         self.assertEqual(policy['trust'], 'github-https'); self.assertIs(policy['enabled'], True)
-        runtime = self.path(u.STATE) / 'runtime/versions/v1.0.0'
+        runtime = self.path(u.STATE) / ('runtime/versions/v' + u.INITIAL_RUNTIME_VERSION)
         self.assertEqual({x.name for x in runtime.iterdir()}, u.RUNTIME_FILES)
         reference = json.loads((self.path(u.STATE) / 'updater-runtime.json').read_bytes())['active']
         self.assertEqual(reference['manifestSha256'], hashlib.sha256((runtime / 'manifest.json').read_bytes()).hexdigest())

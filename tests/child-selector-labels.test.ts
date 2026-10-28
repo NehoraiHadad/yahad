@@ -24,17 +24,17 @@ test('child summary selection buttons and headings use consistent unambiguous la
   }));
   assert.ok(html.includes('<h3>יעל</h3>'));
   for (const label of ['יעל', 'נועם לוי', 'נועם כהן']) {
-    assert.ok(html.includes(`בחירת קבוצות עבור ${label}`), label);
+    assert.ok(html.includes(`בחירת שיחות עבור ${label}`), label);
   }
   assert.equal((html.match(/aria-pressed="true"/g) || []).length, 1);
 });
 
 test('setup next action identifies the pending child by the same canonical name', () => {
   const data = overview();
-  data.groups = [{ id: 'group', title: 'קבוצה סינתטית' }];
+  data.groups = [{ id: 'group', title: 'שיחה סינתטית' }];
   data.grants = [{ user_id: 'unique-id', group_id: 'group' }];
   const html = renderToStaticMarkup(React.createElement(FamilyProgress, {
     data, busy: false, stale: false, onAdd() {}, onSelect() {},
   }));
-  assert.ok(html.includes('הצעד הבא: בחירת קבוצות עבור נועם כהן'));
+  assert.ok(html.includes('הצעד הבא: בחירת שיחות עבור נועם כהן'));
 });

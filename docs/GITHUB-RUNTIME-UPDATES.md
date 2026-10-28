@@ -182,3 +182,61 @@ selection races, exact readiness and pre/post-migration failures. Linux fixture
 results do not establish ARM/systemd/live-provider or power-cut acceptance.
 Those require separately authorized disposable-host acceptance before relying on
 fully automatic operation on the actual installation.
+
+## Five-minute release checks
+
+New app configurations and new HTTPS enrollments use `checkHours: 0.08333333333333333`
+(five minutes). The existing `yachad-update.timer` already uses
+`OnUnitInactiveSec=5min`, with up to 20 seconds jitter and systemd's timer accuracy;
+expect approximately five to six minutes after the previous service finishes,
+not a strict wall-clock deadline. Existing explicit intervals are preserved.
+
+The root transport and direct application worker have separate caches. Configure
+both `/etc/yachad/updates.json` and (when enrolled)
+`/etc/yachad/updater-source.json` consistently. Existing six-hour integer values
+remain supported. Root policy accepts only finite numeric intervals from five
+minutes through seven days; booleans, strings, zero and shorter intervals fail
+closed. Normal transport failures retain the interval backoff. Worker locks,
+failed-version suppression, explicit-request semantics and auto/notify policy
+are unchanged. A manual request can bypass a scheduled cache as before.
+
+When the exact app target is already healthy/idle and the enrolled runtime
+manifest is byte-identical, automatic HTTPS checks fetch release metadata and
+the small runtime manifest only. They do not download ZIPs or authorize app work.
+Changed app targets/runtime manifests still undergo complete existing preflight.
+The root transport's `checkedAt` advances; the application status's `checkedAt`
+is not rewritten by this metadata-only path. No new app check/install is claimed.
+
+### Existing Raspberry Pi
+
+For the protocol-2 direct worker installed by the 0.5.0 one-time replacement,
+this interval already works without replacing code. Inspect the existing files:
+
+```sh
+sudo sha256sum /usr/local/lib/yachad-updater/updater.py
+systemctl cat yachad-update.timer
+sudoedit /etc/yachad/updates.json
+```
+
+For that exact direct worker the SHA-256 is
+`22cd73dc810d08d90e1ec6af4e4b482bc60a0f42b44e1bf874c78682375264cd`.
+Change **only** `"checkHours": 6` to `"checkHours": 0.08333333333333333`;
+keep mode, enablement, operator, trust, paths and all other settings unchanged.
+No service restart, timer replacement or application restart is required: the
+next existing timer invocation reads the configuration. Check the timer with
+`systemctl list-timers yachad-update.timer --all`. In auto mode this can install
+an already published newer release at the next check; in notify mode it only
+notifies. This does not enable updater self-updates.
+
+Do not apply fractional intervals to an older HTTPS enrollment: its immutable
+supervisor/transport/request helper reject them. Those components require a
+separately reviewed local transition; an app ZIP or runtime update cannot replace
+that privileged boundary. The new bootstrap is for eligible direct-worker
+transitions and is not a general migration of already enrolled older launchers.
+Do not rerun a bootstrap or overwrite immutable files to bypass that check.
+
+The five-minute bootstrap is a new `yachad-github-updater-bootstrap-1.0.1.zip`
+artifact with runtime 1.0.1; never replace the already published 1.0.0 archive.
+The runtime now records a worker-liveness heartbeat on scheduled deferred/no-op
+transport results, preserving app `checkedAt` and its existing outcome. This
+keeps parent controls usable after 24 hours without claiming a new app preflight.

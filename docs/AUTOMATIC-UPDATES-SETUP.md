@@ -286,14 +286,13 @@ configured service. Reloading after removing the fragment requires reopening the
 original local link if it is still valid. Never make a public setup listener.
 
 In the current schema-2 app, parents add children with one unique name used for
-both display and login (Hebrew is supported), a confirmed passphrase, then
+both display and login (Hebrew is supported), a confirmed password or short code, then
 choose allowed groups. The historical schema-1 app used separate fields; do not
 apply its account SQL or API examples to schema 2. New children start with no
 group access. Each account needs a different secret. Spaces, Unicode and
-memorable random-word phrases are supported; the 14–256 character policy stays
-in force. Password managers on personal devices reduce repeated typing. Shared
+memorable random-word phrases are supported; new secrets accept 4–256 characters. Existing longer passwords remain valid until explicitly changed. Password managers on personal devices reduce repeated typing. Shared
 tablets should use separate browser profiles and sign out when handed over; the
-child idle lock remains. No remote PIN-only authentication is introduced. Changing
+child idle lock remains. Short numeric codes are allowed by owner choice, but are easier to guess and do not protect against offline guessing if credential hashes are stolen. Use a longer password for exposed installations; do not expose the household service publicly. Login and password re-verification share durable per-account limits of eight attempts per 15-minute window, plus a separate 80-attempt network budget. Successful verification clears only the account budget, not network history. Restarting the application does not clear the budgets. No pattern unlock is implemented. Changing
 your own password or resetting a child's password revokes that account's sessions.
 
 For a forgotten **parent** passphrase, the Pi owner can use a local sudo terminal:
@@ -303,7 +302,7 @@ sudo python3 /opt/yachad/current/scripts/recover-account.py PARENT_USERNAME --da
 ```
 
 This prompts twice with echo disabled, accepts spaces/paste using Python getpass,
-and requires 14+ characters. It resets only that parent, revokes their sessions,
+and requires 4+ characters. It resets only that parent, revokes their sessions,
 and preserves chats/auth/master keys. It takes the updater lock before stopping
 the service and the shared data lock before writing. If the app was running it
 is stopped/restarted; if it was stopped it remains stopped. `--no-restart` requires

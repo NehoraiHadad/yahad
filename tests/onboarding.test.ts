@@ -151,3 +151,13 @@ test('terminal multiline paste never echoes later secret lines before their prom
     assert.ok(!visible.includes('secret pasted words'));
   } finally { prompt.close(); input.destroy(); }
 });
+
+test('first parent can choose a four-character code, not fewer; no default credential is generated', async () => {
+  const f = await fixture();
+  try {
+    assert.equal((await f.setup({ ...f.setupBody, password: '123', confirmation: '123' })).statusCode, 400);
+    assert.equal(f.store.one('SELECT count(*) AS n FROM users').n, 0);
+    assert.equal((await f.setup({ ...f.setupBody, password: '1234', confirmation: '1234' })).statusCode, 200);
+    assert.ok(await verifyPassword('1234', f.store.one("SELECT password FROM users WHERE name='הורה'").password));
+  } finally { await f.close(); }
+});

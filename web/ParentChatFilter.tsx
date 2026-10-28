@@ -17,11 +17,11 @@ export function searchChatGroups<T extends { title: string }>(groups: T[], query
 }
 
 export function parentEmptyMessage(filter: ChatFilter, overview: FamilyOverview | null, verified: boolean): string {
-  if (filter.mode === 'all') return 'עדיין אין קבוצות ברשימה. בדקו את החיבור ורעננו את הקבוצות בניהול ההורה.';
+  if (filter.mode === 'all') return 'עדיין אין שיחות ברשימה. בדקו את החיבור ורעננו את השיחות בניהול ההורה.';
   if (!verified) return 'מאמתים הרשאות לפני הצגת שיחות.';
   if (!overview?.children.length) return 'עדיין אין חשבונות ילדים. אפשר להוסיף ילד או ילדה בניהול ההורה.';
-  if (!overview.children.some(child => child.id === filter.childId)) return 'בחרו ילד או ילדה כדי להציג קבוצות מאושרות.';
-  return 'אין קבוצות מאושרות זמינות לחשבון שנבחר.';
+  if (!overview.children.some(child => child.id === filter.childId)) return 'בחרו ילד או ילדה כדי להציג שיחות מאושרות.';
+  return 'אין שיחות מאושרות זמינות לחשבון שנבחר.';
 }
 
 export function ParentChatFilter({ filter, overview, verified, onChange }: {
@@ -32,7 +32,7 @@ export function ParentChatFilter({ filter, overview, verified, onChange }: {
       <button type="button" aria-pressed={filter.mode === 'all'} onClick={() => onChange({ ...filter, mode: 'all' })}>כל השיחות</button>
       <button type="button" aria-pressed={filter.mode === 'child'} onClick={() => onChange({ ...filter, mode: 'child' })}>לפי ילד</button>
     </div>
-    {filter.mode === 'all' && <p>כל הקבוצות שסונכרנו בחשבון ההורה, לא שיחות פרטיות. אפשר לקרוא ולשלוח גם בקבוצות שלא אושרו לילדים. הרשאות הילדים אינן משתנות.</p>}
+    {filter.mode === 'all' && <p>הקבוצות והשיחות הפרטיות שסונכרנו בחשבון ההורה. אפשר לקרוא ולשלוח גם בשיחות שלא אושרו לילדים. הרשאות הילדים אינן משתנות.</p>}
     {filter.mode === 'child' && <>
       <label>בחירת ילד או ילדה
         <select disabled={!verified || !overview?.children.length}
@@ -42,8 +42,8 @@ export function ParentChatFilter({ filter, overview, verified, onChange }: {
           {overview?.children.map(child => <option key={child.id} value={child.id}>{childLabel(child)}</option>)}
         </select>
       </label>
-      <p>סינון קבוצות בלבד. נשארים בחשבון ההורה; הרשאות השליחה וההיסטוריה עשויות להיות שונות מחשבון הילד.</p>
-      {!verified && <p role="status">ממתינים לאימות הקבוצות המאושרות מול השרת.</p>}
+      <p>סינון לפי השיחות שאושרו לילד. נשארים בחשבון ההורה; הרשאות השליחה וההיסטוריה עשויות להיות שונות מחשבון הילד.</p>
+      {!verified && <p role="status">ממתינים לאימות השיחות המאושרות מול השרת.</p>}
     </>}
   </section>;
 }

@@ -27,8 +27,8 @@ import urllib.request
 import uuid
 
 BASE_SHA256 = '953e13f8d680804671d59fc399d748467cf378c7df2a45c4a366f5a74c3036ee'
-SUPERVISOR_SHA256 = '31bb934e57a28b8a8aad9fc3e27f3eb19a2b9628164f3d5563d8885eaaeaf5ac'
-TRANSPORT_SHA256 = '77965b53ec5cd7cba536d65d0ed9aede16537fe513596e76dac3dbbe1ff71f24'
+SUPERVISOR_SHA256 = 'a432cb808d9e56a58e87684e8899b00667949c3acef68ed3a2d4beb65065291e'
+TRANSPORT_SHA256 = 'bb81e88782aade42c8251a237ccd6c555d7c02452f718819f0c9c5d8229e4010'
 LAUNCHER_SHA256 = '7f2739eaa71df3a295cb0e33c9e78cd3c9e20978a964e51a470ff7e84a5d05dd'
 DIRECTORY = '/usr/local/lib/yachad-updater/'
 POLICY = '/etc/yachad/updater-source.json'
@@ -134,7 +134,7 @@ class GithubRequest(base.ManualRequest):
                 type(policy['format']) is not int or policy['format'] != 2 or policy['trust'] != 'github-https' or
                 type(policy['enabled']) is not bool or require_enabled and not policy['enabled'] or
                 policy['repository'] != 'NehoraiHadad/yahad' or policy['channel'] != 'stable' or
-                type(policy['checkHours']) is not int or not 1 <= policy['checkHours'] <= 168):
+                type(policy['checkHours']) not in (int, float) or not 1 / 12 <= policy['checkHours'] <= 168):
             raise RequestError('HTTPS_ENROLLMENT_REQUIRED: fixed HTTPS source must already be enabled')
         pins = {'updater.py': LAUNCHER_SHA256, 'updater-supervisor.py': SUPERVISOR_SHA256, 'updater-transport.py': TRANSPORT_SHA256}
         for name, digest in pins.items():

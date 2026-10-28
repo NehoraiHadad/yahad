@@ -1,3 +1,4 @@
+import { conversationKind } from './conversation-id.js';
 import { GroupPhotoCache } from './group-photos.js';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { Store, type User } from './store.js';
@@ -99,6 +100,18 @@ export class ChatService {
     this.store.run('DELETE FROM instance_metadata WHERE key=?', 'disconnect:' + f);
     this.store.run('DELETE FROM instance_metadata WHERE key=?', 'disconnect-history:' + f);
     const hooks: ConnectorHooks = {
+      discoverGroups: chats => {
+        if (!active()) return;
+        this.reconcileGroups(f, chats.filter(c => conversationKind(c.id) === 'group'));
+      },
+      discoverDirect: chats => {
+        if (!active()) return;
+        const safe = chats.filter(c => conversationKind(c.id) === 'direct');
+        if (!safe.length) return;
+        const existing = new Map(this.store.groups(f).map(c => [c.id, c.title]));
+        this.store.syncGroups(f, safe.map(c => ({...c, title: c.title === 'שיחה פרטית' ? existing.get(c.id) || c.title : c.title})));
+        this.notify(f, undefined, 'groups');
+      },
       historyEmpty:id=>{if(active())for(const g of this.histories.empty(f,id))if(this.store.retained(f,g))this.notify(f,g);},
       retentionToken: g => active() && this.store.retained(f,g) ? this.store.groupKey(f,g).toString('hex') : undefined,
       history: notice => {
@@ -172,10 +185,13 @@ export class ChatService {
     const groups = await connector.groups();
     // A refresh that finishes after unlink must not revoke retained groups.
     if (this.connectors.get(f) !== connector || this.generations.get(f) !== generation) return;
+    this.reconcileGroups(f, groups);
+  }
+  private reconcileGroups(f: string, groups: import('./connectors/types.js').ChatGroup[]) {
     this.store.syncGroups(f, groups);
     const ids = new Set(groups.map((g) => g.id));
     for (const g of this.store.groups(f))
-      if (!ids.has(g.id)) {
+      if (conversationKind(g.id) === 'group' && !ids.has(g.id)) {
         for (const u of this.store.all(
           'SELECT user_id FROM grants WHERE family_id=? AND group_id=?',
           f,
@@ -315,7 +331,7 @@ export class ChatService {
       mime: input.mime,
       filename: input.filename?.replace(/[\r\n\\/]/g, '_').slice(0, 160),
     };
-    this.store.putMessage(f, m);
+    this.store.putMessage(f, m, !input.history);
     if (bytes && bytes.length <= this.store.config.maxMedia) {
       const mediaId = randomUUID();
       try {

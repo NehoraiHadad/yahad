@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 import { filterParentGroups, searchChatGroups } from '../web/ParentChatFilter.js';
+import { compareChatActivity } from '../web/chatOrder.js';
 import { LatestRequest } from '../web/latestRequest.js';
 
 // Execute the actual Chat hooks/handlers with synthetic deferred API responses.
@@ -37,7 +38,7 @@ function harness() {
     },
     api: (path: string) => new Promise((resolve, reject) => requests.push({ path, resolve, reject })),
     localStorage: { getItem() { return null; }, setItem() {} },
-    filterParentGroups, searchChatGroups, LatestRequest, setTimeout() {}, clearTimeout() {},
+    filterParentGroups, searchChatGroups, LatestRequest, compareChatActivity, useVisibleChatRead() {}, setTimeout() {}, clearTimeout() {},
     document: { visibilityState: 'hidden' },
   });
   const render = () => { cursor = 0; return Chat({ me: { user: { id: 'parent', role: 'parent' }, capabilities: {} }, onError() {}, onMe() {} }); };

@@ -61,7 +61,7 @@ parent/child login, grants, existing WhatsApp link and normal messages/stickers;
 `ACCEPTED` confirms these checks. Only afterward does the flow enable automatic
 updates, the designated-parent auto/notify UI gate and the two existing timers.
 Update backup retention remains **at most seven copies and seven days**; keep the
-separate off-device recovery copy. Default release checks are six hours, with the
+separate off-device recovery copy. Default release checks are five minutes for new configurations (existing configurations retain their interval), with the
 request worker waking about every five minutes. The UI can check/install now and
 choose auto versus notify; acknowledgment can take until the next worker wake.
 

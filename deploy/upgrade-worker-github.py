@@ -25,10 +25,10 @@ import types
 import uuid
 
 BASE_SHA256 = 'f269352cadc965237f5e48ab2c7c9e5fdddb2ae6482bedb273f8afb9f4df78e5'
-SUPERVISOR_SHA256 = '31bb934e57a28b8a8aad9fc3e27f3eb19a2b9628164f3d5563d8885eaaeaf5ac'
-TRANSPORT_SHA256 = '77965b53ec5cd7cba536d65d0ed9aede16537fe513596e76dac3dbbe1ff71f24'
-INITIAL_WORKER_SHA256 = '3efb6848cbafc28759383512306ce802154c7f8fd786f7ddd69c08a7e412572c'
-INITIAL_RUNTIME_VERSION = '1.0.0'
+SUPERVISOR_SHA256 = 'a432cb808d9e56a58e87684e8899b00667949c3acef68ed3a2d4beb65065291e'
+TRANSPORT_SHA256 = 'bb81e88782aade42c8251a237ccd6c555d7c02452f718819f0c9c5d8229e4010'
+INITIAL_WORKER_SHA256 = 'c29b97e7eb62e516cfbd270befb4f4af8592b38d2294a1b102447dc8a78484b3'
+INITIAL_RUNTIME_VERSION = '1.0.1'
 SUPERVISOR = '/usr/local/lib/yachad-updater/updater-supervisor.py'
 TRANSPORT = '/usr/local/lib/yachad-updater/updater-transport.py'
 SOURCE_POLICY = '/etc/yachad/updater-source.json'
@@ -104,7 +104,7 @@ class Bootstrap(base.Bootstrap):
                 hashlib.sha256(worker).hexdigest() != INITIAL_WORKER_SHA256):
             raise UpgradeError('Initial runtime is not the exact locally reviewed version')
         policy = dict(format=2, trust='github-https', enabled=True,
-                      repository='NehoraiHadad/yahad', channel='stable', checkHours=6)
+                      repository='NehoraiHadad/yahad', channel='stable', checkHours=1 / 12)
         return dict(supervisor=source, module=supervisor, transport=transport, raw=raw,
                     archive=archive, manifest=manifest, worker=worker,
                     source_policy=json.dumps(policy, separators=(',', ':')).encode())
@@ -129,7 +129,7 @@ class Bootstrap(base.Bootstrap):
                     set(value) != {'format', 'trust', 'enabled', 'repository', 'channel', 'checkHours'} or
                     type(value['format']) is not int or value['format'] != 2 or value['trust'] != 'github-https' or
                     type(value['enabled']) is not bool or value['repository'] != 'NehoraiHadad/yahad' or
-                    value['channel'] != 'stable' or type(value['checkHours']) is not int or not 1 <= value['checkHours'] <= 168):
+                    value['channel'] != 'stable' or type(value['checkHours']) not in (int, float) or not 1 / 12 <= value['checkHours'] <= 168):
                 raise UpgradeError('Signed, unknown or conflicting source policy is preserved; enrollment refused')
 
     def state(self):

@@ -809,3 +809,81 @@ test('missing connector receipts stay unknown and an out-of-order pending echo c
     await f.close();
   }
 });
+
+test('four-character codes work across child creation, child reset and own password change', async () => {
+  const f = await fixture();
+  try {
+    const created = await f.req(f.parent, '/api/parent/children', 'POST', { name: 'קוד קצר', password: 'a1ב2', confirmation: 'a1ב2' });
+    assert.equal(created.statusCode, 200);
+    const id = created.json().id;
+    const login = (name: string, password: string) => f.req(null, '/api/login', 'POST', { name, password });
+    assert.equal((await login('קוד קצר', 'a1ב2')).statusCode, 200);
+    assert.equal((await f.req(f.parent, '/api/parent/child-password', 'POST', { childId: id, password: '123', confirmation: '123' })).statusCode, 400);
+    assert.equal((await f.req(f.parent, '/api/parent/child-password', 'POST', { childId: id, password: '9876', confirmation: '9876' })).statusCode, 200);
+    assert.equal((await login('קוד קצר', 'a1ב2')).statusCode, 401);
+    assert.equal((await login('קוד קצר', '9876')).statusCode, 200);
+    assert.equal((await f.req(f.parent, '/api/password', 'POST', { current: f.password, next: 'Ab12', confirmation: 'Ab12' })).statusCode, 200);
+    assert.equal((await login('parent-a', 'Ab12')).statusCode, 200);
+    // A different existing account retains its old long password unchanged.
+    assert.equal((await login('parent-b', f.password)).statusCode, 200);
+  } finally { await f.close(); }
+});
+
+test('login guessing budget follows the account across IPs and does not lock the family NAT', async () => {
+  const f = await fixture();
+  try {
+    const login = (name: string, password: string, remoteAddress = '192.0.2.5') => f.app.inject({
+      method: 'POST', url: '/api/login', headers: { origin: f.config.origin }, remoteAddress, payload: { name, password } });
+    for (let i = 0; i < 8; i++) assert.equal((await login('child-a', 'wrong', `192.0.2.${i}`)).statusCode, 401);
+    const blocked = await login('CHILD-A', f.password + 'child');
+    assert.equal(blocked.statusCode, 429);
+    assert.equal(blocked.json().error, 'LOGIN_WAIT');
+    assert.equal(blocked.headers['retry-after'], '900');
+    assert.equal((await login('parent-a', f.password)).statusCode, 200);
+    assert.equal((await login('child-b', f.password + 'child')).statusCode, 200);
+    // A successful login for someone else never clears this account's budget.
+    assert.equal((await login('child-a', f.password + 'child')).statusCode, 429);
+  } finally { await f.close(); }
+});
+
+test('credential throttle is durable, bounded, expires, and does not reset the network budget on success', async () => {
+  const { CredentialThrottle } = await import('../src/credential-throttle.js');
+  const f = await fixture();
+  try {
+    const now = Date.now(), throttle = new CredentialThrottle(f.store);
+    for (let i = 0; i < 8; i++) assert.equal(throttle.reserve('account:synthetic', '192.0.2.1', now), true);
+    const secondStore = new Store(f.config);
+    try { assert.equal(new CredentialThrottle(secondStore).reserve('account:synthetic', '192.0.2.2', now), false); }
+    finally { secondStore.close(); }
+    assert.equal(throttle.reserve('account:synthetic', '192.0.2.1', now + 900000), true);
+    for (let i = 0; i < 79; i++) {
+      throttle.clear('account:synthetic');
+      assert.equal(throttle.reserve('account:synthetic', '192.0.2.1', now + 900000), true);
+    }
+    throttle.clear('account:synthetic');
+    assert.equal(throttle.reserve('account:synthetic', '192.0.2.1', now + 900000), false);
+    assert.ok(f.store.all('SELECT key FROM credential_attempts').every(row => /^[a-f0-9]{64}$/.test(row.key)));
+  } finally { await f.close(); }
+});
+
+test('short code hashing preserves salted scrypt format and rejects fewer than four characters', async () => {
+  const { passwordHash, verifyPassword } = await import('../src/crypto.js');
+  await assert.rejects(passwordHash('123'));
+  const a = await passwordHash('1234'), b = await passwordHash('1234');
+  assert.match(a, /^[a-f0-9]{32}:[a-f0-9]{128}$/);
+  assert.notEqual(a, b);
+  assert.equal(await verifyPassword('1234', a), true);
+  assert.equal(await verifyPassword('4321', a), false);
+});
+
+test('password re-verification shares account budget and explicit child reset restores access', async () => {
+  const f = await fixture();
+  try {
+    for (let i = 0; i < 8; i++) assert.equal((await f.req(f.child, '/api/password', 'POST', {
+      current: 'wrong', next: '1234', confirmation: '1234' })).statusCode, 403);
+    assert.equal((await f.req(null, '/api/login', 'POST', { name: 'child-a', password: f.password + 'child' })).statusCode, 429);
+    assert.equal((await f.req(f.parent, '/api/parent/child-password', 'POST', {
+      childId: f.a.childId, password: '5678', confirmation: '5678' })).statusCode, 200);
+    assert.equal((await f.req(null, '/api/login', 'POST', { name: 'child-a', password: '5678' })).statusCode, 200);
+  } finally { await f.close(); }
+});

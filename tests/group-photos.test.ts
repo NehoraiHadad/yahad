@@ -72,7 +72,8 @@ test('Baileys requests group previews with a provider timeout and hides missing/
   const connector = Object.assign(Object.create(BaileysConnector.prototype), { sock: socket });
   assert.equal(await connector.groupPhoto(g), undefined);
   assert.deepEqual(calls, [[g, 'preview', 5000]]);
-  await connector.groupPhoto('123@s.whatsapp.net'); assert.equal(calls.length, 1);
+  await connector.groupPhoto('123@s.whatsapp.net'); assert.equal(calls.length, 2);
+  await connector.groupPhoto('status@broadcast'); assert.equal(calls.length, 2);
   socket.profilePictureUrl = async () => { throw Error('not authorized'); };
   assert.equal(await connector.groupPhoto(g), undefined);
 });

@@ -1,3 +1,5 @@
+import { compareChatActivity } from './chatOrder';
+import { useVisibleChatRead } from './useVisibleChatRead';
 import { readRoute, writeRoute, type AppRoute } from './browserNavigation';
 import { resilientEventStream } from './eventStream';
 import { LazyEmojiStickerPicker as EmojiStickerPicker } from './LazyEmojiStickerPicker';
@@ -13,6 +15,7 @@ import { DisconnectPanel } from './DisconnectPanel';
 import { GroupAvatar } from './GroupAvatar';
 import { ErrorToast } from './ErrorToast';
 import { ChildManagement } from './ChildManagement';
+import { ChildTabletSetup } from './ChildTabletSetup';
 import { reconcileChildSelection, readChildSelection, saveChildSelection } from './childManagementState';
 import { ParentChatFilter, filterParentGroups, searchChatGroups, parentEmptyMessage, type ChatFilter } from './ParentChatFilter';
 import { CatalogConversation, ConversationVerification } from './CatalogConversation';
@@ -92,7 +95,7 @@ type Me = {
   maxMedia: number;
   senderLabel?: string;
 };
-type Group = { id: string; title: string; canRead: boolean; last?: PublicMessage };
+type Group = { id: string; title: string; canRead: boolean; last?: PublicMessage; lastMessageTime?: number; unreadCount?: number; kind?: 'group' | 'direct' };
 const newId = () => {
   const b = crypto.getRandomValues(new Uint8Array(16));
   b[6] = (b[6] & 15) | 64;
@@ -329,12 +332,15 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
           />
         </label>
         <label>
-          סיסמה
+          סיסמה או קוד
           <div className="password-field">
             <input
               type={show ? 'text' : 'password'}
               autoComplete="current-password"
-              dir="ltr"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              dir="auto"
               required
               value={password}
               maxLength={256}
@@ -422,7 +428,7 @@ function Chat({
   filterRef.current = chatFilter;
   const visibleGroups = me.user.role === 'parent'
     ? filterParentGroups(groups, chatFilter, filterOverview, filterVerified) : groups;
-  const listedGroups = searchChatGroups(visibleGroups, query);
+  const listedGroups = searchChatGroups(visibleGroups, query).slice().sort(compareChatActivity);
   const activeSelected = groupsVerified && visibleGroups.some(group => group.id === selected && group.canRead) ? selected : null;
   const viewport = useRef<HTMLDivElement>(null),
     bottom = useRef<HTMLDivElement>(null),
@@ -500,6 +506,7 @@ function Chat({
       setGroups(data);
     } catch { /* Full permission refresh/reconnect owns recovery and its stale flag. */ }
   }, []);
+  useVisibleChatRead(viewport, activeSelected, groupsVerified && !busy && results === null && !settingsOpen && !themeOpen, !!c.read, messages, refreshGroupData);
   const refreshMessages = useCallback(
     async (g: string, initial = false) => {
       const generation = requestGeneration.current;
@@ -524,9 +531,7 @@ function Chat({
           );
         else if (!initial && added > 0) setNewCount((n) => n + added);
         setBusy(false);
-        const ids = data.messages.filter((m) => !m.fromMe && !m.deleted).map((m) => m.id);
-        if (c.read && document.visibilityState === 'visible' && nearBottom.current && ids.length)
-          void api('/groups/' + encodeURIComponent(g) + '/read', 'POST', { ids }).catch(() => {});
+        // Local read state is updated only after visible message rows render.
       } catch (e) {
         if (selectedRef.current === g && generation === requestGeneration.current) {
           setBusy(false);
@@ -681,7 +686,7 @@ function Chat({
               השיחות שלי<span className="tiny-flower">✳</span>
             </h1>
           </div>
-          <span className="count" aria-label={`${listedGroups.length} קבוצות מוצגות`}>{listedGroups.length}</span>
+          <span className="count" aria-label={`${listedGroups.length} שיחות מוצגות`}>{listedGroups.length}</span>
         </div>
         {me.user.role === 'parent' && <ParentChatFilter filter={chatFilter} overview={filterOverview}
           verified={filterVerified} onChange={changeFilter} />}
@@ -689,7 +694,7 @@ function Chat({
           <Search size={18} />
           <input
             type="search"
-            aria-label="חיפוש קבוצה"
+            aria-label="חיפוש שיחה"
             placeholder="איזו שיחה מחפשים?"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -714,7 +719,7 @@ function Chat({
                     <GroupAvatar groupId={g.id} title={g.title} retryKey={me.connection} className={'avatar av-' + (i % 3)} />
                     <div className="group-info">
                       <div className="group-heading">
-                        <b>{g.title}</b>
+                        <b>{g.title}{g.kind && <small className="chat-kind">{g.kind === 'direct' ? 'שיחה פרטית' : 'קבוצה'}</small>}</b>
                         <span>{groupsVerified && g.canRead && g.last ? time(g.last.time) : ''}</span>
                       </div>
                       <div className="group-preview">
@@ -732,6 +737,8 @@ function Chat({
                                 : 'כאן מתחילה השיחה')}
                       </div>
                     </div>
+                    {groupsVerified && g.canRead && (g.unreadCount || 0) > 0 &&
+                      <span className="chat-unread-badge" aria-label={`${g.unreadCount} הודעות שלא נקראו בחשבון הזה`}>{g.unreadCount! > 99 ? '99+' : g.unreadCount}</span>}
                     {g.id === selected && <span className="selected-dot" />}
                   </button>
                 );
@@ -740,7 +747,7 @@ function Chat({
           {!listBusy && !!visibleGroups.length && !listedGroups.length && (
             <div className="empty-list" role="status">
               <Search />
-              <h3>לא נמצאו קבוצות</h3>
+              <h3>לא נמצאו שיחות</h3>
               <p>נסו שם אחר או נקו את החיפוש כדי לחזור לרשימה.</p>
               <button type="button" className="text-button" onClick={() => setQuery('')}>ניקוי חיפוש</button>
             </div>
@@ -749,7 +756,7 @@ function Chat({
             <div className="empty-list">
               <ShieldCheck />
               <h3>כאן יופיעו השיחות</h3>
-              <p>{me.user.role === 'parent' ? parentEmptyMessage(chatFilter, filterOverview, filterVerified) : 'הקבוצות שההורה יבחר יופיעו כאן.'}</p>
+              <p>{me.user.role === 'parent' ? parentEmptyMessage(chatFilter, filterOverview, filterVerified) : 'השיחות שההורה יבחר יופיעו כאן.'}</p>
               <button className="text-button" onClick={() => void refreshList()}>
                 רענון
               </button>
@@ -759,7 +766,7 @@ function Chat({
         <div className="side-footer">
           <div className="safe-note">
             <ShieldCheck size={16} />
-            <span>{me.user.role === 'parent' ? 'חשבון הורה · הסינון לא משנה הרשאות' : 'רק הקבוצות שנבחרו בשבילך'}</span>
+            <span>{me.user.role === 'parent' ? 'חשבון הורה · הסינון לא משנה הרשאות' : 'רק השיחות שנבחרו בשבילך'}</span>
           </div>
           <div className="profile-row">
             <div className="profile-avatar" aria-hidden="true">{React.createElement(profileIcons[flair] || Flower2, { size: 24 })}</div>
@@ -1018,7 +1025,7 @@ function Chat({
               </button>
             ) : (
               <span className="welcome-foot">
-                <ShieldCheck size={16} /> {me.user.role === 'parent' ? 'הקבוצות מופיעות בצד · הסינון לא משנה הרשאות' : 'השיחות שנבחרו מופיעות בצד'}
+                <ShieldCheck size={16} /> {me.user.role === 'parent' ? 'השיחות מופיעות בצד · הסינון לא משנה הרשאות' : 'השיחות שנבחרו מופיעות בצד'}
               </span>
             )}
             {me.connector === 'mock' && (
@@ -1161,12 +1168,12 @@ function Message({
     sent: 'השרת של WhatsApp אישר שליחה',
     pending: 'ממתינה לאישור',
     delivered: 'החיבור דיווח על מסירה',
-    read: 'החיבור דיווח על קריאה — לא בהכרח כל חברי הקבוצה',
+    read: 'החיבור דיווח על קריאה — לא בהכרח כל חברי השיחה',
     failed: 'לא התקבל אישור — ייתכן שההודעה הגיעה',
     unknown: 'מצב מסירה אינו ידוע',
   };
   return (
-    <article className={'message-row ' + (m.fromMe ? 'outgoing' : 'incoming')}>
+    <article data-local-unread-id={!m.fromMe && !m.deleted ? m.id : undefined} className={'message-row ' + (m.fromMe ? 'outgoing' : 'incoming')}>
       <div className={'bubble ' + (m.kind === 'sticker' ? 'sticker-bubble' : '')}>
         <div className="bubble-top">
           {!m.fromMe && <b className="sender">{m.sender}</b>}
@@ -1884,7 +1891,7 @@ function Parent({
       <div className="parent-content">
         <span className="eyebrow">יחד · ניהול המשפחה</span>
         <h1>מרחב משלהם.<br /><span>בחירה שלכם.</span></h1>
-        <p className="parent-intro">כל הילדים, הקבוצות וההגדרות — במקום אחד.</p>
+        <p className="parent-intro">כל הילדים, השיחות וההגדרות — במקום אחד.</p>
         {overviewStale && <p className="diagnostics-caption" role="status">עדכון המסך ממתין לחיבור לשרת. ננסה שוב אוטומטית; המידע שכבר מוצג עשוי להיות לא מעודכן. שינויים חסומים עד לאימות המצב.</p>}
         {me.connector === 'mock' && (
           <div className="mock-notice">
@@ -1968,31 +1975,18 @@ function Parent({
             </div>
           </section>
         </details>
-        <section className="parent-card next-step" id="family-tablet" tabIndex={-1}>
-          <div>
-            <span className="eyebrow">03 · מתחילים לדבר</span>
-            <h2>{selectedChild ? `כניסה לטאבלט של ${selectedChild.name}` : 'לפני הכניסה בטאבלט'}</h2>
-            <p>{!data ? 'טוענים את מצב ההכנה…' : overviewStale ? 'ממתינים לאימות מצב ההכנה מול השרת.' : !selectedChild ? 'הוסיפו חשבון ילד ובחרו עבורו קבוצות.' : !selectedChild.groups.length ? 'לחשבון שנבחר אין קבוצות מאושרות. בחרו לפחות קבוצה אחת לפני הכניסה.' : !selectedChild.ready ? 'הקבוצות נשמרו. חברו את החשבון כדי להמשיך.' : 'פותחים את אותה כתובת של יחד, ונכנסים עם השם שמופיע כאן והסיסמה שבחרתם לחשבון.'}</p>
-            <p className="muted">המסך אינו מאשר שהטאבלט התחבר. ודאו בטאבלט שהכניסה הצליחה והקבוצות מופיעות.</p>
-          </div>
-          <div className="child-login-details">
-            <span>כתובת הטאבלט <b dir="ltr">{location.origin}</b></span>
-            שם לכניסה{' '}
-            <b dir="auto">{data?.children.find((x: any) => x.id === child)?.name || '—'}</b>
-          </div>
-          <button className="outline-button" onClick={openChat}>
-            לממשק השיחות של ההורה <ArrowLeft size={18} />
-          </button>
-        </section>
+        <ChildTabletSetup child={selectedChild} loaded={!!data} stale={overviewStale} busy={busy}
+          origin={location.origin} openChat={openChat}
+          onPassword={id => { setSettingsChild(id); setSettingsMode('password'); setSettings(true); }}/>
         <DiagnosticsPanel />
         <UpdatesPanel />
         <details className="transparency">
           <summary>מה חשוב לדעת על המרחב הזה?</summary>
           <p>
             זו עדיין זהות ההורה: ההודעות נשלחות מהמספר שלו, והוא יכול לראות אותן ב־WhatsApp. השרת
-            הוא מכשיר מקושר שעשוי לקבל ולפענח גם שיחות שאינן מוצגות לילדים. קבוצות מוכרות במשפחה
-            נשמרות עבור ההורה גם בלי אישור לילד. רק קבוצות שאושרו זמינות לילד; אין כאן פרטיות
-            מההורה או הצפנה מקצה לקצה עד הדפדפן. מידע ניהולי של קבוצות זמין להורה בלבד.
+            הוא מכשיר מקושר שעשוי לקבל ולפענח גם שיחות שאינן מוצגות לילדים. שיחות מוכרות במשפחה
+            נשמרות עבור ההורה גם בלי אישור לילד. רק שיחות שאושרו זמינות לילד; אין כאן פרטיות
+            מההורה או הצפנה מקצה לקצה עד הדפדפן. מידע ניהולי של שיחות זמין להורה בלבד.
           </p>
           <p>
             ההיסטוריה עלולה להיות חלקית, במיוחד לאחר ניתוק. אין הבטחה לשחזור מלא. שיחות קול ווידאו,

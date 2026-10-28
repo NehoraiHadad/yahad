@@ -158,6 +158,19 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(self.refresh(), {'result':'cached'})
         self.assertEqual(len(self.installed), 1)
 
+    def test_five_minute_schedule_and_failure_backoff(self):
+        self.policy['checkHours'] = 1 / 12
+        self.assertEqual(self.refresh()['result'], 'updated')
+        count = len(self.calls)
+        self.assertEqual(u.refresh(self.supervisor, fetch=self.fetch, now=lambda:1299.999), {'result':'cached'})
+        self.assertEqual(len(self.calls), count)
+        self.assertEqual(u.refresh(self.supervisor, fetch=self.fetch, now=lambda:1300)['result'], 'unchanged')
+        def offline(*args):
+            raise u.TransportError('network')
+        self.assertEqual(u.refresh(self.supervisor, fetch=offline, now=lambda:1600)['error'], 'network')
+        self.assertEqual(u.refresh(self.supervisor, fetch=self.fetch, now=lambda:1899), {'result':'cached'})
+        self.assertEqual(u.refresh(self.supervisor, fetch=self.fetch, now=lambda:1900)['result'], 'unchanged')
+
     def test_optional_assets_absent_keep_existing_runtime_and_partial_is_rejected(self):
         self.release['assets'] = [{'name':'yachad-app.zip', 'url':'unused'}]
         self.assertEqual(self.refresh()['result'], 'unavailable')
@@ -211,7 +224,7 @@ class TransportTests(unittest.TestCase):
 
     def test_policy_does_not_accept_key_url_or_unbounded_values(self):
         for change in ({'enabled':1}, {'format':True}, {'repository':'../escape'}, {'channel':'branch'},
-                       {'checkHours':0}, {'checkHours':True}, {'checkHours':169}, {'key':'app-key'}):
+                       {'checkHours':0}, {'checkHours':1/13}, {'checkHours':'0.0833'}, {'checkHours':float('inf')}, {'checkHours':float('nan')}, {'checkHours':True}, {'checkHours':169}, {'key':'app-key'}):
             with self.subTest(change=change):
                 previous = self.policy; self.policy = dict(previous, **change)
                 self.assertEqual(self.refresh(), {'result':'failed', 'error':'configuration'})

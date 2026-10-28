@@ -11,7 +11,7 @@ test('family setup has one Hebrew-capable account name and accessible passphrase
   assert.match(html,/autoComplete="new-password"/);
   assert.match(html,/autoCapitalize="none"/);
   assert.match(html,/spellCheck="false"/);
-  assert.match(html,/minLength="14"/);
+  assert.match(html,/minLength="4"/);
   assert.ok(html.includes('יצירה ובחירת קבוצות'));
   assert.ok(html.includes('שם אחד שמופיע באפליקציה וגם משמש לכניסה'));
   assert.ok(html.includes('dir="auto"'));

@@ -4,7 +4,7 @@ import { ApiError, api, isTransientApiError } from './api';
 import { normalizeAccountName } from '../src/account-name';
 import { useDialogFocus } from './useDialogFocus';
 
-export const passphraseHelp = 'בחרו כמה מילים שקל לזכור, עם רווחים — לפחות 14 תווים. אפשר להדביק ממנהל הסיסמאות. לכל חשבון משפט נפרד.';
+export const passphraseHelp = 'אפשר לבחור קוד קצר של 4 תווים לפחות — מספרים, אותיות או שילוב. סיסמה ארוכה עדיין נתמכת ובטוחה יותר. בחרו קוד שונה לכל חשבון; אחרי ניסיונות שגויים הכניסה תושהה זמנית.';
 export function FamilySetup({ setupToken, onDone, onClose }: {
   setupToken?: string; onDone: (childId?: string) => void; onClose?: () => void;
 }) {
@@ -60,8 +60,8 @@ export function FamilySetup({ setupToken, onDone, onClose }: {
       {setup && <label htmlFor="family-label">שם המשפחה באפליקציה<input disabled={busy || uncertain} id="family-label" autoComplete="off" maxLength={80} value={familyName} onChange={e => setFamilyName(e.target.value)} /></label>}
       <label htmlFor="account-name">{setup ? 'השם שלך' : 'שם הילד או הילדה'}<input disabled={busy || uncertain} id="account-name" dir="auto" autoFocus={setup} required autoComplete="username" spellCheck={false} autoCapitalize="none" autoCorrect="off" maxLength={120} aria-invalid={nameInvalid} aria-describedby="account-name-help family-error" value={name} onChange={e => { setName(e.target.value); setNameInvalid(false); setError(''); }} /></label>
       <small id="account-name-help">שם אחד שמופיע באפליקציה וגם משמש לכניסה. אפשר בעברית או באנגלית, עד 60 תווים.</small>
-      <label htmlFor="family-password">סיסמה<input disabled={busy || uncertain} id="family-password" dir="auto" spellCheck={false} autoCapitalize="none" autoCorrect="off" type={show ? 'text' : 'password'} autoComplete="new-password" required minLength={14} maxLength={256} aria-describedby="passphrase-help family-error" value={password} onChange={e => setPassword(e.target.value)}/></label>
-      <label htmlFor="family-confirmation">אישור הסיסמה<input disabled={busy || uncertain} id="family-confirmation" dir="auto" spellCheck={false} autoCapitalize="none" autoCorrect="off" type={show ? 'text' : 'password'} autoComplete="new-password" required minLength={14} maxLength={256} aria-describedby="family-error" value={confirmation} onChange={e => setConfirmation(e.target.value)}/></label>
+      <label htmlFor="family-password">סיסמה<input disabled={busy || uncertain} id="family-password" dir="auto" spellCheck={false} autoCapitalize="none" autoCorrect="off" type={show ? 'text' : 'password'} autoComplete="new-password" required minLength={4} maxLength={256} aria-describedby="passphrase-help family-error" value={password} onChange={e => setPassword(e.target.value)}/></label>
+      <label htmlFor="family-confirmation">אישור הסיסמה<input disabled={busy || uncertain} id="family-confirmation" dir="auto" spellCheck={false} autoCapitalize="none" autoCorrect="off" type={show ? 'text' : 'password'} autoComplete="new-password" required minLength={4} maxLength={256} aria-describedby="family-error" value={confirmation} onChange={e => setConfirmation(e.target.value)}/></label>
       <label className="secret-toggle"><input type="checkbox" checked={show} onChange={e => setShow(e.target.checked)}/> הצגת הסיסמה</label>
       <p id="passphrase-help" className="muted">{passphraseHelp}</p>
       <p id="family-error" role={error ? 'alert' : undefined} className="error">{error}</p>

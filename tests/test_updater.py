@@ -11,7 +11,7 @@ import tempfile
 import time
 import unittest
 import zipfile
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 spec = importlib.util.spec_from_file_location('updater', pathlib.Path(__file__).parents[1] / 'deploy/updater.py')
 u = importlib.util.module_from_spec(spec)
@@ -95,6 +95,48 @@ class UpdaterTests(unittest.TestCase):
             with patch.object(u,'CONFIG',config):
                 u.main()
             self.assertFalse((self.root/'status.json').exists())
+
+    def test_fractional_hour_direct_schedule_checks_at_five_minutes(self):
+        worker = object.__new__(u.Worker)
+        worker.c = dict(enabled=True, mode='notify', checkHours=1/12, repository='owner/repo')
+        worker.status = dict(phase='idle', checkedAt=1000000)
+        worker.finish_request = Mock()
+        worker.recover = Mock(return_value=True)
+        worker.request = Mock(return_value=None)
+        worker.save = lambda **values: worker.status.update(values)
+        (self.root / 'package.json').write_text('{"version":"0.2.0"}')
+        worker.current = Mock(return_value=self.root)
+        with patch.object(worker, 'release', return_value=({'tag_name':'v0.2.0'}, {})) as release:
+            with patch.object(u.time, 'time', return_value=1299.999): worker.run()
+            release.assert_not_called()
+            with patch.object(u.time, 'time', return_value=1300): worker.run()
+            release.assert_called_once()
+        self.assertEqual(worker.status['phase'], 'idle')
+
+    def test_scheduled_no_selection_keeps_controls_live_without_claiming_app_check(self):
+        for selection in (None, {'error':'network'}):
+            with self.subTest(selection=selection):
+                worker = object.__new__(u.Worker)
+                worker.c = dict(enabled=True, mode='auto', checkHours=1/12,
+                                operator={'familyId':'family', 'userId':'parent'})
+                worker.status = dict(phase='healthy', checkedAt=1000, updatedAt=1000,
+                                     currentVersion='0.5.1', error=None)
+                worker.group = 0
+                worker.status_path = self.root / 'status.json'
+                worker.require_release_selection = True
+                worker.release_selection = selection
+                worker.finish_request = Mock()
+                worker.recover = Mock(return_value=True)
+                worker.request = Mock(return_value=None)
+                worker.release = Mock()
+                with patch.object(u, 'atomic_json') as saved, patch.object(u.time, 'time', return_value=100000):
+                    worker.run()
+                saved.assert_called_once()
+                worker.release.assert_not_called()
+                self.assertEqual(worker.status['updatedAt'], 100000000)
+                self.assertEqual(worker.status['checkedAt'], 1000)
+                self.assertEqual(worker.status['phase'], 'healthy')
+                self.assertIsNone(worker.status['error'])
 
     def lifecycle(self, fail_health=False, fail_backup=False, https=False):
         username=pwd.getpwuid(os.getuid()).pw_name

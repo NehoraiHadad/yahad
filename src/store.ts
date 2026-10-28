@@ -1,4 +1,6 @@
+import { conversationKind } from './conversation-id.js';
 import { DatabaseSync, backup } from 'node:sqlite';
+import { initializeChatReadState, recordUnread } from './chat-read-state.js';
 import { Diagnostics } from './diagnostics.js';
 import { DATABASE_SCHEMA, USERS_TABLE, migrateAccountNames } from './db.js';
 import { normalizeAccountName, accountNameKey } from './account-name.js';
@@ -51,6 +53,7 @@ export class Store {
       this.db.exec(`
  CREATE TABLE IF NOT EXISTS families(id TEXT PRIMARY KEY,name TEXT NOT NULL,linked INTEGER NOT NULL DEFAULT 0);
  ${USERS_TABLE.replace('CREATE TABLE users', 'CREATE TABLE IF NOT EXISTS users')};
+ CREATE TABLE IF NOT EXISTS credential_attempts(key TEXT PRIMARY KEY,n INTEGER NOT NULL,until INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,family_id TEXT NOT NULL,user_id TEXT NOT NULL,csrf TEXT NOT NULL,expires INTEGER NOT NULL,last INTEGER NOT NULL,FOREIGN KEY(family_id,user_id) REFERENCES users(family_id,id) ON DELETE CASCADE);
  CREATE TABLE IF NOT EXISTS groups(family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE,id TEXT NOT NULL,title TEXT NOT NULL,PRIMARY KEY(family_id,id));
  CREATE TABLE IF NOT EXISTS grants(family_id TEXT NOT NULL,user_id TEXT NOT NULL,group_id TEXT NOT NULL,PRIMARY KEY(family_id,user_id,group_id),FOREIGN KEY(family_id,user_id) REFERENCES users(family_id,id) ON DELETE CASCADE,FOREIGN KEY(family_id,group_id) REFERENCES groups(family_id,id) ON DELETE CASCADE);
@@ -72,6 +75,7 @@ export class Store {
         for (const row of this.all('SELECT family_id,id FROM groups'))
           this.ensureGroupKey(row.family_id, row.id);
       });
+      initializeChatReadState(this);
       this.cleanOrphans();
     } catch (error) { this.db.close(); throw error; }
   }
@@ -190,15 +194,17 @@ export class Store {
         seal(this.config.masterKey, randomBytes(32), `${f}:key:${g}`));
   }
   groups(f: string): ChatGroup[] {
-    return this.all('SELECT id,title FROM groups WHERE family_id=? ORDER BY title', f).map((x) => ({
+    return this.all('SELECT g.id,g.title,COALESCE((SELECT MAX(m.time) FROM messages m WHERE m.family_id=g.family_id AND m.group_id=g.id),0) AS lastMessageTime FROM groups g WHERE g.family_id=? ORDER BY lastMessageTime DESC,g.id ASC', f).map((x) => ({
       id: x.id,
+      kind: conversationKind(x.id),
+      lastMessageTime: x.lastMessageTime,
       title: open(this.config.masterKey, x.title, `${f}:title:${x.id}`).toString(),
     }));
   }
   syncGroups(f: string, groups: ChatGroup[]) {
     this.tx(() => {
       for (const g of groups)
-        if (g.id.endsWith('@g.us')) {
+        if (conversationKind(g.id)) {
           this.run(
             'INSERT INTO groups VALUES(?,?,?) ON CONFLICT(family_id,id) DO UPDATE SET title=excluded.title',
             f,
@@ -224,6 +230,7 @@ export class Store {
       this.run('INSERT OR IGNORE INTO grants VALUES(?,?,?)', f, u, g);
     } else {
       this.run('DELETE FROM grants WHERE family_id=? AND user_id=? AND group_id=?', f, u, g);
+      this.run('DELETE FROM chat_unread WHERE family_id=? AND user_id=? AND group_id=?', f, u, g);
       // Revoking a child never revokes the parent or erases the parent’s copy.
     }
   }
@@ -235,16 +242,25 @@ export class Store {
       ? JSON.parse(open(this.groupKey(f, g), row.body, `${f}:${g}:${id}`).toString())
       : undefined;
   }
-  putMessage(f: string, m: StoredMessage) {
+  putMessage(f: string, m: StoredMessage, live = true) {
     if (!this.retained(f, m.groupId)) return false;
-    this.diagnostics.measure(f, 'db_write', () => this.run(
-      'INSERT INTO messages VALUES(?,?,?,?,?) ON CONFLICT(family_id,group_id,id) DO UPDATE SET body=excluded.body,time=excluded.time',
-      f,
-      m.groupId,
-      m.id,
-      m.time,
-      seal(this.groupKey(f, m.groupId), JSON.stringify(m), `${f}:${m.groupId}:${m.id}`),
-    ));
+    this.db.exec('SAVEPOINT message_with_unread');
+    try {
+      const isNew = !this.one('SELECT 1 FROM messages WHERE family_id=? AND group_id=? AND id=?', f, m.groupId, m.id);
+      this.diagnostics.measure(f, 'db_write', () => this.run(
+        'INSERT INTO messages VALUES(?,?,?,?,?) ON CONFLICT(family_id,group_id,id) DO UPDATE SET body=excluded.body,time=excluded.time',
+        f,
+        m.groupId,
+        m.id,
+        m.time,
+        seal(this.groupKey(f, m.groupId), JSON.stringify(m), `${f}:${m.groupId}:${m.id}`),
+      ));
+      recordUnread(this, f, m, isNew, live);
+      this.db.exec('RELEASE message_with_unread');
+    } catch (error) {
+      this.db.exec('ROLLBACK TO message_with_unread; RELEASE message_with_unread');
+      throw error;
+    }
     return true;
   }
   messages(f: string, g: string, cursor?: { time: number; id: string }, limit = 40) {

@@ -75,7 +75,7 @@ class BootstrapPackageTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('node') and shutil.which('python3'), 'local packaging tools')
     def test_bootstrap_runtime_is_byte_identical_to_release_packager(self):
         filename, _ = self.packager.package(self.root / 'bootstrap')
-        result = subprocess.run(['node', str(ROOT / 'scripts/release-updater.mjs'), 'package-github', '1.0.0',
+        result = subprocess.run(['node', str(ROOT / 'scripts/release-updater.mjs'), 'package-github', '1.0.1',
                                  str(self.root / 'runtime')], cwd=ROOT, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         with zipfile.ZipFile(self.root / 'bootstrap' / filename) as archive:

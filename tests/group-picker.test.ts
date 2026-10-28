@@ -19,6 +19,6 @@ test('group search preserves stable IDs, duplicates and granted state through fi
   assert.equal((render('').match(/checked=""/g) || []).length, 1);
   assert.deepEqual(grants.map(g => g.group_id), ['a@g.us','b@g.us']);
   const empty = renderToStaticMarkup(React.createElement(GroupPicker, { groups: [], grants: [], childId: '', busy: false, loading: false, onToggle() {} }));
-  assert.ok(empty.includes('אין קבוצות ברשימה'));
+  assert.ok(empty.includes('אין שיחות ברשימה'));
   assert.ok(empty.includes('הוסיפו חשבון ילד'));
 });

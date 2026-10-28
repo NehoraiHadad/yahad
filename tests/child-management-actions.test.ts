@@ -26,7 +26,7 @@ function harness() {
       : require(name),
   });
   const data: FamilyOverview = { state: 'connected', children: [{ id: 'a', name: 'אלף' }, { id: 'b', name: 'בית' }],
-    groups: [{ id: 'g', title: 'קבוצה סינתטית' }], grants: [] };
+    groups: [{ id: 'g', title: 'שיחה סינתטית' }], grants: [] };
   const props = { data, selected: 'a', stale: false, busy: false, createdChild: '', onSelect() {}, onAdd() {}, onSettings() {}, onRefresh() {}, onRetry() {},
     onGrant: (change: any) => new Promise<boolean>(resolve => pending.push({ change, resolve })) };
   function nodes(node: any): any[] { return !node || typeof node !== 'object' ? [] : [node, ...[node.props?.children].flat(Infinity).flatMap(nodes)]; }
@@ -89,5 +89,5 @@ test('revoke remains visibly approved while saving, then confirms only fresh per
   h.pending[0].resolve(true); await pending;
   assert.ok(!h.feedback().props.className.includes('confirmed'));
   h.data.grants = []; assert.ok(h.feedback().props.className.includes('confirmed'));
-  assert.ok(JSON.stringify(h.feedback()).includes('הוסרה מהקבוצות המאושרות'));
+  assert.ok(JSON.stringify(h.feedback()).includes('הוסרה מהשיחות המאושרות'));
 });

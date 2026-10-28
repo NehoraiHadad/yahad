@@ -382,8 +382,8 @@ test('documented setup CLI creates real separate accounts and a protected random
     ['Family label (local only): ', 'Synthetic setup'],
     ['Parent name (also used to sign in): ', 'הורה לבדיקה'],
     ['Child name (also used to sign in): ', 'עדי לבדיקה'],
-    ['Parent password, 14+ characters: ', parentPassword],
-    ['Child passphrase, 14+ characters: ', childPassword],
+    ['Parent password, 4+ characters: ', parentPassword],
+    ['Child passphrase, 4+ characters: ', childPassword],
     ['Confirm parent password: ', parentPassword],
     ['Confirm child passphrase: ', childPassword],
   ];

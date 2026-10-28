@@ -887,6 +887,11 @@ class Worker:
                 # overrides the independent legacy app cache above.
                 if action in ('check', 'install'):
                     self.save(phase='failed', error=selected.get('error', 'network') if isinstance(selected, dict) else 'network')
+                else:
+                    # The scheduled worker is alive even when root transport is
+                    # unchanged/cached/offline. Preserve last actual app check
+                    # and outcome, but do not strand parent controls as stale.
+                    self.save()
                 return
             current = self.current()
             current_version = json.loads((current / 'package.json').read_bytes())['version']
