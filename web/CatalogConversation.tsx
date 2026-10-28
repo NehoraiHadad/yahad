@@ -32,6 +32,7 @@ export function ConversationVerification({ title, checking, onBack, onRetry }: {
       <ShieldCheck size={36} aria-hidden="true" />
       <h2>{checking ? 'מאמתים את הגישה לשיחה' : 'לא הצלחנו לאמת את הגישה לשיחה'}</h2>
       <p>ההודעות והשליחה מושהות עד לקבלת הרשאות עדכניות מהשרת. שם הקבוצה נשאר ברשימה.</p>
+      <p>טיוטת הודעה חדשה נשמרת זמנית במסך הזה ותופיע שוב אחרי אימות הגישה. יציאה מהשיחה או ביטול הגישה מוחקים אותה.</p>
       <button type="button" className="small-button" disabled={checking} onClick={onRetry}>{checking ? 'מאמתים…' : 'לנסות שוב'}</button>
     </div>
   </div>;

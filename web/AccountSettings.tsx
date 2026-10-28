@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { X, Check } from 'lucide-react';
-import { api, isTransientApiError } from './api';
+import { ApiError, api, isTransientApiError } from './api';
 import { normalizeAccountName, accountNameKey } from '../src/account-name';
 import { passphraseHelp } from './FamilySetup';
 import { useDialogFocus } from './useDialogFocus';
@@ -31,6 +31,7 @@ export function AccountSettings({
     [busy, setBusy] = useState(false),
     [message, setMessage] = useState(''),
     [error, setError] = useState('');
+  const [nameInvalid, setNameInvalid] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const submitting = useRef(false), dialog = useRef<HTMLDivElement>(null);
   useDialogFocus(dialog, true);
@@ -38,7 +39,7 @@ export function AccountSettings({
   const selected = accounts.find(user => user.id === child);
   const unavailable = !!child && !selected;
   const editingProfile = !!selected && mode === 'profile';
-  const resetFeedback = () => { setCurrent(''); setNext(''); setConfirmation(''); setShow(false); setMessage(''); setError(''); };
+  const resetFeedback = () => { setCurrent(''); setNext(''); setConfirmation(''); setShow(false); setMessage(''); setError(''); setNameInvalid(false); };
   const changeMode = (value: 'profile' | 'password') => {
     if (submitting.current || uncertain) return;
     setMode(value); setName(selected?.name || ''); resetFeedback();
@@ -47,9 +48,9 @@ export function AccountSettings({
     e.preventDefault();
     if (submitting.current || uncertain || !selected) return;
     let value: string;
-    setError(''); setMessage('');
+    setError(''); setMessage(''); setNameInvalid(false);
     try { value = normalizeAccountName(name); }
-    catch { setError('כתבו שם באורך 1–60 תווים: אותיות בעברית או באנגלית, מספרים, רווח, נקודה או מקף.'); return; }
+    catch { setNameInvalid(true); setError('כתבו שם באורך 1–60 תווים: אותיות בעברית או באנגלית, מספרים, רווח, נקודה או מקף.'); return; }
     if (value === selected.name) return;
     submitting.current = true; setBusy(true);
     try {
@@ -59,6 +60,7 @@ export function AccountSettings({
       setMessage(`השם עודכן ל־${result.child.name}. בכניסה הבאה משתמשים בשם הזה.${accountNameKey(result.child.name) !== accountNameKey(selected.name) ? ' השם הקודם כבר לא משמש לכניסה.' : ''} הסיסמה והקבוצות לא השתנו.`);
       onProfileChanged?.();
     } catch (e) {
+      if (e instanceof ApiError && e.code === 'NAME_UNAVAILABLE') setNameInvalid(true);
       const unconfirmed = isTransientApiError(e) || e instanceof SyntaxError;
       if (unconfirmed) setUncertain(true);
       setError(unconfirmed
@@ -105,7 +107,7 @@ export function AccountSettings({
         aria-label="הגדרות חשבון"
       >
         <div className="modal-top">
-          <h2>{selected ? `החשבון של ${childLabel(selected)}` : child ? 'הגדרות חשבון' : 'הגדרות החשבון שלי'}</h2>
+          <h2>{selected ? <>החשבון של <bdi>{childLabel(selected)}</bdi></> : child ? 'הגדרות חשבון' : 'הגדרות החשבון שלי'}</h2>
           <button type="button" className="icon-button" aria-label="סגירה" disabled={busy} onClick={() => { if (!submitting.current) onClose(); }}>
             <X />
           </button>
@@ -135,8 +137,8 @@ export function AccountSettings({
           {editingProfile ? <>
             <label htmlFor="account-name">שם הילד או הילדה
               <input id="account-name" dir="auto" autoComplete="off" required maxLength={120} disabled={busy || uncertain || unavailable}
-                aria-describedby="account-name-help account-settings-error" value={name}
-                onChange={e => { setName(e.target.value); setError(''); setMessage(''); }} />
+                aria-invalid={nameInvalid} aria-describedby="account-name-help account-settings-error" value={name}
+                onChange={e => { setName(e.target.value); setNameInvalid(false); setError(''); setMessage(''); }} />
             </label>
             <p id="account-name-help" className="muted">שם אחד שמופיע באפליקציה וגם משמש לכניסה. אפשר בעברית. אחרי השמירה נכנסים בשם החדש, עם אותה סיסמה.</p>
             <p className="muted">השינוי לא משנה את החתימה בהודעות WhatsApp ולא מנתק מכשירים שכבר מחוברים.</p>

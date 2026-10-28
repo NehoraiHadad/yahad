@@ -1,13 +1,12 @@
-import type { FamilyOverview } from './FamilyProgress';
+import { familyProgress, type FamilyOverview } from './FamilyProgress';
 
 export type ChildGrantChange = { childId: string; groupId: string; allowed: boolean };
 
 /** Selection is an account ID, never a name or an array position. */
 export function reconcileChildSelection(data: FamilyOverview, selected: string) {
   if (data.children.some(child => child.id === selected)) return selected;
-  const knownGroups = new Set(data.groups.map(group => group.id));
-  const granted = new Set(data.grants.filter(grant => knownGroups.has(grant.group_id)).map(grant => grant.user_id));
-  return data.children.find(child => !granted.has(child.id))?.id || data.children[0]?.id || '';
+  const progress = familyProgress(data);
+  return progress.pendingChild?.id || progress.children[0]?.id || '';
 }
 
 /** Only a current server snapshot can confirm an individual child's change. */
@@ -24,4 +23,14 @@ export class ChildActionGuard {
   begin(): number | null { if (this.active) return null; this.active = true; return ++this.generation; }
   finish(request: number): boolean { if (request !== this.generation) return false; this.active = false; return true; }
   invalidate() { this.generation++; this.active = false; }
+}
+
+/** Remember only this parent's UI selection in this tab; grants always come from the server. */
+export function readChildSelection(userId: string, storage?: Pick<Storage, 'getItem'>): string {
+  try { return (storage || sessionStorage).getItem(`yachad-selected-child:${userId}`) || ''; }
+  catch { return ''; }
+}
+export function saveChildSelection(userId: string, childId: string, storage?: Pick<Storage, 'setItem'>) {
+  try { (storage || sessionStorage).setItem(`yachad-selected-child:${userId}`, childId); }
+  catch { /* Storage-disabled browsers still support the current in-memory selection. */ }
 }

@@ -21,7 +21,7 @@ test('child workspace identifies roster, selected name, login name, per-child co
   assert.equal((html.match(/class="child-card"/g) || []).length, 2);
   assert.match(html, /id="selected-child-title" dir="auto">יעל לדוגמה/);
   assert.match(html, /שם לכניסה: <b dir="auto">יעל לדוגמה/);
-  assert.match(html, /הקבוצות של יעל לדוגמה/);
+  assert.match(html, /הקבוצות של <bdi>יעל לדוגמה<\/bdi>/);
   assert.match(html, /aria-label="אישור קבוצה משפחה סינתטית עבור יעל לדוגמה" checked=""/);
   assert.doesNotMatch(html, /aria-label="אישור קבוצה כיתה סינתטית עבור יעל לדוגמה" checked/);
   for (const text of ['הוספת ילד או ילדה', 'שינוי שם', 'איפוס סיסמה', 'מאושרות (1)', 'להוספה (1)']) assert.ok(html.includes(text), text);
@@ -42,7 +42,7 @@ test('loading, failed load, zero children, created child and stale snapshots hav
   assert.ok(failed.includes('לא הצלחנו לטעון את הילדים')); assert.ok(failed.includes('ניסיון נוסף'));
   const empty = render({ data: { ...overview(), children: [], grants: [] }, selected: '' });
   assert.ok(empty.includes('הוספת החשבון הראשון')); assert.ok(!empty.includes('אישור קבוצה'));
-  assert.ok(render({ createdChild: 'a' }).includes('החשבון של יעל לדוגמה נוצר ונבחר'));
+  assert.ok(render({ createdChild: 'a' }).includes('החשבון של <bdi>יעל לדוגמה</bdi> נוצר ונבחר'));
   const stale = render({ stale: true });
   assert.ok(!stale.includes('מוכן לכניסה בטאבלט'));
   assert.equal((stale.match(/type="checkbox"[^>]*disabled=""/g) || []).length, 2);

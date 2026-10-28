@@ -3,7 +3,8 @@
 .children-heading { display:flex; align-items:center; justify-content:space-between; gap:20px; padding:26px; border-bottom:1px solid #dfe8df; }
 .children-heading h2 { display:flex; align-items:center; gap:10px; font-size:25px; margin:7px 0; }
 .children-heading p { color:#536b60; line-height:1.7; margin:0; font-size:14px; }
-.children-heading .primary { flex-shrink:0; min-height:46px; }
+.children-heading > div { min-width:0; flex:1; }
+.children-heading .primary { flex:0 0 auto; width:auto; max-width:100%; margin-bottom:0; min-height:46px; }
 .children-count { display:inline-grid; place-items:center; min-width:30px; height:30px; padding-inline:6px; border-radius:10px; background:#e7f1e9; font-size:15px; color:#275c49; }
 .child-workspace { display:grid; grid-template-columns:minmax(220px, .85fr) minmax(0, 2fr); align-items:start; }
 .child-roster { padding:22px 18px; background:#f6f8f2; align-self:stretch; border-inline-end:1px solid #dfe8df; min-width:0; }
@@ -81,3 +82,5 @@
   .child-workspace-panel .group-search { gap:4px; }
 }
 @media(max-width:360px) { .child-roster ul { grid-template-columns:1fr; } .child-card { min-height:auto; } }
+
+.child-management #children-title:focus-visible { outline:3px solid #167b68; outline-offset:4px; }

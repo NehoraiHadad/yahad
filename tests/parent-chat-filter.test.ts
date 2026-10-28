@@ -112,7 +112,7 @@ test('chat wiring invalidates asynchronous responses and uses filtered groups fo
   assert.match(chat, /const current = visibleGroups\.find/);
   assert.match(chat, /const activeSelected = groupsVerified && visibleGroups\.some\(group => group\.id === selected && group\.canRead\)/);
   assert.match(chat, /\{current\?\.canRead && groupsVerified \? \(/);
-  assert.match(chat, /\) : current && !groupsVerified \? \(\s*<ConversationVerification/);
+  assert.match(chat, /\) : verifyingSelection && selected && groups.some\(g => g.id === selected\) \? \(\s*<ConversationVerification/);
   assert.match(chat, /groupsVerified && g\.canRead && g\.last/);
   assert.match(chat, /!groupsVerified\s*\? 'בודקים את הגישה לתוכן…'/);
   assert.match(chat, /\) : current \? \(\s*<CatalogConversation/);

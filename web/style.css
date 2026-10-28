@@ -2559,3 +2559,12 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 .parent-chat-filter label { display: grid; gap: 5px; }
 .parent-chat-filter select { width: 100%; min-width: 0; padding: 8px; border-radius: 8px; color: inherit; background: var(--surface); }
 .parent-chat-filter p { font-size: 12px; line-height: 1.5; margin: 8px 0 0; }
+
+.family-form > .error { color:#b14151; }
+.toast { display:flex; align-items:center; gap:12px; }
+.toast .icon-button { color:inherit; flex:0 0 44px; }
+
+/* Long account names must wrap without pushing the dialog close button away. */
+.account-settings .modal-top { align-items:flex-start; }
+.account-settings .modal-top h2 { display:block; flex:1; min-width:0; overflow-wrap:anywhere; }
+.account-settings .modal-top .icon-button { flex:0 0 auto; }

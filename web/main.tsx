@@ -1,3 +1,5 @@
+import { readRoute, writeRoute, type AppRoute } from './browserNavigation';
+import { resilientEventStream } from './eventStream';
 import { LazyEmojiStickerPicker as EmojiStickerPicker } from './LazyEmojiStickerPicker';
 import { insertEmoji, rememberEmoji } from './emojiSelection';
 import { loadStickerFile } from './stickerFile';
@@ -9,8 +11,9 @@ import { HistoryPanel } from './HistoryPanel';
 import { MessageImage } from './MessageImage';
 import { DisconnectPanel } from './DisconnectPanel';
 import { GroupAvatar } from './GroupAvatar';
+import { ErrorToast } from './ErrorToast';
 import { ChildManagement } from './ChildManagement';
-import { reconcileChildSelection } from './childManagementState';
+import { reconcileChildSelection, readChildSelection, saveChildSelection } from './childManagementState';
 import { ParentChatFilter, filterParentGroups, searchChatGroups, parentEmptyMessage, type ChatFilter } from './ParentChatFilter';
 import { CatalogConversation, ConversationVerification } from './CatalogConversation';
 import './parentChatCatalog.css';
@@ -131,7 +134,23 @@ function App() {
   const [me, setMe] = useState<Me | null>(null),
     [loaded, setLoaded] = useState(false),
     [error, setError] = useState('');
-  const [mode, setMode] = useState('chat');
+  const [route, setRoute] = useState<AppRoute>({ mode: 'chat', group: null });
+  const navigate = (next: AppRoute) => {
+    if (!me) return;
+    writeRoute(history, next, me.user.id);
+    setError('');
+    setRoute(next);
+  };
+  useEffect(() => {
+    if (!me) return;
+    const restore = () => {
+      setError('');
+      setRoute(readRoute(history.state, me.user.id, me.user.role) ||
+        { mode: me.user.role === 'parent' ? 'parent' : 'chat', group: null });
+    };
+    window.addEventListener('popstate', restore);
+    return () => window.removeEventListener('popstate', restore);
+  }, [me?.user.id, me?.user.role]);
   const refresh = useCallback(async () => {
     if (localStorage.getItem('yachad-locked') === '1') {
       setLoaded(true);
@@ -142,7 +161,10 @@ function App() {
       const m = await api<Me>('/me');
       setCsrf(m.csrf);
       setMe(m);
-      if (m.user.role === 'parent') setMode((prev) => (prev === 'chat' ? 'parent' : prev));
+      const next = readRoute(history.state, m.user.id, m.user.role) ||
+        { mode: m.user.role === 'parent' ? 'parent' as const : 'chat' as const, group: null };
+      writeRoute(history, next, m.user.id, true);
+      setRoute(next);
     } catch {
       setMe(null);
     } finally {
@@ -219,18 +241,19 @@ function App() {
   return (
     <>
       {error && (
-        <div role="alert" className="toast" onClick={() => setError('')}>
-          {error}
-        </div>
+        <ErrorToast message={error} onDismiss={() => setError('')} />
       )}
-      {mode === 'parent' && me.user.role === 'parent' ? (
-        <Parent me={me} logout={logout} openChat={() => setMode('chat')} onError={setError} />
+      {route.mode === 'parent' && me.user.role === 'parent' ? (
+        <Parent me={me} logout={logout} openChat={() => navigate({ mode: 'chat', group: null })} onError={setError} />
       ) : (
         <Chat
+          key={me.user.id}
           me={me}
           onMe={setMe}
           logout={logout}
-          parent={() => setMode('parent')}
+          parent={() => navigate({ mode: 'parent', group: null })}
+          routeGroup={route.group}
+          onSelect={group => navigate({ mode: 'chat', group })}
           onError={setError}
         />
       )}
@@ -262,7 +285,7 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
           הרבה ביחד.<span>💚</span>
         </div>
         <div className="art-bubble two">
-          איזה כיף שאת כאן <Flower2 />
+          איזה כיף שנפגשים כאן <Flower2 />
         </div>
         <div className="art-orbit" />
         <p>
@@ -346,16 +369,20 @@ function Chat({
   onMe,
   logout,
   parent,
+  routeGroup,
+  onSelect,
   onError,
 }: {
   me: Me;
   onMe: (x: Me) => void;
   logout: () => Promise<void>;
   parent: () => void;
+  routeGroup?: string | null;
+  onSelect?: (group: string | null) => void;
   onError: (x: string) => void;
 }) {
   const [groups, setGroups] = useState<Group[]>([]),
-    [selected, setSelected] = useState<string | null>(null),
+    [selected, setSelected] = useState<string | null>(routeGroup ?? null),
     [messages, setMessages] = useState<PublicMessage[]>([]),
     [cursor, setCursor] = useState<string | null>(null),
     [busy, setBusy] = useState(true),
@@ -381,6 +408,8 @@ function Chat({
     [stickersOpen, setStickersOpen] = useState(false),
     [attachmentKind, setAttachmentKind] = useState('file'),
     [settingsOpen, setSettingsOpen] = useState(false);
+  useEffect(() => { if (routeGroup !== undefined) setSelected(routeGroup); }, [routeGroup]);
+  const selectGroup = (group: string | null) => { setSelected(group); onSelect?.(group); };
   const [chatFilter, setChatFilter] = useState<ChatFilter>({ mode: 'all', childId: '' });
   const [filterOverview, setFilterOverview] = useState<FamilyOverview | null>(null);
   const [filterVerified, setFilterVerified] = useState(false);
@@ -403,6 +432,10 @@ function Chat({
     composerPending = useRef(false);
   const composerBusyChanged = useCallback((value: boolean) => { composerPending.current = value; }, []);
   selectedRef.current = activeSelected;
+  const verifyingSelection = !groupsVerified || (me.user.role === 'parent' && chatFilter.mode === 'child' && !filterVerified);
+  // Preserve only the local composer while verification is pending, never message content.
+  // A confirmed removal/revocation destroys it, as does leaving this Chat/account.
+  const composerGroup = (verifyingSelection ? groups : visibleGroups).find(g => g.id === selected && g.canRead);
   const current = visibleGroups.find((g) => g.id === selected),
     c = me.capabilities;
   const invalidateFilter = () => {
@@ -417,7 +450,7 @@ function Chat({
     filterRef.current = next;
     selectedRef.current = null;
     requestGeneration.current++;
-    setSelected(null);
+    selectGroup(null);
     setQuery('');
     setChatFilter(next);
     // Never reuse a previously verified grant snapshot when entering a child view.
@@ -503,8 +536,14 @@ function Chat({
   );
   useEffect(() => {
     void refreshList();
-    const source = new EventSource('/api/events');
+    const source = resilientEventStream(() => new EventSource('/api/events'));
+    let active = true;
+    const refreshMe = () => void api<Me>('/me').then(m => {
+      if (!active) return;
+      setCsrf(m.csrf); onMe(m);
+    }).catch(() => {});
     source.addEventListener('ready', () => {
+      refreshMe();
       setOnline(true);
       void refreshList();
       const g = selectedRef.current;
@@ -513,12 +552,7 @@ function Chat({
     source.addEventListener('refresh', (event) => {
       if (isGroupDataRefresh((event as MessageEvent).data)) void refreshGroupData();
       else void refreshList();
-      void api<Me>('/me')
-        .then((m) => {
-          setCsrf(m.csrf);
-          onMe(m);
-        })
-        .catch(() => {});
+      refreshMe();
       const g = selectedRef.current;
       if (g) void refreshMessages(g);
     });
@@ -539,6 +573,7 @@ function Chat({
       setGroupsChecking(false);
     };
     return () => {
+      active = false;
       listGeneration.current.invalidate();
       groupDataGeneration.current.invalidate();
       requestGeneration.current++;
@@ -626,7 +661,7 @@ function Chat({
     }
   };
   return (
-    <main className={`chat-app theme-${theme} ${effects ? 'playful' : ''} ${dark ? 'dark' : ''} ${current ? 'has-chat' : ''}`}>
+    <main className={`chat-app theme-${theme} ${effects ? 'playful' : ''} ${dark ? 'dark' : ''} ${current || (verifyingSelection && composerGroup) ? 'has-chat' : ''}`}>
       <aside className="sidebar">
         <header className="side-top">
           <a className="brand" href="/" onClick={(e) => e.preventDefault()}>
@@ -672,7 +707,7 @@ function Chat({
                   <button
                     key={g.id}
                     className={'group-row ' + (g.id === selected ? 'active ' : '') + (!g.canRead ? 'catalog-only' : '')}
-                    onClick={() => setSelected(g.id)}
+                    onClick={() => selectGroup(g.id)}
                   >
                     <GroupAvatar groupId={g.id} title={g.title} retryKey={me.connection} className={'avatar av-' + (i % 3)} />
                     <div className="group-info">
@@ -711,7 +746,7 @@ function Chat({
           {!listBusy && !visibleGroups.length && (
             <div className="empty-list">
               <ShieldCheck />
-              <h3>עוד רגע, מתחילים</h3>
+              <h3>כאן יופיעו השיחות</h3>
               <p>{me.user.role === 'parent' ? parentEmptyMessage(chatFilter, filterOverview, filterVerified) : 'הקבוצות שההורה יבחר יופיעו כאן.'}</p>
               <button className="text-button" onClick={() => void refreshList()}>
                 רענון
@@ -754,7 +789,7 @@ function Chat({
         {current?.canRead && groupsVerified ? (
           <>
             <header className="chat-header">
-              <IconButton className="back" label="חזרה לשיחות" onClick={() => setSelected(null)}>
+              <IconButton className="back" label="חזרה לשיחות" onClick={() => selectGroup(null)}>
                 <ArrowRight />
               </IconButton>
               <GroupAvatar groupId={current.id} title={current.title} retryKey={me.connection} />
@@ -955,38 +990,12 @@ function Chat({
                 הודעות חדשות <ChevronDown size={16} />
               </button>
             )}
-            <Composer
-              key={current.id}
-              group={current.id}
-              messages={messages}
-              caps={c}
-              onBusyChange={composerBusyChanged}
-              maxMedia={me.maxMedia}
-              effects={effects}
-              flair={flair}
-              enabled={online && me.connection === 'connected'}
-              reply={reply}
-              clearReply={() => setReply(null)}
-              editing={editing}
-              clearEditing={() => setEditing(null)}
-              onSent={() => {
-                setReply(null);
-                setEditing(null);
-                nearBottom.current = true;
-                void refreshGroupData();
-                void refreshMessages(current.id).then(() => {
-                  bottom.current?.scrollIntoView({ behavior: 'smooth' });
-                  nearBottom.current = true;
-                  setNewCount(0);
-                });
-              }}
-              onError={onError}
-            />
+
           </>
-        ) : current && !groupsVerified ? (
-          <ConversationVerification title={current.title} checking={groupsChecking} onBack={() => setSelected(null)} onRetry={() => void refreshList()} />
+        ) : verifyingSelection && selected && groups.some(g => g.id === selected) ? (
+          <ConversationVerification title={groups.find(g => g.id === selected)!.title} checking={groupsChecking} onBack={() => selectGroup(null)} onRetry={() => void refreshList()} />
         ) : current ? (
-          <CatalogConversation title={current.title} onBack={() => setSelected(null)} onRetry={() => void refreshList()} />
+          <CatalogConversation title={current.title} onBack={() => selectGroup(null)} onRetry={() => void refreshList()} />
         ) : (
           <div className="welcome">
             <div className="welcome-emblem">
@@ -997,9 +1006,9 @@ function Chat({
             <span className="eyebrow">המרחב שלנו, בקצב שלנו</span>
             <h1>טוב להיות יחד.</h1>
             <p>
-              בחרי שיחה, שלחי חיוך,
+              בוחרים שיחה, שולחים חיוך,
               <br />
-              ושתפי את מה שעובר עלייך.
+              ומשתפים במה שעובר עלינו.
             </p>
             {needsRefresh ? (
               <button className="small-button" onClick={() => void refreshList()}>
@@ -1014,6 +1023,36 @@ function Chat({
               <div className="demo-label">מצב דוגמה · ללא חיבור לחשבון WhatsApp</div>
             )}
           </div>
+        )}
+        {composerGroup && (
+            <Composer
+              key={composerGroup.id}
+              group={composerGroup.id}
+              messages={messages}
+              caps={c}
+              onBusyChange={composerBusyChanged}
+              maxMedia={me.maxMedia}
+              effects={effects}
+              flair={flair}
+              enabled={!!activeSelected && online && me.connection === 'connected'}
+              suspended={!activeSelected}
+              reply={reply}
+              clearReply={() => setReply(null)}
+              editing={editing}
+              clearEditing={() => setEditing(null)}
+              onSent={() => {
+                setReply(null);
+                setEditing(null);
+                nearBottom.current = true;
+                void refreshGroupData();
+                void refreshMessages(composerGroup.id).then(() => {
+                  bottom.current?.scrollIntoView({ behavior: 'smooth' });
+                  nearBottom.current = true;
+                  setNewCount(0);
+                });
+              }}
+              onError={onError}
+            />
         )}
       </section>
       {themeOpen && (
@@ -1276,6 +1315,7 @@ function Composer({
   effects,
   flair,
   enabled,
+  suspended,
   reply,
   clearReply,
   editing,
@@ -1291,6 +1331,7 @@ function Composer({
   effects: boolean;
   flair: string;
   enabled: boolean;
+  suspended: boolean;
   reply: PublicMessage | null;
   clearReply: () => void;
   editing: PublicMessage | null;
@@ -1323,7 +1364,10 @@ function Composer({
     mounted = useRef(true),
     cancelRecord = useRef(false),
     stickerRequest = useRef<AbortController | null>(null),
-    submitting = useRef(false);
+    submitting = useRef(false),
+    copiedEdit = useRef(false),
+    available = useRef(enabled && !suspended);
+  available.current = enabled && !suspended;
   const { burst, celebrate } = useChatCelebration(effects, flair, group);
   const path = '/groups/' + encodeURIComponent(group);
   useEffect(() => {
@@ -1338,7 +1382,15 @@ function Composer({
     };
   }, []);
   useEffect(() => {
+    if (suspended) {
+      if (editing || copiedEdit.current) setText(''); // Never retain copied message content through permission checks.
+      stopRecording();
+      setEmojiOpen(false); setAttachOpen(false);
+    }
+  }, [suspended]);
+  useEffect(() => {
     if (editing) {
+      copiedEdit.current = true;
       setText(
         editing.authorLabel && editing.text.startsWith(editing.authorLabel + ': ')
           ? editing.text.slice(editing.authorLabel.length + 2)
@@ -1348,6 +1400,9 @@ function Composer({
       setSticker(false);
       setVoice(null);
       input.current?.focus();
+    } else if (copiedEdit.current) {
+      copiedEdit.current = false;
+      setText('');
     }
   }, [editing]);
   useEffect(() => {
@@ -1435,6 +1490,7 @@ function Composer({
     setRecording(false);
   };
   const record = async () => {
+    if (!available.current) return;
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
       onError('להקלטה צריך כתובת HTTPS שהמכשיר סומך עליה, או localhost.');
       return;
@@ -1445,7 +1501,7 @@ function Composer({
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      if (!mounted.current) {
+      if (!mounted.current || !available.current) {
         stream.getTracks().forEach((t) => t.stop());
         return;
       }
@@ -1488,7 +1544,7 @@ function Composer({
     }
   };
   return (
-    <div className="composer-wrap">
+    <div className="composer-wrap" hidden={suspended}>
       <ChatCelebration burst={burst} />
       {reply && !editing && (
         <div className="reply-preview">
@@ -1735,12 +1791,13 @@ function Parent({
   const [data, setData] = useState<FamilyOverview | null>(null),
     [qr, setQr] = useState<string | null>(null),
     [busy, setBusy] = useState(false),
-    [child, setChild] = useState(''),
+    [child, setChild] = useState(() => readChildSelection(me.user.id)),
     [settings, setSettings] = useState(false),
     [addingChild, setAddingChild] = useState(false),
     [deleteOpen, setDeleteOpen] = useState(false),
     [password, setPassword] = useState(''),
     [confirmError, setConfirmError] = useState('');
+  useEffect(() => { if (data) saveChildSelection(me.user.id, child); }, [me.user.id, child, !!data]);
   const acting = useRef(false), overviewRequest = useRef(0);
   const load = useCallback(async (background = false) => {
     const request = ++overviewRequest.current;
@@ -1764,7 +1821,8 @@ function Parent({
   }, [onError]);
   useEffect(() => {
     void load();
-    const source = new EventSource('/api/events');
+    const source = resilientEventStream(() => new EventSource('/api/events'));
+    source.addEventListener('ready', () => void load(true));
     source.addEventListener('refresh', () => void load(true));
     source.addEventListener('expired', () => window.dispatchEvent(new Event('session-expired')));
     const timer = setInterval(() => void load(true), 10000);
@@ -1783,10 +1841,10 @@ function Parent({
       // If an SSE/timer read supersedes this refresh, keep edits blocked until
       // the newest read confirms the persisted state (even after busy clears).
       setOverviewStale(true);
-      await load();
+      await load(path === '/parent/grant');
       return true;
     } catch (e) {
-      onError((e as Error).message);
+      if (path !== '/parent/grant') onError((e as Error).message);
       // A lost mutation response may still have committed. Reconcile before another click.
       setOverviewStale(true);
       await load(true);

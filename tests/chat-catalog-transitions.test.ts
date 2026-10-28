@@ -13,7 +13,7 @@ function harness() {
   const start = source.indexOf('function Chat('), end = source.indexOf('  return (\n    <main className={`chat-app', start);
   assert.ok(start >= 0 && end > start);
   const code = ts.transpileModule(`${source.slice(start, end)}return {
-    visibleGroups, listedGroups, activeSelected, current, selectedRef, requestGeneration,
+    visibleGroups, listedGroups, activeSelected, current, composerGroup, verifyingSelection, selectedRef, requestGeneration,
     chatFilter, query, changeFilter, refreshList, refreshGroupData, refreshMessages,
     setSelected, setQuery, setGroups, setFilterOverview, setFilterVerified, setMessages, messages,
     setGroupsVerified, groupsVerified, groupsChecking
@@ -230,4 +230,38 @@ test('parent-only conversation opens in All, survives child-grant refresh and re
   h.requests[8].resolve({ messages: [{ id: 'fresh-after-retry', time: 3 }], cursor: null });
   await tick(); state = h.flush();
   assert.equal(state.messages[0].id, 'fresh-after-retry');
+});
+
+
+test('temporary verification retains only composer identity; confirmed revocation or navigation destroys it', async () => {
+  const h = harness(); let state = h.flush();
+  state.setGroups(knownGroups); state.setGroupsVerified(true); state.setSelected('approved');
+  state = h.flush(); assert.equal(state.composerGroup.id, 'approved');
+  const checking = state.refreshList(); state = h.flush();
+  assert.equal(state.activeSelected, null, 'content and send permission fail closed');
+  assert.equal(state.composerGroup.id, 'approved', 'local composer can remain mounted, hidden');
+  assert.equal(state.messages.length, 0);
+  const pending = h.requests.filter(r => r.path === '/groups').at(-1)!;
+  pending.resolve(knownGroups.map(g => ({ ...g, canRead: false })));
+  h.requests.filter(r => r.path === '/parent/overview').at(-1)!.resolve({ children: [], groups: [], grants: [] });
+  await checking; state = h.flush();
+  assert.equal(state.composerGroup, undefined, 'verified denial destroys the draft');
+  state.setGroups(knownGroups); state.setSelected('approved'); state = h.flush();
+  assert.equal(state.composerGroup.id, 'approved');
+  state.setSelected(null); assert.equal(h.flush().composerGroup, undefined, 'leaving the group destroys local draft');
+});
+
+test('child-filter verification retains the selected composer without retaining visible conversation content', () => {
+  const h = harness(); let state = h.flush();
+  state.changeFilter({ mode: 'child', childId: 'synthetic-child' }); state = h.flush();
+  state.setGroups(knownGroups); state.setGroupsVerified(true);
+  state.setFilterOverview({ children: [{ id: 'synthetic-child', name: 'Synthetic' }], groups: knownGroups, grants: [{ user_id: 'synthetic-child', group_id: 'approved' }] });
+  state.setFilterVerified(true); state.setSelected('approved'); state = h.flush();
+  assert.equal(state.activeSelected, 'approved'); assert.equal(state.composerGroup.id, 'approved');
+  state.setFilterVerified(false); state = h.flush();
+  assert.equal(state.current, undefined); assert.equal(state.activeSelected, null);
+  assert.equal(state.verifyingSelection, true); assert.equal(state.composerGroup.id, 'approved');
+  state.setFilterOverview({ children: [{ id: 'synthetic-child', name: 'Synthetic' }], groups: knownGroups, grants: [] });
+  state.setFilterVerified(true); state = h.flush();
+  assert.equal(state.composerGroup, undefined, 'confirmed filter removal destroys suspended local draft');
 });

@@ -36,5 +36,5 @@ test('setup next action identifies the pending child by the same canonical name'
   const html = renderToStaticMarkup(React.createElement(FamilyProgress, {
     data, busy: false, stale: false, onAdd() {}, onSelect() {},
   }));
-  assert.ok(html.includes('הצעד הבא: בחירת קבוצות עבור נועם לוי'));
+  assert.ok(html.includes('הצעד הבא: בחירת קבוצות עבור נועם כהן'));
 });

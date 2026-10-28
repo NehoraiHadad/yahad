@@ -20,7 +20,7 @@ function harness() {
     require: (name: string) => name === 'react' ? {
       useState(initial: any) { const i = cursor++; if (!(i in slots)) slots[i] = initial; return [slots[i], (v: any) => slots[i] = typeof v === 'function' ? v(slots[i]) : v]; },
       useRef(initial: any) { const i = cursor++; return slots[i] ||= { current: initial }; },
-      useEffect(effect: () => (() => void)) { const i = cursor++; if (!(i in slots)) { slots[i] = true; cleanups.push(effect()); } },
+      useEffect(effect: () => (() => void)) { const i = cursor++; if (!(i in slots)) { slots[i] = true; const cleanup = effect(); if (cleanup) cleanups.push(cleanup); } },
     } : name === './GroupPicker' ? { GroupPicker } : name === './FamilyProgress' ? { familyProgress }
       : name === './childLabels' ? { childLabel } : name === './childManagementState' ? { ChildActionGuard, confirmedChildGrant }
       : require(name),
@@ -31,7 +31,7 @@ function harness() {
     onGrant: (change: any) => new Promise<boolean>(resolve => pending.push({ change, resolve })) };
   function nodes(node: any): any[] { return !node || typeof node !== 'object' ? [] : [node, ...[node.props?.children].flat(Infinity).flatMap(nodes)]; }
   const render = () => {
-    const root = module.exports.ChildManagement(props);
+    cursor = 1000; const root = module.exports.ChildManagement(props);
     const workspace = nodes(root).find(node => typeof node.type === 'function' && node.type.name === 'ChildWorkspace');
     cursor = 0; return workspace.type(workspace.props);
   };
