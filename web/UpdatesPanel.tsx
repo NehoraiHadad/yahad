@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Clock3, Download, LoaderCircle, RefreshCw, TriangleAlert } from 'lucide-react';
 import { csrf } from './api';
-import { createUpdatePoller, reconcileUpdateRequest, updateActionsDisabled, updateNeedsRepair, updatePhases, updateProgress, type ConfiguredUpdate,
-  type LocalUpdateRequest, type UpdateAction, type UpdateStatus } from './updateProgress';
+import { availableUpdateTarget, sameUpdateTarget, createUpdatePoller, reconcileUpdateRequest, updateActionsDisabled, updateNeedsRepair, updatePhases, updateProgress, type ConfiguredUpdate,
+  type LocalUpdateRequest, type UpdateAction, type UpdateStatus, type UpdateTarget } from './updateProgress';
 
 export class RejectedUpdateRequest extends Error {}
 export class UpdateAccessError extends Error {
@@ -22,18 +22,23 @@ export async function readUpdateStatus(signal: AbortSignal): Promise<UpdateStatu
     throw new Error('Status unavailable');
   return value;
 }
-export async function submitUpdateRequest(action: UpdateAction, mode?: 'auto' | 'notify'): Promise<{ state: 'queued' | 'pending' }> {
+export async function submitUpdateRequest(action: UpdateAction, mode?: 'auto' | 'notify', target?: UpdateTarget): Promise<{ state: 'queued' | 'pending' }> {
+  if (action === 'install' && !target) throw new RejectedUpdateRequest('צריך לבדוק את הגרסה מחדש לפני התקנה. לא נשלחה בקשת התקנה ללא יעד מאושר.');
   const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 15_000);
   try {
     const response = await fetch('/api/parent/updates', { method: 'POST', credentials: 'same-origin', signal: controller.signal,
       headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
-      body: JSON.stringify({ action, ...(action === 'set_mode' ? { mode } : {}) }) });
+      body: JSON.stringify({ action, ...(action === 'set_mode' ? { mode } : {}), ...(action === 'install' ? { target } : {}) }) });
     if (response.status === 401) expiredSession();
     if (!response.ok) {
       // A lost response or server error can occur after durable queue publication.
       // Only a definite client rejection is safe to present as "not accepted".
-      if (response.status >= 400 && response.status < 500 && response.status !== 408)
+      if (response.status >= 400 && response.status < 500 && response.status !== 408) {
+        const rejection = await response.json().catch(() => null);
+        if (rejection?.error === 'UPDATES_TARGET_CHANGED')
+          throw new RejectedUpdateRequest('יעד העדכון השתנה או טרם אושר. לא נשלחה התקנה; בדקו שוב את הגרסה ובחרו מחדש לפני אישור.');
         throw new RejectedUpdateRequest('השרת לא אישר את הבקשה. רעננו את המצב ובדקו שהעדכונים זמינים ושהחשבון מורשה.');
+      }
       throw new Error('Request outcome unknown');
     }
     const result = await response.json();
@@ -63,7 +68,7 @@ export function UpdatesPanel() {
   const [checked, setChecked] = useState(false);
   const [busy, setBusy] = useState(false), [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(''), [notice, setNotice] = useState('');
-  const [reconnecting, setReconnecting] = useState(false), [confirm, setConfirm] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false), [confirm, setConfirm] = useState<UpdateTarget | null>(null);
   const [accessDenied, setAccessDenied] = useState(false);
   const [choice, setChoice] = useState<'auto' | 'notify' | null>(null);
   const [local, setLocal] = useState<LocalUpdateRequest | null>(null);
@@ -97,7 +102,7 @@ export function UpdatesPanel() {
         if (failure instanceof UpdateAccessError) {
           accessDeniedRef.current = true; setAccessDenied(true); setChecked(true);
           dataRef.current = null; setData(null); rememberRequest(null);
-          setReconnecting(false); setError(failure.message); setNotice(''); setChoice(null); setConfirm(false);
+          setReconnecting(false); setError(failure.message); setNotice(''); setChoice(null); setConfirm(null);
         } else setReconnecting(true);
       },
     });
@@ -110,17 +115,22 @@ export function UpdatesPanel() {
     if (accessDenied) { accessDeniedRef.current = false; setAccessDenied(false); setError(''); }
     else poller.current?.refresh();
   }
-  async function request(action: UpdateAction, mode?: 'auto' | 'notify') {
-    if (sending.current || updateActionsDisabled(configured, localRef.current, reconnecting, busy) || !configured) return;
+  async function request(action: UpdateAction, mode?: 'auto' | 'notify', target?: UpdateTarget) {
+    const current = dataRef.current?.configured ? dataRef.current : null;
+    if (sending.current || updateActionsDisabled(current, localRef.current, reconnecting, busy) || !current) return;
+    if (action === 'install' && !sameUpdateTarget(target, availableUpdateTarget(current))) {
+      setError('יעד העדכון השתנה. לא נשלחה התקנה; בדקו את הגרסה ופתחו אישור חדש.');
+      setConfirm(null); return;
+    }
     sending.current = true; setBusy(true); setError(''); setNotice('');
-    rememberRequest({ action, mode, state: 'sending', previousRequestId: configured.lastRequest?.id,
-      previousModeId: configured.lastModeRequest?.id });
+    rememberRequest({ action, mode, target, state: 'sending', previousRequestId: current.lastRequest?.id,
+      previousModeId: current.lastModeRequest?.id });
     try {
-      const result = await submitUpdateRequest(action, mode);
+      const result = await submitUpdateRequest(action, mode, target);
       if (!mounted.current || accessDeniedRef.current) return;
-      if (localRef.current) rememberRequest({ ...localRef.current, state: 'queued' });
+      if (localRef.current) rememberRequest({ ...localRef.current, state: result.state === 'pending' ? 'following' : 'queued' });
       if (result.state === 'pending') setNotice('כבר יש בקשה בטיפול. לא נשלחה בקשה נוספת; מציגים את המצב שמדווח השירות.');
-      setConfirm(false); setChoice(null); poller.current?.refresh();
+      setConfirm(null); setChoice(null); poller.current?.refresh();
     } catch (e) {
       if (!mounted.current || accessDeniedRef.current) return;
       if (e instanceof RejectedUpdateRequest) { rememberRequest(null); setError(e.message); }
@@ -132,11 +142,13 @@ export function UpdatesPanel() {
     } finally { sending.current = false; if (mounted.current) setBusy(false); }
   }
 
+  const installTarget = availableUpdateTarget(configured);
+  const confirmationCurrent = sameUpdateTarget(confirm, installTarget);
   const pendingMode = configured?.queuedMode || configured?.lastModeRequest?.state === 'pending';
   const disabled = updateActionsDisabled(configured, local, reconnecting, busy);
   const repairRequired = configured ? updateNeedsRepair(configured) : false;
   return <section className="parent-card diagnostics-card">
-    <button className="diagnostics-toggle" aria-expanded={open} onClick={() => { setOpen(!open); if (!open && !accessDenied) { setRefreshing(true); poller.current?.refresh(); } }}>
+    <button className="diagnostics-toggle" aria-expanded={open} onClick={() => { setOpen(!open); setConfirm(null); setChoice(null); if (!open && !accessDenied) { setRefreshing(true); poller.current?.refresh(); } }}>
       <Download size={20}/><span><b>עדכוני האפליקציה</b><small aria-live="polite">{accessDenied ? 'אין הרשאה לצפייה במצב העדכונים' : reconnecting || configured?.stale ? 'מצב עדכני אינו זמין — בודקים שוב' : progress?.title || 'גרסאות מ־GitHub, גיבוי ושליטה שלכם'}</small></span><span>{open ? 'סגירה' : 'פתיחה'}</span>
     </button>
     {open && <div className="diagnostics-body" aria-busy={busy || refreshing}>
@@ -158,8 +170,9 @@ export function UpdatesPanel() {
         {choice && !repairRequired && <div className="diagnostics-notice" role="group" aria-label="אישור שינוי מצב העדכונים"><p>{choice === 'auto' ? 'להתקין אוטומטית גרסאות יציבות חדשות? ייתכן ניתוק קצר מהשיחות בזמן התקנה.' : 'לעבור להודעה בלבד? גרסאות חדשות יוצגו כאן, ותבחרו מתי להתקין.'}</p><button className="outline-button" disabled={disabled} onClick={() => void request('set_mode', choice)}>כן, {choice === 'auto' ? 'הפעלת עדכונים אוטומטיים' : 'מעבר להודעה בלבד'}</button><button className="text-button" disabled={busy} onClick={() => setChoice(null)}>ביטול</button></div>}
         {configured.checkedAt && <p className="diagnostics-caption">בדיקת גרסה אחרונה: {new Date(configured.checkedAt).toLocaleString('he-IL')}</p>}
         {configured.stale && <p className="diagnostics-notice">דיווח השירות ישן. ממשיכים לבדוק, אך אין אישור להתקדמות חדשה ואין לשלוח בקשה נוספת כרגע.</p>}
-        {!repairRequired && <div className="diagnostics-actions"><button className="outline-button" disabled={disabled} onClick={() => void request('check')}><RefreshCw size={16}/>{configured.mode === 'auto' ? 'בדיקה ועדכון אוטומטי' : 'בדיקת גרסה חדשה'}</button>{configured.phase === 'available' && <button className="outline-button" disabled={disabled} onClick={() => setConfirm(true)}><Download size={16}/>התקנת הגרסה הזמינה</button>}</div>}
-        {confirm && !repairRequired && <div className="diagnostics-notice"><p>ההתקנה כוללת גיבוי ובדיקת תקינות, וייתכן שהאפליקציה לא תהיה זמינה במהלכה. השירות ממשיך גם אם סוגרים את הדפדפן. להתחיל כעת?</p><button className="outline-button" disabled={disabled} onClick={() => void request('install')}>כן, התקנה עכשיו</button><button className="text-button" disabled={busy} onClick={() => setConfirm(false)}>ביטול</button></div>}
+        {!repairRequired && configured.phase === 'available' && !installTarget && <p className="diagnostics-notice">אין עדיין יעד התקנה מאושר לגרסה הזאת. בדקו שוב את הגרסה. אם היעד עדיין חסר, יש להשלים את התאמת רכיב העדכון במחשב השרת; לא תישלח התקנה ללא זיהוי הגרסה וקובציה.</p>}
+        {!repairRequired && <div className="diagnostics-actions"><button className="outline-button" disabled={disabled} onClick={() => void request('check')}><RefreshCw size={16}/>{configured.mode === 'auto' ? 'בדיקה ועדכון אוטומטי' : 'בדיקת גרסה חדשה'}</button>{configured.phase === 'available' && <button className="outline-button" disabled={disabled || !installTarget} onClick={() => { if (installTarget) setConfirm({ ...installTarget }); }}><Download size={16}/>התקנת גרסה <span dir="ltr">{configured.latestVersion}</span></button>}</div>}
+        {confirm && !repairRequired && <div className="diagnostics-notice" role="group" aria-label="אישור התקנת גרסה"><p>להתקין את גרסה <span dir="ltr">{confirm.version}</span>? ההתקנה כוללת גיבוי ובדיקת תקינות, וייתכן שהאפליקציה לא תהיה זמינה במהלכה. השירות ממשיך גם אם סוגרים את הדפדפן.</p>{!confirmationCurrent && <p role="alert">הגרסה או קובצי העדכון השתנו מאז פתיחת האישור. לא נשלחה התקנה; בדקו את הגרסה המוצגת ופתחו אישור חדש.</p>}<button className="outline-button" disabled={disabled || !confirmationCurrent} onClick={() => void request('install', undefined, confirm)}>כן, התקנת גרסה <span dir="ltr">{confirm.version}</span></button><button className="text-button" disabled={busy} onClick={() => setConfirm(null)}>ביטול</button></div>}
       </>}
       {notice && <p role="status">{notice}</p>}
       <div className="diagnostics-actions"><button className="text-button" disabled={refreshing} onClick={refresh}><RefreshCw size={16}/>{refreshing ? 'מרעננים את המצב…' : accessDenied ? 'בדיקת הרשאה מחדש' : 'רענון המצב'}</button></div>

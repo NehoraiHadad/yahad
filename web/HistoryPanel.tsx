@@ -15,11 +15,14 @@ export function HistoryPanel({groupId}:{groupId:string}) {
   return <section className="history-status" aria-label="מצב קליטת היסטוריה">
     <p role="status" aria-live="polite">{status?phases[status.phase]:'בודקים מצב היסטוריה…'}</p>
     {status && <>
-      <p>שמורות בקבוצה: {status.totalStored}. נשמרו מהיסטוריה במדידה הנוכחית: {status.stored}.</p>
+      <p>שמורות כאן {status.totalStored} הודעות. ייתכן שיש הודעות נוספות בטלפון.</p>
+      <details><summary>פרטי הסנכרון</summary>
+      <p>נשמרו מהיסטוריה במדידה הנוכחית: {status.stored}.</p>
       <p>נבדקו בעיבוד: {status.processed} מתוך {status.received} הודעות מורשות שנמסרו לקליטה. מספר זה אינו מספר ההודעות שנשמרו.</p>
       {status.correlated && <p>נתונים עם מזהה תשובה תואם: {status.requestStored} הודעות חדשות נשמרו. זו אינה הוכחה להיסטוריה מלאה.</p>}
       {!status.correlated && status.stored>0 && <p>הגיעו נתוני היסטוריה, אך לא אומת שהם תשובה לבקשה הנוכחית.</p>}
-      {status.reason==='no_anchor' && <p>אין עדיין הודעת WhatsApp מקורית מתאימה לבקשת הודעות ישנות. בקבוצה שאושרה אחרי החיבור לא שמרנו הודעות שלא היו מורשות. הודעות חדשות או סנכרון עתידי מהטלפון עשויים לספק נקודת התחלה; אין הבטחה לשחזור מלא.</p>}
+      </details>
+      {status.reason==='no_anchor' && <p>אין עדיין הודעת WhatsApp מקורית מתאימה לבקשת הודעות ישנות. הודעות שלא נקלטו או שנמחקו בגרסה קודמת אינן זמינות במאגר המקומי. הודעות חדשות או סנכרון עתידי מהטלפון עשויים לספק נקודת התחלה; אין הבטחה לשחזור מלא.</p>}
       {status.reason==='anchor_scan_limit' && <p>לא נמצאה נקודת התחלה בטווח הבדיקה המקומי. אין בקשת שחזור זמינה כרגע.</p>}
       {status.reason==='capacity' && <p>מעקב ההיסטוריה עמוס. הנתונים שכבר נשמרו נשארים זמינים; המתינו לפני בקשה נוספת.</p>}
       {status.reason==='offline' && <p>נדרש חיבור פעיל כדי לבקש מידע מהטלפון.</p>}

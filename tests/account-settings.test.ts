@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import ts from 'typescript';
+import { ApiError } from '../web/api.js';
 import { childLabel } from '../web/childLabels.js';
 import { normalizeAccountName, accountNameKey } from '../src/account-name.js';
 
@@ -27,7 +28,7 @@ function harness(initialChildId?: string, nameA?: string) {
       : name === './FamilySetup' ? { passphraseHelp: 'synthetic help' }
       : name === './childLabels' ? { childLabel }
       : name === '../src/account-name' ? { normalizeAccountName, accountNameKey }
-      : name === './api' ? { isTransientApiError: (e: Error) => e.message === 'network', api: (...args: any[]) => { requests.push(args); return new Promise((r, j) => { resolve = r; reject = j; }); } }
+      : name === './api' ? { ApiError, isTransientApiError: (e: Error) => e.message === 'network', api: (...args: any[]) => { requests.push(args); return new Promise((r, j) => { resolve = r; reject = j; }); } }
       : require(name),
   });
   const render = () => { cursor = 0; return module.exports.AccountSettings({ children: [{ id: 'a', name: nameA || 'alice' }, { id: 'b', name: 'נועם' }], initialChildId, onProfileChanged() { refreshed++; }, onClose() { closed++; } }); };
@@ -134,13 +135,19 @@ test('empty or unsafe name is inline, cancel does not save, and changing account
   h.close().props.onClick(); assert.equal(h.closed(), 1); assert.equal(h.requests.length, 0);
 });
 
-test('failed or uncertain rename is never presented as saved and leaves a recoverable form', async () => {
+test('failed rename can retry but uncertain rename requires close/reconcile before another request', async () => {
   for (const error of [new Error('not allowed'), new Error('network')]) {
     const h = harness('a');
     h.profileInput().props.onChange({ target: { value: 'שם חדש' } });
     const pending = h.form().props.onSubmit({ preventDefault() {} });
     h.fail(error); await pending;
-    assert.equal(h.profileInput().props.disabled, false); assert.equal(h.save().props.disabled, false);
+    assert.equal(h.profileInput().props.disabled, error.message === 'network');
+    assert.equal(h.save().props.disabled, error.message === 'network');
+    if (error.message === 'network') {
+      await h.form().props.onSubmit({ preventDefault() {} });
+      assert.equal(h.requests.length, 1, 'an uncertain response must not produce a duplicate mutation');
+      assert.equal(h.select().props.disabled, true);
+    }
     assert.ok(!h.text().includes('השם עודכן ל־'));
     assert.ok(h.text().includes(error.message === 'network' ? 'ייתכן שהשם עודכן' : 'not allowed'));
     assert.equal(h.refreshed(), 1);
@@ -153,8 +160,9 @@ test('name conflict is explicit and does not apply an unconfirmed name', async (
   const h = harness('a');
   h.profileInput().props.onChange({ target: { value: 'נועם' } });
   const pending = h.form().props.onSubmit({ preventDefault() {} });
-  h.fail(new Error('השם כבר בשימוש. בחרו שם אחר, למשל שם פרטי ושם משפחה.')); await pending;
+  h.fail(new ApiError('השם כבר בשימוש. בחרו שם אחר, למשל שם פרטי ושם משפחה.', 409, 'NAME_UNAVAILABLE')); await pending;
   assert.ok(h.text().includes('השם כבר בשימוש'));
+  assert.equal(h.profileInput().props['aria-invalid'], true);
   assert.ok(!h.text().includes('השם עודכן ל־'));
   h.select().props.onChange({ target: { value: 'b' } });
   h.select().props.onChange({ target: { value: 'a' } });

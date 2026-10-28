@@ -1,7 +1,13 @@
 # Account-name schema migration and safe update boundaries
 
-**Unreleased 0.5.0 candidate.** Local implementation/tests are not publication,
-production trust provisioning, host installation or live WhatsApp acceptance.
+**Application schema 2 and subsequent updater candidate.** Local implementation/tests
+are not publication, host enrollment or live WhatsApp acceptance.
+
+**No-signature self-update profile:** [explicit GitHub-HTTPS enrollment](GITHUB-RUNTIME-UPDATES.md)
+now provides a separate owner-approved path for updater → app → supported DB
+upgrades. It trusts the fixed owner repository over HTTPS, not an independent
+signing key. Existing signed installations remain signed, without fallback.
+The signed bootstrap sections below describe that separate historical profile.
 
 ## What changes in schema 2
 
@@ -19,6 +25,13 @@ whole transaction rather than guessing a replacement name or suffix. Foreign
 keys are checked before commit. No real provider is contacted by migration tests.
 
 ## Existing machines need an explicitly authorized one-time bootstrap
+
+**Manual no-signature option:** existing exact-known direct-worker installations
+can use [the separate manual protocol-2 transition](MANUAL-UPDATER-TRANSITION.md).
+It preserves app trust/configuration/data, replaces only the reviewed worker and
+provides no automatic updater self-update. It does not use or weaken the signed
+supervisor described below. Signed enrollment remains a separate optional design,
+not a prerequisite for this manual app-0.5.0/schema-2 transition.
 
 An already installed schema-1 worker rejects a schema-2 app manifest before
 staging. Its root-owned source lives outside app releases and cannot update
@@ -171,7 +184,14 @@ release publication and actual host activation remain explicit owner decisions.
    previous schema. A failed migration that fully rolled back can therefore
    recover to schema 1; a later schema-2 → schema-2 code update can also roll back.
 
-**Material difference:** if schema 2 committed and readiness then fails, old
+An interrupted `checking_health` journal is not itself proof of a bad target.
+The protocol-3 worker can adopt an already healthy candidate only when its exact
+journaled path/version/manifest digest, runtime digest and actual schema match.
+At boot it may permit that exact candidate to start, retaining `checking_health`
+until live readiness is checked; it does not claim healthy or start an ordered
+dependent service prematurely. A recorded health failure is not adopted.
+
+**Material difference:** if schema 2 committed and readiness genuinely fails, old
 schema-1 code is not started. The worker leaves `recovery_required`, preserves
 the migrated database/auth, and blocks automatic/boot recovery from running the
 wrong code. Because the application is stopped, its normal web/status endpoint

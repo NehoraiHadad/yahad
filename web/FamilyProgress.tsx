@@ -11,7 +11,7 @@ export type FamilyOverview = {
  * This is setup readiness, never evidence that a child device has signed in. */
 export function familyProgress(data: FamilyOverview) {
   const connected = data.state === 'connected' && !data.disconnect;
-  const children = data.children.map(child => {
+  const children = data.children.slice().sort((a, b) => a.name.localeCompare(b.name, 'he') || a.id.localeCompare(b.id)).map(child => {
     const granted = new Set(data.grants.filter(grant => grant.user_id === child.id).map(grant => grant.group_id));
     const groups = data.groups.filter(group => granted.has(group.id))
       .slice().sort((a, b) => a.title.localeCompare(b.title, 'he') || a.id.localeCompare(b.id));

@@ -1,12 +1,14 @@
-import type { updateStatus } from '../src/updates';
+import type { UpdateTarget, updateStatus } from '../src/updates';
 
+export type { UpdateTarget };
 export type UpdateStatus = Awaited<ReturnType<typeof updateStatus>>;
 export type ConfiguredUpdate = Extract<UpdateStatus, { configured: true }>;
 export type UpdateAction = 'check' | 'install' | 'set_mode';
 export type LocalUpdateRequest = {
   action: UpdateAction;
   mode?: 'auto' | 'notify';
-  state: 'sending' | 'queued' | 'uncertain';
+  target?: UpdateTarget;
+  state: 'sending' | 'queued' | 'uncertain' | 'following';
   queuedId?: string;
   previousRequestId?: string;
   previousModeId?: string;
@@ -28,8 +30,20 @@ export const updatePhases: Record<string, string> = {
   rollback_pending_health: 'החזרה לגרסה הקודמת עדיין לא אושרה כתקינה',
 };
 
-export function updateActionLabel(action: UpdateAction, mode?: 'auto' | 'notify') {
-  if (action === 'install') return 'התקנת הגרסה הזמינה';
+export function sameUpdateTarget(a: UpdateTarget | null | undefined, b: UpdateTarget | null | undefined) {
+  return !!a && !!b && a.version === b.version && a.fingerprint === b.fingerprint;
+}
+
+/** Missing/invalid targets from an older worker never enable an unbound install. */
+export function availableUpdateTarget(data: ConfiguredUpdate | null): UpdateTarget | null {
+  const target = data?.installTarget;
+  if (!data || data.phase !== 'available' || !target || target.version !== data.latestVersion ||
+    !/^\d{1,5}\.\d{1,5}\.\d{1,5}$/.test(target.version) || !/^[a-f0-9]{64}$/.test(target.fingerprint)) return null;
+  return { version: target.version, fingerprint: target.fingerprint };
+}
+
+export function updateActionLabel(action: UpdateAction, mode?: 'auto' | 'notify', target?: UpdateTarget | null) {
+  if (action === 'install') return target ? `התקנת גרסה ${target.version}` : 'התקנת הגרסה הזמינה';
   if (action === 'set_mode') return mode === 'auto' ? 'הפעלת עדכונים אוטומטיים' : 'מעבר להודעה בלבד';
   return mode === 'auto' ? 'בדיקה ועדכון אוטומטי אם תימצא גרסה' : 'בדיקת גרסה חדשה';
 }
@@ -45,15 +59,22 @@ export function observesRequest(data: UpdateStatus, request: LocalUpdateRequest)
   }
   const journal = data.lastRequest;
   if (!journal || journal.action !== request.action) return false;
+  if (request.target && !sameUpdateTarget(request.target, journal.target)) return false;
   return request.queuedId ? journal.id === request.queuedId : journal.id !== request.previousRequestId;
 }
 
 export function reconcileUpdateRequest(data: UpdateStatus, local: LocalUpdateRequest | null) {
   if (!data.configured) return local;
   const queued = data.queuedRequest ?? (data.queuedMode ? { ...data.queuedMode, action: 'set_mode' as const } : null);
-  if (queued) return { action: queued.action, mode: queued.mode, state: 'queued' as const, queuedId: queued.id,
+  if (queued) return { action: queued.action, mode: queued.mode, target: 'target' in queued ? queued.target : undefined, state: 'queued' as const, queuedId: queued.id,
     previousRequestId: local?.previousRequestId ?? data.lastRequest?.id,
     previousModeId: local?.previousModeId ?? data.lastModeRequest?.id };
+  // A definite pending response means this POST did not publish its own work.
+  // Follow the actual competing operation, which may have another action/target.
+  if (local?.state === 'following' && (
+    data.lastRequest && (data.lastRequest.state === 'running' || data.lastRequest.id !== local.previousRequestId) ||
+    data.lastModeRequest && (data.lastModeRequest.state === 'pending' || data.lastModeRequest.id !== local.previousModeId)
+  )) return null;
   if (local && observesRequest(data, local)) return null;
   // Older workers may consume a queue without any request journal. Do not
   // recycle an old phase as acknowledgement of this particular request.
@@ -79,11 +100,14 @@ export function updateProgress(data: ConfiguredUpdate, local: LocalUpdateRequest
     (data.lastRequest.finishedAt !== null && data.checkedAt <= data.lastRequest.finishedAt)) ? data.lastRequest : null;
   const queued = data.queuedRequest;
   if (queued) return { kind: 'queued', active: true, title: 'הבקשה בתור — ממתינים לשירות העדכון',
-    action: updateActionLabel(queued.action, queued.mode ?? data.mode),
+    action: updateActionLabel(queued.action, queued.mode ?? data.mode, queued.target),
     detail: 'השירות עדיין לא אישר שהתחיל לטפל בבקשה הזאת. המצב מתעדכן אוטומטית; אין צורך ללחוץ שוב.' } as const;
+  if (local?.state === 'following') return { kind: 'queued', active: true,
+    title: 'כבר יש בקשה בטיפול — ממתינים לדיווח מהשירות', action: undefined,
+    detail: 'הבקשה הזאת לא נוספה לתור. בודקים את הבקשה שכבר קיימת; הגרסה והשלב יוצגו לפי דיווח השירות, בלי לשלוח שוב.' } as const;
   if (local) return { kind: local.state === 'queued' ? 'queued' : 'unknown', active: true,
     title: local.state === 'sending' ? 'שולחים את הבקשה…' : local.state === 'queued' ? 'הבקשה נקלטה — ממתינים לדיווח מהשירות' : 'ממתינים לאישור מצב הבקשה',
-    action: updateActionLabel(local.action, local.mode ?? data.mode),
+    action: updateActionLabel(local.action, local.mode ?? data.mode, local.target),
     detail: local.state === 'sending' ? 'עדיין לא התקבל אישור מהשרת.' : local.state === 'queued'
       ? 'זהו אישור קבלה, לא אישור שההתקנה התחילה. ההתקדמות תופיע כאן אוטומטית.'
       : 'לא התקבל אישור חד־משמעי. בודקים שוב אוטומטית; אין להסיק שהפעולה נכשלה או לשלוח בקשה נוספת.' } as const;
@@ -92,17 +116,17 @@ export function updateProgress(data: ConfiguredUpdate, local: LocalUpdateRequest
     detail: 'המצב הפעיל מוצג בנפרד ויתחלף רק לאחר אישור מהשירות. אין צורך ללחוץ שוב.' } as const;
   if (last?.state === 'running' || activePhases.has(data.phase)) return { kind: 'running', active: true,
     title: activePhases.has(data.phase) ? updatePhases[data.phase] : 'שירות העדכון מטפל בבקשה',
-    action: last?.state === 'running' ? updateActionLabel(last.action, data.mode) : undefined,
+    action: last?.state === 'running' ? updateActionLabel(last.action, data.mode, last.target) : undefined,
     detail: 'זהו השלב האחרון שדווח בפועל. שירות העדכון ממשיך במחשב גם אם סוגרים את הדפדפן. השאירו את המחשב פועל; בפתיחה מחדש בודקים את המצב מהשירות, בלי להתחיל שוב.' } as const;
   if (last?.state === 'failed' || failedPhases.has(data.phase)) return { kind: 'failure', active: false,
-    title: last?.error === 'expired' ? 'תוקף הבקשה פג לפני הטיפול' : failedPhases.has(data.phase) ? updatePhases[data.phase] : 'הפעולה לא הושלמה',
-    action: last?.state === 'failed' ? updateActionLabel(last.action, data.mode) : undefined,
-    detail: last?.error === 'expired' ? 'הבקשה המתינה מעבר לתוקף שלה ולא בוצעה עבורה התקנה. אפשר לשלוח בקשה חדשה אם עדיין תרצו; הבקשה הזאת לא תישלח שוב אוטומטית.'
+    title: last?.error === 'target_changed' ? 'יעד העדכון השתנה — נדרשת בדיקה חדשה' : last?.error === 'expired' ? 'תוקף הבקשה פג לפני הטיפול' : failedPhases.has(data.phase) ? updatePhases[data.phase] : 'הפעולה לא הושלמה',
+    action: last?.state === 'failed' ? updateActionLabel(last.action, data.mode, last.target) : undefined,
+    detail: last?.error === 'target_changed' ? 'ההתקנה שהתבקשה לא בוצעה: הגרסה או קובצי העדכון אינם זהים לאישור שנשלח. בדקו שוב ובחרו את הגרסה מחדש; לא נשלחת התקנה נוספת אוטומטית.' : last?.error === 'expired' ? 'הבקשה המתינה מעבר לתוקף שלה ולא בוצעה עבורה התקנה. אפשר לשלוח בקשה חדשה אם עדיין תרצו; הבקשה הזאת לא תישלח שוב אוטומטית.'
       : data.phase === 'rolled_back' ? 'הגרסה החדשה לא התקבלה. שירות העדכון דיווח שחזר לגרסה הקודמת.'
       : 'שירות העדכון דיווח על כשל. אין כאן אישור שהגרסה החדשה הותקנה.' } as const;
   if (last?.state === 'succeeded') return { kind: 'success', active: false,
     title: data.phase === 'healthy' ? updatePhases.healthy : data.phase === 'available' ? 'הבדיקה הסתיימה — נמצאה גרסה חדשה' : 'הבדיקה הסתיימה — אין עדכון ממתין',
-    action: updateActionLabel(last.action, data.mode),
+    action: updateActionLabel(last.action, data.mode, last.target),
     detail: data.phase === 'healthy' ? 'שירות העדכון אישר שהגרסה החדשה פעילה ועברה בדיקת תקינות.'
       : data.phase === 'available' ? 'הגרסה זמינה, אך לא התקבלה הודעה שהותקנה.' : 'זהו המצב שאישר שירות העדכון בסיום הפעולה.' } as const;
   return { kind: data.error ? 'failure' : data.phase === 'healthy' ? 'success' : 'idle', active: false, title: updatePhases[data.phase] || 'מצב שירות העדכון',

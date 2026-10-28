@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { ShieldCheck, X } from 'lucide-react';
-import { api, isTransientApiError } from './api';
+import { ApiError, api, isTransientApiError } from './api';
 import { normalizeAccountName } from '../src/account-name';
 import { useDialogFocus } from './useDialogFocus';
 
@@ -12,16 +12,17 @@ export function FamilySetup({ setupToken, onDone, onClose }: {
   const [name, setName] = useState(''), [familyName, setFamilyName] = useState('המשפחה שלנו'),
     [password, setPassword] = useState(''), [confirmation, setConfirmation] = useState(''),
     [uncertain, setUncertain] = useState(false),
+    [nameInvalid, setNameInvalid] = useState(false),
     [show, setShow] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const submitting = useRef(false);
   const form = useRef<HTMLFormElement>(null);
   useDialogFocus(form, !setup);
   const submit = async (e: React.FormEvent) => {
-    e.preventDefault(); if (submitting.current || uncertain) return; setError('');
+    e.preventDefault(); if (submitting.current || uncertain) return; setError(''); setNameInvalid(false);
     if (password !== confirmation) { setError('הסיסמאות אינן זהות. נסו שוב בשדה האישור.'); return; }
     let accountName: string;
     try { accountName = normalizeAccountName(name); }
-    catch { setError('כתבו שם באורך 1–60 תווים: אותיות, מספרים, רווח, נקודה או מקף.'); return; }
+    catch { setNameInvalid(true); setError('כתבו שם באורך 1–60 תווים: אותיות, מספרים, רווח, נקודה או מקף.'); return; }
     submitting.current = true; setBusy(true);
     try {
       let childId: string | undefined;
@@ -38,6 +39,7 @@ export function FamilySetup({ setupToken, onDone, onClose }: {
       } else childId = (await api<{id: string}>('/parent/children', 'POST', { name: accountName, password, confirmation })).id;
       setPassword(''); setConfirmation(''); onDone(childId);
     } catch (e) {
+      if (e instanceof ApiError && e.code === 'NAME_UNAVAILABLE') setNameInvalid(true);
       if (e instanceof TypeError || e instanceof SyntaxError || isTransientApiError(e)) {
         setUncertain(true);
         setError(setup
@@ -56,11 +58,11 @@ export function FamilySetup({ setupToken, onDone, onClose }: {
       <h1 id="family-form-title">{setup ? 'ברוכים הבאים למשפחה' : 'מוסיפים ילד או ילדה'}</h1>
       <p>{setup ? 'יוצרים חשבון הורה, ואחר כך מוסיפים ילדים ובוחרים קבוצות. הכול כאן בדפדפן.' : 'אחרי יצירת החשבון נבחר יחד אילו קבוצות להציג.'}</p>
       {setup && <label htmlFor="family-label">שם המשפחה באפליקציה<input disabled={busy || uncertain} id="family-label" autoComplete="off" maxLength={80} value={familyName} onChange={e => setFamilyName(e.target.value)} /></label>}
-      <label htmlFor="account-name">{setup ? 'השם שלך' : 'שם הילד או הילדה'}<input disabled={busy || uncertain} id="account-name" dir="auto" autoFocus={setup} required autoComplete="username" spellCheck={false} autoCapitalize="none" autoCorrect="off" maxLength={120} aria-describedby="account-name-help" value={name} onChange={e => setName(e.target.value)} /></label>
+      <label htmlFor="account-name">{setup ? 'השם שלך' : 'שם הילד או הילדה'}<input disabled={busy || uncertain} id="account-name" dir="auto" autoFocus={setup} required autoComplete="username" spellCheck={false} autoCapitalize="none" autoCorrect="off" maxLength={120} aria-invalid={nameInvalid} aria-describedby="account-name-help family-error" value={name} onChange={e => { setName(e.target.value); setNameInvalid(false); setError(''); }} /></label>
       <small id="account-name-help">שם אחד שמופיע באפליקציה וגם משמש לכניסה. אפשר בעברית או באנגלית, עד 60 תווים.</small>
-      <label htmlFor="family-password">משפט סודי<input disabled={busy || uncertain} id="family-password" dir="auto" spellCheck={false} autoCapitalize="none" autoCorrect="off" type={show ? 'text' : 'password'} autoComplete="new-password" required minLength={14} maxLength={256} aria-describedby="passphrase-help family-error" value={password} onChange={e => setPassword(e.target.value)}/></label>
-      <label htmlFor="family-confirmation">שוב את המשפט הסודי<input disabled={busy || uncertain} id="family-confirmation" dir="auto" spellCheck={false} autoCapitalize="none" autoCorrect="off" type={show ? 'text' : 'password'} autoComplete="new-password" required minLength={14} maxLength={256} aria-describedby="family-error" value={confirmation} onChange={e => setConfirmation(e.target.value)}/></label>
-      <label className="secret-toggle"><input type="checkbox" checked={show} onChange={e => setShow(e.target.checked)}/> הצגת המשפטים</label>
+      <label htmlFor="family-password">סיסמה<input disabled={busy || uncertain} id="family-password" dir="auto" spellCheck={false} autoCapitalize="none" autoCorrect="off" type={show ? 'text' : 'password'} autoComplete="new-password" required minLength={14} maxLength={256} aria-describedby="passphrase-help family-error" value={password} onChange={e => setPassword(e.target.value)}/></label>
+      <label htmlFor="family-confirmation">אישור הסיסמה<input disabled={busy || uncertain} id="family-confirmation" dir="auto" spellCheck={false} autoCapitalize="none" autoCorrect="off" type={show ? 'text' : 'password'} autoComplete="new-password" required minLength={14} maxLength={256} aria-describedby="family-error" value={confirmation} onChange={e => setConfirmation(e.target.value)}/></label>
+      <label className="secret-toggle"><input type="checkbox" checked={show} onChange={e => setShow(e.target.checked)}/> הצגת הסיסמה</label>
       <p id="passphrase-help" className="muted">{passphraseHelp}</p>
       <p id="family-error" role={error ? 'alert' : undefined} className="error">{error}</p>
       <div className="family-form-actions"><button className="primary" disabled={busy || uncertain}>{busy ? 'יוצרים את החשבון…' : setup ? 'יצירת חשבון והמשך' : 'יצירה ובחירת קבוצות'}</button>

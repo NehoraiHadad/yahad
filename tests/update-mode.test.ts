@@ -8,6 +8,7 @@ import fsPromises from 'node:fs/promises';
 import {syncBuiltinESMExports} from 'node:module';
 import {createApp} from '../src/server.js';
 import type {Config} from '../src/config.js';
+const installTarget={version:'0.3.2',fingerprint:'a'.repeat(64)};
 async function fixture(){
   const dir=mkdtempSync(join(tmpdir(),'yachad-mode-'));
   const config:Config={dataDir:dir,masterKey:randomBytes(32),connector:'mock',realAllowed:false,host:'127.0.0.1',port:3000,origin:'http://localhost:3000',secureCookie:false,maxMedia:1048576,maxStorage:67108864,childIdleMs:60000,sessionMs:3600000,diagnosticsEnabled:false,updateStatusFile:join(dir,'root-status.json')};
@@ -16,7 +17,7 @@ async function fixture(){
   const session=(id:string)=>store.createSession(store.user(store.one('SELECT * FROM users WHERE id=?',id)));
   const parent=session(a.parentId),child=session(a.childId),other=session(b.parentId);
   const request=(s:typeof parent|null,method='GET',body?:any,csrf=true)=>app.inject({url:'/api/parent/updates',method:method as any,payload:body,headers:{origin:config.origin,...s?{cookie:'sid='+s.sid,...csrf?{'x-csrf-token':s.csrf}:{}}:{}}});
-  let status:any={enabled:true,mode:'notify',modeControlAllowed:true,operator:{familyId:a.familyId,userId:a.parentId},phase:'available',currentVersion:'0.3.1',latestVersion:'0.3.2',checkedAt:Date.now(),updatedAt:Date.now(),error:null,rootSecret:'DO_NOT_EXPOSE'};
+  let status:any={enabled:true,mode:'notify',modeControlAllowed:true,operator:{familyId:a.familyId,userId:a.parentId},phase:'available',installTarget,currentVersion:'0.3.1',latestVersion:'0.3.2',checkedAt:Date.now(),updatedAt:Date.now(),error:null,rootSecret:'DO_NOT_EXPOSE'};
   const set=(patch:any={})=>{status={...status,...patch};writeFileSync(config.updateStatusFile!,JSON.stringify(status));};set();
   return{dir,request,parent,child,other,set,queue:()=>JSON.parse(readFileSync(join(dir,'update-request.json'),'utf8')),async close(){await app.close();rmSync(dir,{recursive:true,force:true});}};
 }
@@ -48,7 +49,7 @@ test('queued and root-journal pending requests never optimistically change appli
     assert.equal((await f.request(f.parent,'POST',{action:'set_mode',mode:'notify'})).json().state,'pending');assert.deepEqual(f.queue(),first);
     rmSync(join(f.dir,'update-request.json'));f.set({lastModeRequest:{id:first.id,mode:'auto',state:'pending',error:'configuration'}});
     const view=(await f.request(f.parent)).json();assert.equal(view.mode,'notify');assert.equal(view.lastModeRequest.state,'pending');
-    assert.equal((await f.request(f.parent,'POST',{action:'install'})).json().state,'pending');
+    assert.equal((await f.request(f.parent,'POST',{action:'install',target:installTarget})).json().state,'pending');
     f.set({mode:'auto',lastModeRequest:{id:first.id,mode:'auto',state:'applied',error:null}});
     assert.equal((await f.request(f.parent)).json().mode,'auto');
     assert.equal((await f.request(f.parent,'POST',{action:'set_mode',mode:'notify'})).json().state,'queued');
@@ -120,7 +121,7 @@ test('wake-link ENOSPC cannot report failure after an install request was publis
       return originalLink(source,destination);
     };
     syncBuiltinESMExports();
-    const result=await f.request(f.parent,'POST',{action:'install'});
+    const result=await f.request(f.parent,'POST',{action:'install',target:installTarget});
     assert.equal(result.statusCode,200);assert.equal(result.json().state,'queued');
     assert.equal(attempts,2);assert.equal(f.queue().action,'install');
     assert.equal(readdirSync(f.dir).includes('update-request.wake'),false);

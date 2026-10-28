@@ -26,9 +26,9 @@ class WorkerProtocolTests(unittest.TestCase):
                  patch.object(u, 'load_config', side_effect=AssertionError('must not load config')):
                 with self.assertRaises(u.UpdateError): u.main()
         for command in ('run', 'requests', 'recover', 'boot-recover', 'self-check'):
-            self.assertEqual(u.parse_command([command]), (command, None, None))
+            self.assertEqual(u.parse_command([command]), (command, None, None, None))
             self.assertEqual(u.parse_command([command, '--supervisor-lock-fd', '7', '--runtime-digest', 'a' * 64]),
-                             (command, 7, 'a' * 64))
+                             (command, 7, 'a' * 64, None))
 
     def test_capability_probe_is_read_only_and_reports_future_actual_schema(self):
         class Worker:
@@ -39,7 +39,7 @@ class WorkerProtocolTests(unittest.TestCase):
                 return 3
             def __getattr__(self, name): raise AssertionError('Probe tried '+name)
         worker = Worker()
-        self.assertEqual(u.self_check(worker), dict(supervisorProtocol=1, workerProtocol=2, helperProtocol=1,
+        self.assertEqual(u.self_check(worker), dict(supervisorProtocol=1, workerProtocol=3, helperProtocol=1,
                          configFormat=1, stateFormat=1, appManifestFormats=[1, 2], databaseSchema=3))
         self.assertEqual(worker.path, '/synthetic/current')
         worker.app_schema = lambda path: 2

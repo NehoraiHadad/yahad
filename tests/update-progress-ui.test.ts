@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { UpdateProgressStatus, RejectedUpdateRequest, submitUpdateRequest, readUpdateStatus, UpdateAccessError } from '../web/UpdatesPanel.js';
-import { createUpdatePoller, observesRequest, reconcileUpdateRequest, updateActionsDisabled, updatePhases, updatePollDelay,
+import { availableUpdateTarget, sameUpdateTarget, createUpdatePoller, observesRequest, reconcileUpdateRequest, updateActionsDisabled, updatePhases, updatePollDelay,
   updateProgress, type ConfiguredUpdate, type LocalUpdateRequest } from '../web/updateProgress.js';
 import { setCsrf } from '../web/api.js';
 import { readFileSync } from 'node:fs';
@@ -14,10 +14,12 @@ import * as progressModule from '../web/updateProgress.js';
 
 const before = '11111111-1111-4111-8111-111111111111';
 const requestId = '22222222-2222-4222-8222-222222222222';
+const target = { version: '0.4.0', fingerprint: 'a'.repeat(64) };
+const nextTarget = { version: '0.5.0', fingerprint: 'b'.repeat(64) };
 const base: ConfiguredUpdate = {
   configured: true, enabled: true, mode: 'notify', modeControlAllowed: true, phase: 'available',
   currentVersion: '0.3.2', latestVersion: '0.4.0', updatedAt: 1000, checkedAt: 1000,
-  error: null, stale: false, queuedMode: null, queuedRequest: null,
+  error: null, stale: false, queuedMode: null, queuedRequest: null, installTarget: target,
 };
 const local: LocalUpdateRequest = { action: 'install', state: 'queued', previousRequestId: before };
 const journal = (state: 'running' | 'succeeded' | 'failed', id = requestId) => ({
@@ -201,15 +203,15 @@ test('mutation transport sends one CSRF-protected request and separates rejectio
     globalThis.fetch = (async (_url, init) => {
       calls++; assert.equal(init?.method, 'POST'); assert.equal(init?.credentials, 'same-origin');
       assert.equal((init?.headers as Record<string, string>)['X-CSRF-Token'], 'synthetic-csrf');
-      assert.deepEqual(JSON.parse(init?.body as string), { action: 'install' });
+      assert.deepEqual(JSON.parse(init?.body as string), { action: 'install', target });
       return new Response(JSON.stringify({ state: 'queued' }));
     }) as typeof fetch;
-    assert.equal((await submitUpdateRequest('install')).state, 'queued'); assert.equal(calls, 1);
+    assert.equal((await submitUpdateRequest('install', undefined, target)).state, 'queued'); assert.equal(calls, 1);
     globalThis.fetch = (async () => new Response('{}', { status: 409 })) as typeof fetch;
-    await assert.rejects(submitUpdateRequest('install'), RejectedUpdateRequest);
+    await assert.rejects(submitUpdateRequest('install', undefined, target), RejectedUpdateRequest);
     for (const fetcher of [async () => new Response('{}', { status: 503 }), async () => { throw new TypeError('Network lost'); }]) {
       globalThis.fetch = fetcher as typeof fetch;
-      await assert.rejects(submitUpdateRequest('install'), e => e instanceof Error && !(e instanceof RejectedUpdateRequest));
+      await assert.rejects(submitUpdateRequest('install', undefined, target), e => e instanceof Error && !(e instanceof RejectedUpdateRequest));
     }
   } finally { globalThis.fetch = original; setCsrf(''); }
 });
@@ -289,17 +291,17 @@ test('unrecognized or malformed status cannot replace the last real report with 
 
 // Drive the actual component tree/handlers with deterministic hooks. Transport,
 // poll cleanup and retry behavior are covered above; this is not a browser test.
-function panelHarness(data: ConfiguredUpdate, reconnecting = false) {
-  const slots: any[] = [true, data, true, false, false, '', '', reconnecting, true, false, 'auto', null];
+function panelHarness(data: ConfiguredUpdate | null, reconnecting = false, transport?: (init?: RequestInit) => Promise<Response>) {
+  const slots: any[] = [true, data, true, false, false, '', '', reconnecting, null, false, null, null];
   let cursor = 0;
-  const calls: string[] = [];
+  const calls: string[] = [], bodies: any[] = [];
   const module = { exports: {} as any }, require = createRequire(import.meta.url);
   const code = ts.transpileModule(readFileSync(new URL('../web/UpdatesPanel.tsx', import.meta.url), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 },
   }).outputText;
   vm.runInNewContext(code, {
     module, exports: module.exports, AbortController, setTimeout, clearTimeout,
-    fetch: async (_url: string, init?: RequestInit) => { calls.push(init?.method || 'GET'); throw new Error('unexpected transport'); },
+    fetch: async (_url: string, init?: RequestInit) => { calls.push(init?.method || 'GET'); if (init?.body) bodies.push(JSON.parse(init.body as string)); if (transport) return transport(init); throw new Error('unexpected transport'); },
     require: (name: string) => name === 'react' ? {
       useState(initial: any) { const index = cursor++; if (!(index in slots)) slots[index] = initial; return [slots[index], (value: any) => { slots[index] = typeof value === 'function' ? value(slots[index]) : value; }]; },
       useRef(initial: any) { const index = cursor++; return slots[index] ||= { current: initial }; },
@@ -309,7 +311,10 @@ function panelHarness(data: ConfiguredUpdate, reconnecting = false) {
   const render = () => { cursor = 0; return module.exports.UpdatesPanel(); };
   const nodes = (node: any): any[] => !node || typeof node !== 'object' ? [] : [node, ...[node.props?.children].flat(Infinity).flatMap(nodes)];
   const buttons = () => nodes(render()).filter(node => node.type === 'button');
-  return { calls, html: () => renderToStaticMarkup(render()), buttons,
+  return { calls, bodies, html: () => renderToStaticMarkup(render()), buttons,
+    status: (next: ConfiguredUpdate) => { slots[1] = next; if (slots[14]) slots[14].current = next; slots[11] = reconcileUpdateRequest(next, slots[15]?.current ?? slots[11]); if (slots[15]) slots[15].current = slots[11]; },
+    unmount: () => { if (slots[12]) slots[12].current = false; },
+    button: (label: RegExp) => buttons().find(node => label.test(renderToStaticMarkup(node)))!,
     toggle: () => buttons().find(node => node.props.className === 'diagnostics-toggle')!.props.onClick(),
     refresh: () => buttons().find(node => node.props.className === 'text-button')!.props.onClick(),
   };
@@ -317,7 +322,9 @@ function panelHarness(data: ConfiguredUpdate, reconnecting = false) {
 
 test('actual panel hides recovery mutations including already-open confirmations and preserves repair state on reopen', () => {
   for (const phase of ['recovery_required', 'rollback_pending_health'] as const) {
-    const h = panelHarness({ ...base, phase, lastRequest: journal('failed') });
+    const h = panelHarness(base);
+    h.button(/התקנת גרסה/).props.onClick();
+    h.status({ ...base, phase, lastRequest: journal('failed') });
     assert.equal(h.buttons().length, 2, 'only disclosure and read-only refresh remain');
     assert.doesNotMatch(h.html(), /כן, התקנה עכשיו|אישור שינוי מצב העדכונים|בדיקה ועדכון אוטומטי/);
     assert.ok(h.html().includes(updatePhases[phase]));
@@ -338,4 +345,133 @@ test('actual panel treats an unavailable current status as unknown even when las
   h.toggle(); h.toggle();
   assert.ok(h.html().includes('המצב העדכני אינו זמין'));
   assert.deepEqual(h.calls, []);
+});
+
+test('fresh panel without an app status reports unavailable rather than claiming a reachable recovery console', () => {
+  const h = panelHarness(null, true);
+  assert.match(h.html(), /מצב עדכני אינו זמין/);
+  assert.doesNotMatch(h.html(), /העדכון הושלם בהצלחה|כן, התקנת גרסה|בדיקת גרסה חדשה|חזרנו לגרסה הקודמת/);
+  assert.equal(h.buttons().filter(node => node.props.className === 'outline-button').length, 0);
+  h.toggle(); h.toggle(); h.refresh();
+  assert.deepEqual(h.calls, [], 'a UI loaded before an outage must not invent recovery or publish mutations');
+});
+
+test('only a valid available root target enables install, including older-root and failed/recovery status', () => {
+  assert.deepEqual(availableUpdateTarget(base), target);
+  assert.notEqual(availableUpdateTarget(base), target, 'confirmation receives a snapshot, not mutable status');
+  for (const data of [
+    { ...base, installTarget: undefined }, { ...base, installTarget: null },
+    { ...base, installTarget: nextTarget }, { ...base, installTarget: { ...target, fingerprint: 'bad' } },
+    ...(['failed', 'rolled_back', 'recovery_required', 'rollback_pending_health', 'healthy', 'checking'] as const).map(phase => ({ ...base, phase })),
+  ]) assert.equal(availableUpdateTarget(data), null);
+  assert.equal(sameUpdateTarget(target, { ...target }), true);
+  assert.equal(sameUpdateTarget(target, { ...target, fingerprint: 'b'.repeat(64) }), false);
+  const old = panelHarness({ ...base, installTarget: undefined });
+  assert.match(old.html(), /אין עדיין יעד התקנה מאושר/);
+  assert.equal(old.button(/התקנת גרסה/).props.disabled, true);
+  assert.equal(old.button(/בדיקת גרסה חדשה/).props.disabled, false, 'check remains available to discover a supported target');
+  old.button(/התקנת גרסה/).props.onClick();
+  assert.doesNotMatch(old.html(), /אישור התקנת גרסה/);
+  assert.deepEqual(old.calls, []);
+});
+
+test('install transport refuses an absent target and explains a definitive stale-target rejection without retrying', async () => {
+  const original = globalThis.fetch; let calls = 0;
+  try {
+    globalThis.fetch = (async () => { calls++; return new Response(JSON.stringify({ error: 'UPDATES_TARGET_CHANGED' }), { status: 409 }); }) as typeof fetch;
+    await assert.rejects(submitUpdateRequest('install'), RejectedUpdateRequest);
+    assert.equal(calls, 0, 'no silent unbound compatibility fallback');
+    await assert.rejects(submitUpdateRequest('install', undefined, target), e => e instanceof RejectedUpdateRequest && /יעד העדכון השתנה/.test(e.message));
+    assert.equal(calls, 1);
+  } finally { globalThis.fetch = original; }
+});
+
+test('queued and restarted progress retain requested X rather than newer available Y', () => {
+  const queued = { ...base, latestVersion: nextTarget.version, installTarget: nextTarget,
+    queuedRequest: { id: requestId, action: 'install' as const, target, createdAt: 2000 } };
+  const tracked = reconcileUpdateRequest(queued, null)!;
+  assert.deepEqual(tracked.target, target);
+  assert.equal(updateProgress(queued).action, 'התקנת גרסה 0.4.0');
+  assert.equal(updateProgress(base, tracked).action, 'התקנת גרסה 0.4.0');
+  const running = { ...base, latestVersion: nextTarget.version, installTarget: nextTarget, phase: 'building' as const,
+    lastRequest: { ...journal('running'), target } };
+  assert.equal(updateProgress(structuredClone(running)).action, 'התקנת גרסה 0.4.0');
+  assert.equal(observesRequest({ ...running, lastRequest: { ...journal('running'), target: nextTarget } }, tracked), false);
+  assert.equal(observesRequest({ ...running, lastRequest: journal('running') }, tracked), false, 'a legacy journal cannot acknowledge a target-bound install');
+  const rejected = { ...base, phase: 'failed' as const, lastRequest: { ...journal('failed'), target, error: 'target_changed' as const } };
+  assert.equal(reconcileUpdateRequest(rejected, tracked), null);
+  assert.match(updateProgress(rejected).title, /יעד העדכון השתנה/);
+  assert.match(updateProgress(rejected).detail, /לא נשלחת התקנה נוספת/);
+});
+
+test('actual confirmation snapshots X; refresh to Y or changed bytes invalidates consent without silently installing Y', async () => {
+  for (const replacement of [nextTarget, { ...target, fingerprint: 'c'.repeat(64) }]) {
+    const h = panelHarness(base, false, async () => new Response(JSON.stringify({ state: 'queued' })));
+    h.button(/התקנת גרסה/).props.onClick();
+    const oldConfirm = h.button(/כן, התקנת גרסה/);
+    assert.match(renderToStaticMarkup(oldConfirm), /0\.4\.0/);
+    h.status({ ...base, latestVersion: replacement.version, installTarget: replacement });
+    assert.equal(h.button(/כן, התקנת גרסה/).props.disabled, true);
+    assert.match(h.html(), /הגרסה או קובצי העדכון השתנו/);
+    assert.match(renderToStaticMarkup(h.button(/כן, התקנת גרסה/)), /0\.4\.0/);
+    oldConfirm.props.onClick(); await flush();
+    assert.deepEqual(h.calls, [], 'even a captured stale event handler rereads the current status before posting');
+    assert.doesNotMatch(h.html(), /אישור התקנת גרסה/);
+  }
+});
+
+test('actual panel sends one target-bound request on repeated clicks, and closing or reopening never retries it', async () => {
+  let finish!: (response: Response) => void;
+  const h = panelHarness(base, false, () => new Promise(resolve => { finish = resolve; }));
+  h.button(/התקנת גרסה/).props.onClick();
+  const confirm = h.button(/כן, התקנת גרסה/);
+  confirm.props.onClick(); confirm.props.onClick();
+  assert.deepEqual(h.bodies, [{ action: 'install', target }]);
+  assert.match(h.html(), /שולחים את הבקשה/);
+  h.toggle(); h.toggle();
+  assert.doesNotMatch(h.html(), /אישור התקנת גרסה/, 'closing discards unsubmitted confirmation, not the queued operation');
+  assert.deepEqual(h.calls, ['POST']);
+  finish(new Response(JSON.stringify({ state: 'queued' }))); await flush();
+  assert.match(h.html(), /הבקשה נקלטה/);
+  assert.match(h.html(), /התקנת גרסה 0\.4\.0/);
+  h.toggle(); h.toggle(); assert.deepEqual(h.calls, ['POST']);
+  const reopened = panelHarness({ ...base, queuedRequest: { id: requestId, action: 'install', target, createdAt: 2000 } });
+  assert.match(reopened.html(), /הבקשה בתור/);
+  assert.match(reopened.html(), /התקנת גרסה 0\.4\.0/);
+  assert.deepEqual(reopened.calls, [], 'new browser reads durable status; it never republishes a request');
+});
+
+test('browser closure during target-bound POST causes no retry; unsubmitted confirmation is discarded on reopen', async () => {
+  let finish!: (response: Response) => void;
+  const h = panelHarness(base, false, () => new Promise(resolve => { finish = resolve; }));
+  h.button(/התקנת גרסה/).props.onClick();
+  h.toggle(); h.toggle();
+  assert.doesNotMatch(h.html(), /אישור התקנת גרסה/);
+  assert.deepEqual(h.calls, []);
+  h.button(/התקנת גרסה/).props.onClick(); h.button(/כן, התקנת גרסה/).props.onClick();
+  h.unmount(); finish(new Response(JSON.stringify({ state: 'queued' }))); await flush();
+  assert.deepEqual(h.bodies, [{ action: 'install', target }]);
+  const reopened = panelHarness({ ...base, phase: 'building', lastRequest: { ...journal('running'), target } });
+  assert.match(reopened.html(), /התקנת גרסה 0\.4\.0/);
+  assert.match(reopened.html(), /גם אם סוגרים את הדפדפן/);
+  assert.deepEqual(reopened.calls, []);
+});
+
+
+test('definite pending response follows the actual competing Y request instead of pretending X was accepted', async () => {
+  const h = panelHarness(base, false, async () => new Response(JSON.stringify({ state: 'pending' })));
+  h.button(/התקנת גרסה/).props.onClick(); h.button(/כן, התקנת גרסה/).props.onClick(); await flush();
+  assert.match(h.html(), /הבקשה הזאת לא נוספה לתור/);
+  assert.doesNotMatch(h.html(), /הבקשה נקלטה/);
+  assert.deepEqual(h.bodies, [{ action: 'install', target }]);
+  const following: LocalUpdateRequest = { ...local, target, state: 'following' };
+  assert.equal(updateProgress(base, following).action, undefined, 'do not label a competing operation as our X');
+  const competing = { ...base, phase: 'building' as const, latestVersion: nextTarget.version, installTarget: nextTarget,
+    lastRequest: { ...journal('running'), target: nextTarget } };
+  assert.equal(reconcileUpdateRequest(competing, following), null);
+  assert.equal(reconcileUpdateRequest({ ...competing, lastRequest: { ...competing.lastRequest, state: 'succeeded', finishedAt: 3000 } }, following), null);
+  h.status(competing);
+  assert.match(h.html(), /התקנת גרסה 0\.5\.0/);
+  assert.doesNotMatch(h.html(), /הבקשה הזאת לא נוספה לתור|התקנת גרסה 0\.4\.0/);
+  h.toggle(); h.toggle(); assert.deepEqual(h.calls, ['POST']);
 });

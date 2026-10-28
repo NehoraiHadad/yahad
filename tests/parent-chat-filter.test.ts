@@ -61,7 +61,8 @@ test('all-mode copy describes the known group catalog rather than promising priv
   }));
   assert.ok(html.includes('כל הקבוצות שסונכרנו'));
   assert.ok(html.includes('לא שיחות פרטיות'));
-  assert.ok(html.includes('שאושרו לילד אחד לפחות'));
+  assert.ok(html.includes('גם בקבוצות שלא אושרו לילדים'));
+  assert.ok(html.includes('הרשאות הילדים אינן משתנות'));
   assert.equal(html.includes('<select'), false);
   assert.match(parentEmptyMessage({ mode: 'all', childId: '' }, fixture(), true), /ניהול ההורה/);
   const empty = fixture(); empty.children = [];
@@ -79,15 +80,15 @@ test('normalized group search has explicit empty results and does not mutate the
   assert.equal(groups.length, 3);
 });
 
-test('catalog-only details are not an empty working conversation and never invite accidental child access', () => {
+test('unavailable-content fallback stays closed and never invites accidental child access', () => {
   const html = renderToStaticMarkup(React.createElement(CatalogConversation, {
-    title: 'Synthetic private group', onBack() {}, onManage() {},
+    title: 'Synthetic private group', onBack() {}, onRetry() {},
   }));
   assert.ok(html.includes('Synthetic private group'));
-  assert.ok(html.includes('ללא תוכן שמור'));
-  assert.ok(html.includes('אי אפשר לשלוח מכאן'));
-  assert.ok(html.includes('אישור קבוצה לילד ייתן גם לו גישה'));
-  assert.ok(html.includes('לניהול הקבוצות וההרשאות'));
+  assert.ok(html.includes('הגישה לשיחה אינה זמינה'));
+  assert.ok(html.includes('ההודעות והשליחה מושהות'));
+  assert.ok(html.includes('אין צורך לשנות הרשאות של ילד'));
+  assert.ok(html.includes('לנסות שוב'));
   assert.ok(html.includes('חזרה לשיחות'));
   assert.doesNotMatch(html, /<textarea|<input|message-viewport|composer|history-panel/);
 });
@@ -111,7 +112,7 @@ test('chat wiring invalidates asynchronous responses and uses filtered groups fo
   assert.match(chat, /const current = visibleGroups\.find/);
   assert.match(chat, /const activeSelected = groupsVerified && visibleGroups\.some\(group => group\.id === selected && group\.canRead\)/);
   assert.match(chat, /\{current\?\.canRead && groupsVerified \? \(/);
-  assert.match(chat, /\) : current && !groupsVerified \? \(\s*<ConversationVerification/);
+  assert.match(chat, /\) : verifyingSelection && selected && groups.some\(g => g.id === selected\) \? \(\s*<ConversationVerification/);
   assert.match(chat, /groupsVerified && g\.canRead && g\.last/);
   assert.match(chat, /!groupsVerified\s*\? 'בודקים את הגישה לתוכן…'/);
   assert.match(chat, /\) : current \? \(\s*<CatalogConversation/);

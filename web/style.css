@@ -195,21 +195,22 @@ a {
   width: 55px;
   height: 55px;
 }
+/* Reserve a notification row instead of covering chat controls with an overlay. */
+.app-shell { height:100dvh; display:flex; flex-direction:column; overflow:hidden; }
+.app-content { flex:1; min-height:0; overflow:auto; }
+.app-content > .chat-app { height:100%; }
+.app-content > .parent-page { min-height:100%; }
 .toast {
-  position: fixed;
-  z-index: 100;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: 28px;
-  max-width: calc(100% - 30px);
-  padding: 15px 23px;
+  position: relative;
+  flex: 0 0 auto;
+  width: 100%;
+  padding: 12px max(16px, env(safe-area-inset-left)) 12px max(16px, env(safe-area-inset-right));
   color: #fff;
   background: #334d46;
-  box-shadow: 0 6px 35px #172d3340;
-  border-radius: 14px;
-  cursor: pointer;
   font-size: 14px;
 }
+.toast > span { flex:1; min-width:0; max-height:min(20dvh, 10rem); overflow:auto; overflow-wrap:anywhere; }
+
 .error {
   color: #b14151;
   font-size: 14px;
@@ -1934,6 +1935,7 @@ a {
   filter: invert(0.82);
 }
 @media (min-width: 1400px) {
+  .app-shell:has(.chat-app) { height:calc(100dvh - 50px); }
   body:has(.chat-app) {
     padding: 25px;
   }
@@ -2559,3 +2561,12 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 .parent-chat-filter label { display: grid; gap: 5px; }
 .parent-chat-filter select { width: 100%; min-width: 0; padding: 8px; border-radius: 8px; color: inherit; background: var(--surface); }
 .parent-chat-filter p { font-size: 12px; line-height: 1.5; margin: 8px 0 0; }
+
+.family-form > .error { color:#b14151; }
+.toast { display:flex; align-items:flex-start; gap:12px; }
+.toast .icon-button { color:inherit; flex:0 0 44px; }
+
+/* Long account names must wrap without pushing the dialog close button away. */
+.account-settings .modal-top { align-items:flex-start; }
+.account-settings .modal-top h2 { display:block; flex:1; min-width:0; overflow-wrap:anywhere; }
+.account-settings .modal-top .icon-button { flex:0 0 auto; }

@@ -8,7 +8,7 @@ import {Readable} from 'node:stream';
 import {proto, type WAMessage} from '@whiskeysockets/baileys';
 import {normalizeIncoming,incomingMediaStream} from '../src/connectors/baileys.js';
 import {createApp} from '../src/server.js';
-import {MockConnector} from '../src/connectors/mock.js';
+import {MockConnector,mockGroups} from '../src/connectors/mock.js';
 import type {Config} from '../src/config.js';
 const group='120363001@g.us';
 const sticker=(id:string,extra:any={})=>proto.WebMessageInfo.fromObject({key:{id,remoteJid:group,fromMe:false},pushName:'Synthetic sender',messageTimestamp:1700000000,
@@ -71,12 +71,13 @@ test('unsupported sticker bytes stay an explicit explanation and are not stored 
   const message=f.store.getMessage(f.a.familyId,group,'invalid')!;assert.equal(message.kind,'unsupported');assert.ok(message.text);assert.equal(message.mediaId,undefined);assert.equal(message.raw,undefined);
  }finally{await f.close();}
 });
-test('sticker download and repair cannot cross revoked or replaced grant epochs',async()=>{
+test('sticker download and repair cannot cross removed or replaced group retention epochs',async()=>{
  const f=await fixture();let release!:(bytes:Buffer)=>void;try{
   const incoming=normalizeIncoming(sticker('revoked'))!;let started!:()=>void;const waiting=new Promise<void>(r=>started=r);
   const task=f.service.ingest(f.a.familyId,{...incoming,download:()=>{started();return new Promise<Buffer>(r=>release=r);}});await waiting;
-  await f.service.grant(f.a.familyId,f.a.childId,group,false);await f.service.grant(f.a.familyId,f.a.childId,group,true);release(readFileSync('fixtures/flower.webp'));await task;
+  const connector=f.service.connector(f.a.familyId);connector.groups=async()=>mockGroups.filter(g=>g.id!==group);
+  await f.service.syncGroups(f.a.familyId);f.store.syncGroups(f.a.familyId,[mockGroups[0]]);release(readFileSync('fixtures/flower.webp'));await task;
   assert.equal(f.store.getMessage(f.a.familyId,group,'revoked'),undefined);
-  await f.service.grant(f.a.familyId,f.a.childId,group,false);let called=false;await f.service.ingest(f.a.familyId,{...incoming,download:async()=>{called=true;return Buffer.alloc(0);}});assert.equal(called,false);
+  await f.service.syncGroups(f.a.familyId);let called=false;await f.service.ingest(f.a.familyId,{...incoming,download:async()=>{called=true;return Buffer.alloc(0);}});assert.equal(called,false);
  }finally{release?.(Buffer.alloc(0));await f.close();}
 });

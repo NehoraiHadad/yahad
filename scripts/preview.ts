@@ -82,7 +82,7 @@ app.get<{ Params: { size: string }; Querystring: { role?: string; reset?: string
 } else app.get('/__qa/setup', async (_req, reply) => reply.redirect('/#setup='+setup));
 await app.listen({ host: config.host, port: config.port });
 console.log(
-  'Disposable mock QA harness ready on port 4173. Entry: /__qa/frame/tablet or /__qa/frame/mobile',
+  `Disposable mock QA harness ready on port ${config.port}. Entry: ${firstRun ? '/__qa/setup' : '/__qa/frame/tablet or /__qa/frame/mobile'}`,
 );
 for (const signal of ['SIGTERM', 'SIGINT'] as const)
   process.once(signal, () => void app.close().then(() => process.exit(0)));
