@@ -62,3 +62,23 @@ edit text is cleared, and delayed microphone permission cannot start recording w
 suspended. Independent review caught and verified both latter guards before integration.
 Recheck these two cases on the corrected build; source/component tests do not constitute
 Firefox geometry or actual disconnected-browser acceptance.
+
+## Notification non-obstruction follow-up
+
+Muse's corrected Firefox mobile/tablet report (Slack 1793188543.424909) covers remote
+325af5b/tree abae2e63 and reports the original issues, long heading and plain-text draft
+recovery fixed. This is peer browser evidence, not a complete acceptance sign-off; its six
+screenshots were not attached to that report. That candidate's Node count is **231**, while
+224 above describes the earlier tested candidate, not the final mobile corrections.
+
+The remaining eight-second notification/composer overlap is fixed in 0550d9a: notifications
+occupy a reserved row above the app, with bounded scrollable text and an independent close
+button. The app uses the remaining viewport height, including the existing wide-desktop
+body padding. The content subtree remains mounted when notifications appear/disappear.
+Independent source review passed. Browser recheck must verify the notification with focused
+composer, long errors, narrow/mobile and wide-desktop screens; this source fix is not a claim
+of corrected pixels. Attachment suspension, revocation deletion controls and delayed microphone
+permissions still need browser evidence; no Pi or real-provider acceptance is implied.
+
+Exact notification source checks: **232 Node tests passed, 0 failed/skipped**, typecheck
+and production build passed. Documentation-only evidence update follows the tested source.

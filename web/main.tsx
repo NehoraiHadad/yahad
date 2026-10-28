@@ -239,10 +239,11 @@ function App() {
     );
   if (!me) return <Login onLogin={refresh} />;
   return (
-    <>
+    <div className="app-shell">
       {error && (
         <ErrorToast message={error} onDismiss={() => setError('')} />
       )}
+      <div className="app-content">
       {route.mode === 'parent' && me.user.role === 'parent' ? (
         <Parent me={me} logout={logout} openChat={() => navigate({ mode: 'chat', group: null })} onError={setError} />
       ) : (
@@ -257,7 +258,8 @@ function App() {
           onError={setError}
         />
       )}
-    </>
+      </div>
+    </div>
   );
 }
 function Login({ onLogin }: { onLogin: () => Promise<void> }) {

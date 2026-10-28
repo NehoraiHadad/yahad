@@ -91,3 +91,18 @@ test('account heading isolates and wraps long names without shrinking its close 
   assert.match(css, /\.account-settings \.modal-top h2 \{ display:block; flex:1; min-width:0; overflow-wrap:anywhere;/);
   assert.match(css, /\.account-settings \.modal-top \.icon-button \{ flex:0 0 auto;/);
 });
+
+
+test('error notification reserves layout space rather than overlaying composer or navigation', () => {
+  const css = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
+  const source = readFileSync(new URL('../web/main.tsx', import.meta.url), 'utf8');
+  assert.match(source, /className="app-shell"[\s\S]*<ErrorToast[\s\S]*className="app-content"/);
+  assert.match(css, /\.app-shell \{ height:100dvh; display:flex; flex-direction:column; overflow:hidden;/);
+  assert.match(css, /\.app-content \{ flex:1; min-height:0; overflow:auto;/);
+  assert.match(css, /\.app-content > \.chat-app \{ height:100%;/);
+  assert.match(css, /\.app-shell:has\(\.chat-app\) \{ height:calc\(100dvh - 50px\);/);
+  const notice = css.slice(css.indexOf('.toast {'), css.indexOf('.error {'));
+  assert.doesNotMatch(notice, /position:\s*(fixed|absolute)|bottom:|transform:/);
+  assert.match(notice, /flex: 0 0 auto/);
+  assert.match(notice, /max-height:min\(20dvh, 10rem\); overflow:auto; overflow-wrap:anywhere/);
+});
