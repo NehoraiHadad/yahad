@@ -1,0 +1,11 @@
+{
+  "appSourceCommit": "ae406ed5e2e9f1757df16b5e3ea954b939e0f824",
+  "helperSourceCommit": "ae406ed5e2e9f1757df16b5e3ea954b939e0f824",
+  "packagerSourceCommit": "ae406ed5e2e9f1757df16b5e3ea954b939e0f824",
+  "databaseSchema": 5,
+  "offlineProductionRestore": true,
+  "familyInstallationReady": false,
+  "helperAssemblyInformationalVersion": "1.0.0+ae406ed5e2e9f1757df16b5e3ea954b939e0f824",
+  "quotaImportedHead": "d5f787fe1a924a0689541abed1a24c6c185dd004",
+  "installedProductionPackages": 172
+}

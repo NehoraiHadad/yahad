@@ -1,5 +1,7 @@
 # Private dependency and recovery checkpoint
 
+Historical checkpoint at `3bf951b`. See `NATIVE-INTEGRATION-CHECKPOINT.md` for the completed source import, native audit fixes, schema-5 integration and rebuilt combined payload.
+
 This supersedes the supply-status section of `NATIVE-RUNTIME-PACKAGING.md`. Windows now has a **full binary-content candidate** with private Node, production modules, self-contained .NET helper, FFmpeg and Caddy. This is not a family installer, Windows service installation or completed distribution/legal acceptance. `familyInstallationReady` remains false.
 
 ## Fixed vendor inputs
