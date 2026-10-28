@@ -8,6 +8,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -61,7 +62,8 @@ def prepare(repo, output, node, dotnet, cache):
         'scope':'Installed package roots from the lockfile, including retained package-root legal files; not a complete transitive legal audit.'}, indent=2), encoding='utf-8')
     (legal/'build-inputs.json').write_text(json.dumps({'appSourceCommit':source_commit,
         'helperSourceCommit':source_commit, 'packagerSourceCommit':source_commit,
-        'quotaSchema5Integrated':True, 'offlineProductionRestore':True,
+        'databaseSchema':int(re.search(r'export const DATABASE_SCHEMA = (\d+)', (repo/'src/database-schema.ts').read_text(encoding='utf-8'))[1]),
+        'offlineProductionRestore':True,
         'familyInstallationReady':False}, indent=2), encoding='utf-8')
     version = subprocess.check_output([str(node/'node.exe'), '--version'], env=environment, text=True).strip().removeprefix('v')
     components = [dict(id='node', path='runtime/node/node.exe', version=version,
