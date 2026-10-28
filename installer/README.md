@@ -1,5 +1,7 @@
 # Native easy-install feasibility slice
 
+Current continuation: see [native app portability and dependency status](../docs/NATIVE-PORTABILITY.md). The feasibility-only results below describe the first increment.
+
 Development only, isolated from the released installer and application. This is **not an installer for a family computer**. It does not register services, alter firewall/CA settings, open onboarding, or run the Yahad app. Production packages are deliberately refused.
 
 Baseline: `v0.5.2`, commit `4c41d5ef80ea349d0f678ee9c572e4975a2d776d`, tree `f4dde9cc1dc2d2abd374929a436d425bbc2e9f63`.

@@ -1,0 +1,42 @@
+{
+  "codeCommit": "0852cad431dbe36a772ed374d28f38de208291ed",
+  "linuxCommit": "8157434c49050f608843e71ba3653433b331cbaa",
+  "host": "Windows 11 x64 build 26100, development machine",
+  "sdk": "10.0.403",
+  "runtime": "10.0.14",
+  "privateNodeVersion": "24.22.2",
+  "privateNodeSha256": "1c331340fa6cac5e4294725959070a143fa0507195a78ad77eed7943f719aac9",
+  "nativeNodeTests": {
+    "passed": 7,
+    "kind": "final tool-output summary, actual mock app with synthetic data",
+    "failed": 0,
+    "emptyChildPath": true,
+    "cleanMachineInstallationVerified": false,
+    "skipped": 0
+  },
+  "linuxCandidateTests": {
+    "passed": 14,
+    "actualLinuxExecution": false,
+    "failed": 0
+  },
+  "artifacts": [
+    {
+      "path": "installer/artifacts/Yahad.Platform/Yahad.Platform.exe",
+      "bytes": 73599852,
+      "sha256": "1e6a1398cc885c8d1f97d1ecac60cbe0c6e9343dded563af3b32326d329e5a31",
+      "guiExecutionVerified": false
+    },
+    {
+      "path": "installer/artifacts/Yahad.Setup/Yahad.Setup.exe",
+      "bytes": 139832469,
+      "sha256": "5bb0db6d3dfb3c778b078414183f1247ceb41c52d5ba3f1d7c363b48eb3939f3",
+      "guiExecutionVerified": false
+    },
+    {
+      "path": "installer/artifacts/Yahad.Host.Slice/Yahad.Host.Slice.exe",
+      "bytes": 73599864,
+      "sha256": "0b7f692a8da983e0e5ff38a71574ac1d10be0e07b00022154607461ca8b78066",
+      "guiExecutionVerified": false
+    }
+  ]
+}
