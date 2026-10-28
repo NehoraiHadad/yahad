@@ -12,9 +12,9 @@ export function migrateAccountNames(db: DatabaseSync) {
     return;
   }
   const versions = db.prepare('SELECT version FROM schema_version').all();
-  if (versions.length !== 1 || ![1, DATABASE_SCHEMA].includes(Number(versions[0].version)))
+  if (versions.length !== 1 || ![1, 2, DATABASE_SCHEMA].includes(Number(versions[0].version)))
     throw new Error('Unsupported database schema');
-  if (versions[0].version === DATABASE_SCHEMA) return;
+  if (Number(versions[0].version) >= 2) return;
   // Rebuilding the parent table must not cascade-delete sessions/grants. SQLite
   // only allows switching FK enforcement outside a transaction.
   db.exec('PRAGMA foreign_keys=OFF');
@@ -26,7 +26,7 @@ export function migrateAccountNames(db: DatabaseSync) {
       const name = normalizeAccountName(String(user.username));
       insert.run(user.id, user.family_id, name, accountNameKey(name), user.role, user.password);
     }
-    db.exec(`DROP TABLE users; ALTER TABLE users_next RENAME TO users; UPDATE schema_version SET version=${DATABASE_SCHEMA};`);
+    db.exec('DROP TABLE users; ALTER TABLE users_next RENAME TO users; UPDATE schema_version SET version=2;');
     if (db.prepare('PRAGMA foreign_key_check').all().length) throw new Error('Migration would break account references');
     db.exec('COMMIT');
   } catch (error) {

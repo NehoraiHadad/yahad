@@ -14,6 +14,11 @@ export function isTransientApiError(error: unknown) {
     error.code !== 'LOGIN_WAIT' && (error.status === 408 || error.status === 429 || error.status >= 500 && error.status < 600);
 }
 const errors: Record<string, string> = {
+  USAGE_EXHAUSTED: 'מכסת הזמן להיום הסתיימה. ההורה יכול להוסיף זמן.',
+  USAGE_PAUSED: 'זמן השימוש מושהה. יש לחזור לחלון פעיל ולבדוק את המכסה.',
+  USAGE_CLOCK: 'שעון השרת דורש בדיקה. זמן השימוש מושהה.',
+  BONUS_DAY_CHANGED: 'היום התחלף. יש לרענן לפני הוספת זמן.',
+  TIMEZONE_IN_USE: 'אזור הזמן קבוע לאחר תחילת המדידה.',
   UPDATES_MODE_LOCKED: 'שליטה במצב העדכון טרם אושרה בהגדרה המקומית של רכיב העדכון.',
   HISTORY_WAIT: 'יש בקשות היסטוריה פעילות או שבוצעו לאחרונה. המתינו מעט לפני בקשה נוספת.',
   DELETION_INCOMPLETE: 'מחיקת שיחות קודמת לא הושלמה. בדקו את המצב ואשרו בנפרד את השלמת המחיקה לפני חיבור מחדש.',
@@ -59,6 +64,7 @@ export async function api<T = any>(path: string, method = 'GET', body?: unknown)
       error = (await res.json()).error;
     } catch {}
     if (res.status === 401 && path !== '/login') window.dispatchEvent(new Event('session-expired'));
+    if (error.startsWith('USAGE_') && path !== '/usage/heartbeat') window.dispatchEvent(new Event('usage-required'));
     throw new ApiError(errors[error] || 'הפעולה לא הושלמה. אפשר לנסות שוב.', res.status, error);
   }
   return res.json();

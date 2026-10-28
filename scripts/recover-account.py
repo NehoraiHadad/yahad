@@ -12,6 +12,8 @@ import contextlib
 import re
 import unicodedata
 
+DATABASE_SCHEMA = 3
+
 
 def account_name_key(value):
     """Mirror src/account-name.ts; never use locale rules or Unicode casefold.
@@ -37,9 +39,9 @@ def parent_account(db, name_key):
     try:
         versions = db.execute('SELECT version FROM schema_version').fetchall()
     except sqlite3.Error:
-        raise ValueError('Account recovery requires database schema 2; use the recovery tool matching the installed release') from None
-    if versions != [(2,)]:
-        raise ValueError('Account recovery requires database schema 2; use the recovery tool matching the installed release')
+        raise ValueError(f'Account recovery requires database schema {DATABASE_SCHEMA}; use the recovery tool matching the installed release') from None
+    if versions != [(DATABASE_SCHEMA,)]:
+        raise ValueError(f'Account recovery requires database schema {DATABASE_SCHEMA}; use the recovery tool matching the installed release')
     row = db.execute("SELECT family_id,id FROM users WHERE name_key=? AND role='parent'", (name_key,)).fetchone()
     if row is None:
         raise ValueError('Parent account not found; check the account name or use the parent UI for child passwords')

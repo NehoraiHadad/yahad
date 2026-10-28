@@ -29,8 +29,8 @@ try {
     await import('@whiskeysockets/baileys');
   } finally { await fresh.app.close(); }
 
-  const migrationFixtures = new Map<number, () => Promise<void>>([[1, async () => {
-  const upgradeConfig = { ...config, dataDir: join(dir, 'synthetic-upgrade') };
+  const migrationFixture = async (source: number) => {
+  const upgradeConfig = { ...config, dataDir: join(dir, 'synthetic-upgrade-' + source) };
   const seed = new Store(upgradeConfig), password = 'synthetic release passphrase only';
   const family = await seed.createFamily('Synthetic', { name: 'parent-smoke', password }, { name: 'child-smoke', password });
   const child = seed.user(seed.one('SELECT * FROM users WHERE id=?', family.childId));
@@ -48,6 +48,8 @@ try {
   // This is NOT a runtime downgrade or restore path.
   const legacy = new DatabaseSync(join(upgradeConfig.dataDir, 'app.sqlite'));
   try {
+    legacy.exec('DROP TABLE usage_bonus; DROP TABLE usage_leases; DROP TABLE usage_days; DROP TABLE usage_policy; DROP TABLE usage_families; UPDATE schema_version SET version=2;');
+    if (source === 1)
     legacy.exec(`PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE;
       CREATE TABLE users_legacy(id TEXT NOT NULL,family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE,username TEXT NOT NULL UNIQUE,display TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('parent','child')),password TEXT NOT NULL,PRIMARY KEY(family_id,id));
       INSERT INTO users_legacy SELECT id,family_id,name,'אני',role,password FROM users;
@@ -66,12 +68,14 @@ try {
     assert.equal(store.identityLabel(family.familyId, family.childId), 'Synthetic signature');
     assert.equal(store.getMessage(family.familyId, group, 'synthetic-message')?.text, 'Synthetic history, not household data');
     assert.deepEqual(store.all('PRAGMA foreign_key_check'), []);
+    assert.equal(store.usage.status(family.familyId, family.childId).minutes, null);
     const columns = store.all('PRAGMA table_info(users)').map(column => column.name);
     assert.ok(!columns.includes('username') && !columns.includes('display'));
     const login = await app.inject({ method: 'POST', url: '/api/login', headers: {origin:config.origin}, payload: { name: 'CHILD-SMOKE', password } });
     assert.equal(login.statusCode, 200);
   } finally { await upgraded.app.close(); }
-  }]]);
+  };
+  const migrationFixtures = new Map<number, () => Promise<void>>([[1, () => migrationFixture(1)], [2, () => migrationFixture(2)]]);
   for (const source of DATABASE_MIGRATIONS_FROM) {
     const fixture = migrationFixtures.get(source);
     if (!fixture) throw new Error(`No synthetic migration fixture for schema ${source}`);

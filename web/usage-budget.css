@@ -1,0 +1,18 @@
+.child-usage-settings { margin-block: 1.5rem; padding: 1.25rem; border: 1px solid var(--line, #d9e3df); border-radius: 18px; background: var(--surface, #f7fbf9); }
+.child-usage-settings h4 { margin: 0 0 .6rem; font-size: 1.15rem; }
+.child-usage-settings fieldset { border: 0; padding: .5rem 0; margin: 0; display: flex; gap: .75rem; align-items: end; flex-wrap: wrap; }
+.child-usage-settings label { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+.child-usage-settings input[type=number] { width: 8rem; }
+.child-usage-settings label:has(input:not([type=checkbox])) { display: grid; gap: .35rem; font-size: .9rem; }
+.child-usage-settings input:not([type=checkbox]) { min-height: 44px; border: 1px solid #bfcfc7; border-radius: 10px; padding: .6rem .75rem; background: #fff; color: #183d30; font: inherit; }
+.child-usage-settings .small-note { font-size: .85rem; line-height: 1.6; }
+.child-usage-settings input[type=checkbox] { width: 1.25rem; height: 1.25rem; }
+.usage-summary, .usage-indicator { padding: .75rem 1rem; background: #e9f5ef; color: #204b3b; border-radius: 12px; }
+.usage-indicator { margin: .75rem 1rem; font-weight: 600; font-size: .95rem; }
+.usage-indicator small { display: block; margin-top: .25rem; font-weight: 400; }
+.usage-warning { background: #fff1d1; color: #694414; }
+.usage-backdrop { position: fixed; inset: 0; z-index: 2000; background: #edf5f1; display: grid; place-items: center; padding: 1rem; overflow: auto; }
+.usage-overlay { width: min(100%, 460px); border-radius: 24px; padding: 2rem; background: white; color: #183d30; box-shadow: 0 18px 70px #183d3020; }
+.usage-overlay h2 { font-size: 1.6rem; }
+.usage-overlay p { line-height: 1.7; }
+.usage-overlay button { min-height: 48px; margin: .4rem; }

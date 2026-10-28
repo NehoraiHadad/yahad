@@ -110,7 +110,7 @@ test('chat wiring invalidates asynchronous responses and uses filtered groups fo
   const source = readFileSync(new URL('../web/main.tsx', import.meta.url), 'utf8');
   const chat = source.slice(source.indexOf('function Chat('), source.indexOf('function Message'));
   assert.match(chat, /const current = visibleGroups\.find/);
-  assert.match(chat, /const activeSelected = groupsVerified && visibleGroups\.some\(group => group\.id === selected && group\.canRead\)/);
+  assert.match(chat, /const activeSelected = !usageSuspended && groupsVerified && visibleGroups\.some\(group => group\.id === selected && group\.canRead\)/);
   assert.match(chat, /\{current\?\.canRead && groupsVerified \? \(/);
   assert.match(chat, /\) : verifyingSelection && selected && groups.some\(g => g.id === selected\) \? \(\s*<ConversationVerification/);
   assert.match(chat, /groupsVerified && g\.canRead && g\.last/);

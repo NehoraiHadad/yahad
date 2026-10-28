@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Check, ChevronLeft, LoaderCircle, Plus, RefreshCw, Settings, ShieldCheck, Users } from 'lucide-react';
 import { familyProgress, type FamilyOverview } from './FamilyProgress';
 import { childLabel } from './childLabels';
+import { ChildUsageSettings } from './ChildUsageSettings';
 import { GroupPicker } from './GroupPicker';
 import { ChildActionGuard, confirmedChildGrant, type ChildGrantChange } from './childManagementState';
 
@@ -88,6 +89,7 @@ function ChildWorkspace({ data, selectedChild: child, busy, stale, createdChild,
     </header>
     {createdChild === child.id && <p className="setup-success" role="status">החשבון של <bdi>{child.name}</bdi> נוצר ונבחר. עכשיו בוחרים אילו שיחות להציג בו.</p>}
     {stale && <p className="child-sync-note" role="status">מציגים את המידע האחרון. שינוי שיחות והגדרות יתאפשר אחרי אימות מול השרת.</p>}
+    <ChildUsageSettings key={child.id} childId={child.id} name={child.name} disabled={busy || stale || saving}/>
     <section className="child-groups-section" aria-labelledby="selected-groups-title">
       <div className="child-groups-heading"><div><h4 id="selected-groups-title">השיחות של <bdi>{child.name}</bdi></h4><p>{child.groups.length ? `${child.groups.length === 1 ? 'שיחה אחת מאושרת' : `${child.groups.length} שיחות מאושרות`} לחשבון הזה` : 'עדיין אין שיחות מאושרות — בחרו מהרשימה למטה'}</p></div>
         <button type="button" className="icon-button" aria-label="רענון רשימת שיחות" title="רענון רשימת שיחות" disabled={busy || stale || saving || data.state !== 'connected' || !!data.disconnect} onClick={onRefresh}><RefreshCw size={18}/></button></div>

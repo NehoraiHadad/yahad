@@ -9,9 +9,9 @@ import { LatestRequest } from '../web/latestRequest.js';
 
 // Execute the actual Chat hooks/handlers with synthetic deferred API responses.
 // This verifies state/race behavior; it is not a browser layout or focus test.
-function harness() {
+function harness(role: 'parent' | 'child' = 'parent') {
   const source = readFileSync(new URL('../web/main.tsx', import.meta.url), 'utf8');
-  const start = source.indexOf('function Chat('), end = source.indexOf('  return (\n    <main className={`chat-app', start);
+  const start = source.indexOf('function Chat('), end = source.indexOf('  return (\n    <>\n    <UsageOverlay', start);
   assert.ok(start >= 0 && end > start);
   const code = ts.transpileModule(`${source.slice(start, end)}return {
     visibleGroups, listedGroups, activeSelected, current, composerGroup, verifyingSelection, selectedRef, requestGeneration,
@@ -21,6 +21,7 @@ function harness() {
   }; }; Chat;`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   const slots: any[] = [], effects: (() => void)[] = [], requests: { path: string; resolve: (value: any) => void; reject: (error: Error) => void }[] = [];
   let cursor = 0;
+  const budget = { suspended: false, suspendedRef: { current: false }, activation: { current: 0 }, reconcile() {} };
   const Chat = vm.runInNewContext(code, {
     useState(value: any) {
       const index = cursor++;
@@ -39,11 +40,12 @@ function harness() {
     api: (path: string) => new Promise((resolve, reject) => requests.push({ path, resolve, reject })),
     localStorage: { getItem() { return null; }, setItem() {} },
     filterParentGroups, searchChatGroups, LatestRequest, compareChatActivity, useVisibleChatRead() {}, setTimeout() {}, clearTimeout() {},
+    useUsageBudget: () => budget,
     document: { visibilityState: 'hidden' },
   });
-  const render = () => { cursor = 0; return Chat({ me: { user: { id: 'parent', role: 'parent' }, capabilities: {} }, onError() {}, onMe() {} }); };
+  const render = () => { cursor = 0; return Chat({ me: { user: { id: role, role }, capabilities: {} }, onError() {}, onMe() {} }); };
   const flush = () => { let value = render(); while (effects.length) { effects.splice(0).forEach(fn => fn()); value = render(); } return value; };
-  return { render, flush, requests };
+  return { render, flush, requests, budget };
 }
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
 const knownGroups = [{ id: 'approved', title: 'Synthetic approved', canRead: true }, { id: 'catalog', title: 'Synthetic catalog', canRead: false }];
@@ -265,4 +267,20 @@ test('child-filter verification retains the selected composer without retaining 
   state.setFilterOverview({ children: [{ id: 'synthetic-child', name: 'Synthetic' }], groups: knownGroups, grants: [] });
   state.setFilterVerified(true); state = h.flush();
   assert.equal(state.composerGroup, undefined, 'confirmed filter removal destroys suspended local draft');
+});
+
+test('a renewed child lease cannot reveal chats until a fresh permission snapshot confirms that activation', async () => {
+  const h = harness('child'); let state = h.flush();
+  h.requests[0].resolve(knownGroups); await tick(); state = h.flush();
+  state.setSelected('approved'); state = h.flush(); assert.equal(state.activeSelected, 'approved');
+  const staleMessages = h.requests.filter(r => r.path.endsWith('/messages')).at(-1)!;
+  h.budget.suspended = true; h.budget.suspendedRef.current = true; state = h.flush();
+  assert.equal(state.activeSelected, null); assert.equal(state.composerGroup.id, 'approved');
+  h.budget.suspended = false; h.budget.suspendedRef.current = false; h.budget.activation.current++;
+  state = h.render(); assert.equal(state.activeSelected, null, 'even before effects, the old permission epoch cannot reopen content');
+  state = h.flush(); assert.equal(state.composerGroup.id, 'approved');
+  staleMessages.resolve({ messages: [{ id: 'stale-before-pause', time: 1 }], cursor: null }); await tick();
+  assert.equal(h.flush().messages.length, 0);
+  h.requests.filter(r => r.path === '/groups').at(-1)!.resolve([]); await tick(); state = h.flush();
+  assert.equal(state.activeSelected, null); assert.equal(state.composerGroup, undefined, 'a newly confirmed revocation destroys the local draft');
 });
