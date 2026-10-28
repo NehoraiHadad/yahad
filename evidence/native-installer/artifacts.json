@@ -1,0 +1,26 @@
+{
+  "sourceCommit": "81d403b7ffab956ed2ba88f8373fb555f8c8133d",
+  "baselineCommit": "4c41d5ef80ea349d0f678ee9c572e4975a2d776d",
+  "branch": "feat/native-installer-slice",
+  "sdk": "10.0.403",
+  "runtime": "10.0.14",
+  "hostOS": "Windows 11 build 26100 x64",
+  "artifacts": [
+    {
+      "path": "installer/artifacts/Yahad.Setup/Yahad.Setup.exe",
+      "bytes": 139824789,
+      "sha256": "d4bb0577f7d3e4473269d7e2a4283f3469996d30c8198b76e05ff16fc8dab267",
+      "kind": "self-contained-feasibility-executable",
+      "guiExecutionVerified": false,
+      "launchAttempted": true
+    },
+    {
+      "path": "installer/artifacts/Yahad.Host.Slice/Yahad.Host.Slice.exe",
+      "bytes": 73592184,
+      "sha256": "1588091c976e51610ef17d4956314a8050926f913f8f1e0112a31f5af62901be",
+      "kind": "self-contained-feasibility-executable",
+      "guiExecutionVerified": false,
+      "launchAttempted": false
+    }
+  ]
+}
