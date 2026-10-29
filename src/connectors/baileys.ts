@@ -1,6 +1,7 @@
 import { conversationKind } from '../conversation-id.js';
 import { fetchGroupPhoto } from '../group-photos.js';
 import { IngestionQueue } from './ingestion.js';
+import { restrictedContent } from './message-retention.js';
 import makeWASocket, {
   BufferJSON,
   initAuthCreds,
@@ -107,6 +108,7 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
   if (!groupId || !conversationKind(groupId) || !id) return;
   const content = normalizeMessageContent(raw.message);
   if (!content) return;
+  const restricted = !!raw.key.isViewOnce || restrictedContent(raw.message);
   const base: Incoming = {
     id,
     groupId,
@@ -116,8 +118,15 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
     kind: 'unsupported',
     text: 'סוג הודעה זה עדיין אינו נתמך',
     status: receipt(raw.status),
-    raw: stringify(stripEmbeddedContext(raw)),
+    raw: restricted ? undefined : stringify(stripEmbeddedContext(raw)),
   };
+  if (restricted) {
+    const p = content.protocolMessage;
+    if (p?.key?.remoteJid && p.key.remoteJid !== groupId) return;
+    return { ...base, restricted: true,
+      id: p?.type === proto.Message.ProtocolMessage.Type.MESSAGE_EDIT ? p.key?.id || id : id,
+      text: 'הודעה זמנית או לצפייה חד־פעמית — לפתיחה ב־WhatsApp בלבד' };
+  }
   if (content.reactionMessage) {
     const r = content.reactionMessage;
     if (r.key?.remoteJid && r.key.remoteJid !== groupId) return;
@@ -147,18 +156,6 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
     }
     return;
   }
-  // View-once and disappearing content is deliberately never retained.
-  if (
-    raw.message?.viewOnceMessage ||
-    raw.message?.viewOnceMessageV2 ||
-    raw.message?.viewOnceMessageV2Extension ||
-    raw.message?.ephemeralMessage
-  )
-    return {
-      ...base,
-      text: 'הודעה זמנית או לצפייה חד־פעמית — לפתיחה ב־WhatsApp בלבד',
-      raw: undefined,
-    };
   let body: any;
   if (content.lottieStickerMessage || content.stickerMessage?.isLottie)
     return {...base, text:'מדבקה בפורמט שאינו נתמך כאן — אפשר לפתוח אותה ב־WhatsApp.',raw:undefined};
@@ -187,19 +184,13 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
         break;
       }
   }
-  if (body?.contextInfo?.expiration)
-    return {
-      ...base,
-      kind: 'unsupported',
-      text: 'הודעה זמנית — לפתיחה ב־WhatsApp בלבד',
-      raw: undefined,
-    };
   // Resolve only an existing message from THIS group in the application layer. Never copy quoted payload.
   const ctx = body?.contextInfo;
   if (ctx?.stanzaId && (!ctx.remoteJid || ctx.remoteJid === groupId)) base.replyId = ctx.stanzaId;
   return base;
 }
 export function validateMediaSource(raw: WAMessage) {
+  if (raw.key.isViewOnce || restrictedContent(raw.message)) throw new Error('Temporary media unavailable');
   const content = normalizeMessageContent(raw.message);
   const body: any =
     content?.imageMessage ||

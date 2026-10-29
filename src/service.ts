@@ -260,9 +260,9 @@ export class ChatService {
   async ingest(f: string, input: Incoming, active: () => boolean = () => true) {
     const g = input.groupId;
     if (!active() || !this.store.retained(f, g)) return;
-    if (input.reaction) {
+    if (input.reaction && !input.restricted) {
       const target = this.store.getMessage(f, g, input.reaction.target);
-      if (!target || target.deleted) return;
+      if (!target || target.deleted || target.restricted) return;
       const actor = input.reaction.actor;
       const reactions = { ...target.reactions };
       if (input.reaction.emoji) reactions[actor] = input.reaction.emoji.slice(0, 24);
@@ -272,10 +272,21 @@ export class ChatService {
     }
     const existing = this.store.getMessage(f, g, input.id);
     if (existing?.deleted) return;
+    if (input.restricted) {
+      if (existing?.mediaId) this.store.deleteMedia(f, g, existing.mediaId);
+      this.store.putMessage(f, { id: input.id, groupId: g, sender: existing?.sender || input.sender.slice(0,80),
+        fromMe: existing?.fromMe ?? input.fromMe, time: existing?.time ?? Date.now(),
+        kind: 'unsupported', text: 'הודעה זמנית או לצפייה חד־פעמית — לפתיחה ב־WhatsApp בלבד',
+        restricted: true, status: existing?.status || input.status || 'unknown', reactions: {} }, !input.history);
+      this.notify(f,g);
+      return;
+    }
     if (input.deleted) {
       if (existing) this.update(f, g, input.id, { deleted: true, text: '' });
       return;
     }
+    // Never recover content that a prior provider envelope marked temporary.
+    if (existing?.restricted) return;
     if (input.edited && existing) {
       this.update(f, g, input.id, { text: input.text, edited: true, raw: input.raw });
       return;
@@ -374,7 +385,8 @@ export class ChatService {
     if (!m) return;
     const allowed: Partial<StoredMessage> = {};
     for (const k of ['text', 'edited', 'deleted', 'status', 'reactions', 'raw'] as const)
-      if (patch[k] !== undefined) (allowed as any)[k] = patch[k];
+      if (patch[k] !== undefined && (!m.restricted || k === 'deleted' || k === 'status'))
+        (allowed as any)[k] = patch[k];
     const ranks: Record<string, number> = {
       unknown: -1,
       failed: -1,

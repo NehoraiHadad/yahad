@@ -23,6 +23,7 @@ export interface ChatGroup {
   title: string;
 }
 export interface Incoming {
+  restricted?: boolean;
   guard?: () => boolean;
   history?: { requestId?: string };
   id: string;
@@ -44,6 +45,7 @@ export interface Incoming {
   reaction?: { target: string; actor: string; emoji: string };
 }
 export interface StoredMessage {
+  restricted?: boolean;
   id: string;
   groupId: string;
   sender: string;
