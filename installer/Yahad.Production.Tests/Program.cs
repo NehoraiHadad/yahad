@@ -5,7 +5,7 @@ using Yahad.Install;
 using Yahad.Service;
 
 string? preparedPayload=null;
-if(args.Length==12&&args[^2]=="--prepared"){preparedPayload=args[^1];args=args[..^2];}
+if(args.Length==10&&args[^2]=="--prepared"){preparedPayload=args[^1];args=args[..^2];}
 if(args is not ["--node",var node,"--repo",var repo,"--helper",var helper,"--report",var report])throw new IOException("PRIVATE_INPUTS_REQUIRED");
 var results=new List<object>();var failures=0;
 void Assert(bool b,string reason="assertion failed"){if(!b)throw new Exception(reason);}
