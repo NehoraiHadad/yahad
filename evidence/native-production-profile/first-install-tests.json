@@ -1,0 +1,152 @@
+{
+  "kind": "first-install-synthetic-host-operations",
+  "passed": 35,
+  "failed": 0,
+  "nativeScmInvoked": false,
+  "hostAclProvisioned": false,
+  "setupCapabilityProvisioned": false,
+  "networkListenersOpened": false,
+  "offscreenUiOnly": true,
+  "tests": [
+    {
+      "name": "single installer path performs prepare publish service readiness then browser handoff",
+      "status": "PASS"
+    },
+    {
+      "name": "failed prepare never reports ready or removes data",
+      "status": "PASS"
+    },
+    {
+      "name": "failed publish never reports ready or removes data",
+      "status": "PASS"
+    },
+    {
+      "name": "failed ready never reports ready or removes data",
+      "status": "PASS"
+    },
+    {
+      "name": "cancel before service publication performs no subsequent host operation",
+      "status": "PASS"
+    },
+    {
+      "name": "invalid owner fields cannot reach a host operation",
+      "status": "PASS"
+    },
+    {
+      "name": "browser handoff refuses https://evil.invalid/",
+      "status": "PASS"
+    },
+    {
+      "name": "browser handoff refuses http://192.168.1.2:47123/",
+      "status": "PASS"
+    },
+    {
+      "name": "browser handoff refuses http://127.0.0.1:47123/?token=x",
+      "status": "PASS"
+    },
+    {
+      "name": "browser handoff refuses http://user@127.0.0.1:47123/",
+      "status": "PASS"
+    },
+    {
+      "name": "failed health result never becomes browser-ready",
+      "status": "PASS"
+    },
+    {
+      "name": "uninstall only calls the owned uninstall adapter and reports data preservation",
+      "status": "PASS"
+    },
+    {
+      "name": "embedded extraction refuses unsafe path ../personal.txt",
+      "status": "PASS"
+    },
+    {
+      "name": "embedded extraction refuses unsafe path payload/../../secret",
+      "status": "PASS"
+    },
+    {
+      "name": "embedded extraction refuses unsafe path payload/C:/bad",
+      "status": "PASS"
+    },
+    {
+      "name": "embedded extraction refuses unsafe path payload/CON",
+      "status": "PASS"
+    },
+    {
+      "name": "embedded extraction refuses unsafe path payload/x\\y",
+      "status": "PASS"
+    },
+    {
+      "name": "embedded extraction refuses unsafe path host/trailing. ",
+      "status": "PASS"
+    },
+    {
+      "name": "embedded extraction refuses unsafe path host//duplicate",
+      "status": "PASS"
+    },
+    {
+      "name": "real package reader verifies and extracts exact offline payload bytes",
+      "status": "PASS"
+    },
+    {
+      "name": "corrupt package digest and duplicate zip entry refuse before extraction",
+      "status": "PASS"
+    },
+    {
+      "name": "wrong member hash fails without overwriting preexisting files",
+      "status": "PASS"
+    },
+    {
+      "name": "initial data capability is admin-owned read/delete only, never service-writable",
+      "status": "PASS"
+    },
+    {
+      "name": "user installer enables existing real connector; only explicit test profile uses mock",
+      "status": "PASS"
+    },
+    {
+      "name": "real Store first startup creates schema5 only after one-use authorization",
+      "status": "PASS"
+    },
+    {
+      "name": "existing verified database retires a leftover initial grant without reinitializing",
+      "status": "PASS"
+    },
+    {
+      "name": "missing database plus unrelated data refuses fresh initialization and keeps files",
+      "status": "PASS"
+    },
+    {
+      "name": "initial handoff retains durable retry grant and a quiescent retry succeeds",
+      "status": "PASS"
+    },
+    {
+      "name": "initial resume retains durable retry grant and a quiescent retry succeeds",
+      "status": "PASS"
+    },
+    {
+      "name": "initial early-crash retains durable retry grant and a quiescent retry succeeds",
+      "status": "PASS"
+    },
+    {
+      "name": "uncertain first-start cleanup retains both retry evidence and exclusive lease until observed reconciliation",
+      "status": "PASS"
+    },
+    {
+      "name": "verified DB from an interrupted attempt retires grants before retry and never resets data",
+      "status": "PASS"
+    },
+    {
+      "name": "inconsistent or corrupt initial grant state fails closed and creates no replacement",
+      "status": "PASS"
+    },
+    {
+      "name": "SQLite handles a crash-left WAL under actual exclusive lease without deleting live data",
+      "status": "PASS"
+    },
+    {
+      "name": "native RTL window renders at desktop and minimum size without showing or installing",
+      "status": "PASS"
+    }
+  ]
+}

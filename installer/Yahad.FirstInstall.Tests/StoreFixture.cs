@@ -67,7 +67,7 @@ internal sealed class ProductionFixture:IDisposable
         Write("epoch.json",new InstalledEpoch(1,InstallationId,AnchorEpoch,AnchorDigest??head));
     }
     internal InstallationBinding Binding=>new(InstallationId,Hash(File.ReadAllBytes(PathOf("activation.json"))));
-    internal InstalledActivationResolver CreateResolver(JobProcessFaultInjection? fault=null)=>new(Root,new PrivateControlFiles(),Control,()=>Now,fault);
+    internal InstalledActivationResolver CreateResolver(JobProcessFaultInjection? fault=null)=>new(Root,new PrivateControlFiles(),Control,()=>Now,fault,connectorProfile:RuntimeConnectorProfile.Synthetic);
     internal Task<AuthorizedServiceStart> Resolve(CancellationToken cancellation=default)=>CreateResolver().ResolveAsync(Binding,cancellation);
     private async Task Seed(string node)
     {

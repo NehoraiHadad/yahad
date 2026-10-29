@@ -24,5 +24,5 @@ run(common+['-mwindows',str(root/'main.cpp'),str(resource),'-o',str(output/'Yaha
 run(common+[str(root/'tests.cpp'),'-o',str(output/'Yahad.Bootstrap.Tests.exe')]+libs)
 run(common+['-mwindows',str(root/'child_probe.cpp'),str(resource),'-o',str(output/'Yahad.Harmless.Child.exe')]+libs)
 run(common+[str(root/'http_probe.cpp'),'-o',str(output/'Yahad.Http.Probe.exe')]+libs)
-exe=output/'Yahad.Setup.Web.exe';pin.update(url=url or None,distributionConfigured=bool(url));result={'launcherBytes':exe.stat().st_size,'launcherSha256':hashlib.file_digest(exe.open('rb'),'sha256').hexdigest(),'payload':pin,'nativeImage':inspect(exe),'hostInstallExecuted':False,'compiler':subprocess.check_output([str(args.zig.resolve()),'version'],env=env,text=True).strip()}
+exe=output/'Yahad.Setup.Web.exe';pin.update(url=url or None,distributionConfigured=bool(url));result={'launcherBytes':exe.stat().st_size,'launcherSha256':hashlib.file_digest(exe.open('rb'),'sha256').hexdigest(),'payload':pin,'nativeImage':inspect(exe,pin['sha256']),'hostInstallExecuted':False,'compiler':subprocess.check_output([str(args.zig.resolve()),'version'],env=env,text=True).strip()}
 (output/'build-evidence.json').write_text(json.dumps(result,indent=2),encoding='utf-8');print(json.dumps(result))

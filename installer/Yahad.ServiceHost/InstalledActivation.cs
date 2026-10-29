@@ -29,11 +29,11 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
     public event Action? ObservedWork;
     internal static string StateRoot=>Path.GetDirectoryName(WindowsInstallationReader.DescriptorPath)!;
     private readonly string root;private readonly IInstalledControlFiles control;private readonly IChildControlFactory channels;
-    private readonly FreshDataAuthorization? fresh;private readonly bool committerUnconfigured;private readonly InstalledStateFiles files;
+    private readonly RuntimeConnectorProfile connectorProfile;private readonly FreshDataAuthorization? fresh;private readonly bool committerUnconfigured;private readonly InstalledStateFiles files;
     private readonly Func<DateTimeOffset> clock;private readonly JobProcessFaultInjection? probeFault,startFault;
     internal InstalledActivationResolver():this(StateRoot,new AdminInstalledControlFiles(),new LocalChildControlFactory(),()=>DateTimeOffset.UtcNow){committerUnconfigured=true;}
-    internal InstalledActivationResolver(string root,IInstalledControlFiles control,IChildControlFactory channels,Func<DateTimeOffset> clock,JobProcessFaultInjection? probeFault=null,InstalledStateFiles? stateFiles=null,FreshDataAuthorization? fresh=null,JobProcessFaultInjection? startFault=null)
-    {this.startFault=startFault;this.fresh=fresh;this.root=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(root));this.control=control;this.channels=channels;this.clock=clock;this.probeFault=probeFault;files=stateFiles??InstalledStateFiles.Private(root);}
+    internal InstalledActivationResolver(string root,IInstalledControlFiles control,IChildControlFactory channels,Func<DateTimeOffset> clock,JobProcessFaultInjection? probeFault=null,InstalledStateFiles? stateFiles=null,FreshDataAuthorization? fresh=null,JobProcessFaultInjection? startFault=null,RuntimeConnectorProfile connectorProfile=RuntimeConnectorProfile.Production)
+    {this.connectorProfile=connectorProfile;this.startFault=startFault;this.fresh=fresh;this.root=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(root));this.control=control;this.channels=channels;this.clock=clock;this.probeFault=probeFault;files=stateFiles??InstalledStateFiles.Private(root);}
     public Task<AuthorizedServiceStart> ResolveAsync(InstallationBinding binding,CancellationToken cancellation)=>ResolveCore(binding,false,null,cancellation);
     internal Task<AuthorizedServiceStart> InspectCommitCandidateAsync(InstallationBinding binding,string? pendingDigest,CancellationToken cancellation)
         =>ResolveCore(binding,true,pendingDigest,cancellation);
@@ -117,7 +117,7 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
             reservation.Release=head.ReleaseDigest;await reservation.RequireStartAllowedAsync(new(head.ReleaseDigest),cancellation);
             var environment=new Dictionary<string,string>{{"HOST","127.0.0.1"},{"PORT",web.Port.ToString(System.Globalization.CultureInfo.InvariantCulture)},
                 {"APP_ORIGIN",origin.GetLeftPart(UriPartial.Authority)},{"COOKIE_SECURE",origin.Scheme=="https"?"true":"false"},{"DATA_DIR",reservation.Data},{"MASTER_KEY_FILE",key},
-                {"CONNECTOR","mock"},{"ALLOW_REAL_WHATSAPP","no"},{"SETUP_CAPABILITY_FILE",Path.Combine(root,"Secrets","setup-capability.json")}};
+                {"CONNECTOR",RuntimeConnectorSettings.For(connectorProfile).Connector},{"ALLOW_REAL_WHATSAPP",RuntimeConnectorSettings.For(connectorProfile).Approval},{"SETUP_CAPABILITY_FILE",Path.Combine(root,"Secrets","setup-capability.json")}};
             var spec=new VerifiedProcessSpec(node,reservation.NodeDigest,["--import","tsx","src/main.ts"],Path.Combine(payload,"app"),temporary,
                 Path.Combine(payload,"runtime","ffmpeg","ffmpeg.exe"),environment,reservation.Lease,reservation.BeginMutableStart,files,reservation.ObserveHealthy);
             return new(new(head.ReleaseDigest),new ServiceProcessLauncher(spec,channels,startFault),reservation,reservation);

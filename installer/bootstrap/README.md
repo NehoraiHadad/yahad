@@ -56,9 +56,7 @@ downloaded or created by the bootstrap.
 
 ## Scope and evidence
 
-The preserved payload is loopback-only with mocked WhatsApp, explicitly labeled
-in the UI. This launcher does not silently change that behavior or install a
-provider. Existing real WhatsApp opt-in remains a separate uncompleted step.
+The user payload uses the existing Baileys connector; synthetic mode is selected explicitly only by tests. A new family remains unlinked until the authenticated parent uses the existing web account-link button and QR. Existing linked families retain reconnect behavior. No actual account connection is performed by these tests. The current first-install network profile remains numeric loopback; LAN/TLS exposure is not silently added.
 No service registration, persistent machine permissions, firewall, certificates,
 network listener or public distribution is performed by the bootstrap tests.
 
@@ -76,3 +74,7 @@ before public distribution. No new signing keys or trust enrollment are created.
 The native bootstrap includes the LLVM license/exception and MinGW copying text
 as an embedded resource, also available with the non-installing `--notices` mode.
 
+
+Keyboard tab stops and native tab order are checked. Hidden layout fixtures exercise 96/144/192 DPI, bounded scrolling and footer visibility without changing desktop settings. Interactive Computer Use launch approval timed out; these renders are not a claim of interactive keyboard or multiple-monitor acceptance.
+
+This source-preparation checkpoint still preserves the reviewed 97b7ab4 download pin. The production payload must be rebuilt and then its exact size/hash/source pin updated before a customer launcher can be issued. Intermediate UI executables are not user distribution artifacts.

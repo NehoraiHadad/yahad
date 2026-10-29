@@ -1,7 +1,7 @@
 """Inspect native launcher dependencies and early DLL search hardening."""
 import struct
 from pathlib import Path
-def inspect(path):
+def inspect(path, payload_sha):
     b=Path(path).read_bytes();u16=lambda p:struct.unpack_from('<H',b,p)[0];u32=lambda p:struct.unpack_from('<I',b,p)[0]
     pe=u32(0x3c)
     if b[pe:pe+4]!=b'PE\0\0' or u16(pe+4)!=0x8664:raise ValueError('Windows x64 required')
@@ -31,5 +31,5 @@ def inspect(path):
     characteristics=u16(optional+70)
     if characteristics&0x160!=0x160:raise ValueError('ASLR, high-entropy VA and NX required')
     if b'level="asInvoker"' not in b:raise ValueError('Explicit unelevated manifest required')
-    if b'0ae76fb89c2df50ad68cc1b635d06003a893b5613f01aa9b9a4ba146269edf37' not in b:raise ValueError('Missing pinned payload identity')
+    if len(payload_sha)!=64 or payload_sha.encode('ascii') not in b:raise ValueError('Missing pinned payload identity')
     return {'machine':'AMD64','imports':imports,'initialDllSearchFlags':dependent,'asInvoker':True,'aslr':True,'nx':True,'highEntropyVa':True,'privateRuntimeRequired':False}

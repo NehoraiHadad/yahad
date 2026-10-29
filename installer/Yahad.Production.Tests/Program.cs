@@ -18,9 +18,9 @@ async Task Reject(Func<Task> run,string? code=null)
 {try{await run();}catch(Exception e)when(e is IOException or Win32Exception or JsonException or CryptographicException or FormatException){if(code is not null&&e.Message!=code)throw new Exception("wrong refusal: "+e.Message);return;}throw new Exception("unexpected admission");}
 using var f=await ProductionFixture.Create(node,repo,helper);
 await Check("production admin boundary rejects current-user fixture records",async()=>{await Reject(async()=>{using var grant=await new InstalledActivationResolver(f.Root,new AdminInstalledControlFiles(),f.Control,()=>f.Now).ResolveAsync(f.Binding,default);});});
-await Check("production resolver refuses absent protected activation state",async()=>{var binding=f.Binding;var bytes=File.ReadAllBytes(f.PathOf("activation.json"));File.Delete(f.PathOf("activation.json"));try{await Reject(async()=>{using var grant=await new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now).ResolveAsync(binding,default);});}finally{File.WriteAllBytes(f.PathOf("activation.json"),bytes);}});
+await Check("production resolver refuses absent protected activation state",async()=>{var binding=f.Binding;var bytes=File.ReadAllBytes(f.PathOf("activation.json"));File.Delete(f.PathOf("activation.json"));try{await Reject(async()=>{using var grant=await new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,connectorProfile:RuntimeConnectorProfile.Synthetic).ResolveAsync(binding,default);});}finally{File.WriteAllBytes(f.PathOf("activation.json"),bytes);}});
 await Check("stale bootstrap digest cannot select a different protected activation",async()=>
-{var binding=f.Binding with{ActivationReceiptDigest=new string('0',64)};await Reject(async()=>{using var grant=await new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now).ResolveAsync(binding,default);},"INSTALLED_ACTIVATION_ANCHOR");});
+{var binding=f.Binding with{ActivationReceiptDigest=new string('0',64)};await Reject(async()=>{using var grant=await new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,connectorProfile:RuntimeConnectorProfile.Synthetic).ResolveAsync(binding,default);},"INSTALLED_ACTIVATION_ANCHOR");});
 await Check("missing owner record refuses the concrete resolver",async()=>
 {var path=f.PathOf("owner-intent.json");var bytes=File.ReadAllBytes(path);File.Delete(path);try{await Reject(async()=>{using var grant=await f.Resolve();});}finally{File.WriteAllBytes(path,bytes);}});
 await Check("locked selected payload refuses without changing selected data",async()=>
@@ -561,7 +561,7 @@ InstalledAuthorityComposition Composition(bool reset=true,Func<CancellationToken
  InstalledAuthorityComposition? composition=null;
  RuntimeAuthorityGate EmptyGate(){var kernel=new FakeRuntimeKernel{Empty=true};var gate=new RuntimeAuthorityGate(kernel);gate.Admit(kernel.Generation);kernel.Exit=true;return gate;}
  composition=InstalledAuthorityComposition.PrivateFixture(f.Root,ProductionFixture.Hash(bytes),RuntimeSid,node,anchor.ProbeSha256!,(_,_)=>projectedRoles++,EmptyGate,quiesce??(_=>Task.CompletedTask),f.Control,
-  b=>{f.ClearSignals();return new InstalledBindingStartAuthorizer(new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,stateFiles:composition!.Files),b);},()=>f.Now);
+  b=>{f.ClearSignals();return new InstalledBindingStartAuthorizer(new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,connectorProfile:RuntimeConnectorProfile.Synthetic,stateFiles:composition!.Files),b);},()=>f.Now);
  return composition;
 }
 byte[] Frame(string id,string method,object body)=>JsonSerializer.SerializeToUtf8Bytes(new AuthorityFrame(1,id,method,JsonSerializer.SerializeToElement(body)));
