@@ -389,7 +389,9 @@ test('filter unknown groups BEFORE media download and storage; external quote co
     );
     await f.ingest(f.a.familyId, 'reply', 'Visible', { replyId: 'outside-message' });
     const r = await f.req(f.child, `/api/groups/${group}/messages`);
-    assert.equal(r.json().messages[0].reply, undefined);
+    assert.deepEqual(r.json().messages[0].reply, {
+      id: 'outside-message', text: 'ההודעה המקורית אינה זמינה', sender: '', available: false,
+    });
     assert.equal('raw' in r.json().messages[0], false);
     for (const file of readdirSync(f.config.dataDir))
       if (file.startsWith('app.sqlite'))

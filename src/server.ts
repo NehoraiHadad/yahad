@@ -19,8 +19,9 @@ import { ChildAccessError } from './child-access.js';
 import { unreadCount, markLocallyViewed } from './chat-read-state.js';
 import { ChatService, AppError, deny } from './service.js';
 import { voiceToOpus } from './media.js';
+import { validReaction } from './message-actions.js';
 import { updateStatus, requestUpdate, updateTargetSchema } from './updates.js';
-import type { ConnectorHooks, Connector, StoredMessage, Kind } from './connectors/types.js';
+import type { ConnectorHooks, Connector, StoredMessage, SendKind } from './connectors/types.js';
 const textSchema = z.string().trim().max(12000);
 const accountNameSchema = z.string().max(240).transform((value, ctx) => {
   try { return normalizeAccountName(value); }
@@ -162,6 +163,11 @@ export async function createApp(
     )
       throw new AppError(403, 'OWN_MESSAGE_ONLY');
     return m;
+  };
+  const requireOriginal = (s: Session,m: StoredMessage) => {
+    const c=service.connector(s.user.familyId);
+    if (m.restricted || m.kind==='unsupported' || m.kind==='poll' || c.originalAvailable && !c.originalAvailable(m))
+      throw new AppError(409,'ORIGINAL_UNAVAILABLE');
   };
   let settingUp = false;
   app.get('/api/setup/status', async () => ({
@@ -408,7 +414,7 @@ export async function createApp(
     s: Session,
     g: string,
     data: z.infer<typeof sendSchema>,
-    attachment?: { bytes: Buffer; mime: string; filename: string; kind: Kind },
+    attachment?: { bytes: Buffer; mime: string; filename: string; kind: SendKind },
   ) {
     current(s, g);
     const f = s.user.familyId;
@@ -418,6 +424,14 @@ export async function createApp(
     const currentSend = () => {
       current(s, g);
       if (!sameRetention()) throw deny();
+    };
+    const currentQuote = (quoted?: StoredMessage) => {
+      currentSend();
+      if (!quoted)return;
+      const latest=store.getMessage(f,g,quoted.id);
+      if (!latest || latest.deleted || latest.restricted || latest.raw!==quoted.raw || latest.text!==quoted.text)
+        throw new AppError(409,'ORIGINAL_UNAVAILABLE');
+      requireOriginal(s,latest);
     };
     if (service.states.get(f)?.state !== 'connected') throw new AppError(409, 'NOT_CONNECTED');
     if (attachment) capable(s, attachment.kind);
@@ -429,7 +443,7 @@ export async function createApp(
     if (pending.has(requestKey)) throw new AppError(409, 'SEND_PENDING');
     rateSend(s);
     const reply = data.replyId ? getMessage(s, g, data.replyId) : undefined;
-    if (reply) capable(s, 'reply');
+    if (reply) { capable(s, 'reply'); requireOriginal(s,reply); }
     const label = s.user.role === 'child' ? store.identityLabel(f, s.user.id) : '';
     const needsMarker = !!label && (attachment?.kind === 'audio' || attachment?.kind === 'sticker');
     const wireText = label && !needsMarker ? `${label}: ${data.text}` : data.text;
@@ -475,7 +489,7 @@ export async function createApp(
           let sentMarker;
           try {
             sentMarker = await c.send({
-              beforeSend: currentSend,
+              beforeSend: () => currentQuote(reply),
               id: markerId,
               groupId: g,
               text: marker.text,
@@ -484,7 +498,7 @@ export async function createApp(
             });
           } catch (error) {
             if (sameRetention()) service.update(f, g, markerId, { status: 'failed' });
-            if (error instanceof UsageError) throw error;
+            if (error instanceof UsageError || error instanceof AppError && error.code==='ORIGINAL_UNAVAILABLE') throw error;
             throw new Error('Marker send failed');
           }
           currentSend();
@@ -495,7 +509,7 @@ export async function createApp(
       }
       currentSend();
       const sent = await c.send({
-        beforeSend: currentSend,
+        beforeSend: () => currentQuote(wireReply),
         id,
         groupId: g,
         text: wireText,
@@ -520,7 +534,7 @@ export async function createApp(
     } catch (error) {
       if (sameRetention())
         service.update(f, g, id, { status: 'failed' });
-      if (error instanceof UsageError) throw error;
+      if (error instanceof UsageError || error instanceof AppError && error.code==='ORIGINAL_UNAVAILABLE') throw error;
       throw new AppError(502, 'SEND_UNCERTAIN');
     } finally {
       pending.delete(requestKey);
@@ -556,7 +570,7 @@ export async function createApp(
       const { fileTypeFromBuffer } = await import('file-type');
       const type = await fileTypeFromBuffer(bytes);
       const detected = (type?.mime || 'application/octet-stream').split(';')[0];
-      let kind: Kind = 'document';
+      let kind: SendKind = 'document';
       if (fields.voice === 'true') {
         capable(s, 'audio');
         if (
@@ -655,8 +669,9 @@ export async function createApp(
         g = req.params.g;
       capable(s, 'reactions');
       const m = getMessage(s, g, req.params.id);
+      requireOriginal(s,m);
       const { emoji } = z
-        .object({ emoji: z.enum(['', '💚', '❤️', '👍', '😂', '✨', '🌸', '🎉', '🙏']) })
+        .object({ emoji: z.string().max(64).refine(validReaction) })
         .parse(req.body);
       rateSend(s);
       await service.connector(s.user.familyId).react(g, m, emoji);
@@ -669,6 +684,7 @@ export async function createApp(
     capable(s, 'edit');
     const m = own(s, g, req.params.id),
       c = service.connector(s.user.familyId);
+      requireOriginal(s,m);
     if (m.kind !== 'text' || Date.now() - m.time > c.capabilities.editWindowMs)
       throw new AppError(409, 'EDIT_WINDOW_CLOSED');
     const { text } = z.object({ text: textSchema.min(1) }).parse(req.body);
@@ -684,6 +700,7 @@ export async function createApp(
       g = req.params.g;
     capable(s, 'delete');
     const m = own(s, g, req.params.id);
+      requireOriginal(s,m);
     rateSend(s);
     await service.connector(s.user.familyId).delete(g, m);
     return { ok: true };

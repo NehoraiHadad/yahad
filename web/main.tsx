@@ -15,6 +15,8 @@ import { ChatCelebration, useChatCelebration } from './ChatCelebrationView';
 import './chatCelebration.css';
 import { HistoryPanel } from './HistoryPanel';
 import { MessageImage } from './MessageImage';
+import { PollMessage } from './PollMessage';
+import './poll-message.css';
 import { DisconnectPanel } from './DisconnectPanel';
 import { GroupAvatar } from './GroupAvatar';
 import { ErrorToast } from './ErrorToast';
@@ -1193,7 +1195,7 @@ function Message({
       <div className={'bubble ' + (m.kind === 'sticker' ? 'sticker-bubble' : '')}>
         <div className="bubble-top">
           {!m.fromMe && <b className="sender">{m.sender}</b>}
-          {!m.deleted && (
+          {!m.deleted && m.kind!=='poll' && (
             <IconButton className="message-menu-button" label="פעולות בהודעה" onClick={onMenu}>
               <MoreHorizontal size={17} />
             </IconButton>
@@ -1209,6 +1211,7 @@ function Message({
           <p className="deleted">ההודעה נמחקה</p>
         ) : (
           <>
+            {m.kind==='poll' && <PollMessage question={m.text} options={m.poll?.options}/>}
             {url && (m.kind === 'image' || m.kind === 'sticker') && (
               <MessageImage key={url} url={url} sticker={m.kind==='sticker'} alt={m.kind==='sticker'?'מדבקה':m.text||'תמונה שנשלחה בשיחה'}/>
             )}
@@ -1235,13 +1238,13 @@ function Message({
                 <Download size={19} />
               </a>
             )}
-            {!url && m.kind !== 'text' && m.kind !== 'unsupported' && (
+            {!url && m.kind !== 'text' && m.kind !== 'unsupported' && m.kind!=='poll' && (
               <p className="media-missing">
                 <AlertCircle size={15} /> המדיה לא נשמרה או שכבר אינה זמינה
               </p>
             )}
             {!url&&!m.text&&(m.kind==='text'||m.kind==='unsupported')&&<p className="media-missing" role="status">תוכן ההודעה אינו זמין בתצוגה הזאת.</p>}
-            {m.text && (
+            {m.text && m.kind!=='poll' && (
               <p className="message-text" dir="auto">
                 {m.text}
               </p>
@@ -1279,7 +1282,7 @@ function Message({
             {m.reactions.map((r) => (
               <button
                 key={r.emoji}
-                disabled={!caps.reactions}
+                disabled={!caps.reactions || m.actions?.reactions===false}
                 className={r.mine ? 'mine' : ''}
                 aria-label={`תגובה ${r.emoji}, ${r.count}`}
                 onClick={() => onReaction(r.mine ? '' : r.emoji)}
@@ -1293,14 +1296,14 @@ function Message({
         {menu && (
           <div className="message-actions">
             <div className="reaction-picker">
-              {caps.reactions &&
+              {caps.reactions && m.actions?.reactions!==false &&
                 emojiChoices.map((e) => (
                   <button aria-label={'תגובה ' + e} key={e} onClick={() => onReaction(e)}>
                     {e}
                   </button>
                 ))}
             </div>
-            {caps.reply && (
+            {caps.reply && m.actions?.reply!==false && (
               <button onClick={onReply}>
                 <Reply size={16} />
                 מענה
@@ -1310,13 +1313,14 @@ function Message({
               (isParent || m.authorUserId === userId) &&
               m.kind === 'text' &&
               caps.edit &&
+              m.actions?.edit!==false &&
               Date.now() - m.time < (caps.editWindowMs || 0) && (
                 <button onClick={onEdit}>
                   <Pencil size={16} />
                   עריכה
                 </button>
               )}
-            {m.fromMe && (isParent || m.authorUserId === userId) && caps.delete && (
+            {m.fromMe && (isParent || m.authorUserId === userId) && caps.delete && m.actions?.delete!==false && (
               <button className="danger-text" onClick={onDelete}>
                 <Trash2 size={16} />
                 מחיקה לכולם

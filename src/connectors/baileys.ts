@@ -1,6 +1,9 @@
 import { conversationKind } from '../conversation-id.js';
 import { fetchGroupPhoto } from '../group-photos.js';
 import { IngestionQueue } from './ingestion.js';
+import { restrictedMessage, restrictedStoredMessage, temporaryMessageText } from './message-retention.js';
+import { editedEnvelope, historicalReactions, reactionActor, reactionTime } from './message-updates.js';
+import { normalizePoll } from './poll-content.js';
 import makeWASocket, {
   BufferJSON,
   initAuthCreds,
@@ -107,6 +110,8 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
   if (!groupId || !conversationKind(groupId) || !id) return;
   const content = normalizeMessageContent(raw.message);
   if (!content) return;
+  const restricted = restrictedMessage(raw);
+  const poll=!restricted && !content.protocolMessage && !content.reactionMessage ? normalizePoll(content) : undefined;
   const base: Incoming = {
     id,
     groupId,
@@ -116,8 +121,19 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
     kind: 'unsupported',
     text: 'סוג הודעה זה עדיין אינו נתמך',
     status: receipt(raw.status),
-    raw: stringify(stripEmbeddedContext(raw)),
+    edited: editedEnvelope(raw.message) || undefined,
+    historicalReactions: restricted ? undefined : historicalReactions(raw),
+    raw: restricted || poll ? undefined : stringify(stripEmbeddedContext(raw)),
   };
+  if(base.edited)base.editTime=base.time;
+  if (restricted) {
+    const p = content.protocolMessage;
+    if (p?.key?.remoteJid && p.key.remoteJid !== groupId) return;
+    return { ...base, restricted: true,
+      id: p?.type === proto.Message.ProtocolMessage.Type.MESSAGE_EDIT ? p.key?.id || id : id,
+      text: temporaryMessageText };
+  }
+  if(poll)return {...base,...poll};
   if (content.reactionMessage) {
     const r = content.reactionMessage;
     if (r.key?.remoteJid && r.key.remoteJid !== groupId) return;
@@ -127,8 +143,9 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
       text: '',
       reaction: {
         target: r.key?.id || '',
-        actor: raw.key.fromMe ? 'self' : raw.key.participant || 'unknown',
+        actor: reactionActor(raw.key,groupId),
         emoji: r.text || '',
+        time: reactionTime(r.senderTimestampMs,base.time),
       },
     };
   }
@@ -143,22 +160,10 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
         key: { ...raw.key, id: p.key?.id || id },
         message: p.editedMessage,
       });
-      return nested ? { ...nested, edited: true } : undefined;
+      return nested ? { ...nested, edited: true, editTime: reactionTime(p.timestampMs,base.time) } : undefined;
     }
     return;
   }
-  // View-once and disappearing content is deliberately never retained.
-  if (
-    raw.message?.viewOnceMessage ||
-    raw.message?.viewOnceMessageV2 ||
-    raw.message?.viewOnceMessageV2Extension ||
-    raw.message?.ephemeralMessage
-  )
-    return {
-      ...base,
-      text: 'הודעה זמנית או לצפייה חד־פעמית — לפתיחה ב־WhatsApp בלבד',
-      raw: undefined,
-    };
   let body: any;
   if (content.lottieStickerMessage || content.stickerMessage?.isLottie)
     return {...base, text:'מדבקה בפורמט שאינו נתמך כאן — אפשר לפתוח אותה ב־WhatsApp.',raw:undefined};
@@ -187,19 +192,13 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
         break;
       }
   }
-  if (body?.contextInfo?.expiration)
-    return {
-      ...base,
-      kind: 'unsupported',
-      text: 'הודעה זמנית — לפתיחה ב־WhatsApp בלבד',
-      raw: undefined,
-    };
   // Resolve only an existing message from THIS group in the application layer. Never copy quoted payload.
   const ctx = body?.contextInfo;
   if (ctx?.stanzaId && (!ctx.remoteJid || ctx.remoteJid === groupId)) base.replyId = ctx.stanzaId;
   return base;
 }
 export function validateMediaSource(raw: WAMessage) {
+  if (restrictedMessage(raw)) throw new Error('Temporary media unavailable');
   const content = normalizeMessageContent(raw.message);
   const body: any =
     content?.imageMessage ||
@@ -240,6 +239,7 @@ export async function incomingMediaStream(raw:WAMessage,reuploadRequest:WASocket
 }
 export class BaileysConnector implements Connector {
   readonly capabilities: Capabilities = {
+    polls: {identify:true,display:true,create:false,vote:false,results:false},
     reply: true,
     reactions: true,
     image: true,
@@ -465,8 +465,9 @@ export class BaileysConnector implements Connector {
             text: '',
             reaction: {
               target: key.id || '',
-              actor: reaction.key?.fromMe ? 'self' : reaction.key?.participant || 'unknown',
+              actor: reactionActor(reaction.key,key.remoteJid),
               emoji: reaction.text || '',
+              time: reactionTime(reaction.senderTimestampMs,Date.now()),
             },
           })
           .catch(() => {});
@@ -493,8 +494,15 @@ export class BaileysConnector implements Connector {
     return this.sock;
   }
   key(m: StoredMessage) {
-    if (!m.raw) throw new Error('Original message unavailable');
-    return parse(m.raw).key;
+    if (!this.originalAvailable(m)) throw new Error('Original message unavailable');
+    return parse(m.raw!).key;
+  }
+  originalAvailable(m: StoredMessage) {
+    if (!m.raw || m.deleted || restrictedStoredMessage(m) || m.kind==='unsupported' || m.kind==='poll') return false;
+    try {
+      const original=parse(m.raw);
+      return !!original.message && original.key?.id===m.id && original.key?.remoteJid===m.groupId;
+    } catch { return false; }
   }
   async groups() {
     const sock = this.require(), generation = this.generation;
@@ -515,6 +523,8 @@ export class BaileysConnector implements Connector {
     } catch { return; }
   }
   async send(m: Outgoing) {
+    if((m.kind as string)==='poll')throw new Error('Poll sending unavailable');
+    if (m.reply && !this.originalAvailable(m.reply)) throw new Error('Original message unavailable');
     const sock = this.require();
     const content: any =
       m.kind === 'text'
@@ -545,7 +555,11 @@ export class BaileysConnector implements Connector {
   }
   async edit(g: string, m: StoredMessage, text: string) {
     await this.require().sendMessage(g, { text, edit: this.key(m), linkPreview: null });
-    this.hooks.update(g, m.id, { text, edited: true });
+    // Subsequent quotes must contain the edited text, even before the echo.
+    // Preserve original key/time metadata, never restore the prior body.
+    const original=parse(m.raw!);
+    original.message={conversation:text};
+    this.hooks.update(g, m.id, { text, edited: true, editTime:Math.floor(Date.now()/1000)*1000, raw:stringify(original) });
   }
   async delete(g: string, m: StoredMessage) {
     await this.require().sendMessage(g, { delete: this.key(m) });
@@ -559,6 +573,7 @@ export class BaileysConnector implements Connector {
     if (keys.length) await this.require().readMessages(keys);
   }
   historyAnchor(g: string, m: StoredMessage) {
+    if(m.originalTimeKnown===false || restrictedStoredMessage(m))return false;
     if (m.groupId !== g || m.deleted || m.kind === 'unsupported' || ['pending','failed'].includes(m.status) || !m.raw || !Number.isFinite(m.time) || m.time <= 0) return false;
     try {
       const parsed=parse(m.raw);

@@ -14,6 +14,7 @@ export function isTransientApiError(error: unknown) {
     error.code !== 'LOGIN_WAIT' && (error.status === 408 || error.status === 429 || error.status >= 500 && error.status < 600);
 }
 const errors: Record<string, string> = {
+  ORIGINAL_UNAVAILABLE: 'ההודעה המקורית אינה זמינה לפעולה הזאת. אפשר לפתוח אותה ב־WhatsApp.',
   CHILD_ACCESS_PAUSED: 'ההורה השהה את הגישה לחשבון. אפשר לפנות אליו כדי להפעיל אותה מחדש.',
   CHILD_ACCESS_CHANGED: 'מצב הגישה השתנה. בדקו את המצב המעודכן ונסו שוב.',
   USAGE_TAB_LIMIT: 'יותר מדי חלונות פעילים בחשבון הזה. סגרו חלון אחר ונסו שוב בעוד כמה שניות.',

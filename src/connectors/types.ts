@@ -1,6 +1,10 @@
-export type Kind = 'text' | 'image' | 'video' | 'document' | 'sticker' | 'audio' | 'unsupported';
+export type Kind = 'text' | 'image' | 'video' | 'document' | 'sticker' | 'audio' | 'poll' | 'unsupported';
+export type SendKind=Exclude<Kind,'poll'>;
+export interface PollOptions {options:string[]}
 export type Receipt = 'pending' | 'sent' | 'delivered' | 'read' | 'unknown' | 'failed';
+export interface ReactionUpdate { target: string; actor: string; emoji: string; time?: number }
 export interface Capabilities {
+  polls?: { identify: boolean; display?: boolean; create: boolean; vote: boolean; results: boolean };
   reply: boolean;
   reactions: boolean;
   image: boolean;
@@ -23,6 +27,7 @@ export interface ChatGroup {
   title: string;
 }
 export interface Incoming {
+  restricted?: boolean;
   guard?: () => boolean;
   history?: { requestId?: string };
   id: string;
@@ -32,6 +37,8 @@ export interface Incoming {
   time: number;
   kind: Kind;
   text: string;
+  unsupportedReason?: 'poll' | 'poll-vote' | 'poll-results' | 'poll-variant' | 'poll-invalid';
+  poll?: PollOptions;
   replyId?: string;
   mime?: string;
   filename?: string;
@@ -40,10 +47,13 @@ export interface Incoming {
   download?: () => Promise<Buffer>;
   status?: Receipt;
   edited?: boolean;
+  editTime?: number;
   deleted?: boolean;
-  reaction?: { target: string; actor: string; emoji: string };
+  reaction?: ReactionUpdate;
+  historicalReactions?: ReactionUpdate[];
 }
 export interface StoredMessage {
+  restricted?: boolean;
   id: string;
   groupId: string;
   sender: string;
@@ -51,14 +61,19 @@ export interface StoredMessage {
   time: number;
   kind: Kind;
   text: string;
+  unsupportedReason?: 'poll' | 'poll-vote' | 'poll-results' | 'poll-variant' | 'poll-invalid';
+  poll?: PollOptions;
   replyId?: string;
   mediaId?: string;
   mime?: string;
   filename?: string;
   status: Receipt;
   edited?: boolean;
+  editTime?: number;
+  originalTimeKnown?: boolean;
   deleted?: boolean;
   reactions: Record<string, string>;
+  reactionTimes?: Record<string, number>;
   raw?: string;
   clientId?: string;
   authorUserId?: string;
@@ -70,7 +85,7 @@ export interface Outgoing {
   groupId: string;
   id: string;
   text: string;
-  kind: Kind;
+  kind: SendKind;
   reply?: StoredMessage;
   bytes?: Buffer;
   mime?: string;
@@ -103,6 +118,7 @@ export interface ConnectorHooks {
   maxMedia: number;
 }
 export interface Connector {
+  originalAvailable?(message: StoredMessage): boolean;
   readonly capabilities: Capabilities;
   start(): Promise<void>;
   stop(logout?: boolean): Promise<void | { remoteRevoked: boolean; unlinkRequested?: boolean }>;
