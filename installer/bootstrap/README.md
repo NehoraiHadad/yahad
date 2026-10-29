@@ -77,4 +77,4 @@ as an embedded resource, also available with the non-installing `--notices` mode
 
 Keyboard tab stops and native tab order are checked. Hidden layout fixtures exercise 96/144/192 DPI, bounded scrolling and footer visibility without changing desktop settings. Interactive Computer Use launch approval timed out; these renders are not a claim of interactive keyboard or multiple-monitor acceptance.
 
-This source-preparation checkpoint still preserves the reviewed 97b7ab4 download pin. The production payload must be rebuilt and then its exact size/hash/source pin updated before a customer launcher can be issued. Intermediate UI executables are not user distribution artifacts.
+The committed payload pin now names the exact rebuilt full installer from 2d1b547cb7cadd0ed08c6cdb3584c78ae9060f51. It uses the real existing connector, with account linking initiated only from existing web onboarding. The distribution URL remains unconfigured and download remains disabled until an authorized publisher supplies the exact retained HTTPS asset. The full offline installer is independently usable for the approved local host test.
