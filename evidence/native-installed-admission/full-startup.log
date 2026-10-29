@@ -1,0 +1,39 @@
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  Yahad.Install.Core -> C:\projects\yahad-native-production\installer\Yahad.Install.Core\bin\Release\net10.0-windows\Yahad.Install.Core.dll
+  Yahad.ServiceHost -> C:\projects\yahad-native-production\installer\Yahad.ServiceHost\bin\Release\net10.0-windows\Yahad.ServiceHost.dll
+  Yahad.Production.Tests -> C:\projects\yahad-native-production\installer\Yahad.Production.Tests\bin\Release\net10.0-windows\Yahad.Production.Tests.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:02.96
+PASS production admin boundary rejects current-user fixture records
+PASS production resolver refuses absent protected activation state
+PASS stale bootstrap digest cannot select a different protected activation
+PASS missing owner record refuses the concrete resolver
+PASS locked selected payload refuses without changing selected data
+PASS omitted owner expiry is not silently promoted to a persistent capability
+PASS same concrete resolver reads fixture capabilities and observes actual Store schema 5
+PASS protected-state binding refuses epoch
+PASS protected-state binding refuses head
+PASS protected-state binding refuses owner
+PASS protected-state binding refuses policy
+PASS protected-state binding refuses pin
+PASS protected-state binding refuses pending
+PASS protected-state binding refuses phase
+PASS owner expiration is observed again at mutable start barrier
+PASS exact pinned release bytes cannot be substituted
+PASS protected-control anchor cannot conceal a crash-left WAL
+PASS concrete production resolver launches real mutable Store through continuous handoff
+PASS child duplicate prevents a second writer even after host lease handle is closed
+PASS wrong host-lease nonce or data identity cannot authorize Store
+PASS actual recovery output is verified but cannot start before protected commit
+PASS actual receipt MAC corruption is refused even with matching control digest
+PASS actual completed-journal truncation refuses recovered selection
+PASS changed actual recovered plaintext refuses without overwriting original data
+PASS protected committed recovery selection launches real Store and restarts after writes
+FULL_ADMISSION_SECONDS 160.711 CHECKPOINTS 149
+PASS exact rebuilt full payload passes installed release and runtime admission without app launch
+26 passed; 0 failed. No SCM or network listeners.

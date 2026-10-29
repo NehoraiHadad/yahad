@@ -1,6 +1,6 @@
 {
   "kind": "concrete-installed-adapters-synthetic-inputs",
-  "passed": 25,
+  "passed": 26,
   "failed": 0,
   "productionEntryWired": true,
   "actualAdminProvisioningTested": false,
@@ -9,7 +9,8 @@
   "scmInvoked": false,
   "networkListenersOpened": false,
   "productionTrustOrOwnerStateCreated": false,
-  "fixtureRoot": "C:\\projects\\yahad-native-production\\installer\\.scratch\\production\\temp\\yahad-fixture-46f239c518d6436ebd29c7cded23fcd2",
+  "fullRebuiltPayloadInspected": true,
+  "fixtureRoot": "C:\\projects\\yahad-native-production\\installer\\.scratch\\production\\temp\\yahad-fixture-125a5773ac2f42f9a811ca4c4489fcf8",
   "tests": [
     {
       "name": "production admin boundary rejects current-user fixture records",
@@ -109,6 +110,10 @@
     },
     {
       "name": "protected committed recovery selection launches real Store and restarts after writes",
+      "status": "PASS"
+    },
+    {
+      "name": "exact rebuilt full payload passes installed release and runtime admission without app launch",
       "status": "PASS"
     }
   ]

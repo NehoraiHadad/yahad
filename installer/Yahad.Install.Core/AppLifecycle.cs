@@ -43,7 +43,7 @@ public sealed class AppLifecycle : IAsyncDisposable
     private readonly IPrivateAppLauncher launcher;
     private readonly IAppRecoveryBarrier recovery;
     private readonly IAppUpdateAuthority updater;
-    private readonly TimeSpan deadline;
+    private readonly TimeSpan deadline,startupDeadline;
     private readonly SemaphoreSlim serial = new(1, 1);
     private IContainedAppSession? session;
     private AppRelease active;
@@ -52,13 +52,15 @@ public sealed class AppLifecycle : IAsyncDisposable
     public AppLifecycleState State { get; private set; } = AppLifecycleState.Stopped;
 
     public AppLifecycle(AppRelease active, IPrivateAppLauncher launcher, IAppRecoveryBarrier recovery,
-        IAppUpdateAuthority updater, TimeSpan deadline)
+        IAppUpdateAuthority updater, TimeSpan deadline, TimeSpan? startupDeadline=null)
     {
         if (deadline <= TimeSpan.Zero || deadline > TimeSpan.FromMinutes(5)) throw new ArgumentOutOfRangeException(nameof(deadline));
         this.active = active; this.launcher = launcher; this.recovery = recovery; this.updater = updater; this.deadline = deadline;
+        this.startupDeadline=startupDeadline??deadline;
+        if(this.startupDeadline<=TimeSpan.Zero||this.startupDeadline>TimeSpan.FromMinutes(5))throw new ArgumentOutOfRangeException(nameof(startupDeadline));
     }
-    private CancellationTokenSource Bound(CancellationToken cancellation)
-    { var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellation); bounded.CancelAfter(deadline); return bounded; }
+    private CancellationTokenSource Bound(CancellationToken cancellation,TimeSpan? timeout=null)
+    { var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellation); bounded.CancelAfter(timeout??deadline); return bounded; }
     private void Require(AppLifecycleState state)
     { ObjectDisposedException.ThrowIf(disposed, this); if (State != state) throw new InvalidOperationException("LIFECYCLE_STATE"); }
 
@@ -68,7 +70,7 @@ public sealed class AppLifecycle : IAsyncDisposable
         try
         {
             Require(AppLifecycleState.Stopped);
-            using var bounded = Bound(cancellation);
+            using var bounded = Bound(cancellation,startupDeadline);
             try { await StartCoreAsync(bounded.Token); }
             catch { await FailAndCleanAsync(); throw; }
         }

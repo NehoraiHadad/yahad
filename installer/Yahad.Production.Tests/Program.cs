@@ -115,7 +115,14 @@ await Check("protected committed recovery selection launches real Store and rest
     }
 });
 if(preparedPayload is not null)await Check("exact rebuilt full payload passes installed release and runtime admission without app launch",async()=>
-{f.Reset();f.SelectPreparedPayload(preparedPayload);using var grant=await f.Resolve();await grant.Recovery.RequireStartAllowedAsync(grant.Release,default);});
+{
+    f.Reset();f.SelectPreparedPayload(preparedPayload);var admission=new VerificationOnlyAuthorization(f);var reports=new List<ServiceReport>();
+    var timer=System.Diagnostics.Stopwatch.StartNew();var controller=new ServiceController(admission);
+    var result=await controller.RunAsync(r=>{reports.Add(r);if(r.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);});
+    if(result.Failure!=ServiceFailure.None||!reports.Any(r=>r.State==ServiceState.Running))throw new Exception("full startup path failed: "+result.Failure);
+    Console.WriteLine("FULL_ADMISSION_SECONDS "+timer.Elapsed.TotalSeconds.ToString("F3",System.Globalization.CultureInfo.InvariantCulture)+" CHECKPOINTS "+reports.Count(r=>r.State==ServiceState.StartPending));
+    Assert(reports.Count(r=>r.State==ServiceState.StartPending)>3);
+});
 File.WriteAllText(report,JsonSerializer.Serialize(new{kind="concrete-installed-adapters-synthetic-inputs",passed=results.Count-failures,failed=failures,
     productionEntryWired=true,actualAdminProvisioningTested=false,actualStoreWrites=true,actualReceiptProducer=true,scmInvoked=false,networkListenersOpened=false,
     productionTrustOrOwnerStateCreated=false,fullRebuiltPayloadInspected=preparedPayload is not null,fixtureRoot=f.Root,tests=results},new JsonSerializerOptions{WriteIndented=true}));
@@ -123,8 +130,33 @@ Console.WriteLine($"{results.Count-failures} passed; {failures} failed. No SCM o
 
 internal sealed class PrivateControlFiles:IInstalledControlFiles
 {public byte[] Read(string path,int bound,ICollection<IDisposable> held){var file=WindowsFileBoundary.OpenPrivateRead(path);held.Add(file);return file.Small(bound);}}
-internal sealed class DirectAuthorization(ProductionFixture fixture):IServiceStartAuthorizer
-{public Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)=>fixture.Resolve(cancellation);}
+internal sealed class DirectAuthorization(ProductionFixture fixture):IServiceStartAuthorizer,IObservedAdmission
+{
+    private readonly InstalledActivationResolver resolver=fixture.CreateResolver();public TimeSpan AdmissionBudget=>resolver.AdmissionBudget;
+    public event Action? ObservedWork{add=>resolver.ObservedWork+=value;remove=>resolver.ObservedWork-=value;}
+    public Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)=>Task.Run(()=>resolver.ResolveAsync(fixture.Binding,cancellation),cancellation);
+}
+internal sealed class VerificationOnlyAuthorization(ProductionFixture fixture):IServiceStartAuthorizer,IObservedAdmission
+{
+    private readonly InstalledActivationResolver resolver=fixture.CreateResolver();public TimeSpan AdmissionBudget=>resolver.AdmissionBudget;
+    public event Action? ObservedWork{add=>resolver.ObservedWork+=value;remove=>resolver.ObservedWork-=value;}
+    public async Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)
+    {var actual=await Task.Run(()=>resolver.ResolveAsync(fixture.Binding,cancellation),cancellation);return new(actual.Release,new NoNetworkLauncher(),actual.Recovery,actual);}
+    private sealed class NoNetworkLauncher:IPrivateAppLauncher
+    {
+        public Task<IContainedAppSession> StartAsync(AppRelease release,CancellationToken cancellation)=>Task.FromResult<IContainedAppSession>(new Session());
+        public Task WaitForHealthyAsync(IContainedAppSession session,CancellationToken cancellation)=>Task.CompletedTask;
+        private sealed class Session:IContainedAppSession
+        {
+            private readonly TaskCompletionSource<int> exit=new(TaskCreationOptions.RunContinuationsAsynchronously);
+            public Task RequestGracefulStopAsync(CancellationToken cancellation){exit.TrySetResult(0);return Task.CompletedTask;}
+            public Task<int> WaitForRootExitAsync(CancellationToken cancellation)=>exit.Task.WaitAsync(cancellation);
+            public Task WaitForTreeEmptyAsync(CancellationToken cancellation)=>Task.CompletedTask;
+            public Task TerminateAndWaitForTreeEmptyAsync(CancellationToken cancellation){exit.TrySetResult(1);return Task.CompletedTask;}
+            public ValueTask DisposeAsync()=>ValueTask.CompletedTask;
+        }
+    }
+}
 internal sealed class FileControl(ProductionFixture fixture):IChildControlFactory
 {
     internal int Creates;internal bool HeldAfterClose;internal string? StopError;
@@ -186,7 +218,8 @@ internal sealed class ProductionFixture:IDisposable
         Write("epoch.json",new InstalledEpoch(1,InstallationId,AnchorEpoch,AnchorDigest??head));
     }
     internal InstallationBinding Binding=>new(InstallationId,Hash(File.ReadAllBytes(PathOf("activation.json"))));
-    internal Task<AuthorizedServiceStart> Resolve(CancellationToken cancellation=default)=>new InstalledActivationResolver(Root,new PrivateControlFiles(),Control,()=>Now).ResolveAsync(Binding,cancellation);
+    internal InstalledActivationResolver CreateResolver()=>new(Root,new PrivateControlFiles(),Control,()=>Now);
+    internal Task<AuthorizedServiceStart> Resolve(CancellationToken cancellation=default)=>CreateResolver().ResolveAsync(Binding,cancellation);
     private async Task Seed(string node)
     {
         var config=ConfigScript();var script="import fs from 'node:fs';try{const{Store}=await import("+JsonSerializer.Serialize(new Uri(Path.Combine(Repo,"src/store.ts")).AbsoluteUri)+");"+config+"const s=new Store(config);s.close();}catch(e){fs.writeFileSync("+JsonSerializer.Serialize(Path.Combine(Root,"seed-error.json"))+",JSON.stringify({name:e.name,message:e.message}));process.exit(1)}";

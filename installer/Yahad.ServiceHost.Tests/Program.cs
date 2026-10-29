@@ -156,6 +156,32 @@ await Check("changed child image hash refuses before process/channel creation",a
 });
 File.WriteAllText(report,JsonSerializer.Serialize(new{kind="SCM-host-noninstalling-contracts",passed=checks.Count-failures,failed=failures,
     nativeScmInvoked=false,serviceInstalled=false,listenersOpened=false,realNativeJobTests=4,privateNodeSha256=nodeHash,tests=checks},new JsonSerializerOptions{WriteIndented=true}));
+await Check("observed admission checkpoints follow work and detach before terminal status",async()=>
+{
+    var auth=new ObservedTestAuthorizer(new FakeApp());var controller=new ServiceController(auth);var reports=new List<ServiceReport>();
+    var result=await controller.RunAsync(r=>{reports.Add(r);if(r.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);});
+    Assert(result.Failure==ServiceFailure.None&&reports.Count(r=>r.State==ServiceState.StartPending)>=5);var count=reports.Count;auth.Pulse();Assert(reports.Count==count);
+});
+await Check("observed admission status transport failure cannot become readiness",async()=>
+{
+    var auth=new ObservedTestAuthorizer(new FakeApp());var result=await new ServiceController(auth).RunAsync(r=>{if(r.State==ServiceState.StartPending&&r.Checkpoint==2)throw new IOException("STATUS_FAILED");});
+    Assert(result.Failure==ServiceFailure.StatusTransport);
+});
+await Check("observed admission budget remains capped at five minutes",()=>
+{
+    try{_ =new ServiceController(new ObservedTestAuthorizer(new FakeApp()){Budget=TimeSpan.FromHours(1)});throw new Exception("unbounded admission accepted");}catch(ArgumentOutOfRangeException){}return Task.CompletedTask;
+});
+await Check("stalled observed admission invents no checkpoints and cancels before app launch",async()=>
+{
+    var auth=new WaitingObservedAuthorizer();var controller=new ServiceController(auth);var reports=new List<ServiceReport>();
+    var run=controller.RunAsync(reports.Add);await auth.Entered.Task.WaitAsync(TimeSpan.FromSeconds(2));var count=reports.Count;await Task.Delay(50);Assert(reports.Count==count);
+    controller.Control(ServiceDefinition.Stop);var result=await run.WaitAsync(TimeSpan.FromSeconds(2));Assert(result.Failure==ServiceFailure.None&&!reports.Any(r=>r.State==ServiceState.Running));
+});
+await Check("large admission budget does not extend graceful stop budget",async()=>
+{
+    var controller=new ServiceController(new ObservedTestAuthorizer(new FakeApp{StuckGraceful=true}),lifecycleDeadline:TimeSpan.FromMilliseconds(50));
+    var result=await controller.RunAsync(r=>{if(r.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);}).WaitAsync(TimeSpan.FromSeconds(2));Assert(result.Failure==ServiceFailure.StopFailed);
+});
 Console.WriteLine($"{checks.Count-failures} passed; {failures} failed. No SCM calls/listeners. Fixture: {root}");return failures==0?0:1;
 
 static bool Alive(int id){try{using var process=Process.GetProcessById(id);return !process.HasExited;}catch(ArgumentException){return false;}}
@@ -236,3 +262,19 @@ internal sealed class RevokedResource:IDisposable
 {internal readonly TaskCompletionSource Disposed=new(TaskCreationOptions.RunContinuationsAsynchronously);public void Dispose()=>Disposed.TrySetResult();}
 internal sealed class LateAuthorization:IServiceStartAuthorizer
 {internal readonly TaskCompletionSource<AuthorizedServiceStart> Completion=new(TaskCreationOptions.RunContinuationsAsynchronously);public Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)=>Completion.Task;}
+
+internal sealed class ObservedTestAuthorizer(FakeApp app):IServiceStartAuthorizer,IObservedAdmission
+{
+    internal TimeSpan Budget=TimeSpan.FromMinutes(5);public TimeSpan AdmissionBudget=>Budget;public event Action? ObservedWork;
+    internal void Pulse()=>ObservedWork?.Invoke();
+    public Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)=>Task.Run(()=>
+    {for(var i=0;i<3;i++){cancellation.ThrowIfCancellationRequested();_ =System.Security.Cryptography.SHA256.HashData(new byte[4096]);Pulse();}return new AuthorizedServiceStart(new("observed"),app,app);},cancellation);
+}
+
+internal sealed class WaitingObservedAuthorizer:IServiceStartAuthorizer,IObservedAdmission
+{
+    internal readonly TaskCompletionSource Entered=new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public TimeSpan AdmissionBudget=>TimeSpan.FromMinutes(5);public event Action? ObservedWork;
+    public async Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)
+    {ObservedWork?.Invoke();Entered.TrySetResult();await Task.Delay(Timeout.Infinite,cancellation);throw new IOException("unreachable");}
+}

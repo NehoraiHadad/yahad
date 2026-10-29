@@ -26,9 +26,15 @@ internal static class ServiceIdentityPolicy
             token.Privileges.Length!=1||token.Privileges[0]!="SeChangeNotifyPrivilege")throw new ServiceStartDenied(ServiceFailure.IdentityDenied);
     }
 }
-internal sealed class InstalledStartAuthorizer(IServiceTokenReader tokens,IInstallationReader installation,IInstalledActivationResolver activation):IServiceStartAuthorizer
+internal sealed class InstalledStartAuthorizer(IServiceTokenReader tokens,IInstallationReader installation,IInstalledActivationResolver activation):IServiceStartAuthorizer,IObservedAdmission
 {
+    public TimeSpan AdmissionBudget=>activation is IObservedAdmission observed?observed.AdmissionBudget:TimeSpan.FromSeconds(25);
+    public event Action? ObservedWork
+    {add{if(activation is IObservedAdmission observed)observed.ObservedWork+=value;}remove{if(activation is IObservedAdmission observed)observed.ObservedWork-=value;}}
+    // Slow file verification must not occupy the SCM entry/control thread.
     public Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)
+        =>Task.Run(()=>AuthorizeOnWorker(cancellation),cancellation);
+    private Task<AuthorizedServiceStart> AuthorizeOnWorker(CancellationToken cancellation)
     {
         cancellation.ThrowIfCancellationRequested();
         try{ServiceIdentityPolicy.Require(tokens.Read(),tokens.ExpectedServiceSid());}

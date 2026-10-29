@@ -112,6 +112,35 @@ same root process. No public control endpoint is introduced.
 [DuplicateHandle documents that the duplicate refers to the same object](https://learn.microsoft.com/en-us/windows/win32/api/handleapi/nf-handleapi-duplicatehandle).
 [ResumeThread controls when the suspended child begins execution](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-resumethread).
 
+## Measured full-payload startup
+
+The rebuilt app payload is source `146857134c5ef326d3451ac5085b2da14edbef0d`:
+9,301 files, 204 PE modules, 501,525,346 payload bytes. Its full verification
+initially took about 177 seconds, exposing the old 25-second service admission
+budget as insufficient. That earlier service archive is superseded.
+
+Installed verification now runs on a cancellable worker, with a five-minute hard
+admission/start budget. Checkpoints are emitted only after actual file reads or
+observed enumeration work, at most once per second. No independent timer claims
+progress for a stalled verifier. Checkpoint publication is serialized and detached
+before terminal status; publication failure cannot become readiness. Health and
+graceful-stop budgets remain separate and short. No global SCM timeout or other
+machine setting is changed.
+
+The actual full payload then passed the real controller and read-only start
+barrier in **160.711 seconds with 149 START_PENDING checkpoints**. This test used
+a simulated no-network launcher after genuine admission, not the app HTTP entry
+or native SCM. Separate tests still launch the actual mutable Store through the
+same lease/process adapters. Missing/expired authority and cancellation continue
+to fail closed. Slow hardware, cold boot and actual SCM timing require VM tests.
+
+The final host is paired with the unchanged, verified app/helper payload from
+`1468571`. Later source changes affect host startup orchestration and its optional
+Core lifecycle budget; the app helper's lease protocol and app sources are
+unchanged. Host and app artifact source identities are recorded separately.
+
+[Microsoft requires pending checkpoints to reflect actual initialization work](https://learn.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-setservicestatus).
+
 ## Evidence and acceptance limits
 
 The dedicated production-adapter suite uses real Node/CLR/platform helper, real

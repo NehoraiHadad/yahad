@@ -21,6 +21,11 @@ internal interface IScmApi
     void Register(string name,Func<uint,uint> handler);
     void Publish(ServiceReport report);
 }
+internal interface IObservedAdmission
+{
+    TimeSpan AdmissionBudget {get;}
+    event Action? ObservedWork;
+}
 internal interface IServiceStartAuthorizer
 {Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation);}
 
@@ -49,9 +54,9 @@ internal sealed class ServiceController
     private int terminal;
     internal ServiceController(IServiceStartAuthorizer authorizer,TimeSpan? startDeadline=null,TimeSpan? lifecycleDeadline=null)
     {
-        this.authorizer=authorizer;this.startDeadline=startDeadline??TimeSpan.FromSeconds(25);
+        this.authorizer=authorizer;this.startDeadline=startDeadline??(authorizer is IObservedAdmission observed?observed.AdmissionBudget:TimeSpan.FromSeconds(25));
         this.lifecycleDeadline=lifecycleDeadline??TimeSpan.FromSeconds(20);
-        if(this.startDeadline<=TimeSpan.Zero||this.startDeadline>TimeSpan.FromSeconds(30)||this.lifecycleDeadline<=TimeSpan.Zero||this.lifecycleDeadline>TimeSpan.FromSeconds(30))throw new ArgumentOutOfRangeException();
+        if(this.startDeadline<=TimeSpan.Zero||this.startDeadline>(authorizer is IObservedAdmission?TimeSpan.FromMinutes(5):TimeSpan.FromSeconds(30))||this.lifecycleDeadline<=TimeSpan.Zero||this.lifecycleDeadline>TimeSpan.FromSeconds(30))throw new ArgumentOutOfRangeException();
     }
     internal uint Control(uint control)
     {
@@ -62,7 +67,7 @@ internal sealed class ServiceController
         if(Volatile.Read(ref terminal)!=0)return 1062;
         stop.TrySetResult();return 0;
     }
-    private sealed class TrackedLauncher(IPrivateAppLauncher inner):IPrivateAppLauncher
+    private sealed class TrackedLauncher(IPrivateAppLauncher inner,TimeSpan healthDeadline):IPrivateAppLauncher
     {
         private readonly TaskCompletionSource<int> exit=new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal Task<int> Exit=>exit.Task;
@@ -72,7 +77,8 @@ internal sealed class ServiceController
         }
         private async Task Watch(IContainedAppSession session)
         {try{exit.TrySetResult(await session.WaitForRootExitAsync(default));}catch(Exception e){exit.TrySetException(e);}}
-        public Task WaitForHealthyAsync(IContainedAppSession session,CancellationToken cancellation)=>inner.WaitForHealthyAsync(session,cancellation);
+        public async Task WaitForHealthyAsync(IContainedAppSession session,CancellationToken cancellation)
+        {using var health=CancellationTokenSource.CreateLinkedTokenSource(cancellation);health.CancelAfter(healthDeadline);await inner.WaitForHealthyAsync(session,health.Token).WaitAsync(health.Token);}
     }
     private sealed class BoundedStartBarrier(IAppRecoveryBarrier inner):IAppRecoveryBarrier
     {
@@ -85,15 +91,27 @@ internal sealed class ServiceController
     {
         AuthorizedServiceStart? grant=null;AppLifecycle? lifecycle=null;
         var failure=ServiceFailure.None;var quiescent=true;var checkpoint=0u;
-        var pending=ServiceState.StartPending;
+        var pending=ServiceState.StartPending;var statusGate=new object();var acceptingProgress=true;var progressStatusFailed=false;
+        var observed=authorizer as IObservedAdmission;
         void Pending(ServiceState state)
         {
-            if(state!=pending){pending=state;checkpoint=0;}
-            publish(new(state,0,++checkpoint,60000,0,0));
+            lock(statusGate)
+            {
+                if(state!=pending){pending=state;checkpoint=0;}
+                publish(new(state,0,++checkpoint,60000,0,0));
+            }
+        }
+        void Observed()
+        {
+            lock(statusGate)
+            {
+                if(!acceptingProgress||pending!=ServiceState.StartPending)return;
+                try{Pending(ServiceState.StartPending);}catch{progressStatusFailed=true;throw;}
+            }
         }
         try
         {
-            Pending(ServiceState.StartPending);
+            Pending(ServiceState.StartPending);if(observed is not null)observed.ObservedWork+=Observed;
             using var start=new CancellationTokenSource(startDeadline);
             // A stop request cancels startup on a pool thread, never inside HandlerEx.
             _=stop.Task.ContinueWith(_=>{try{start.Cancel();}catch(Exception e)when(e is ObjectDisposedException or AggregateException){}},CancellationToken.None,TaskContinuationOptions.None,TaskScheduler.Default);
@@ -106,12 +124,12 @@ internal sealed class ServiceController
                 throw;
             }
             start.Token.ThrowIfCancellationRequested();Pending(ServiceState.StartPending);
-            var tracked=new TrackedLauncher(grant.Launcher);
-            lifecycle=new(grant.Release,tracked,new BoundedStartBarrier(grant.Recovery),new NoHostUpdateAuthority(),lifecycleDeadline);
+            var tracked=new TrackedLauncher(grant.Launcher,lifecycleDeadline);
+            lifecycle=new(grant.Release,tracked,new BoundedStartBarrier(grant.Recovery),new NoHostUpdateAuthority(),lifecycleDeadline,authorizer is IObservedAdmission?startDeadline:null);
             await lifecycle.StartAsync(start.Token);
             start.Token.ThrowIfCancellationRequested();if(stop.Task.IsCompleted)throw new OperationCanceledException();
             start.CancelAfter(Timeout.InfiniteTimeSpan);
-            publish(new(ServiceState.Running,0x1|0x4,0,0,0,0));
+            lock(statusGate){acceptingProgress=false;publish(new(ServiceState.Running,0x1|0x4,0,0,0,0));}
             var completed=await Task.WhenAny(stop.Task,tracked.Exit);
             Pending(ServiceState.StopPending);
             if(completed==tracked.Exit&&!stop.Task.IsCompleted)
@@ -130,6 +148,9 @@ internal sealed class ServiceController
         catch{failure=pending==ServiceState.StopPending?ServiceFailure.StopFailed:ServiceFailure.StartFailed;}
         finally
         {
+            lock(statusGate)acceptingProgress=false;
+            if(observed is not null)observed.ObservedWork-=Observed;
+            if(progressStatusFailed)failure=ServiceFailure.StatusTransport;
             if(lifecycle is not null)
             {
                 try{if(pending!=ServiceState.StopPending)Pending(ServiceState.StopPending);}catch{failure=ServiceFailure.StatusTransport;}
