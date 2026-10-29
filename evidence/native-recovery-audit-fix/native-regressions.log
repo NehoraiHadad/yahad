@@ -1,0 +1,122 @@
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  Yahad.Install.Core -> C:\projects\yahad-native-recovery\installer\Yahad.Install.Core\bin\Release\net10.0-windows\Yahad.Install.Core.dll
+  Yahad.Install.Tests -> C:\projects\yahad-native-recovery\installer\Yahad.Install.Tests\bin\Release\net10.0-windows\Yahad.Install.Tests.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:02.56
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  Yahad.Install.Core -> C:\projects\yahad-native-recovery\installer\Yahad.Install.Core\bin\Release\net10.0-windows\Yahad.Install.Core.dll
+  Yahad.Host.Slice -> C:\projects\yahad-native-recovery\installer\Yahad.Host.Slice\bin\Release\net10.0-windows\Yahad.Host.Slice.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:02.08
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  Yahad.Install.Core -> C:\projects\yahad-native-recovery\installer\Yahad.Install.Core\bin\Release\net10.0-windows\Yahad.Install.Core.dll
+  Yahad.Setup -> C:\projects\yahad-native-recovery\installer\Yahad.Setup\bin\Release\net10.0-windows\Yahad.Setup.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:02.59
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  Yahad.Install.Core -> C:\projects\yahad-native-recovery\installer\Yahad.Install.Core\bin\Release\net10.0-windows\Yahad.Install.Core.dll
+  Yahad.Platform -> C:\projects\yahad-native-recovery\installer\Yahad.Platform\bin\Release\net10.0-windows\Yahad.Platform.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:02.12
+PASS valid manifest and bytes
+PASS malformed JSON is a package diagnostic
+PASS reject unsafe path ../escape
+PASS reject unsafe path app/../../escape
+PASS reject unsafe path app/file:ads
+PASS reject unsafe path app/CON.txt
+PASS reject unsafe path app/LPT1
+PASS reject unsafe path app/folder./file
+PASS reject unsafe path app//file
+PASS reject unsafe path app/./file
+PASS reject unsafe path app/evil\file
+PASS reject unsafe path /app/root
+PASS reject unsafe path data/family.sqlite
+PASS reject corrupt bytes
+PASS reject case collision
+PASS reject symlink entry
+PASS reject undeclared file
+PASS refuse production payload in slice
+PASS refuse unsupported architecture
+PASS stage and verify repeated run
+PASS cancel and resume preserves state
+PASS resume IO interruption after-journal
+PASS resume IO interruption before-publish
+PASS resume IO interruption after-publish
+PASS never replace changed published payload
+PASS refuse bundle change during resume
+PASS exclusive lock held by a separate process
+PASS refuse permissive session ACL
+PASS refuse junction ancestor
+PASS native argument quoting without shell
+PASS retain exact process exit status after early exit
+PASS native job child environment omits host hooks and search variables
+PASS job disposal kills child and grandchild
+PASS root exit cannot claim empty native process tree
+PASS host crash closes job and kills descendants
+PASS private LAN address boundaries
+PASS multiple adapters require explicit current selection
+PASS occupied loopback port is a recoverable conflict
+PASS native handle reads private bytes
+PASS native private handle supports canonical paths beyond MAX_PATH
+PASS native pinned ancestors and leaf refuse rename
+PASS native handle refuses broad read ACL
+PASS native bootstrap refuses application-owned capability
+PASS native bootstrap ACL policy accepts admin owner and read-only service
+PASS native handle rejects hardlink alias
+PASS native handle bounds secret size
+PASS native data lease excludes and releases
+PASS native data lease refuses unsafe existing child ACL
+PASS native path refuses \\server\share\secret
+PASS native path refuses C:\one\..\secret
+PASS native path refuses C:\path\secret:ads
+PASS native path refuses C:\path\secret.
+PASS native path refuses C:\path\CON.txt
+PASS LAN plan cannot authorize network actions or Internet exposure
+PASS unselected managed certificate provider stays blocked
+PASS host health cannot claim other-device web reachability
+PASS existing family handoff discards obsolete setup link
+PASS fresh handoff reuses web fragment without serializing secrets
+PASS expired or closed setup never reopens family onboarding
+PASS public or insecure LAN handoff is refused
+PASS native host update orders barrier shutdown tree-empty authority then health
+PASS recovery barrier refuses app start without touching update authority
+PASS unclean root exit cannot grant activation
+PASS living descendant after root exit times out and prevents activation
+PASS uncertain activation never restarts old payload or restores data
+PASS failed new health stays behind recovery barrier without downgrade
+PASS repeated disposal retries unresolved cleanup and never reports false success
+PASS cancelled request cannot stop or activate running app
+PASS recovery cannot restore while app tree lives or exclusive data lease is absent
+PASS policy or pin drift prevents recovery without silently restoring old settings
+PASS preactivation crash resumes unchanged old payload only with compatible observed schema
+PASS possible new schema writes never trigger automatic downgrade
+PASS explicit recovery requires matching complete backup receipt and compatible backup schema
+PASS before candidate start owner can request payload-only rollback without database overwrite
+PASS after candidate start explicit recovery plans offline verified restore before old app
+PASS interrupted restore requires reconciliation instead of repeating uncertain writes
+PASS healthy candidate restarts only when active pointer and schema agree
+PASS completed rollback needs verified receipt and observed previous pointer and schema
+PASS invalid journal identifiers and unrecognized phases never produce recovery actions
+PASS native failed health cleans root and grandchild before returning failure
+PASS native health timeout cleans complete job before returning failure
+81 passed; 0 failed. Synthetic fixtures only. Session: C:\projects\yahad-native-recovery\installer\.scratch\temp\yahad-fixture-73b49ba4b30e43a8b88ef23ecc6cde04

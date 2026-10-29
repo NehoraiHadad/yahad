@@ -6,14 +6,41 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Encodings.Web;
 
 namespace Yahad.Install;
+
+// One encoded-byte budget for preflight, serialization and receipt intake.
+// Base64 is ASCII without JSON control characters; explicit outer encoding makes
+// the exact envelope length independent of digest/base64 character values.
+internal static class RecoveryReceiptEncoding
+{
+    internal const int MaximumBytes=4*1024*1024;
+    private static readonly JsonSerializerOptions Outer=new(){Encoder=JavaScriptEncoder.UnsafeRelaxedJsonEscaping};
+    private static readonly int Overhead=JsonSerializer.SerializeToUtf8Bytes(new RecoveryEnvelope("",new string('0',64)),Outer).Length;
+    internal static int MaximumPayloadBytes=>((MaximumBytes-Overhead)/4)*3;
+    internal static int EncodedSize(int payloadBytes)
+    {
+        if(payloadBytes<0||payloadBytes>MaximumPayloadBytes)throw new IOException("RECOVERY_RECEIPT_BOUND");
+        return Overhead+((payloadBytes+2)/3)*4;
+    }
+    internal static byte[] Serialize(byte[] payload,string mac)
+    {
+        var expected=EncodedSize(payload.Length);
+        var bytes=JsonSerializer.SerializeToUtf8Bytes(new RecoveryEnvelope(Convert.ToBase64String(payload),mac),Outer);
+        if(bytes.Length!=expected||bytes.Length>MaximumBytes)throw new IOException("RECOVERY_RECEIPT_BOUND");
+        return bytes;
+    }
+    internal static int Preflight(RecoveryManifest manifest)=>EncodedSize(JsonSerializer.SerializeToUtf8Bytes(manifest).Length);
+}
 
 public sealed record NativeBackupResult(string BackupId,string ReceiptDigest,int ObservedSchema);
 public sealed record NativeRestoreResult(string OperationId,string RestoredDirectory,int ObservedSchema,bool ReconciledPublication);
 internal sealed record RecoveryFile(string Name,long Bytes,string Sha256,long EncryptedBytes,string EncryptedSha256);
 internal sealed record RecoveryManifest(int Format,string BackupId,string ContextDigest,int Schema,RecoveryFile[] Files);
 internal sealed record RecoveryEnvelope(string Payload,string Mac);
+internal sealed record ProbeScratchOwner(int Format,string DirectoryName,string DataPathDigest,string Purpose,
+    int OwnerProcessId,string LeaseGeneration);
 internal sealed record RecoveryRecord(int Format,int Sequence,string OperationId,string BackupId,string ReceiptDigest,
     string ContextDigest,int MinimumSchema,int MaximumSchema,string Phase,string? Attempt,string PreviousDigest,
     string DataPathDigest,int ObservedJobRootProcessId,string LeaseGeneration);
@@ -38,6 +65,8 @@ public sealed class NativeRecoveryFixture : IDisposable
     private readonly byte[] encryption,authentication;
     private readonly SemaphoreSlim serial=new(1,1);
     private bool disposed;
+    public int ReconciledProbeResidues { get; private set; }
+    private string ProbeRoot=>Path.Combine(root,".recovery-probes");
     private NativeRecoveryFixture(string root,string data,JobProcess job,NativeSqliteInspector inspector,
         IDisposable rootPin,WindowsFileBoundary.DataLease lease,WindowsFileBoundary.PrivateReadLease keyFile,
         WindowsFileBoundary.PrivateReadLease policyFile,WindowsFileBoundary.PrivateReadLease pinFile,byte[] key)
@@ -70,7 +99,9 @@ public sealed class NativeRecoveryFixture : IDisposable
             while(end>start&&bytes[end-1] is 9 or 10 or 13 or 32)end--;
             raw=new byte[32];
             if(Base64.DecodeFromUtf8(bytes.AsSpan(start,end-start),raw,out _,out var written)!=OperationStatus.Done||written!=32||policy.Length>1024*1024||pins.Length>1024*1024)throw new IOException("RECOVERY_IDENTITY_BOUND");
-            return new(root,data,retainedOwnedAppJob,inspector,rootPin,lease,key,policy,pins,raw);
+            var recovery=new NativeRecoveryFixture(root,data,retainedOwnedAppJob,inspector,rootPin,lease,key,policy,pins,raw);
+            try{recovery.ReconciledProbeResidues=recovery.ReconcileProbeResidues();return recovery;}
+            catch{recovery.Dispose();throw;}
         }
         catch {pins?.Dispose();policy?.Dispose();key?.Dispose();lease?.Dispose();rootPin.Dispose();throw;}
         finally {if(bytes is not null)CryptographicOperations.ZeroMemory(bytes);if(raw is not null)CryptographicOperations.ZeroMemory(raw);}
@@ -121,8 +152,9 @@ public sealed class NativeRecoveryFixture : IDisposable
     private byte[] Envelope<T>(T value,string domain)
     {
         var payload=JsonSerializer.SerializeToUtf8Bytes(value);
-        return JsonSerializer.SerializeToUtf8Bytes(new RecoveryEnvelope(Convert.ToBase64String(payload),
-            Convert.ToHexStringLower(HMACSHA256.HashData(authentication,Encoding.UTF8.GetBytes(domain+":"+Convert.ToBase64String(payload))))));
+        RecoveryReceiptEncoding.EncodedSize(payload.Length);
+        return RecoveryReceiptEncoding.Serialize(payload,
+            Convert.ToHexStringLower(HMACSHA256.HashData(authentication,Encoding.UTF8.GetBytes(domain+":"+Convert.ToBase64String(payload)))));
     }
     private T Authenticate<T>(byte[] bytes,string domain)
     {
@@ -139,6 +171,12 @@ public sealed class NativeRecoveryFixture : IDisposable
         {stream.Write(bytes);fault?.Invoke("before-durable-flush");stream.Flush(true);}
         if(!MoveFileExW(@"\\?\"+partial,@"\\?\"+destination,8))throw new Win32Exception(); // never replace an existing destination
     }
+    private static int FullChunk(WindowsFileBoundary.PrivateReadLease source,long offset,byte[] buffer)
+    {
+        var wanted=(int)Math.Min(buffer.Length,source.Length-offset);var read=0;
+        while(read<wanted){var count=source.Read(offset+read,buffer.AsSpan(read,wanted-read));if(count==0)throw new IOException("RECOVERY_SHORT_READ");read+=count;}
+        return read;
+    }
     private RecoveryFile Encrypt(string backupId,string name,WindowsFileBoundary.PrivateReadLease source,string destination,Action<string>? fault,CancellationToken cancellation)
     {
         var plain=new byte[Chunk];using var aes=new AesGcm(encryption,16);long offset=0,index=0;
@@ -147,7 +185,7 @@ public sealed class NativeRecoveryFixture : IDisposable
         {
             using(var output=new FileStream(destination,FileMode.CreateNew,FileAccess.Write,FileShare.None,4096,FileOptions.WriteThrough))
             {
-                int count;while((count=source.Read(offset,plain))>0)
+                int count;while((count=FullChunk(source,offset,plain))>0)
                 {
                     cancellation.ThrowIfCancellationRequested();
                     var nonce=RandomNumberGenerator.GetBytes(12);var tag=new byte[16];var cipher=new byte[count];
@@ -195,21 +233,29 @@ public sealed class NativeRecoveryFixture : IDisposable
             var total=sources.Sum(s=>s.File.Length)+keyFile.Length+policyFile.Length+pinFile.Length;
             if(total>MaximumTotal)throw new IOException("RECOVERY_SIZE_BOUND");
             if(new DriveInfo(Path.GetPathRoot(root)!).AvailableFreeSpace<total+sources.Single(s=>s.Name=="data/app.sqlite").File.Length+16L*1024*1024)throw new IOException("RECOVERY_FREE_SPACE");
-            var id=Guid.NewGuid().ToString("N");var directory=Path.Combine(root,"backup-"+id);Directory.CreateDirectory(directory);
-            var probe=Path.Combine(directory,"probe");Directory.CreateDirectory(probe);
-            // Probe a private copy; read-only SQLite can create WAL sidecars. Never probe the source DB.
-            var database=sources.Single(s=>s.Name=="data/app.sqlite").File;
-            var copied=Path.Combine(probe,"app.sqlite");CopyPlain(database,copied);
-            var schema=await inspector.InspectAsync(copied,probe,cancellation);
-            DeleteScratch(probe); // only this new, private, non-published scratch subtree
             var all=sources.Concat(new[]{("identity/master-key",keyFile),("policy/update-policy",policyFile),("policy/update-pin",pinFile)}).ToArray();
+            foreach(var member in all)Child(root,member.Item1); // enforce path limits before any payload writes
+            var database=sources.Single(s=>s.Name=="data/app.sqlite").File;
+            // Plaintext validation staging is never a child of an exportable backup.
+            // The backup directory is not created until validation/cleanup succeeds.
+            var schema=await ProbeCopyAsync(database,"backup-validation",fault,cancellation);
+            cancellation.ThrowIfCancellationRequested();
+            var id=Guid.NewGuid().ToString("N");
+            var placeholder=new string('0',64);
+            var projected=all.Select(s=>new RecoveryFile(s.Item1,s.Item2.Length,placeholder,
+                s.Item2.Length+((s.Item2.Length+Chunk-1)/Chunk)*32,placeholder)).ToArray();
+            var receiptBytes=RecoveryReceiptEncoding.Preflight(new RecoveryManifest(1,id,context,schema,projected));
+            fault?.Invoke("backup-receipt-preflight-complete");
+            var directory=Path.Combine(root,"backup-"+id);Directory.CreateDirectory(directory);
             var members=new List<RecoveryFile>();
             for(var i=0;i<all.Length;i++){cancellation.ThrowIfCancellationRequested();members.Add(Encrypt(id,all[i].Item1,all[i].Item2,Path.Combine(directory,$"{i:D5}.bin"),fault,cancellation));}
             await ObserveAsync(cancellation);
             var observed=FilesBelow(data).Where(n=>n!="process.lock").Select(n=>"data/"+n).ToHashSet(StringComparer.Ordinal);
             if(!observed.SetEquals(sources.Select(s=>s.Name)))throw new IOException("RECOVERY_SOURCE_MEMBERS_CHANGED");
             var manifest=new RecoveryManifest(1,id,context,schema,members.ToArray());
-            var bytes=Envelope(manifest,"backup");fault?.Invoke("before-backup-receipt");
+            var bytes=Envelope(manifest,"backup");
+            if(bytes.Length!=receiptBytes)throw new IOException("RECOVERY_RECEIPT_PREFLIGHT_CHANGED");
+            fault?.Invoke("before-backup-receipt");
             Durable(Path.Combine(directory,"receipt.json"),bytes,fault);
             fault?.Invoke("after-backup-receipt");
             VerifyBackup(id);return new(id,Hash(bytes),schema);
@@ -225,7 +271,7 @@ public sealed class NativeRecoveryFixture : IDisposable
     private (RecoveryManifest Manifest,string Digest) VerifyBackup(string backupId)
     {
         var directory=Path.Combine(root,"backup-"+Id(backupId));using var pin=WindowsFileBoundary.PinPrivateDirectory(directory);
-        using var receipt=WindowsFileBoundary.OpenPrivateRead(Path.Combine(directory,"receipt.json"));var bytes=receipt.Small(4*1024*1024);
+        using var receipt=WindowsFileBoundary.OpenPrivateRead(Path.Combine(directory,"receipt.json"));var bytes=receipt.Small(RecoveryReceiptEncoding.MaximumBytes);
         var manifest=Authenticate<RecoveryManifest>(bytes,"backup");
         if(manifest.Format!=1||manifest.BackupId!=backupId||manifest.ContextDigest!=context||manifest.Schema<1||manifest.Files.Length is <4 or >MaximumFiles)throw new IOException("RECOVERY_BACKUP_IDENTITY");
         var names=new HashSet<string>(StringComparer.OrdinalIgnoreCase);long total=0;
@@ -238,16 +284,83 @@ public sealed class NativeRecoveryFixture : IDisposable
         }
         if(!new[]{"data/app.sqlite","identity/master-key","policy/update-policy","policy/update-pin"}.All(names.Contains))throw new IOException("RECOVERY_BACKUP_INCOMPLETE");
         var expectedNames=Enumerable.Range(0,manifest.Files.Length).Select(i=>$"{i:D5}.bin").Append("receipt.json").ToHashSet(StringComparer.Ordinal);
-        if(!expectedNames.SetEquals(FilesBelow(directory)))throw new IOException("RECOVERY_BACKUP_MEMBERS");
+        if(!expectedNames.SetEquals(FilesBelow(directory,MaximumFiles+1)))throw new IOException("RECOVERY_BACKUP_MEMBERS");
         return(manifest,Hash(bytes));
     }
-    private void DeleteScratch(string directory)
+    private async Task<int> ProbeCopyAsync(WindowsFileBoundary.PrivateReadLease source,string purpose,
+        Action<string>? fault,CancellationToken cancellation)
     {
-        var path=Path.GetFullPath(directory);
-        if(!path.StartsWith(root+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)||path==root)throw new IOException("RECOVERY_SCRATCH_SCOPE");
-        SafeDirectory.NoReparseAncestors(path);FilesBelow(path);Directory.Delete(path,true);
+        Directory.CreateDirectory(ProbeRoot);
+        using var parentPin=WindowsFileBoundary.PinPrivateDirectory(ProbeRoot);
+        var scratch=SafeDirectory.CreatePrivateSession(ProbeRoot);
+        // Commit authenticated ownership BEFORE copying any plaintext. A crash
+        // after this point is reconciled on the next offline admission.
+        Durable(Path.Combine(scratch,"owner.json"),Envelope(new ProbeScratchOwner(1,Path.GetFileName(scratch),
+            DataPathDigest,purpose,Environment.ProcessId,leaseGeneration),"probe-scratch"));
+        try
+        {
+            using var gate=WindowsFileBoundary.AcquireDataLease(scratch);
+            var copied=Path.Combine(scratch,"app.sqlite");CopyPlain(source,copied);
+            fault?.Invoke("probe-copy-complete");cancellation.ThrowIfCancellationRequested();
+            return await inspector.InspectAsync(copied,scratch,cancellation);
+        }
+        finally {CleanupProbe(scratch);}
     }
-    private static List<string> FilesBelow(string root)
+    private int ReconcileProbeResidues()
+    {
+        if(!Directory.Exists(ProbeRoot))return 0;
+        using var parentPin=WindowsFileBoundary.PinPrivateDirectory(ProbeRoot);var count=0;
+        var entries=Directory.EnumerateFileSystemEntries(ProbeRoot).ToArray();
+        if(entries.Length>128)throw new IOException("RECOVERY_PROBE_RESIDUE_BOUND");
+        foreach(var path in entries){CleanupProbe(path);count++;}return count;
+    }
+    private void CleanupProbe(string directory)
+    {
+        var path=Path.GetFullPath(directory);var name=Path.GetFileName(path);
+        if(!string.Equals(Path.GetDirectoryName(path),ProbeRoot,StringComparison.OrdinalIgnoreCase)||
+            !name.StartsWith("yahad-fixture-",StringComparison.Ordinal)||!Guid.TryParseExact(name[14..],"N",out _))
+            throw new IOException("RECOVERY_PROBE_SCOPE");
+        string[] members;
+        bool Metadata(string file)=>file is ".yahad-fixture" or "owner.json" or "process.lock"||
+            file.StartsWith("owner.json.partial-",StringComparison.Ordinal)&&Guid.TryParseExact(file[19..],"N",out _);
+        using(var gate=WindowsFileBoundary.AcquireDataLease(path))
+        {
+            if(File.Exists(Path.Combine(path,".yahad-fixture")))SafeDirectory.ValidateSession(path);
+            if(Directory.EnumerateDirectories(path).Any())throw new IOException("RECOVERY_PROBE_UNEXPECTED_MEMBER");
+            members=FilesBelow(path).ToArray();
+            var ownerPath=Path.Combine(path,"owner.json");
+            if(File.Exists(ownerPath))
+            {
+                using var owner=WindowsFileBoundary.OpenPrivateRead(ownerPath);
+                var record=Authenticate<ProbeScratchOwner>(owner.Small(8192),"probe-scratch");
+                if(record.Format!=1||record.DirectoryName!=name||record.DataPathDigest!=DataPathDigest||
+                    record.OwnerProcessId<1||!Guid.TryParseExact(record.LeaseGeneration,"N",out _)||
+                    record.Purpose is not("backup-validation" or "restore-validation"))throw new IOException("RECOVERY_PROBE_OWNERSHIP");
+            }
+            else if(members.Any(file=>!Metadata(file)||file.StartsWith("owner.json.partial-",StringComparison.Ordinal)))throw new IOException("RECOVERY_PROBE_OWNERSHIP_MISSING");
+            foreach(var file in members)
+            {
+                if(Metadata(file))continue;
+                if(file is not("app.sqlite" or "app.sqlite-wal" or "app.sqlite-shm" or "app.sqlite-journal")&&
+                    !(file.StartsWith("sqlite-observation-",StringComparison.Ordinal)&&file.EndsWith(".json",StringComparison.Ordinal)&&Guid.TryParseExact(file[19..^5],"N",out _)))
+                    throw new IOException("RECOVERY_PROBE_UNEXPECTED_MEMBER");
+                // Check actual read handles before changing the catalog. In
+                // particular, a locked DB must not cause its ownership record
+                // to be deleted first by an unordered recursive directory delete.
+                using var readable=WindowsFileBoundary.OpenPrivateRead(Path.Combine(path,file));
+            }
+            foreach(var file in members.Where(file=>!Metadata(file)))File.Delete(Path.Combine(path,file));
+        }
+        // All plaintext is gone before metadata removal. A crash now leaves
+        // either an authenticated owned scope or only recognized metadata in
+        // the pinned private catalog; the latter contains no payload to export.
+        SafeDirectory.NoReparseAncestors(path);
+        foreach(var file in members.Where(file=>Metadata(file)&&file!="owner.json"))File.Delete(Path.Combine(path,file));
+        File.Delete(Path.Combine(path,"owner.json"));
+        Directory.Delete(path,false);
+    }
+
+    private static List<string> FilesBelow(string root,int maximumFiles=MaximumFiles)
     {
         var names=new List<string>();
         void Walk(string directory,int depth)
@@ -258,7 +371,7 @@ public sealed class NativeRecoveryFixture : IDisposable
             {
                 if((File.GetAttributes(path)&FileAttributes.ReparsePoint)!=0)throw new IOException("RECOVERY_REPARSE");
                 if(Directory.Exists(path))Walk(path,depth+1);
-                else{names.Add(Path.GetRelativePath(root,path).Replace('\\','/'));if(names.Count>MaximumFiles)throw new IOException("RECOVERY_FILE_COUNT");}
+                else{names.Add(Path.GetRelativePath(root,path).Replace('\\','/'));if(names.Count>maximumFiles)throw new IOException("RECOVERY_FILE_COUNT");}
             }
         }
         Walk(root,0);return names;
@@ -269,15 +382,9 @@ public sealed class NativeRecoveryFixture : IDisposable
         var names=FilesBelow(directory).ToHashSet(StringComparer.Ordinal);
         if(!names.SetEquals(manifest.Files.Select(f=>f.Name)))throw new IOException("RECOVERY_RESTORED_MEMBERS");
         foreach(var member in manifest.Files){using var file=WindowsFileBoundary.OpenPrivateRead(Child(directory,member.Name));if(file.Length!=member.Bytes||Digest(file)!=member.Sha256)throw new IOException("RECOVERY_RESTORED_HASH");}
-        var scratch=Path.Combine(root,"sqlite-probe-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(scratch);
-        try
-        {
-            // Inspector uses a copy, leaving both source and restored tree byte-for-byte unchanged.
-            using(var source=WindowsFileBoundary.OpenPrivateRead(Child(directory,"data/app.sqlite")))CopyPlain(source,Path.Combine(scratch,"app.sqlite"));
-            var schema=await inspector.InspectAsync(Path.Combine(scratch,"app.sqlite"),scratch,cancellation);
-            if(schema!=manifest.Schema||schema<minimum||schema>maximum)throw new IOException("RECOVERY_SCHEMA_INCOMPATIBLE");
-        }
-        finally{DeleteScratch(scratch);}
+        using var source=WindowsFileBoundary.OpenPrivateRead(Child(directory,"data/app.sqlite"));
+        var schema=await ProbeCopyAsync(source,"restore-validation",null,cancellation);
+        if(schema!=manifest.Schema||schema<minimum||schema>maximum)throw new IOException("RECOVERY_SCHEMA_INCOMPATIBLE");
     }
     private List<RecoveryRecord> ReadJournal(string operation,out string previousDigest)
     {

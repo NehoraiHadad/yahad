@@ -1,5 +1,7 @@
 # Native offline recovery checkpoint
 
+Historical `e3388c6` checkpoint. See `NATIVE-RECOVERY-AUDIT-FIX.md` for corrected plaintext-probe isolation and receipt/member budgets.
+
 This is a bounded source slice after preserved `213a75a`, on `feat/native-recovery` in `C:\projects\yahad-native-recovery`. It adds a callable, explicitly fixture-only Windows backup/restore adapter. It does not install a service, replace an active database, switch an active data directory or publish a release. The previous combined binary archive remains the `ae406ed` payload documented in the integration checkpoint; it was not relabeled or rebuilt here.
 
 ## Actual observations and file boundaries

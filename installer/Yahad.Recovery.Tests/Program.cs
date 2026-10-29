@@ -9,6 +9,18 @@ using Yahad.Install;
 
 if(args is ["--exit"])return 0;
 if(args is ["--wait"]){await Task.Delay(Timeout.Infinite);return 0;}
+if(args is ["--backup-worker",var backupWorkerRoot,var backupWorkerNode,var backupWorkerHash])
+{
+    using var app=await Helpers.EmptyJob(backupWorkerRoot);
+    using var probe=new NativeSqliteInspector(backupWorkerNode,backupWorkerHash);
+    using var recovery=await NativeRecoveryFixture.OpenAsync(backupWorkerRoot,app,probe);
+    await recovery.BackupAsync(p=>
+    {
+        if(p!="probe-copy-complete")return;
+        using(var ready=new FileStream(Path.Combine(backupWorkerRoot,"crash-ready"),FileMode.CreateNew,FileAccess.Write,FileShare.Read,4096,FileOptions.WriteThrough))
+        {ready.WriteByte(1);ready.Flush(true);}Thread.Sleep(Timeout.Infinite);
+    });return 0;
+}
 if(args is ["--worker",var workerRoot,var workerNode,var workerHash,var workerBackup,var workerOperation,var point])
 {
     using var app=await Helpers.EmptyJob(workerRoot);
@@ -44,6 +56,97 @@ string Operation(Fixture f)=>Path.GetFileName(Directory.GetDirectories(f.Root,"r
 string Completed(Fixture f,string operation)=>Path.Combine(f.Root,"restore-"+operation,"completed");
 IOException DiskFull()=>new("INJECTED_DISK_FULL",unchecked((int)0x80070070));
 
+await Check("inspector exception cannot leave plaintext in backup artifacts",async()=>
+{
+    using var f=await Make(0);using var recovery=await f.Open();var before=f.DataDigest();
+    try{await recovery.BackupAsync();throw new Exception("invalid SQLite observation accepted");}
+    catch(IOException error)when(error.Message=="RECOVERY_SQLITE_REFUSED"){}
+    Assert(!Directory.GetDirectories(f.Root,"backup-*").Any()&&!Directory.EnumerateFileSystemEntries(Path.Combine(f.Root,".recovery-probes")).Any()&&before==f.DataDigest());
+});
+await Check("cancellation after private SQLite copy never creates a backup artifact",async()=>
+{
+    using var f=await Make();using var recovery=await f.Open();using var cancel=new CancellationTokenSource();var copied=false;
+    try{await recovery.BackupAsync(p=>{if(p=="probe-copy-complete"){copied=true;cancel.Cancel();}},cancel.Token);throw new Exception("cancellation ignored");}
+    catch(OperationCanceledException){}
+    Assert(copied&&!Directory.GetDirectories(f.Root,"backup-*").Any()&&!Directory.EnumerateFileSystemEntries(Path.Combine(f.Root,".recovery-probes")).Any());
+});
+await Check("killed backup worker leaves only private owned residue and admission reconciles it",async()=>
+{
+    using var f=await Make();var before=f.DataDigest();
+    using(var worker=Helpers.Job(f.Root,["--backup-worker",f.Root,node,nodeHash]))
+    {
+        using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(35));
+        while(!File.Exists(Path.Combine(f.Root,"crash-ready")))await Task.Delay(25,deadline.Token);
+        Assert(!Directory.GetDirectories(f.Root,"backup-*").Any());
+        await worker.TerminateAndWaitForTreeEmptyAsync(deadline.Token);
+    }
+    var scratch=Directory.GetDirectories(Path.Combine(f.Root,".recovery-probes")).Single();
+    var database=Path.Combine(scratch,"app.sqlite");Assert(File.ReadAllBytes(database).AsSpan(0,16).SequenceEqual(Encoding.ASCII.GetBytes("SQLite format 3\0")));
+    using(var locked=new FileStream(database,FileMode.Open,FileAccess.Read,FileShare.None))await Reject(async()=>{using var refused=await f.Open();});
+    Assert(File.Exists(database));var owner=Path.Combine(scratch,"owner.json");var original=File.ReadAllBytes(owner);var bad=(byte[])original.Clone();bad[bad.Length/2]^=1;File.WriteAllBytes(owner,bad);
+    await Reject(async()=>{using var refused=await f.Open();});Assert(File.Exists(database));File.WriteAllBytes(owner,original);
+    using var recovery=await f.Open();Assert(recovery.ReconciledProbeResidues==1&&!Directory.Exists(scratch)&&before==f.DataDigest());
+    var backup=await recovery.BackupAsync();Assert(Directory.GetFiles(Path.Combine(f.Root,"backup-"+backup.BackupId)).All(p=>p.EndsWith(".bin")||Path.GetFileName(p)=="receipt.json"));
+});
+await Check("metadata-only interrupted probe creation cleans safely but unowned payload stays quarantined",async()=>
+{
+    using var f=await Make();var catalog=Path.Combine(f.Root,".recovery-probes");Directory.CreateDirectory(catalog);
+    var empty=SafeDirectory.CreatePrivateSession(catalog);
+    using(var recovery=await f.Open())Assert(recovery.ReconciledProbeResidues==1&&!Directory.Exists(empty));
+    var unowned=SafeDirectory.CreatePrivateSession(catalog);var database=Path.Combine(unowned,"app.sqlite");File.Copy(Path.Combine(f.Root,"data/app.sqlite"),database);
+    await Reject(async()=>{using var refused=await f.Open();});Assert(File.Exists(database)&&!Directory.GetDirectories(f.Root,"backup-*").Any());
+});
+await Check("receipt codec exact encoded capacity and one-byte overflow share the intake bound",()=>
+{
+    var maximum=RecoveryReceiptEncoding.MaximumPayloadBytes;var bytes=RecoveryReceiptEncoding.Serialize(new byte[maximum],new string('0',64));
+    Assert(bytes.Length==RecoveryReceiptEncoding.EncodedSize(maximum)&&bytes.Length<=RecoveryReceiptEncoding.MaximumBytes);
+    using(var json=JsonDocument.Parse(bytes))Assert(Convert.FromBase64String(json.RootElement.GetProperty("Payload").GetString()!).Length==maximum);
+    var directory=SafeDirectory.CreatePrivateSession(parent);var file=Path.Combine(directory,"receipt.json");
+    var atLimit=new byte[RecoveryReceiptEncoding.MaximumBytes];bytes.CopyTo(atLimit,0);Array.Fill(atLimit,(byte)' ',bytes.Length,atLimit.Length-bytes.Length);File.WriteAllBytes(file,atLimit);
+    using(var read=WindowsFileBoundary.OpenPrivateRead(file))Assert(read.Small(RecoveryReceiptEncoding.MaximumBytes).Length==atLimit.Length);
+    File.WriteAllBytes(file,new byte[RecoveryReceiptEncoding.MaximumBytes+1]);
+    try{using var read=WindowsFileBoundary.OpenPrivateRead(file);read.Small(RecoveryReceiptEncoding.MaximumBytes);throw new Exception("intake overflow accepted");}catch(IOException error)when(error.Message=="RECOVERY_FILE_BOUND"){}
+    try{RecoveryReceiptEncoding.Serialize(new byte[maximum+1],new string('0',64));throw new Exception("preflight overflow accepted");}catch(IOException error)when(error.Message=="RECOVERY_RECEIPT_BOUND"){}
+    return Task.CompletedTask;
+});
+await Check("10000-record long-path receipt is rejected by metadata preflight",()=>
+{
+    var placeholder=new string('0',64);var files=Enumerable.Range(0,10000).Select(i=>new RecoveryFile("data/"+new string('a',189)+"/"+i.ToString("D5"),0,placeholder,0,placeholder)).ToArray();
+    Assert(files.All(f=>f.Name.Length==200));
+    try{RecoveryReceiptEncoding.Preflight(new(1,new string('a',32),placeholder,5,files));throw new Exception("oversized manifest accepted");}catch(IOException error)when(error.Message=="RECOVERY_RECEIPT_BOUND"){}
+    var shortFiles=files.Select((f,i)=>f with{Name="data/f"+i.ToString("D5")}).ToArray();
+    Assert(RecoveryReceiptEncoding.Preflight(new(1,new string('a',32),placeholder,5,shortFiles))<=RecoveryReceiptEncoding.MaximumBytes);
+    return Task.CompletedTask;
+});
+await Check("200-character source member passes but 201 refuses before encryption",async()=>
+{
+    using var f=await Make();using var recovery=await f.Open();File.WriteAllBytes(Path.Combine(f.Root,"data/media",new string('a',189)),[1]);
+    var valid=await recovery.BackupAsync();var count=Directory.GetDirectories(f.Root,"backup-*").Length;
+    File.WriteAllBytes(Path.Combine(f.Root,"data/media",new string('b',190)),[2]);var encrypted=false;
+    try{await recovery.BackupAsync(p=>{if(p=="backup-chunk-written")encrypted=true;});throw new Exception("long member accepted");}catch(IOException error)when(error.Message=="RECOVERY_MEMBER_PATH"){}
+    Assert(!encrypted&&count==Directory.GetDirectories(f.Root,"backup-*").Length);
+});
+await Check("10000 payload records plus receipt pass the real 10001-file artifact verifier",async()=>
+{
+    using var f=await Make();using var recovery=await f.Open();var backup=await recovery.BackupAsync();var directory=Path.Combine(f.Root,"backup-"+backup.BackupId);
+    var envelope=JsonNode.Parse(File.ReadAllText(Path.Combine(directory,"receipt.json")))!;
+    var manifest=JsonNode.Parse(Convert.FromBase64String(envelope["Payload"]!.GetValue<string>()))!;
+    var originals=manifest["Files"]!.AsArray();var retained=new Dictionary<string,(JsonNode Record,byte[] Cipher)>();
+    foreach(var name in new[]{"data/app.sqlite","identity/master-key","policy/update-policy","policy/update-pin"})
+    {var index=originals.Select((item,i)=>(item,i)).Single(p=>p.item!["Name"]!.GetValue<string>()==name).i;retained[name]=(originals[index]!.DeepClone(),File.ReadAllBytes(Path.Combine(directory,index.ToString("D5")+".bin")));}
+    var records=new JsonArray();var empty=Convert.ToHexStringLower(SHA256.HashData(Array.Empty<byte>()));
+    records.Add(retained["data/app.sqlite"].Record.DeepClone());
+    for(var i=1;i<=9996;i++)records.Add(JsonSerializer.SerializeToNode(new RecoveryFile("data/file-"+i.ToString("D5"),0,empty,0,empty)));
+    foreach(var name in new[]{"identity/master-key","policy/update-policy","policy/update-pin"})records.Add(retained[name].Record.DeepClone());
+    for(var i=0;i<records.Count;i++)File.WriteAllBytes(Path.Combine(directory,i.ToString("D5")+".bin"),retained.TryGetValue(records[i]!["Name"]!.GetValue<string>(),out var original)?original.Cipher:Array.Empty<byte>());
+    f.RewriteReceipt(backup.BackupId,json=>json["Files"]=records);
+    Assert(Directory.GetFiles(directory).Length==10001);
+    try{await recovery.RestoreToNewDirectoryAsync(backup.BackupId,6,6);throw new Exception("unexpected schema acceptance");}
+    catch(IOException error)when(error.Message=="RECOVERY_SCHEMA_INCOMPATIBLE"){} // reached AFTER real artifact membership verification
+    File.WriteAllBytes(Path.Combine(directory,"10000.bin"),[]);
+    try{await recovery.RestoreToNewDirectoryAsync(backup.BackupId,6,6);throw new Exception("extra artifact member accepted");}
+    catch(IOException error)when(error.Message=="RECOVERY_FILE_COUNT"){}
+});
 await Check("actual nonempty job refuses offline boundary",async()=>
 {
     using var f=await Make();using var live=Helpers.Job(f.Root,["--wait"]);using var cancel=new CancellationTokenSource(150);
