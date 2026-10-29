@@ -3,6 +3,8 @@ import { DatabaseSync, backup } from 'node:sqlite';
 import { initializeChatReadState, recordUnread } from './chat-read-state.js';
 import { Diagnostics } from './diagnostics.js';
 import { DATABASE_SCHEMA, USERS_TABLE, migrateAccountNames } from './db.js';
+import { migrateUsage, migrateUsageCalendar, migrateUsageAdmission } from './usage-schema.js';
+import { UsageBudgets } from './usage.js';
 import { normalizeAccountName, accountNameKey } from './account-name.js';
 import {
   mkdirSync,
@@ -35,7 +37,8 @@ export class Store {
   db: DatabaseSync;
   config: Config;
   readonly diagnostics: Diagnostics;
-  constructor(config: Config) {
+  readonly usage: UsageBudgets;
+  constructor(config: Config, options: { usageClock?: () => number } = {}) {
     this.config = config;
     this.diagnostics = new Diagnostics(config);
     mkdirSync(config.dataDir, { recursive: true, mode: 0o700 });
@@ -66,6 +69,11 @@ export class Store {
  CREATE TABLE IF NOT EXISTS identity_labels(family_id TEXT NOT NULL,user_id TEXT NOT NULL,value BLOB NOT NULL,PRIMARY KEY(family_id,user_id),FOREIGN KEY(family_id,user_id) REFERENCES users(family_id,id) ON DELETE CASCADE);
  CREATE TABLE IF NOT EXISTS instance_metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS schema_version(version INTEGER NOT NULL); INSERT INTO schema_version SELECT ${DATABASE_SCHEMA} WHERE NOT EXISTS(SELECT 1 FROM schema_version);`);
+      migrateUsage(this.db);
+      migrateUsageCalendar(this.db);
+      migrateUsageAdmission(this.db);
+      this.usage = new UsageBudgets(this, options.usageClock);
+      this.usage.restart();
       this.run('INSERT OR IGNORE INTO instance_metadata VALUES(?,?)', 'connector', config.connector);
       if (this.one('SELECT version FROM schema_version')?.version !== DATABASE_SCHEMA)
         throw new Error('Unsupported database schema');

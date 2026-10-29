@@ -61,7 +61,7 @@ test('v1 migration keeps unique login names and all durable identity references,
   try {
     const before = snapshot(db), users = rows(db, 'users');
     migrateAccountNames(db);
-    assert.equal(db.prepare('SELECT version FROM schema_version').get()?.version, DATABASE_SCHEMA);
+    assert.equal(db.prepare('SELECT version FROM schema_version').get()?.version, 2);
     assert.deepEqual(rows(db, 'users'), users.map(({ username, display: _display, ...user }) => ({
       ...user, name: username, name_key: accountNameKey(String(username)),
     })));
@@ -109,7 +109,7 @@ test('failure after dropping the old table rolls back rows and schema, then a cl
     assert.deepEqual(rows(db, 'users'), users); assert.deepEqual(snapshot(db), before);
     assert.equal(db.isTransaction, false); foreignKeysOn(db); noTemporaryTable(db);
     migrateAccountNames(db);
-    assert.equal(db.prepare('SELECT version FROM schema_version').get()?.version, DATABASE_SCHEMA);
+    assert.equal(db.prepare('SELECT version FROM schema_version').get()?.version, 2);
     assert.deepEqual(snapshot(db), before);
     assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
   } finally { db.close(); }

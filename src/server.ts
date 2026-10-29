@@ -14,6 +14,7 @@ import { hash, verifyPassword, passwordHash } from './crypto.js';
 import { timingSafeEqual, randomUUID } from 'node:crypto';
 import type { Config } from './config.js';
 import { Store, type Session } from './store.js';
+import { UsageError } from './usage.js';
 import { unreadCount, markLocallyViewed } from './chat-read-state.js';
 import { ChatService, AppError, deny } from './service.js';
 import { voiceToOpus } from './media.js';
@@ -73,7 +74,7 @@ export async function createApp(
   app.setErrorHandler((error, req, reply) => {
     const e = error as any;
     const status =
-      e instanceof AppError
+      e instanceof AppError || e instanceof UsageError
         ? e.status
         : e instanceof z.ZodError
           ? 400
@@ -82,7 +83,7 @@ export async function createApp(
             : 500;
     reply.code(status).send({
       error:
-        e instanceof AppError
+        e instanceof AppError || e instanceof UsageError
           ? e.code
           : status === 400
             ? 'INVALID_INPUT'
@@ -118,7 +119,14 @@ export async function createApp(
   const parent = (s: Session) => {
     if (s.user.role !== 'parent') throw new AppError(403, 'PARENT_ONLY');
   };
-  const group = (s: Session, g: string) => service.requireGroup(s.user, g);
+  app.addHook('preHandler', async req => {
+    if (req.url.split('?')[0].startsWith('/api/groups')) store.usage.require(req.session);
+  });
+  app.addHook('onSend', async (req, reply, payload) => {
+    if (reply.statusCode < 400 && req.url.split('?')[0].startsWith('/api/groups') && req.session) store.usage.require(req.session);
+    return payload;
+  });
+  const group = (s: Session, g: string) => { store.usage.require(s); return service.requireGroup(s.user, g); };
   const current = (s: Session, g: string) => {
     if (!store.session(s.sid)) throw new AppError(401, 'SIGN_IN_REQUIRED');
     group(s, g);
@@ -201,7 +209,10 @@ export async function createApp(
     const authenticated = store.one('SELECT * FROM users WHERE family_id=? AND id=? AND name_key=? AND password=?',
       row.family_id, row.id, accountNameKey(input.name), row.password);
     if (!authenticated) throw new AppError(401, 'INVALID_CREDENTIALS');
-    if (req.cookies.sid) store.run('DELETE FROM sessions WHERE id=?', hash(req.cookies.sid));
+    if (req.cookies.sid) {
+      store.usage.pauseSession(req.cookies.sid);
+      store.run('DELETE FROM sessions WHERE id=?', hash(req.cookies.sid));
+    }
     const session = store.createSession(store.user(authenticated));
     credentialThrottle.clear(credentialKey);
     reply.setCookie('sid', session.sid, {
@@ -227,7 +238,47 @@ export async function createApp(
     };
   });
   app.post('/api/activity', async () => ({ ok: true }));
+  app.get('/api/usage', async req => {
+    if (req.session.user.role !== 'child') throw new AppError(403, 'CHILD_ONLY');
+    return store.usage.status(req.session.user.familyId, req.session.user.id, req.session.sid);
+  });
+  app.post('/api/usage/open', async req => {
+    if (req.session.user.role !== 'child') throw new AppError(403, 'CHILD_ONLY');
+    z.object({}).strict().parse(req.body);
+    return store.usage.open(req.session);
+  });
+  app.post('/api/usage/heartbeat', async req => {
+    if (req.session.user.role !== 'child') throw new AppError(403, 'CHILD_ONLY');
+    const data = z.object({ tab: z.uuid(), seq: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER), active: z.boolean() }).strict().parse(req.body);
+    return store.usage.heartbeat(req.session, data.tab, data.seq, data.active);
+  });
+  app.get<{ Params: { c: string } }>('/api/parent/usage/:c', async req => {
+    parent(req.session);
+    return store.usage.status(req.session.user.familyId, req.params.c);
+  });
+  app.put<{ Params: { c: string } }>('/api/parent/usage/:c', async req => {
+    parent(req.session);
+    const { minutes } = z.object({ minutes: z.number().int().min(0).max(1000000).nullable() }).strict().parse(req.body);
+    const status = store.usage.setPolicy(req.session.user.familyId, req.params.c, minutes);
+    service.notify(req.session.user.familyId, undefined, 'usage');
+    return status;
+  });
+  app.post<{ Params: { c: string } }>('/api/parent/usage/:c/bonus', async req => {
+    parent(req.session);
+    const data = z.object({ requestId: z.uuid(), day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), dayKey: z.string().max(100).optional(), minutes: z.number().int().min(1).max(1000000) }).strict().parse(req.body);
+    const status = store.usage.bonus(req.session.user.familyId, req.params.c, data.requestId, data.day, data.minutes, data.dayKey);
+    service.notify(req.session.user.familyId, undefined, 'usage');
+    return status;
+  });
+  app.put('/api/parent/usage-timezone', async req => {
+    parent(req.session);
+    const { timezone } = z.object({ timezone: z.string().min(1).max(100) }).strict().parse(req.body);
+    store.usage.setTimezone(req.session.user.familyId, timezone);
+    service.notify(req.session.user.familyId, undefined, 'usage');
+    return { ok: true };
+  });
   app.post('/api/logout', async (req, reply) => {
+    store.usage.pauseSession(req.session.sid);
     store.run('DELETE FROM sessions WHERE id=?', hash(req.session.sid));
     service.notify(req.session.user.familyId, undefined, 'session');
     reply.clearCookie('sid', { path: '/' });
@@ -249,6 +300,7 @@ export async function createApp(
     if (!(await limitedVerify(data.current, row.password)))
       throw new AppError(403, 'WRONG_PASSWORD');
     const next = await passwordHash(data.next);
+    store.usage.revokeUser(s.user.familyId, s.user.id);
     credentialThrottle.clear(`account:${s.user.familyId}:${s.user.id}`);
     store.run(
       'UPDATE users SET password=? WHERE family_id=? AND id=?',
@@ -265,6 +317,7 @@ export async function createApp(
     const photo = await service.groupPhoto(s.user, req.params.g);
     if (!store.session(s.sid)) throw new AppError(401, 'SIGN_IN_REQUIRED');
     service.requirePhotoGroup(s.user, req.params.g);
+    store.usage.require(s);
     if (!photo) throw deny();
     return reply.type(photo.mime).send(photo.bytes);
   });
@@ -451,9 +504,10 @@ export async function createApp(
       });
       currentSend();
       return { message: service.public(f, store.getMessage(f, g, id)!) };
-    } catch {
+    } catch (error) {
       if (sameRetention())
         service.update(f, g, id, { status: 'failed' });
+      if (error instanceof UsageError) throw error;
       throw new AppError(502, 'SEND_UNCERTAIN');
     } finally {
       pending.delete(requestKey);
@@ -808,6 +862,7 @@ export async function createApp(
     )
       throw deny();
     const pw = await passwordHash(data.password);
+    store.usage.revokeUser(f, data.childId);
     store.run('UPDATE users SET password=? WHERE family_id=? AND id=?', pw, f, data.childId);
     credentialThrottle.clear(`account:${f}:${data.childId}`);
     store.run('DELETE FROM sessions WHERE family_id=? AND user_id=?', f, data.childId);
@@ -897,10 +952,15 @@ export async function createApp(
         end();
         return;
       }
+      if (s.user.role === 'child' && !['ready', 'heartbeat', 'usage'].includes(event)) {
+        try { store.usage.require(s); }
+        catch { return; }
+      }
       reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
     const listener = (f: string, g: string | undefined, type: string) => {
       if (f !== s.user.familyId) return;
+      if (type === 'usage') { emit('usage', {}); return; }
       if (type === 'revoked' || type === 'reset' || type === 'session') {
         emit('refresh', {});
         return;
@@ -923,6 +983,7 @@ export async function createApp(
   });
   const cleanup = setInterval(() => {
     store.run('DELETE FROM sessions WHERE expires<?', Date.now());
+    try { store.usage.cleanExpiredSessions(); } catch { /* Retry on the next sweep after a server clock/storage fault. */ }
     store.run('DELETE FROM credential_attempts WHERE until<=?', Date.now());
     for (const [k, v] of sends) if (!v.some((t) => t > Date.now() - 60000)) sends.delete(k);
   }, 60000);
@@ -938,6 +999,9 @@ export async function createApp(
   app.addHook('preClose', async () => {
     shuttingDown = true;
     clearInterval(cleanup);
+    // Settle a graceful stop immediately; abrupt interruption retains only the
+    // bounded lease tail. A clock fault must not prevent transport shutdown.
+    try { store.usage.restart(); } catch { /* Fail closed at the persisted lease expiry. */ }
     // onClose runs only AFTER HTTP connections drain. Closing long-lived SSE
     // there deadlocks shutdown and can leave a fresh data lock after SIGKILL.
     for (const end of streams) end(true);

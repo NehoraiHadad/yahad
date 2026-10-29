@@ -29,8 +29,8 @@ try {
     await import('@whiskeysockets/baileys');
   } finally { await fresh.app.close(); }
 
-  const migrationFixtures = new Map<number, () => Promise<void>>([[1, async () => {
-  const upgradeConfig = { ...config, dataDir: join(dir, 'synthetic-upgrade') };
+  const migrationFixture = async (source: number) => {
+  const upgradeConfig = { ...config, dataDir: join(dir, 'synthetic-upgrade-' + source) };
   const seed = new Store(upgradeConfig), password = 'synthetic release passphrase only';
   const family = await seed.createFamily('Synthetic', { name: 'parent-smoke', password }, { name: 'child-smoke', password });
   const child = seed.user(seed.one('SELECT * FROM users WHERE id=?', family.childId));
@@ -43,11 +43,22 @@ try {
     time: 1, kind: 'text', status: 'delivered', text: 'Synthetic history, not household data', reactions: {} });
   const originalPassword = seed.one('SELECT password FROM users WHERE id=?', family.childId).password;
   const originalAuth = seed.one('SELECT value FROM auth WHERE family_id=?', family.familyId).value;
+  if (source >= 3) {
+    seed.usage.setTimezone(family.familyId, 'Asia/Jerusalem');
+    const policy = seed.usage.setPolicy(family.familyId, family.childId, 37);
+    seed.run('INSERT INTO usage_days VALUES(?,?,?,?,?)', family.familyId, family.childId, policy.dayKey, 1234, 60000);
+    if (source === 4) seed.usage.setTimezone(family.familyId, 'America/New_York');
+  }
+  const originalCalendar = source === 4 ? seed.one('SELECT * FROM usage_calendar WHERE family_id=?', family.familyId) : null;
   seed.close();
   // Produce an exact legacy users layout inside this disposable fixture only.
   // This is NOT a runtime downgrade or restore path.
   const legacy = new DatabaseSync(join(upgradeConfig.dataDir, 'app.sqlite'));
   try {
+    legacy.exec('UPDATE schema_version SET version=4;');
+    if (source < 4) legacy.exec('DROP TABLE usage_calendar; UPDATE schema_version SET version=3;');
+    if (source < 3) legacy.exec('DROP TABLE usage_bonus; DROP TABLE usage_leases; DROP TABLE usage_days; DROP TABLE usage_policy; DROP TABLE usage_families; UPDATE schema_version SET version=2;');
+    if (source === 1)
     legacy.exec(`PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE;
       CREATE TABLE users_legacy(id TEXT NOT NULL,family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE,username TEXT NOT NULL UNIQUE,display TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('parent','child')),password TEXT NOT NULL,PRIMARY KEY(family_id,id));
       INSERT INTO users_legacy SELECT id,family_id,name,'אני',role,password FROM users;
@@ -66,12 +77,17 @@ try {
     assert.equal(store.identityLabel(family.familyId, family.childId), 'Synthetic signature');
     assert.equal(store.getMessage(family.familyId, group, 'synthetic-message')?.text, 'Synthetic history, not household data');
     assert.deepEqual(store.all('PRAGMA foreign_key_check'), []);
+    const usage = store.usage.status(family.familyId, family.childId);
+    assert.equal(usage.minutes, source >= 3 ? 37 : null);
+    if (source >= 3) { assert.equal(usage.usedMs, 1234); assert.equal(usage.bonusMs, 60000); assert.equal(usage.timezone, 'Asia/Jerusalem'); assert.equal(usage.timezoneConfirmed, true); }
+    if (source === 4) { assert.deepEqual(store.one('SELECT * FROM usage_calendar WHERE family_id=?', family.familyId), originalCalendar); assert.equal(usage.pendingTimezone, 'America/New_York'); }
     const columns = store.all('PRAGMA table_info(users)').map(column => column.name);
     assert.ok(!columns.includes('username') && !columns.includes('display'));
     const login = await app.inject({ method: 'POST', url: '/api/login', headers: {origin:config.origin}, payload: { name: 'CHILD-SMOKE', password } });
     assert.equal(login.statusCode, 200);
   } finally { await upgraded.app.close(); }
-  }]]);
+  };
+  const migrationFixtures = new Map<number, () => Promise<void>>([[1, () => migrationFixture(1)], [2, () => migrationFixture(2)], [3, () => migrationFixture(3)], [4, () => migrationFixture(4)]]);
   for (const source of DATABASE_MIGRATIONS_FROM) {
     const fixture = migrationFixtures.get(source);
     if (!fixture) throw new Error(`No synthetic migration fixture for schema ${source}`);

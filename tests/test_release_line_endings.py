@@ -15,7 +15,7 @@ class ReleaseLineEndings(unittest.TestCase):
   root,result=self.package(b'\n');self.assertEqual(result.returncode,0,result.stderr)
   with zipfile.ZipFile(root/'out/yachad-app.zip') as archive:self.assertEqual(archive.read('deploy/updater.py'),b'# synthetic\n')
   manifest=json.loads((root/'out/yachad-release.json').read_bytes())
-  self.assertEqual((manifest['format'],manifest['databaseSchema'],manifest['databaseMigrationsFrom'],manifest['minimumUpdaterProtocol']),(2,2,[1],2))
+  self.assertEqual((manifest['format'],manifest['databaseSchema'],manifest['databaseMigrationsFrom'],manifest['minimumUpdaterProtocol']),(2,5,[1,2,3,4],2))
  def test_crlf_privileged_source_rejected_before_output(self):
   root,result=self.package(b'\r\n');self.assertNotEqual(result.returncode,0)
   self.assertIn('Noncanonical deploy line endings',result.stderr);self.assertFalse((root/'out').exists())
