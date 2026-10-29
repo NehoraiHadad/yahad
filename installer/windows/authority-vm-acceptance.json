@@ -1,0 +1,268 @@
+{
+  "schema": 1,
+  "kind": "proposed-windows-authority-adapter-acceptance",
+  "status": "design-only-blocked",
+  "authorized": false,
+  "executionEligible": false,
+  "baselineSource": "b1ea1bd5be33693fa7d3e2f7e375d3d1a1d0444d",
+  "purpose": "Real Windows service identities, exact file roles, authenticated local owner channel, gated process containment and synthetic activation/recovery; no family app listener.",
+  "requiredBeforeAnyExecution": [
+    "Implement the plan, review it, and freeze the actual new source commit and all executable/dependency hashes in this single manifest.",
+    "Identify a disposable Windows 11 x64 VM and snapshot; record VM ID, console, OS build, snapshot ID, existing owner and adversary Windows SIDs.",
+    "Verify no real family data, domain membership, production credentials, existing Yahad.Acceptance services or colliding target directories.",
+    "Owner explicitly approves the final populated manifest SHA256 and exact VM/snapshot; earlier service/GUI proposals grant no approval here."
+  ],
+  "machine": {
+    "vmId": null,
+    "snapshotId": null,
+    "console": null,
+    "os": "supported Windows 11 x64",
+    "osBuild": null,
+    "domainJoined": false,
+    "disposable": true,
+    "vmAvailabilityVerified": false,
+    "network": "VM NIC disconnected; local console only",
+    "existingOwnerSid": null,
+    "existingAdversarySid": null,
+    "newUserAccounts": [],
+    "runtimesPreinstalledRequired": false
+  },
+  "artifacts": {
+    "newSourceCommit": null,
+    "newPackageSha256": null,
+    "completeFileManifestSha256": null,
+    "newExecutables": [
+      {
+        "path": "bootstrap/authority/Yahad.Authority.exe",
+        "sha256": null
+      },
+      {
+        "path": "bootstrap/runtime/Yahad.ServiceHost.exe",
+        "sha256": null
+      },
+      {
+        "path": "bootstrap/owner/Yahad.Owner.exe",
+        "sha256": null
+      },
+      {
+        "path": "bootstrap/test/Yahad.Authority.Acceptance.Worker.exe",
+        "sha256": null
+      },
+      {
+        "path": "bootstrap/probe/node/node.exe",
+        "sha256": null
+      }
+    ],
+    "allSelfContainedDependenciesMustBeInventoried": true,
+    "referenceOnlyNotRunnableAsNewAdapter": {
+      "source": "b1ea1bd5be33693fa7d3e2f7e375d3d1a1d0444d",
+      "archive": "yahad-service-host-b1ea1bd-win-x64.zip",
+      "sha256": "faabf68cc6aae8f4e096900433e0a59f892dbf95c077261721eae84fff6aa262",
+      "reason": "No authority/owner-channel executable exists in that package; do not substitute it."
+    }
+  },
+  "installationAuthority": {
+    "executor": "elevated administrator in identified VM only",
+    "purpose": "create only the two exact service registrations and new test directory trees; register the existing unelevated owner SID after OS-token verification and native confirmation",
+    "persistentCredentialsCreated": false,
+    "productionCapabilitiesCreated": false,
+    "temporarySyntheticApprovalLedgerAllowedOnlyAfterApproval": true
+  },
+  "services": [
+    {
+      "name": "Yahad.Acceptance.Authority",
+      "account": "NT SERVICE\\Yahad.Acceptance.Authority",
+      "type": "SERVICE_WIN32_OWN_PROCESS",
+      "imagePath": "\"C:\\Program Files\\Yahad.Acceptance\\bootstrap\\authority\\Yahad.Authority.exe\" --service",
+      "startType": "SERVICE_DEMAND_START",
+      "sidType": "SERVICE_SID_TYPE_UNRESTRICTED",
+      "requiredPrivileges": [
+        "SeChangeNotifyPrivilege"
+      ],
+      "failureActions": [],
+      "delayedAutoStart": false,
+      "objectOwner": "BUILTIN\\Administrators",
+      "serviceObjectAccess": {
+        "SYSTEM": "SERVICE_ALL_ACCESS",
+        "BUILTIN\\Administrators": "SERVICE_ALL_ACCESS",
+        "runtime": "none",
+        "registeredOwner": "none; status through authenticated pipe"
+      }
+    },
+    {
+      "name": "Yahad.Acceptance",
+      "account": "NT SERVICE\\Yahad.Acceptance",
+      "type": "SERVICE_WIN32_OWN_PROCESS",
+      "imagePath": "\"C:\\Program Files\\Yahad.Acceptance\\bootstrap\\runtime\\Yahad.ServiceHost.exe\" --service",
+      "startType": "SERVICE_DEMAND_START",
+      "sidType": "SERVICE_SID_TYPE_UNRESTRICTED",
+      "requiredPrivileges": [
+        "SeChangeNotifyPrivilege"
+      ],
+      "failureActions": [],
+      "delayedAutoStart": false,
+      "objectOwner": "BUILTIN\\Administrators",
+      "serviceObjectAccess": {
+        "SYSTEM": "SERVICE_ALL_ACCESS",
+        "BUILTIN\\Administrators": "SERVICE_ALL_ACCESS",
+        "NT SERVICE\\Yahad.Acceptance.Authority": "0x000200b5: READ_CONTROL, QUERY_CONFIG, QUERY_STATUS, START, STOP, INTERROGATE",
+        "runtime": "no extra service control rights",
+        "registeredOwner": "none; requests through pipe"
+      }
+    }
+  ],
+  "persistentChangeAllowlist": [
+    "HKLM\\SYSTEM\\CurrentControlSet\\Services\\Yahad.Acceptance.Authority and its exact child configuration",
+    "HKLM\\SYSTEM\\CurrentControlSet\\Services\\Yahad.Acceptance and its exact child configuration",
+    "C:\\Program Files\\Yahad.Acceptance: new verified bootstrap/runtime/owner/probe/test executable tree only",
+    "C:\\ProgramData\\Yahad.Acceptance: new synthetic installation/control/data/payload/approval/status/backup/recovery tree only",
+    "OS-generated SCM event records and virtual-service-logon/profile bookkeeping: observe and retain inventory; do not edit or delete shared profiles; snapshot revert is full rollback"
+  ],
+  "fileRoles": [
+    {
+      "path": "C:\\Program Files\\Yahad.Acceptance",
+      "owner": "BUILTIN\\Administrators",
+      "daclProtected": true,
+      "access": {
+        "SYSTEM": "FullControl",
+        "Administrators": "FullControl",
+        "authority": "ReadAndExecute",
+        "runtime": "ReadAndExecute on runtime/worker/probe closure only",
+        "registeredOwner": "ReadAndExecute on owner companion/dependency closure only"
+      },
+      "others": "none; scoped execute-only ancestor traversal as required, never secrets"
+    },
+    {
+      "path": "C:\\ProgramData\\Yahad.Acceptance\\installation.json",
+      "owner": "BUILTIN\\Administrators",
+      "daclProtected": true,
+      "access": {
+        "SYSTEM": "FullControl",
+        "Administrators": "FullControl",
+        "authority": "Read",
+        "runtime": "Read"
+      },
+      "others": "none"
+    },
+    {
+      "path": "C:\\ProgramData\\Yahad.Acceptance: dynamic bootstrap/activation/epoch/owner/web and payload tree",
+      "owner": "authority SID",
+      "daclProtected": true,
+      "access": {
+        "SYSTEM": "FullControl",
+        "Administrators": "FullControl",
+        "authority": "Modify",
+        "runtime": "Read; admitted payload ReadAndExecute"
+      },
+      "others": "none"
+    },
+    {
+      "path": "C:\\ProgramData\\Yahad.Acceptance: .authority approval/nonce/pending/quarantine records and backup/recovery staging",
+      "owner": "authority SID",
+      "daclProtected": true,
+      "access": {
+        "SYSTEM": "FullControl",
+        "Administrators": "FullControl",
+        "authority": "Modify"
+      },
+      "others": "none; publish separate bounded runtime-readable status only"
+    },
+    {
+      "path": "C:\\ProgramData\\Yahad.Acceptance\\datasets: live synthetic data/media",
+      "owner": "authority root; runtime-created leaves may be runtime owned",
+      "daclProtected": true,
+      "access": {
+        "SYSTEM": "FullControl",
+        "Administrators": "FullControl",
+        "runtime": "Modify",
+        "authority": "ReadAndExecute; exclusive lock file read/write; Modify only separate authority-created backup/restore/probe roots"
+      },
+      "others": "none"
+    },
+    {
+      "path": "C:\\ProgramData\\Yahad.Acceptance: synthetic master-key/update-policy/update-pin",
+      "owner": "authority SID or Administrators according to anchored class",
+      "daclProtected": true,
+      "access": {
+        "SYSTEM": "FullControl",
+        "Administrators": "FullControl",
+        "authority": "Read; authority-owned policy publication only after exact approval",
+        "runtime": "Read"
+      },
+      "others": "none"
+    }
+  ],
+  "localEndpoints": {
+    "pipeNames": [
+      "\\\\.\\pipe\\Yahad.Authority.<installationId>.requests",
+      "\\\\.\\pipe\\Yahad.Authority.<installationId>.owner",
+      "\\\\.\\pipe\\Yahad.Authority.<installationId>.runtime"
+    ],
+    "literalInstallIdMustBeFrozenInFinalManifest": null,
+    "remoteClients": "PIPE_REJECT_REMOTE_CLIENTS",
+    "firstInstance": "mandatory; collision refuses startup",
+    "clientRights": "individual read-data/write-data/synchronize; no FILE_CREATE_PIPE_INSTANCE/WRITE_DAC/WRITE_OWNER",
+    "peerAuthentication": "OS token + retained process handle/creation identity; owner SID from immutable registration; runtime exact SCM PID; client verifies authority SCM PID/token/image",
+    "clientSQOS": "SecurityIdentification",
+    "maximumFrameBytes": 32768,
+    "maximumConcurrentMutations": 1,
+    "approvalLifetimeSeconds": 600,
+    "tcpUdpListenersAllowed": false,
+    "temporaryPipeHandlesClosedOnStop": true
+  },
+  "processRules": {
+    "authority": "never launches arbitrary payload commands; fixed installer-owned Node for fixed read-only SQLite probes only",
+    "runtime": "native host waits before any application child; authenticated generation gate",
+    "outerJob": "authority-owned, no breakaway, kill-on-last-owner-close, no child inheritance of job handle",
+    "assignment": "exact SCM PID/handle/token, grant authority only process set-quota/terminate/query/synchronize; assign before launch permission; nesting failure blocks before Node",
+    "quiescence": "retain exact host handle plus authority-owned job; observe host exit AND empty job AND exclusive data lease before mutation",
+    "privilegeFallback": "none; no Debug/Impersonate/AssignPrimaryToken privileges",
+    "worker": "hash-pinned test worker uses synthetic SQLite/actual Store lease and child tree; no HTTP, WhatsApp or provider code"
+  },
+  "testSteps": [
+    "Record baseline service/path absence and snapshot. Verify all source/package hashes before elevated copy. Abort on collision or changed artifacts.",
+    "Provision only declared roots, exact protected role ACLs, immutable installation descriptor with verified existing owner SID, and two demand-start services. Read back all identities/configuration/token privileges/ACLs.",
+    "Start authority manually. Verify local pipe ACLs, mutual kernel peer authentication, and refusal before trust/owner state exists. Start runtime only via authority; verify startup gate and outer-job membership before hash-pinned non-listening test worker.",
+    "Attempt ordinary child/adversary SID, runtime request with forged owner fields, wrong digest, expired/replayed challenge, pipe collision/spoofed server and service configuration drift. Require denial and byte-identical protected records.",
+    "Submit bounded synthetic exact-target request, open installed companion as registered existing owner, display authoritative summary and approve. Verify token-derived principal, durable approval/CAS/nonce and actual consumer admission, with data leases held throughout.",
+    "Verify graceful stop and full real process-tree exit; exercise stuck child, failed observation and denied process-assignment access. Unknown state must retain recovery-required and must not publish success/STOPPED as confirmed cleanup.",
+    "Kill authority during an owned synthetic update, nonce reservation and selected record publications. Verify managed-tree termination and fail-closed reconciliation; owner may explicitly reconcile only when actual required observations exist. A missing old job handle alone never proves quiescence.",
+    "Use actual synthetic encrypted backup receipt and restore to a new directory; corrupt receipt/SQLite and stale epoch must refuse. Verify active synthetic DB never overwritten on failure.",
+    "Exercise ordinary uninstall receipt path retaining synthetic data by default, reinstall without resetting identities/policy/pins, then perform the declared rollback and VM snapshot revert. Record all skips as acceptance gaps."
+  ],
+  "outOfScope": [
+    "real family or WhatsApp data",
+    "app HTTP/TLS/LAN handoff",
+    "automatic mode delegation",
+    "autostart/boot/reboot/power-loss acceptance",
+    "VM creation/configuration",
+    "Windows user/account creation",
+    "global PATH/runtime installation",
+    "firewall/CA/certificate trust/DNS/router/tunnel changes",
+    "URI handlers/tray autostart/scheduled tasks",
+    "signing keys/credentials/provider enrollment",
+    "release/website/PR publication"
+  ],
+  "rollback": [
+    "Stop the exact acceptance worker gracefully; on timeout request contained termination and wait for exact host/job death. Unknown cleanup blocks file/service deletion; do not call termination-request success an observation.",
+    "Stop authority and verify its exact PID and private probe tree exit. Remove only the two service registrations proven by this test installation receipt; wait for actual deletion. Abort on identity/configuration drift.",
+    "Remove only the new Program Files test tree after canonical-path, no-reparse, receipt/hash and quiescence checks. Never remove global runtimes or unrelated services.",
+    "Ordinary uninstall keeps ProgramData synthetic data/backups and records their inventory; do not exercise permanent family-data deletion. Preserve private failure evidence in the VM only.",
+    "Revert the named disposable snapshot to remove all remaining synthetic data, test ACLs and OS-managed virtual-account bookkeeping. Confirm original service/path absence after revert; never delete shared service profiles manually."
+  ],
+  "passRequires": [
+    "actual expected service tokens and exact ACL allow/deny results",
+    "mutually authenticated local owner channel, including wrong-user rejection",
+    "real kernel job/start gate and data-lease observations",
+    "replay/stale/interrupt tests against actual writer and consumer",
+    "successful declared rollback and snapshot revert"
+  ],
+  "cannotClaimFromThisTest": [
+    "family-ready installer",
+    "trusted public release intake",
+    "successful real browser onboarding",
+    "automatic Windows updates",
+    "clean power-loss recovery",
+    "Linux or ARM acceptance"
+  ]
+}
