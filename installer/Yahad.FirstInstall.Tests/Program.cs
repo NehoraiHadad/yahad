@@ -12,6 +12,10 @@ using Yahad.Install;
 using Yahad.Service;
 using Yahad.Setup;
 
+if(args is ["--elevation-framing-only"])
+{
+    var result=await ElevationFramingRegression.RunAsync();Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));return result.Ok?0:1;
+}
 if(args is not [var node,var repo,var helper,var output])throw new IOException("TEST_INPUTS_REQUIRED");
 Directory.CreateDirectory(output);var cases=new List<object>();int failures=0;
 void Assert(bool condition,string code="assertion failed"){if(!condition)throw new Exception(code);}
@@ -95,6 +99,8 @@ await Check("reinstall cached payload verification rejects changed missing and a
  File.WriteAllText(file,"changed");await Refuse(()=>{PreservedInstallation.VerifyDirectory(root,records,"payload/");return Task.CompletedTask;});File.Delete(file);
  await Refuse(()=>{PreservedInstallation.VerifyDirectory(root,records,"payload/");return Task.CompletedTask;});
 });
+await Check("elevated progress frame completes while the calling UI context is synchronously blocked",async()=>
+{var result=await ElevationFramingRegression.RunAsync();Assert(result.Ok,"ELEVATION_PROGRESS_CONTEXT_DEADLOCK");});
 using var f=await ProductionFixture.Create(node,repo,helper);
 await Check("real Store first startup creates schema5 only after one-use authorization",async()=>
 {

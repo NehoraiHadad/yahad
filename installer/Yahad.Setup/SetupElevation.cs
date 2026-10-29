@@ -89,8 +89,10 @@ internal static class SetupElevation
         finally{Marshal.FreeHGlobal(memory);pin.Free();}
         return new NamedPipeServerStream(PipeDirection.InOut,true,false,handle);
     }
+    // Progress can synchronously wait here on the elevated WPF dispatcher.
+    // Framing I/O must never capture that blocked caller's UI context.
     private static async Task WriteAsync(Stream stream,SetupWire value,CancellationToken cancellation)
-    {var bytes=JsonSerializer.SerializeToUtf8Bytes(value);if(bytes.Length>32768)throw new IOException("SETUP_FRAME_BOUND");var header=BitConverter.GetBytes(bytes.Length);await stream.WriteAsync(header,cancellation);await stream.WriteAsync(bytes,cancellation);await stream.FlushAsync(cancellation);}
+    {var bytes=JsonSerializer.SerializeToUtf8Bytes(value);if(bytes.Length>32768)throw new IOException("SETUP_FRAME_BOUND");var header=BitConverter.GetBytes(bytes.Length);await stream.WriteAsync(header,cancellation).ConfigureAwait(false);await stream.WriteAsync(bytes,cancellation).ConfigureAwait(false);await stream.FlushAsync(cancellation).ConfigureAwait(false);}
     private static async Task<SetupWire> ReadAsync(Stream stream,CancellationToken cancellation)
     {var header=new byte[4];await stream.ReadExactlyAsync(header,cancellation);var n=BitConverter.ToInt32(header);if(n is <2 or >32768)throw new IOException("SETUP_FRAME_BOUND");var bytes=new byte[n];await stream.ReadExactlyAsync(bytes,cancellation);return NativeJson.Read<SetupWire>(bytes);}
     [StructLayout(LayoutKind.Sequential)]private struct Attributes{public int Length;public IntPtr Descriptor;public int Inherit;}

@@ -118,3 +118,20 @@ automated acceptance check.
 
 Synthetic checkpoint: 37 first-install cases and 45 service-host cases passed.
 These are not evidence of actual Windows SCM installation or OS-token acceptance.
+
+## Elevation framing repair after ASUS attempt
+
+The actual owner-approved ASUS attempt reached the elevated helper but stalled
+before first progress/service creation. The elevated WPF dispatcher synchronously
+waits for progress delivery; frame writes captured that same blocked context.
+The framing writer now uses ConfigureAwait(false) on all asynchronous writes and
+flushes. A regression invokes the actual private writer on a blocked UI context
+with an in-memory asynchronously completing stream: old code times out with one
+queued UI continuation; fixed code delivers the complete frame with zero.
+All 38 first-install synthetic cases passed. Actual service/web acceptance remains
+unverified. The previous helper must be quiescent before another installation.
+
+Only Setup framing/tests/docs changed in this repair. A repaired Setup may reuse
+the retained, verified application/service ZIP from 2d1b547 unchanged; record the
+new Setup source separately from its unchanged app/helper payload source and
+never describe the old 4881073-associated installer as containing this repair.
