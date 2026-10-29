@@ -35,6 +35,7 @@ public sealed class NativeSqliteInspector : IDisposable
         var output=Path.Combine(privateScratch,"sqlite-observation-"+Guid.NewGuid().ToString("N")+".json");
         try{return await SqliteProbeProcess.ReadAsync(node,Script,database,privateScratch,output,TimeSpan.FromSeconds(30),cancellation,fault);}
         catch(ProbeOwnershipException owned){pending=owned;owned.KeepAlive(this);owned.AfterCleanup(()=>pending=null);throw;}
+        catch(IOException refused)when(refused.Message=="SQLITE_PROBE_REFUSED"){throw new IOException("RECOVERY_SQLITE_REFUSED",refused);}
     }
     public void Dispose(){if(pending is not null&&!pending.QuiescenceConfirmed)throw new IOException("RECOVERY_PROBE_QUIESCENCE_UNCONFIRMED");pinned.Dispose();}
 }
