@@ -46,6 +46,49 @@ public static class WindowsFileBoundary
         catch { pinned.Dispose(); throw; }
     }
 
+    internal static PrivateReadLease OpenBootstrapForInstaller(string path,SecurityIdentifier expectedService)
+    {var pin=Pin(path,false,true);try{ValidateAcl(Security(pin.Leaf),expectedService,true);return new(pin);}catch{pin.Dispose();throw;}}
+    internal static PrivateReadLease OpenInstallerInitialSeed(string path,SecurityIdentifier expectedService)
+    {var pin=Pin(path,false,true);try{ValidateInitialSeedAcl(Security(pin.Leaf),expectedService);return new(pin);}catch{pin.Dispose();throw;}}
+    internal static PrivateReadLease OpenInstallerMetadata(string path)
+    {
+        var pin=Pin(path,false,true);try
+        {
+            var acl=Security(pin.Leaf);var admins=new SecurityIdentifier("S-1-5-32-544");var system=new SecurityIdentifier("S-1-5-18");
+            if(acl.Owner!=admins&&acl.Owner!=system||acl.DiscretionaryAcl is null)throw new IOException("INSTALL_METADATA_OWNER");
+            foreach(GenericAce raw in acl.DiscretionaryAcl)
+            {
+                if(raw is not CommonAce ace||ace.IsCallback)throw new IOException("INSTALL_METADATA_ACE");
+                if(ace.AceQualifier==AceQualifier.AccessDenied)continue;
+                if(ace.AceQualifier!=AceQualifier.AccessAllowed)throw new IOException("INSTALL_METADATA_ACE");
+                if(ace.SecurityIdentifier==admins||ace.SecurityIdentifier==system)continue;
+                if(!ace.SecurityIdentifier.Value.StartsWith("S-1-5-80-",StringComparison.Ordinal)||(ace.AccessMask&~0x1200a9)!=0)throw new IOException("INSTALL_METADATA_ACCESS");
+            }
+            return new(pin);
+        }
+        catch{pin.Dispose();throw;}
+    }
+    internal static IDisposable PinSingleServiceDirectory(string path,bool immutable)
+    {var pin=Pin(path,true,false);try{ValidateAcl(Security(pin.Leaf),ApplicationSid(),immutable);return pin;}catch{pin.Dispose();throw;}}
+    internal static void ValidateInitialSeedAcl(RawSecurityDescriptor acl,SecurityIdentifier service)
+    {
+        var copy=new RawSecurityDescriptor(acl.GetSddlForm(AccessControlSections.All));
+        if(copy.DiscretionaryAcl is null)throw new IOException("FIRST_SEED_ACL");
+        foreach(GenericAce entry in copy.DiscretionaryAcl)
+        {if(entry is CommonAce ace&&ace.AceQualifier==AceQualifier.AccessAllowed&&ace.SecurityIdentifier==service){if((ace.AccessMask&~0x001300a9)!=0)throw new IOException("FIRST_SEED_WRITABLE");ace.AccessMask&=~0x10000;}}
+        ValidateAcl(copy,service,true);
+    }
+    internal static byte[] ReadInitialSeed(string path)
+    {var pin=Pin(path,false,true);using var lease=new PrivateReadLease(pin);ValidateInitialSeedAcl(Security(pin.Leaf),ApplicationSid());return lease.Small(4096);}
+    internal static void ConsumeInitialSeed(string path,string expectedDigest)
+    {
+        var pin=Pin(path,false,true,true);using(var lease=new PrivateReadLease(pin))
+        {ValidateInitialSeedAcl(Security(pin.Leaf),ApplicationSid());if(Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(lease.Small(4096)))!=expectedDigest)throw new IOException("FIRST_SEED_CHANGED");
+        byte disposition=1;if(!SetFileInformationByHandle(pin.Leaf,4,ref disposition,1))throw new Win32Exception();}
+        if(File.Exists(path))throw new IOException("FIRST_SEED_NOT_CONSUMED");
+    }
+    [DllImport("kernel32.dll",SetLastError=true)]private static extern bool SetFileInformationByHandle(SafeFileHandle file,int kind,ref byte value,int bytes);
+
     // Recovery reads use the same pinned path, no-follow, link-count and ACL
     // checks as secrets, with bounded streaming rather than loading media in RAM.
     internal static PrivateReadLease OpenInstalledRoleRead(string path,InstalledFileRoles roles,InstalledFileRole role)
@@ -200,7 +243,7 @@ public static class WindowsFileBoundary
         }
     }
 
-    private static PinnedPath Pin(string path, bool leafDirectory, bool readContents)
+    private static PinnedPath Pin(string path, bool leafDirectory, bool readContents,bool delete=false)
     {
         CanonicalLocalPath(path);
         var result = new PinnedPath();
@@ -214,7 +257,7 @@ public static class WindowsFileBoundary
             for (var i = 0; i < parts.Length; i++)
             {
                 prefix = Path.Combine(prefix, parts[i]);
-                result.Handles.Add(Open(prefix, i < parts.Length - 1 || leafDirectory, i == parts.Length - 1 && readContents));
+                result.Handles.Add(Open(prefix, i < parts.Length - 1 || leafDirectory, i == parts.Length - 1 && readContents,i==parts.Length-1&&delete));
             }
             return result;
         }
@@ -223,9 +266,9 @@ public static class WindowsFileBoundary
 
     private static string Extended(string canonical) => @"\\?\" + canonical;
 
-    private static SafeFileHandle Open(string path, bool directory, bool contents)
+    private static SafeFileHandle Open(string path, bool directory, bool contents,bool delete=false)
     {
-        var handle = Native.CreateFileW(Extended(path), ReadControl | ReadAttributes | (contents ? GenericRead : 0),
+        var handle = Native.CreateFileW(Extended(path), ReadControl | ReadAttributes | (contents ? GenericRead : 0) | (delete?0x10000u:0),
             contents ? 1u : 3u, IntPtr.Zero, 3, 0x00200000 | 0x02000000, IntPtr.Zero);
         if (handle.IsInvalid) { var error = Marshal.GetLastPInvokeError(); handle.Dispose(); throw new Win32Exception(error); }
         try { CheckKind(handle, directory); return handle; }

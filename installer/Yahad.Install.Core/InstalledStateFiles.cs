@@ -6,16 +6,19 @@ namespace Yahad.Install;
 // private-file checks; it is internal and never selectable by CLI/JSON/env.
 internal sealed class InstalledStateFiles
 {
+    internal bool IsSingleService{get;}
     internal string Root{get;}internal InstalledFileRoles? Roles{get;}
     internal string ProbeExecutable{get;}internal string ProbeDigest{get;}
     internal string RuntimeTemporary=>Path.Combine(Root,"temporary");
     internal string ProbeTemporary=>Roles is null?RuntimeTemporary:Path.Combine(Root,"authority-temporary");
     private readonly Action<string,InstalledFileRole>? projectedRole;
-    private InstalledStateFiles(string root,InstalledFileRoles? roles,string probe,string probeDigest,Action<string,InstalledFileRole>? projection)
-    {Root=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(root));Roles=roles;ProbeExecutable=probe;ProbeDigest=probeDigest;projectedRole=projection;ValidateRoot();}
+    private InstalledStateFiles(string root,InstalledFileRoles? roles,string probe,string probeDigest,Action<string,InstalledFileRole>? projection,bool singleService=false)
+    {IsSingleService=singleService;Root=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(root));Roles=roles;ProbeExecutable=probe;ProbeDigest=probeDigest;projectedRole=projection;ValidateRoot();}
+    internal static InstalledStateFiles SingleService(string root)=>new(root,null,"","",null,true);
     internal static InstalledStateFiles Private(string root,string probe="",string digest="",Action<string,InstalledFileRole>? projection=null)=>new(root,null,probe,digest,projection);
     internal static InstalledStateFiles Installed(string root,InstalledFileRoles roles,string probe,string digest)=>new(root,roles,probe,digest,null);
-    internal void ValidateRoot(){if(Roles is null)SafeDirectory.ValidateSession(Root);else using(WindowsFileBoundary.PinInstalledRoleDirectory(Root,Roles,InstalledFileRole.Control)){}projectedRole?.Invoke(Root,InstalledFileRole.Control);}
+    internal void ValidateRoot(){if(IsSingleService){using var root=WindowsFileBoundary.PinSingleServiceDirectory(Root,true);}
+        else if(Roles is null)SafeDirectory.ValidateSession(Root);else using(WindowsFileBoundary.PinInstalledRoleDirectory(Root,Roles,InstalledFileRole.Control)){}projectedRole?.Invoke(Root,InstalledFileRole.Control);}
     internal string PathOf(string relative)
     {var path=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(Path.Combine(Root,relative)));if(!path.StartsWith(Root+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))throw new IOException("AUTHORITY_STORAGE_PATH");return path;}
     internal InstalledFileRole SecretClass(string path,SecretRole role)=>role==SecretRole.MasterKey?InstalledFileRole.MasterKey:string.Equals(Path.GetFullPath(path),PathOf("bootstrap.json"),StringComparison.OrdinalIgnoreCase)?InstalledFileRole.Control:InstalledFileRole.Anchor;
@@ -36,13 +39,14 @@ internal sealed class InstalledStateFiles
         }
         return InstalledFileRole.Control;
     }
+    private bool Mutable(string path){var n=Path.GetRelativePath(Root,path).Replace('\\','/');return n=="temporary"||n.StartsWith("temporary/",StringComparison.Ordinal)||n.EndsWith("/data",StringComparison.Ordinal)||n.Contains("/data/",StringComparison.Ordinal);}
     internal WindowsFileBoundary.PrivateReadLease Open(string path)
-    {var role=Role(path);projectedRole?.Invoke(path,role);return Roles is null?WindowsFileBoundary.OpenPrivateRead(path):WindowsFileBoundary.OpenInstalledRoleRead(path,Roles,role);}
+    {if(IsSingleService&&!Mutable(path))return WindowsFileBoundary.OpenInstalledRead(path);var role=Role(path);projectedRole?.Invoke(path,role);return Roles is null?WindowsFileBoundary.OpenPrivateRead(path):WindowsFileBoundary.OpenInstalledRoleRead(path,Roles,role);}
     internal byte[] Read(string path,int bound){using var f=Open(path);return f.Small(bound);}
     internal IDisposable PinDirectory(string path)
-    {var role=path==Root?InstalledFileRole.Control:Role(path);projectedRole?.Invoke(path,role);return Roles is null?WindowsFileBoundary.PinPrivateDirectory(path):WindowsFileBoundary.PinInstalledRoleDirectory(path,Roles,role);}
+    {if(IsSingleService)return WindowsFileBoundary.PinSingleServiceDirectory(path,!Mutable(path));var role=path==Root?InstalledFileRole.Control:Role(path);projectedRole?.Invoke(path,role);return Roles is null?WindowsFileBoundary.PinPrivateDirectory(path):WindowsFileBoundary.PinInstalledRoleDirectory(path,Roles,role);}
     internal void EnsureDirectory(string path)
-    {if(Roles is null)Directory.CreateDirectory(path);using var pin=PinDirectory(path);}
+    {if(Roles is null&&!IsSingleService)Directory.CreateDirectory(path);using var pin=PinDirectory(path);}
     internal void CreateDirectory(string path)
     {
         if(Roles is null){Directory.CreateDirectory(path);return;}

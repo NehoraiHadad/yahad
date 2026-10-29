@@ -75,7 +75,10 @@ def inspect(path):
 
 # Explicit Windows desktop OS contracts, not a lookup in the developer's PATH
 # or installed DLL directories. VC redistributables are intentionally excluded.
-SYSTEM_DLLS = set('advapi32.dll avicap32.dll avrt.dll bcrypt.dll bcryptprimitives.dll cabinet.dll cfgmgr32.dll combase.dll comctl32.dll comdlg32.dll crypt32.dll cryptbase.dll cryptnet.dll cryptsp.dll dbghelp.dll dnsapi.dll dwrite.dll dwmapi.dll dxgi.dll d3d9.dll d3d11.dll d2d1.dll gdi32.dll hid.dll imagehlp.dll imm32.dll iphlpapi.dll kernel32.dll kernelbase.dll mpr.dll msimg32.dll msvcrt.dll ncrypt.dll netapi32.dll normaliz.dll ntdll.dll ole32.dll oleacc.dll oleaut32.dll powrprof.dll propsys.dll psapi.dll rasapi32.dll rpcrt4.dll secur32.dll setupapi.dll shell32.dll shlwapi.dll sspicli.dll ucrtbase.dll user32.dll userenv.dll usp10.dll version.dll vfw32.dll winhttp.dll wininet.dll winmm.dll winspool.drv wintrust.dll wldap32.dll ws2_32.dll wtsapi32.dll'.split())
+SYSTEM_DLLS = set('advapi32.dll avicap32.dll avrt.dll bcrypt.dll bcryptprimitives.dll cabinet.dll cfgmgr32.dll combase.dll comctl32.dll comdlg32.dll crypt32.dll cryptbase.dll cryptnet.dll cryptsp.dll dbghelp.dll dnsapi.dll dwrite.dll dwmapi.dll dxgi.dll d3d9.dll d3d11.dll d2d1.dll gdi32.dll hid.dll imagehlp.dll imm32.dll iphlpapi.dll kernel32.dll kernelbase.dll mpr.dll msimg32.dll msvcrt.dll ncrypt.dll netapi32.dll normaliz.dll ntdll.dll ole32.dll oleacc.dll oleaut32.dll powrprof.dll propsys.dll psapi.dll rasapi32.dll rpcrt4.dll secur32.dll setupapi.dll shell32.dll shlwapi.dll sspicli.dll ucrtbase.dll user32.dll userenv.dll usp10.dll version.dll vfw32.dll windowscodecs.dll winhttp.dll wininet.dll winmm.dll winspool.drv wintrust.dll wldap32.dll ws2_32.dll wtsapi32.dll'.split())
 
 def is_system(name):
     return name in SYSTEM_DLLS or name.startswith(('api-ms-win-', 'ext-ms-win-')) and name.endswith('.dll')
+
+# windowscodecs.dll: Windows Imaging Component, built into supported Windows.
+# https://learn.microsoft.com/en-us/windows/win32/wic/-wic-api

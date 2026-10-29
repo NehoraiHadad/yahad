@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup><InternalsVisibleTo Include="Yahad.Recovery.Tests" />
     <InternalsVisibleTo Include="Yahad.ServiceHost" />
-    <InternalsVisibleTo Include="Yahad.Admission.Tests" /><InternalsVisibleTo Include="Yahad.Production.Tests" /><InternalsVisibleTo Include="Yahad.Authority"/></ItemGroup>
+    <InternalsVisibleTo Include="Yahad.Admission.Tests" /><InternalsVisibleTo Include="Yahad.Production.Tests" /><InternalsVisibleTo Include="Yahad.Authority"/><InternalsVisibleTo Include="Yahad.Setup"/><InternalsVisibleTo Include="Yahad.FirstInstall.Tests"/></ItemGroup>
 </Project>

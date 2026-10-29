@@ -1,110 +1,50 @@
 using System.ComponentModel;
-using System.IO;
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Media;
-using Yahad.Install;
-
 namespace Yahad.Setup;
-
-public partial class MainWindow : Window
+public partial class MainWindow:Window
 {
-    private CancellationTokenSource? running;
-    private string? session;
-    private string? package;
-    private bool completed;
-    public MainWindow()
+    private bool running,completed;private readonly bool uninstall;private SetupResult? result;
+    internal MainWindow(bool uninstall=false)
     {
-        InitializeComponent();
-        Closing += OnClosing;
-        var screen = Environment.GetCommandLineArgs().FirstOrDefault(a => a.StartsWith("--preview="))?.Split('=')[1];
-        if (screen == "error") ShowFailure("PACKAGE_HASH", true);
-        else if (screen == "consent") ShowConsent();
-        else if (screen == "ready") ShowReady(true);
+        InitializeComponent();this.uninstall=uninstall;Closing+=OnClosing;
+        if(uninstall){Eyebrow.Text="הסרת יחד";Heading.Text="מסירים את התוכנה,\nשומרים את הנתונים.";Description.Text="נעצור את השירות ונסיר את קובצי התוכנה. נתוני המשפחה, המפתחות והגיבויים יישמרו במחשב.";Primary.Content="הסרת יחד";NoticeText.Text="Windows יבקש אישור להסרת השירות. תוכנות ושירותים אחרים במחשב לא יוסרו.";}
     }
-
-    private async void Start_Click(object sender, RoutedEventArgs e)
+    private async void Start_Click(object sender,RoutedEventArgs e)
     {
-        if (running is not null) return;
-        if (completed) { Close(); return; }
-        using var cancellation = new CancellationTokenSource(); running = cancellation;
-        Primary.IsEnabled = false; Secondary.Content = "עצירת הבדיקה";
-        Notice.Background = new SolidColorBrush(Color.FromRgb(234, 241, 234));
-        Status.FlowDirection = FlowDirection.RightToLeft;
-        Heading.Text = "מכינים מקום,\nצעד אחר צעד.";
-        Description.Text = "בודקים את שלמות החבילה ומכינים קבצים לדוגמה בתיקייה פרטית וזמנית.";
-        ProgressBar.Visibility = Visibility.Visible;
+        if(running)return;if(completed){if(!uninstall&&result?.Url is not null)OpenBrowser(result);else Close();return;}
+        running=true;Primary.IsEnabled=false;Secondary.IsEnabled=false;ProgressBar.Visibility=Visibility.Visible;ProgressBar.IsIndeterminate=true;
         try
         {
-            if (session is null)
-            {
-                session = SafeDirectory.CreatePrivateSession(Path.GetTempPath());
-                package = Path.Combine(session, "fixture.zip");
-                FixtureBundle.Create(package);
-            }
-            var progress = new Progress<Yahad.Install.Progress>(p =>
-            {
-                ProgressBar.Value = p.Stage == Stage.Ready ? 100 : p.Stage == Stage.Staging ? 65 : 20;
-                Status.Text = p.Stage == Stage.Ready ? "הקבצים נבדקו בהצלחה" : p.Stage == Stage.Staging ? "מכינים את קבצי הדוגמה" : "בודקים שלמות ותאימות";
-            });
-            await Task.Run(() => FixtureInstaller.StageAsync(package!, session, cancellation.Token, progress));
-            ShowReady(false);
+            result=await SetupElevation.RunAsync(uninstall,p=>Dispatcher.Invoke(()=>ShowProgress(p)),CancellationToken.None);
+            if(!result.Ok){Failure(result.Code);return;}
+            completed=true;ProgressBar.IsIndeterminate=false;ProgressBar.Value=100;Heading.Text=uninstall?"יחד הוסר.\nהנתונים שלכם נשמרו.":"הכול מוכן.\nממשיכים ליחד.";
+            Description.Text=uninstall?"השירות וקובצי התוכנה הוסרו. נתוני המשפחה נשארו מוגנים במחשב.":"השירות פועל ברקע. ההגדרה המשפחתית נפתחת כעת בדפדפן.";
+            Primary.Content=uninstall?"סיום":"פתיחת יחד";NoticeText.Text=uninstall?"לא נמחקו נתוני המשפחה, מפתחות או גיבויים.":"אפשר לסגור את המתקין. השירות ימשיך לפעול במחשב.";
+            if(!uninstall)try{OpenBrowser(result);}catch{Status.Text="הדפדפן לא נפתח. אפשר לנסות שוב בלחיצה על פתיחת יחד.";}
         }
-        catch (OperationCanceledException)
-        {
-            Heading.Text = "עצרנו כאן.\nאפשר להמשיך אחר כך.";
-            Description.Text = "הבדיקה נעצרה. קבצי הדוגמה נשמרו בתיקייה הזמנית, ושום התקנת מערכת לא בוצעה.";
-            Primary.Content = "המשך הבדיקה  ←"; Status.Text = "מושהה";
-        }
-        catch (Exception ex)
-        {
-            // Only fixed diagnostic codes; never paths, tokens, payloads or exception strings.
-            var code = ex is InvalidDataException ? "PACKAGE_INVALID" : ex is UnauthorizedAccessException ? "ACCESS_DENIED" : "LOCAL_IO";
-            ShowFailure(code, false);
-        }
-        finally { running = null; Primary.IsEnabled = true; Secondary.Content = "סגירה"; }
+        catch(Exception error){Failure(SetupElevation.Code(error));}
+        finally{running=false;Primary.IsEnabled=true;Secondary.IsEnabled=true;}
     }
-
-    private void ShowReady(bool preview)
+    private void ShowProgress(SetupProgress progress)
     {
-        completed = true;
-        Notice.Background = new SolidColorBrush(Color.FromRgb(234, 241, 234));
-        Status.FlowDirection = FlowDirection.RightToLeft;
-        Eyebrow.Text = preview ? "תצוגת מסך לדוגמה" : "בדיקת ההיתכנות הושלמה";
-        Heading.Text = "יש בסיס טוב.\nממשיכים לבנות.";
-        Description.Text = "המסלול המקומי מוכן לבדיקה: חבילה מאומתת, תיקייה פרטית ושמירה בטוחה של התקדמות.";
-        NoticeText.Text = "זו עדיין אינה התקנת יחד. השירות, חיבור הרשת ואשף המשפחה בדפדפן יופעלו רק לאחר השלמת שכבות האבטחה ובדיקות במכונה נפרדת.";
-        Primary.Content = "סיום הבדיקה";
-        System.Windows.Automation.AutomationProperties.SetName(Primary, "סיום הבדיקה");
-        Step1.Text = "✓  שלמות חבילת הדוגמה"; Step2.Text = "✓  תיקייה פרטית עם הרשאות Windows"; Step3.Text = "✓  קבצים ויומן התקדמות מאומתים";
-        if (preview) Status.Text = "תצוגה בלבד · לא הורצה בדיקה";
+        ProgressBar.IsIndeterminate=progress.Phase is not("extracting" or "ready" or "removed");ProgressBar.Value=progress.Percent;
+        Status.Text=progress.Phase switch{"checking"=>"בודקים שהכול מוכן להתקנה…","extracting"=>"מכינים את הרכיבים של יחד…","installing_service"=>"מתקינים את שירות Windows…","starting_server"=>"מפעילים את יחד ומוודאים שהשרת מוכן…","stopping_server"=>"סוגרים את יחד בבטחה…","ready"=>"יחד מוכן לשימוש","removed"=>"ההסרה הושלמה",_=>"ממשיכים בהתקנה…"};
     }
-
-    private void ShowFailure(string code, bool preview)
+    private void Failure(string code)
     {
-        Eyebrow.Text = preview ? "תצוגת מסך שגיאה" : "הבדיקה נעצרה בבטחה";
-        Heading.Text = "לא ממשיכים\nעם חבילה לא תקינה.";
-        Description.Text = "לא הצלחנו להשלים את הבדיקה. הקבצים הקיימים נשמרו; אפשר לנסות שוב או לסגור ולחזור בהמשך.";
-        Notice.Background = new SolidColorBrush(Color.FromRgb(249, 237, 224));
-        NoticeText.Text = "אם התקלה חוזרת, מוסרים לתמיכה רק את קוד התקלה שמופיע כאן. אין צורך לשלוח מפתחות, סיסמאות או שיחות.";
-        Status.Text = (preview ? "תצוגה בלבד · " : "קוד תקלה: ") + code;
-        Status.FlowDirection = FlowDirection.LeftToRight;
-        Primary.Content = "ניסיון נוסף  ←";
-        System.Windows.Automation.AutomationProperties.SetName(Primary, "ניסיון נוסף");
+        ProgressBar.IsIndeterminate=false;Heading.Text="נעצרנו כאן.\nהנתונים נשמרו.";Notice.Background=new SolidColorBrush(Color.FromRgb(249,237,224));
+        Description.Text=code switch{"UAC_CANCELLED"=>"האישור של Windows בוטל. אפשר לנסות שוב כשנוח לכם.","DISK_SPACE"=>"אין מספיק מקום פנוי. פנו מקום במחשב ונסו שוב.","FILE_LOCKED"=>"קובץ של יחד נמצא בשימוש. המתינו לסגירתו ונסו שוב.","INSTALL_COLLISION" or "EXISTING_DATA_PRESERVED"=>"מצאנו התקנה או נתונים קיימים. שמרנו עליהם ולא החלפנו אותם.","NO_LOCAL_PORT"=>"לא נמצאה כתובת מקומית פנויה. לא סגרנו תוכנות אחרות במחשב.","SERVICE_START_FAILED" or "SERVER_NOT_READY"=>"השירות עדיין לא מוכן. קובצי ההתקנה נשמרו, בלי למחוק נתונים.",_=>"ההתקנה לא הושלמה. לא מחקנו נתונים קיימים. אפשר לנסות שוב או לשמור את קוד התקלה לפנייה לעזרה."};
+        NoticeText.Text="קוד תקלה: "+code;Status.Text="ההתקנה טרם הושלמה";Primary.Content="ניסיון נוסף";
     }
-
-    private void ShowConsent()
+    private static void OpenBrowser(SetupResult result)
     {
-        Eyebrow.Text = "תצוגת מסך הסבר לפני הרשאה";
-        Heading.Text = "אישור אחד,\nעם הסבר ברור.";
-        Description.Text = "בהתקנה המלאה, Windows יבקש הרשאת מנהל כדי להפעיל את יחד גם כשההורה לא מחובר למחשב.";
-        NoticeText.Text = "הבקשה המתוכננת: התקנת שירות יחד בלבד. פתיחת גישה לרשת הביתית ואמון בתעודה יוסברו בנפרד. לא תופיע בקשת הרשאה בגרסת ההדגמה הזו.";
-        Primary.Content = "חזרה לבדיקה";
+        if(result.Url is null)return;var url=result.Url+(result.SetupToken is null?"":"#setup="+result.SetupToken);
+        Process.Start(new ProcessStartInfo(url){UseShellExecute=true});
+        // Shortcut deliberately contains no one-use capability.
+        try{var folder=Environment.GetFolderPath(Environment.SpecialFolder.Programs);var path=System.IO.Path.Combine(folder,"Yahad.url");if(!System.IO.File.Exists(path))System.IO.File.WriteAllText(path,"[InternetShortcut]\r\nURL="+result.Url+"\r\n");}catch{}
     }
-    private void LanPlan_Click(object sender, RoutedEventArgs e)
-    { new LanPlanWindow { Owner = this }.ShowDialog(); }
-
-    private void Close_Click(object sender, RoutedEventArgs e)
-    { if (running is not null) running.Cancel(); else Close(); }
-    private void OnClosing(object? sender, CancelEventArgs e)
-    { if (running is not null) { e.Cancel = true; running.Cancel(); } }
+    private void Close_Click(object sender,RoutedEventArgs e){if(!running)Close();}
+    private void OnClosing(object? sender,CancelEventArgs e){if(running)e.Cancel=true;}
 }

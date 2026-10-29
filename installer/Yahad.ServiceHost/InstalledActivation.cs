@@ -29,11 +29,11 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
     public event Action? ObservedWork;
     internal static string StateRoot=>Path.GetDirectoryName(WindowsInstallationReader.DescriptorPath)!;
     private readonly string root;private readonly IInstalledControlFiles control;private readonly IChildControlFactory channels;
-    private readonly bool committerUnconfigured;private readonly InstalledStateFiles files;
+    private readonly FreshDataAuthorization? fresh;private readonly bool committerUnconfigured;private readonly InstalledStateFiles files;
     private readonly Func<DateTimeOffset> clock;private readonly JobProcessFaultInjection? probeFault;
     internal InstalledActivationResolver():this(StateRoot,new AdminInstalledControlFiles(),new LocalChildControlFactory(),()=>DateTimeOffset.UtcNow){committerUnconfigured=true;}
-    internal InstalledActivationResolver(string root,IInstalledControlFiles control,IChildControlFactory channels,Func<DateTimeOffset> clock,JobProcessFaultInjection? probeFault=null,InstalledStateFiles? stateFiles=null)
-    {this.root=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(root));this.control=control;this.channels=channels;this.clock=clock;this.probeFault=probeFault;files=stateFiles??InstalledStateFiles.Private(root);}
+    internal InstalledActivationResolver(string root,IInstalledControlFiles control,IChildControlFactory channels,Func<DateTimeOffset> clock,JobProcessFaultInjection? probeFault=null,InstalledStateFiles? stateFiles=null,FreshDataAuthorization? fresh=null)
+    {this.fresh=fresh;this.root=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(root));this.control=control;this.channels=channels;this.clock=clock;this.probeFault=probeFault;files=stateFiles??InstalledStateFiles.Private(root);}
     public Task<AuthorizedServiceStart> ResolveAsync(InstallationBinding binding,CancellationToken cancellation)=>ResolveCore(binding,false,null,cancellation);
     internal Task<AuthorizedServiceStart> InspectCommitCandidateAsync(InstallationBinding binding,string? pendingDigest,CancellationToken cancellation)
         =>ResolveCore(binding,true,pendingDigest,cancellation);
@@ -64,7 +64,7 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
             reservation.Owner=owner;reservation.CheckOwner();
             var webBytes=Protected("web.json");if(Hash(webBytes)!=head.WebDigest)throw new IOException("INSTALLED_WEB_ANCHOR");
             var web=NativeJson.Read<InstalledWeb>(webBytes);
-            if(web.Format!=1||web.InstallationId!=binding.InstallationId||web.Port is <1024 or >65535||!Uri.TryCreate(web.Origin,UriKind.Absolute,out var origin)||origin.Scheme!="https"||origin.UserInfo!=""||origin.Query!=""||origin.Fragment!=""||origin.AbsolutePath!="/")throw new IOException("INSTALLED_WEB_CONFIGURATION");
+            if(web.Format!=1||web.InstallationId!=binding.InstallationId||web.Port is <1024 or >65535||!Uri.TryCreate(web.Origin,UriKind.Absolute,out var origin)||(origin.Scheme!="https"&&!(files.IsSingleService&&origin.Scheme=="http"&&origin.Host=="127.0.0.1"&&origin.Port==web.Port))||origin.UserInfo!=""||origin.Query!=""||origin.Fragment!=""||origin.AbsolutePath!="/")throw new IOException("INSTALLED_WEB_CONFIGURATION");
             if(head.Phase is not("committed" or "recovered")||head.Phase=="recovered"&&head.Recovery is null)throw new IOException("INSTALLED_INCOMPLETE_ACTIVATION");
             var selected=Path.Combine(root,"datasets",head.DataId);var key=Path.Combine(selected,"master-key");var policy=Path.Combine(selected,"update-policy");var pins=Path.Combine(selected,"update-pin");
             if(head.Recovery is { } recovery)
@@ -74,9 +74,9 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
                 key=Path.Combine(selected,"identity","master-key");policy=Path.Combine(selected,"policy","update-policy");pins=Path.Combine(selected,"policy","update-pin");
             }
             reservation.Data=Path.Combine(selected,"data");reservation.Hold(files.PinDirectory(selected));
-            reservation.Lease=files.Lease(reservation.Data);reservation.Hold(reservation.Lease);reservation.CheckWal();
+            reservation.Lease=files.Lease(reservation.Data);reservation.Hold(reservation.Lease);
+            if(!files.IsSingleService)reservation.CheckWal();
             if(reservation.PinDigest(key)!=head.MasterKeyDigest||reservation.PinDigest(policy)!=head.PolicyDigest||reservation.PinDigest(pins)!=head.PinDigest)throw new IOException("INSTALLED_DATA_IDENTITY");
-            reservation.PinData();
             var payload=Path.Combine(root,"payloads",head.ReleaseDigest);var payloadManifest=reservation.PinBytes(Path.Combine(payload,"bundle.json"),16*1024*1024);
             if(Hash(payloadManifest)!=head.ReleaseDigest)throw new IOException("INSTALLED_RELEASE_ANCHOR");
             reservation.VerifyPayload(payload,payloadManifest);
@@ -85,7 +85,16 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
             var probe=string.IsNullOrEmpty(files.ProbeExecutable)?node:files.ProbeExecutable;
             if(!string.IsNullOrEmpty(files.ProbeDigest)){using var pinnedProbe=new FileStream(probe,FileMode.Open,FileAccess.Read,FileShare.Read);if(Convert.ToHexStringLower(SHA256.HashData(pinnedProbe))!=files.ProbeDigest)throw new IOException("INSTALLED_PROBE_IDENTITY");}
             var probeTemporary=string.IsNullOrEmpty(files.ProbeExecutable)?temporary:files.ProbeTemporary;reservation.Hold(files.PinDirectory(probeTemporary));
-            var schema=await FrozenAdmissionSchema.ReadAsync(probe,Path.Combine(reservation.Data,"app.sqlite"),probeTemporary,cancellation,probeFault);
+            var initializing=!File.Exists(Path.Combine(reservation.Data,"app.sqlite"));
+            if(initializing)
+            {
+                if(fresh is null||fresh.InstallationId!=binding.InstallationId||fresh.DataId!=head.DataId||fresh.ReleaseDigest!=head.ReleaseDigest||head.Recovery is not null)throw new IOException("INSTALLED_DATABASE_MISSING");
+                reservation.Initialize=fresh.Consume;
+            }
+            else if(files.IsSingleService&&new[]{"app.sqlite-wal","app.sqlite-shm","app.sqlite-journal"}.Any(n=>Path.Exists(Path.Combine(reservation.Data,n))))
+                _=await FirstInstallWal.ReconcileAsync(probe,Path.Combine(reservation.Data,"app.sqlite"),probeTemporary,cancellation);
+            reservation.CheckWal();reservation.PinData(initializing);
+            var schema=initializing?reservation.PayloadSchema:await FrozenAdmissionSchema.ReadAsync(probe,Path.Combine(reservation.Data,"app.sqlite"),probeTemporary,cancellation,probeFault);
             if(schema<head.MinimumSchema||schema>head.MaximumSchema||schema>reservation.PayloadSchema||head.MaximumSchema!=reservation.PayloadSchema)throw new IOException("INSTALLED_SCHEMA_INCOMPATIBLE");
             if(head.Recovery is { } recovered)
             {
@@ -103,7 +112,7 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
             }
             reservation.Release=head.ReleaseDigest;await reservation.RequireStartAllowedAsync(new(head.ReleaseDigest),cancellation);
             var environment=new Dictionary<string,string>{{"HOST","127.0.0.1"},{"PORT",web.Port.ToString(System.Globalization.CultureInfo.InvariantCulture)},
-                {"APP_ORIGIN",origin.GetLeftPart(UriPartial.Authority)},{"COOKIE_SECURE","true"},{"DATA_DIR",reservation.Data},{"MASTER_KEY_FILE",key},
+                {"APP_ORIGIN",origin.GetLeftPart(UriPartial.Authority)},{"COOKIE_SECURE",origin.Scheme=="https"?"true":"false"},{"DATA_DIR",reservation.Data},{"MASTER_KEY_FILE",key},
                 {"CONNECTOR","mock"},{"ALLOW_REAL_WHATSAPP","no"},{"SETUP_CAPABILITY_FILE",Path.Combine(root,"Secrets","setup-capability.json")}};
             var spec=new VerifiedProcessSpec(node,reservation.NodeDigest,["--import","tsx","src/main.ts"],Path.Combine(payload,"app"),temporary,
                 Path.Combine(payload,"runtime","ffmpeg","ffmpeg.exe"),environment,reservation.Lease,reservation.BeginMutableStart,files);
@@ -150,9 +159,10 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
             {if(depth>64)throw new IOException("INSTALLED_DEPTH");using var pinned=files.PinDirectory(path);foreach(var child in Directory.EnumerateFileSystemEntries(path)){cancellation.ThrowIfCancellationRequested();work();if((File.GetAttributes(child)&FileAttributes.ReparsePoint)!=0)throw new IOException("INSTALLED_REPARSE");if(Directory.Exists(child))Walk(child,depth+1);else{names.Add(Path.GetRelativePath(directory,child).Replace('\\','/'));if(names.Count>max)throw new IOException("INSTALLED_MEMBERS");}}}
             Walk(directory,0);return names.Order(StringComparer.Ordinal).ToArray();
         }
-        internal void PinData()
+        internal Action? Initialize;
+        internal void PinData(bool initializing=false)
         {
-            dataMembers=Names(Data,100001).Where(n=>n!="process.lock").ToArray();if(!dataMembers.Contains("app.sqlite"))throw new IOException("INSTALLED_DATABASE_MISSING");
+            dataMembers=Names(Data,100001).Where(n=>n!="process.lock").ToArray();if(initializing?dataMembers.Length!=0:!dataMembers.Contains("app.sqlite"))throw new IOException("INSTALLED_DATABASE_MISSING");
             foreach(var name in dataMembers){work();DataPins.Add(files.Open(Path.Combine(Data,name.Replace('/',Path.DirectorySeparatorChar))));}
         }
         internal void VerifyPayload(string payload,byte[] manifest)
@@ -183,7 +193,7 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
         }
         internal void BeginMutableStart()
         {
-            CheckStart(new(Release),admissionCancellation);mutable=true;
+            CheckStart(new(Release),admissionCancellation);Initialize?.Invoke();mutable=true;
             for(var i=DataPins.Count-1;i>=0;i--)DataPins[i].Dispose();DataPins.Clear(); // exclusive OS gate is continuously retained
         }
         public void Dispose(){if(disposed)return;disposed=true;for(var i=DataPins.Count-1;i>=0;i--)DataPins[i].Dispose();for(var i=Resources.Count-1;i>=0;i--)Resources[i].Dispose();}
