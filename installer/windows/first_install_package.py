@@ -5,6 +5,7 @@ Build-machine tool only; never runs the installer or modifies a Windows service.
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import stat
 import subprocess
@@ -12,6 +13,20 @@ import zipfile
 from pathlib import Path
 from . import bundle,dependencies,pe
 from .prepare_core_fixture import prepare
+
+
+def source_database_schema(repo):
+    text=(Path(repo)/'src'/'database-schema.ts').read_text(encoding='utf-8')
+    matches=re.findall(r'^export const DATABASE_SCHEMA\s*=\s*([0-9]+);',text,re.MULTILINE)
+    if len(matches)!=1 or not 1<=int(matches[0])<=64:raise ValueError('Source database schema is unavailable')
+    return int(matches[0])
+
+
+def require_source_database_schema(build,repo):
+    expected=source_database_schema(repo)
+    if type(build.get('databaseSchema')) is not int or build['databaseSchema']!=expected:
+        raise ValueError('Mixed source database schema')
+    return expected
 
 
 def payload(repo,core,vendors,full,node,dotnet,npm_cache,verified_vendor_source,archive):
@@ -54,7 +69,8 @@ def setup_inputs(repo,payload_zip,host,output):
         parsed=json.loads(payload_manifest)
         if parsed['version']!='0.5.3' or parsed['profile']!='full' or parsed['target']!='win-x64':raise ValueError('Wrong app payload')
         build=json.loads(payload_source.read('legal/build-inputs.json'))
-        if build['appSourceCommit']!=source or build['helperSourceCommit']!=source or build['databaseSchema']!=5:raise ValueError('Mixed source payload')
+        if build['appSourceCommit']!=source or build['helperSourceCommit']!=source:raise ValueError('Mixed source payload')
+        require_source_database_schema(build,repo)
         expected={'bundle.json'}|{record['path'] for record in parsed['files']}
         if set(payload_source.namelist())!=expected or len(payload_source.infolist())!=len(expected):raise ValueError('Unexpected payload member')
         with zipfile.ZipFile(archive,'x',compression=zipfile.ZIP_DEFLATED,compresslevel=6) as target:

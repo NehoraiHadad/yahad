@@ -2,6 +2,7 @@ using System.IO;
 using System.Text.Json;
 using System.ComponentModel;
 using System.Security.Cryptography;
+using System.Text.RegularExpressions;
 using Yahad.Service;
 using Yahad.Install;
 internal sealed class PrivateControlFiles:IInstalledControlFiles
@@ -26,12 +27,13 @@ internal sealed class ProductionFixture:IDisposable
 {
     internal readonly string Root,Dataset,OriginalDataId=Guid.NewGuid().ToString("N"),InstallationId=Guid.NewGuid().ToString("N"),Payload,Node,Repo;
     internal string DataId,Phase="committed";internal long AnchorEpoch=1;internal string? AnchorDigest,OwnerRelease;internal long? Expiry;
+    internal int Schema {get;}
     internal InstalledRecovery? Recovery;internal DateTimeOffset Now=DateTimeOffset.UtcNow;internal readonly FileControl Control;
     internal string Data=>Recovery is null?Path.Combine(Dataset,"data"):Path.Combine(Dataset,"restore-"+Recovery.OperationId,"completed","data");
     internal string Policy=>Path.Combine(Dataset,"update-policy");private string release="";
     private ProductionFixture(string repo)
     {
-        Repo=repo;Root=SafeDirectory.CreatePrivateSession(Path.GetTempPath());Directory.CreateDirectory(Path.Combine(Root,"datasets"));
+        Repo=repo;Schema=ReadSourceSchema(repo);Root=SafeDirectory.CreatePrivateSession(Path.GetTempPath());Directory.CreateDirectory(Path.Combine(Root,"datasets"));
         var source=SafeDirectory.CreatePrivateSession(Path.Combine(Root,"datasets"));Dataset=Path.Combine(Root,"datasets",OriginalDataId);
         if(!Path.GetFullPath(source).StartsWith(Root+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)||!Path.GetFullPath(Dataset).StartsWith(Root+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))throw new IOException("TEST_MOVE_SCOPE");Directory.Move(source,Dataset);
         DataId=OriginalDataId;Payload=Path.Combine(Root,"payload-stage");Directory.CreateDirectory(Payload);Node=Path.Combine(Payload,"runtime/node/node.exe");Directory.CreateDirectory(Path.GetDirectoryName(Node)!);Control=new(this);
@@ -44,7 +46,7 @@ internal sealed class ProductionFixture:IDisposable
         Put("runtime/ffmpeg/ffmpeg.exe","synthetic-ffmpeg-not-executed");Put("runtime/caddy/caddy.exe","synthetic-caddy-not-executed");
         Put("app/package.json","{\"type\":\"module\"}");Put("app/node_modules/tsx/package.json","{\"type\":\"module\",\"exports\":\"./index.mjs\"}");
         Put("app/node_modules/tsx/index.mjs","export * from "+JsonSerializer.Serialize(new Uri(Path.Combine(repo,"node_modules/tsx/dist/loader.mjs")).AbsoluteUri)+";");
-        Put("legal/build-inputs.json","{\"databaseSchema\":5}");
+        Put("legal/build-inputs.json",JsonSerializer.Serialize(new{databaseSchema=f.Schema}));
         Put("app/src/main.ts",f.Worker());
         var records=Directory.GetFiles(f.Payload,"*",SearchOption.AllDirectories).Order(StringComparer.Ordinal).Select(p=>new{path=Path.GetRelativePath(f.Payload,p).Replace('\\','/'),size=new FileInfo(p).Length,sha256=Hash(File.ReadAllBytes(p))}).ToArray();
         var manifest=JsonSerializer.SerializeToUtf8Bytes(new{version="0.5.3",schema=1,kind="windows-runtime-candidate",target="win-x64",profile="full",authority="application-updater",
@@ -63,7 +65,7 @@ internal sealed class ProductionFixture:IDisposable
         string Write<T>(string name,T value){var bytes=JsonSerializer.SerializeToUtf8Bytes(value);File.WriteAllBytes(PathOf(name),bytes);return Hash(bytes);}
         var owner=Write("owner-intent.json",new InstalledOwnerIntent(1,InstallationId,1,Guid.NewGuid().ToString("N"),OwnerRelease??release,DataId,Recovery is not null?"recover":"activate","synthetic-owner",Now.AddSeconds(-1).ToUnixTimeSeconds(),Expiry));
         var web=Write("web.json",new InstalledWeb(1,InstallationId,"https://yahad.invalid",32000));
-        var head=Write("activation.json",new InstalledActivation(1,InstallationId,1,release,DataId,5,5,Hash(File.ReadAllBytes(Path.Combine(Dataset,"master-key"))),Hash(File.ReadAllBytes(Policy)),Hash(File.ReadAllBytes(Path.Combine(Dataset,"update-pin"))),owner,web,Phase,Recovery));
+        var head=Write("activation.json",new InstalledActivation(1,InstallationId,1,release,DataId,Schema,Schema,Hash(File.ReadAllBytes(Path.Combine(Dataset,"master-key"))),Hash(File.ReadAllBytes(Policy)),Hash(File.ReadAllBytes(Path.Combine(Dataset,"update-pin"))),owner,web,Phase,Recovery));
         Write("epoch.json",new InstalledEpoch(1,InstallationId,AnchorEpoch,AnchorDigest??head));
     }
     internal InstallationBinding Binding=>new(InstallationId,Hash(File.ReadAllBytes(PathOf("activation.json"))));
@@ -78,6 +80,8 @@ internal sealed class ProductionFixture:IDisposable
     private string Worker()=>"import fs from 'node:fs';import path from 'node:path';import{Store}from "+JsonSerializer.Serialize(new Uri(Path.Combine(Repo,"src/store.ts")).AbsoluteUri)+";import{createPlatformFiles}from "+JsonSerializer.Serialize(new Uri(Path.Combine(Repo,"src/platform-files.ts")).AbsoluteUri)+";"+"const data=process.env.DATA_DIR;const release=await createPlatformFiles('win32',path.resolve('native/Yahad.Platform.exe')).acquireDataLock(data);const config={dataDir:data,masterKey:Buffer.from(fs.readFileSync(process.env.MASTER_KEY_FILE,'utf8').trim(),'base64'),connector:'mock',realAllowed:false,host:'127.0.0.1',port:32000,origin:'https://yahad.invalid',secureCookie:true,maxMedia:16777216,maxStorage:2147483648,childIdleMs:900000,sessionMs:43200000,diagnosticsEnabled:false};if(fs.existsSync("+JsonSerializer.Serialize(Path.Combine(Root,"crash-before-store"))+"))process.exit(73);const store=new Store(config);store.db.exec('CREATE TABLE IF NOT EXISTS native_activation_probe(value INTEGER);INSERT INTO native_activation_probe VALUES(1)');fs.writeFileSync(path.join(data,'native-ready.partial'),JSON.stringify({pid:process.pid,PATH:process.env.PATH,clean:!process.env.NODE_OPTIONS&&!process.env.DOTNET_STARTUP_HOOKS}));fs.renameSync(path.join(data,'native-ready.partial'),path.join(data,'native-ready'));const wait=n=>new Promise(resolve=>{const timer=setInterval(()=>{if(fs.existsSync(path.join(data,n))){clearInterval(timer);resolve();}},10)});await wait('native-stop');store.close();await release();fs.writeFileSync(path.join(data,'native-closed'),'closed');await wait('native-exit');";
     internal void SelectPreparedPayload(string prepared)
     {
+        var build=NativeJson.Read<JsonElement>(File.ReadAllBytes(Path.Combine(prepared,"legal/build-inputs.json")));
+        if(build.GetProperty("databaseSchema").GetInt32()!=Schema)throw new IOException("STORE_FIXTURE_SCHEMA_MISMATCH");
         var manifest=File.ReadAllBytes(Path.Combine(prepared,"bundle.json"));release=Hash(manifest);var target=Path.Combine(Root,"payloads",release);
         Directory.CreateDirectory(target);
         foreach(var path in Directory.GetFiles(prepared,"*",SearchOption.AllDirectories))
@@ -86,6 +90,22 @@ internal sealed class ProductionFixture:IDisposable
     }
     internal VerifiedProcessSpec RawSpec(WindowsFileBoundary.DataLease lease)=>new(Path.Combine(Package,"runtime/node/node.exe"),Hash(File.ReadAllBytes(Path.Combine(Package,"runtime/node/node.exe"))),["--import","tsx","src/main.ts"],Path.Combine(Package,"app"),Path.Combine(Root,"temporary"),Path.Combine(Package,"runtime/ffmpeg/ffmpeg.exe"),new Dictionary<string,string>{{"DATA_DIR",Data},{"MASTER_KEY_FILE",Path.Combine(Dataset,"master-key")}},lease);
     internal static string Hash(byte[] value)=>Convert.ToHexStringLower(SHA256.HashData(value));
+    internal static int ReadSourceSchema(string repo)
+    {
+        // Store imports db.ts, which re-exports the side-effect-free schema
+        // constant. Older source trees declared that same constant in db.ts.
+        // Neither path imports Store or opens a database merely to read it.
+        var path=Path.Combine(repo,"src/database-schema.ts");if(!File.Exists(path))path=Path.Combine(repo,"src/db.ts");
+        var file=new FileInfo(path);if(!file.Exists||file.Length is <1 or >131072)throw new IOException("STORE_FIXTURE_SCHEMA_SOURCE");
+        return ParseSourceSchema(File.ReadAllText(path));
+    }
+    internal static int ParseSourceSchema(string source)
+    {
+        var matches=Regex.Matches(source,@"(?m)^\s*export\s+const\s+DATABASE_SCHEMA\s*=\s*([1-9][0-9]*)\s*;\s*$",RegexOptions.CultureInvariant);
+        if(matches.Count!=1||!int.TryParse(matches[0].Groups[1].Value,System.Globalization.NumberStyles.None,System.Globalization.CultureInfo.InvariantCulture,out var schema)||schema is <1 or >100000)
+            throw new IOException("STORE_FIXTURE_SCHEMA_SOURCE");
+        return schema;
+    }
     private static void Copy(string source,string target){Directory.CreateDirectory(target);foreach(var file in Directory.GetFiles(source))File.Copy(file,Path.Combine(target,Path.GetFileName(file)));}
     public void Dispose(){} // synthetic data stays private; never included in source or runtime artifacts
 }

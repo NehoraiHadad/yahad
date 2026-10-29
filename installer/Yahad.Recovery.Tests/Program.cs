@@ -7,6 +7,18 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Yahad.Install;
 
+if(args is ["--store-schema-only",var schemaPackage])
+{
+    foreach(var expected in new[]{5,6,17})
+        if(Helpers.ParsePackagedSchema(JsonSerializer.SerializeToUtf8Bytes(new{databaseSchema=expected}))!=expected)throw new IOException("STORE_SCHEMA_PARSER");
+    foreach(var invalid in new[]{"{}","{\"databaseSchema\":0}","{\"databaseSchema\":\"6\"}","{\"databaseSchema\":6,\"databaseSchema\":7}","{\"databaseSchema\":999999999999999999999}"})
+    {
+        var refused=false;try{Helpers.ParsePackagedSchema(System.Text.Encoding.UTF8.GetBytes(invalid));}catch(Exception failure)when(failure is IOException or JsonException){refused=true;}
+        if(!refused)throw new IOException("STORE_SCHEMA_PARSER_ADMITTED_INVALID_METADATA");
+    }
+    var observed=Helpers.ReadPackagedSchema(schemaPackage);
+    Console.WriteLine(JsonSerializer.Serialize(new{suite="recovery-store-schema-package-pure",ok=true,schema=observed,declaredSchemasTested=new[]{5,6,17},nativeOperations=false,storeOpened=false}));return 0;
+}
 if(args is ["--exit"])return 0;
 if(args is ["--wait"]){await Task.Delay(Timeout.Infinite);return 0;}
 if(args is ["--backup-worker",var backupWorkerRoot,var backupWorkerNode,var backupWorkerHash])
@@ -174,16 +186,19 @@ await Check("encrypted complete snapshot and new-directory restore preserve all 
     var repeated=await recovery.RestoreToNewDirectoryAsync(backup.BackupId,5,5,restored.OperationId);Assert(repeated.ReconciledPublication&&repeated.RestoredDirectory==restored.RestoredDirectory);
 });
 if(appRoot is not null)
-await Check("actual schema-5 Store preserves family login session grants encrypted history media and auth",async()=>
+{
+var packagedSchema=Helpers.ReadPackagedSchema(appRoot);
+await Check($"actual schema-{packagedSchema} Store preserves family login session grants encrypted history media and auth",async()=>
 {
     using var f=await Make();File.Delete(Path.Combine(f.Root,"data/app.sqlite"));
     await Helpers.Store(node,appRoot,f.Root,null);
     using var recovery=await f.Open();var before=f.DataDigest();var backup=await recovery.BackupAsync();
-    var restored=await recovery.RestoreToNewDirectoryAsync(backup.BackupId,5,5);
+    var restored=await recovery.RestoreToNewDirectoryAsync(backup.BackupId,packagedSchema,packagedSchema);
     using(var restoredLease=WindowsFileBoundary.AcquireDataLease(Path.Combine(restored.RestoredDirectory,"data")))
         await Helpers.Store(node,appRoot,f.Root,restored.RestoredDirectory);
     Assert(f.DataDigest()==before);
 });
+}
 await Check("future observed SQLite schema refuses older target before restore writes",async()=>
 {
     using var f=await Make(6);using var recovery=await f.Open();var backup=await recovery.BackupAsync();Assert(backup.ObservedSchema==6);
@@ -332,11 +347,14 @@ internal static class Helpers
     [return:MarshalAs(UnmanagedType.Bool)]public static extern bool CreateHardLinkW(string link,string existing,IntPtr security);
     public static async Task Store(string node,string packaged,string fixture,string? restored)
     {
+        var expectedSchema=ReadPackagedSchema(packaged);
         const string script="""
             (async()=>{
             const fs=require('node:fs'),path=require('node:path'),{pathToFileURL}=require('node:url'),assert=require('node:assert/strict');
-            const packaged=process.argv[1],fixture=process.argv[2],restored=process.argv[3];
+            const packaged=process.argv[1],fixture=process.argv[2],restored=process.argv[3],expectedSchema=Number(process.argv[4]);
             const {Store}=await import(pathToFileURL(path.join(packaged,'app/src/store.ts')));
+            const {DATABASE_SCHEMA}=await import(pathToFileURL(path.join(packaged,'app/src/db.ts')));
+            assert.equal(DATABASE_SCHEMA,expectedSchema);
             const {verifyPassword}=await import(pathToFileURL(path.join(packaged,'app/src/crypto.ts')));
             const masterKey=Buffer.from(fs.readFileSync(path.join(restored||fixture,restored?'identity/master-key':'master-key'),'utf8'),'base64');
             const store=new Store({dataDir:path.join(restored||fixture,'data'),masterKey,connector:'mock',realAllowed:false,host:'127.0.0.1',port:3000,origin:'http://127.0.0.1:3000',secureCookie:false,maxMedia:1048576,maxStorage:8388608,childIdleMs:900000,sessionMs:3600000});
@@ -354,15 +372,28 @@ internal static class Helpers
              const parent=store.one('SELECT * FROM users WHERE id=?',family.parentId);assert.equal(await verifyPassword('fixture-parent-password',parent.password),true);
              assert.equal(store.session(session.sid).user.id,family.childId);assert.equal(store.allowed(store.user(store.one('SELECT * FROM users WHERE id=?',family.childId)),group),true);
              assert.equal(store.authGet(family.familyId,'fixture-auth'),'synthetic-local-auth');assert.equal(store.getMessage(family.familyId,group,'fixture-message').text,'synthetic encrypted history');
-             assert.equal(store.getMedia(family.familyId,group,'fixture-media').bytes.toString(),'synthetic encrypted media');assert.equal(store.one('SELECT version FROM schema_version').version,5);
+             assert.equal(store.getMedia(family.familyId,group,'fixture-media').bytes.toString(),'synthetic encrypted media');assert.equal(store.one('SELECT version FROM schema_version').version,DATABASE_SCHEMA);
             }}finally{store.close();masterKey.fill(0);}
             })().catch(()=>{process.exitCode=2;});
             """;
         var loader=new Uri(Path.Combine(packaged,"app/node_modules/tsx/dist/loader.mjs")).AbsoluteUri;
-        using var job=JobProcess.Start(node,["--import",loader,"-e",script,packaged,fixture,restored??""],fixture,LaunchEnvironment.Clean(fixture));
+        using var job=JobProcess.Start(node,["--import",loader,"-e",script,packaged,fixture,restored??"",expectedSchema.ToString(System.Globalization.CultureInfo.InvariantCulture)],fixture,LaunchEnvironment.Clean(fixture));
         using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(30));
         try{if(await job.WaitAsync(deadline.Token)!=0)throw new IOException("REAL_STORE_FIXTURE_REFUSED");await job.WaitForTreeEmptyAsync(deadline.Token);}
         catch{using var cleanup=new CancellationTokenSource(TimeSpan.FromSeconds(10));await job.TerminateAndWaitForTreeEmptyAsync(cleanup.Token);throw;}
+    }
+    internal static int ReadPackagedSchema(string packaged)
+    {
+        var path=Path.Combine(packaged,"legal/build-inputs.json");var file=new FileInfo(path);
+        if(!file.Exists||file.Length is <1 or >65536)throw new IOException("STORE_FIXTURE_SCHEMA_SOURCE");
+        return ParsePackagedSchema(File.ReadAllBytes(path));
+    }
+    internal static int ParsePackagedSchema(byte[] bytes)
+    {
+        var value=NativeJson.Read<JsonElement>(bytes);
+        if(value.ValueKind!=JsonValueKind.Object||!value.TryGetProperty("databaseSchema",out var field)||field.ValueKind!=JsonValueKind.Number||!field.TryGetInt32(out var schema)||schema is <1 or >100000)
+            throw new IOException("STORE_FIXTURE_SCHEMA_SOURCE");
+        return schema;
     }
     public static JobProcess Job(string directory,IEnumerable<string> args)
     {

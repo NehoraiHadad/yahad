@@ -118,6 +118,10 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
             var environment=new Dictionary<string,string>{{"HOST","127.0.0.1"},{"PORT",web.Port.ToString(System.Globalization.CultureInfo.InvariantCulture)},
                 {"APP_ORIGIN",origin.GetLeftPart(UriPartial.Authority)},{"COOKIE_SECURE",origin.Scheme=="https"?"true":"false"},{"DATA_DIR",reservation.Data},{"MASTER_KEY_FILE",key},
                 {"CONNECTOR",RuntimeConnectorSettings.For(connectorProfile).Connector},{"ALLOW_REAL_WHATSAPP",RuntimeConnectorSettings.For(connectorProfile).Approval},{"SETUP_CAPABILITY_FILE",Path.Combine(root,"Secrets","setup-capability.json")}};
+            // LAN HTTPS keeps Secure cookies. Only the fixed local owner origin
+            // is added for bootstrap; remote origins are never inferred here.
+            if(origin.Scheme=="https"&&NetworkPlan.IsPrivateLanV4(origin.Host))
+                environment["APP_ADDITIONAL_ORIGINS"]=$"http://127.0.0.1:{web.Port}";
             var spec=new VerifiedProcessSpec(node,reservation.NodeDigest,["--import","tsx","src/main.ts"],Path.Combine(payload,"app"),temporary,
                 Path.Combine(payload,"runtime","ffmpeg","ffmpeg.exe"),environment,reservation.Lease,reservation.BeginMutableStart,files,reservation.ObserveHealthy);
             return new(new(head.ReleaseDigest),new ServiceProcessLauncher(spec,channels,startFault),reservation,reservation);

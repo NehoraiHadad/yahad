@@ -18,6 +18,35 @@
      <TextBlock x:Name="Step3" Text="03   ממשיכים להגדרה המשפחתית בדפדפן" FontSize="14"/>
     </StackPanel></Border>
     <Button x:Name="RemovalEntry" Visibility="Collapsed" Content="אפשרויות הסרה להתקנה הקיימת" Click="RemovalOptions_Click" Background="Transparent" Foreground="#157C69" HorizontalAlignment="Right" Margin="0,8,0,0" FontSize="13"/>
+    <StackPanel x:Name="LanPanel" Margin="0,18,0,0">
+     <TextBlock Text="איפה משתמשים ביחד?" FontSize="18" FontWeight="SemiBold"/>
+     <RadioButton x:Name="KeepLan" GroupName="LanMode" IsChecked="True" Checked="LanChanged" Content="ללא שינוי בגישה לרשת" Margin="0,12,0,0"/>
+     <TextBlock Text="בהתקנה חדשה: שימוש במחשב הזה בלבד. בהתקנה קיימת: הגדרות הגישה נשמרות." FontSize="12" Foreground="#5C716B" Margin="22,5,0,8"/>
+     <RadioButton x:Name="HomeLan" GroupName="LanMode" Checked="LanChanged" Content="גם בטלפונים ובטאבלטים ברשת הביתית" Margin="0,5,0,8"/>
+     <StackPanel x:Name="LanSelection" Visibility="Collapsed" Margin="20,0,0,12">
+      <TextBlock Text="בחרו במפורש את החיבור הביתי. כתובת פרטית יכולה להיות גם של VPN; אין בחירה אוטומטית." FontSize="13" TextWrapping="Wrap"/>
+      <ComboBox x:Name="LanAddress" DisplayMemberPath="Label" SelectionChanged="LanAddressChanged" MinHeight="36" Margin="0,9,0,9" AutomationProperties.Name="החיבור לרשת הביתית"/>
+      <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+       <CheckBox x:Name="LanHttpHelp" IsChecked="True" Checked="LanChanged" Unchecked="LanChanged" VerticalAlignment="Top" AutomationProperties.LabeledBy="{Binding ElementName=LanHelpLabel}"/>
+       <TextBlock x:Name="LanHelpLabel" Grid.Column="1" Text="דף עזרה מקומי והורדת תעודה ציבורית (HTTP, פורט 80)" TextWrapping="Wrap" Margin="8,0,0,0"/>
+      </Grid>
+      <TextBlock x:Name="LanProgram" FontSize="11" FlowDirection="LeftToRight" TextWrapping="Wrap" Margin="0,10,0,6"/>
+      <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+       <CheckBox x:Name="LanConsent" Checked="LanChanged" Unchecked="LanChanged" VerticalAlignment="Top" AutomationProperties.LabeledBy="{Binding ElementName=LanConsentLabel}"/>
+       <TextBlock x:Name="LanConsentLabel" Grid.Column="1" Text="אני מאשר/ת לאפשר לתוכנית Caddy המוצגת למעלה חיבורים נכנסים ב־TCP 443, וב־80 אם נבחר דף עזרה, רק בפרופיל Private ומהתת־רשת המקומית. לא תיפתח גישה בנתב או לאינטרנט." TextWrapping="Wrap" FontSize="13" Margin="8,0,0,0"/>
+      </Grid>
+      <TextBlock Text="HTTPS מקומי ללא חשבון או דומיין. יש לאשר את התעודה בכל מכשיר, לאחר השוואה מול מסך המחשב הזה. המחשב צריך להישאר פועל; שינוי כתובת הרשת דורש תיקון כאן." FontSize="12" TextWrapping="Wrap" Foreground="#5C716B" Margin="0,9,0,0"/>
+     </StackPanel>
+     <RadioButton x:Name="DisableLan" GroupName="LanMode" Checked="LanChanged" Content="כיבוי הגישה הביתית והסרת כללי חומת האש של יחד" Margin="0,4,0,0"/>
+    </StackPanel>
+    <Border x:Name="LanResultPanel" Visibility="Collapsed" Background="White" BorderBrush="#DFE7E0" BorderThickness="1" CornerRadius="14" Padding="18" Margin="0,16,0,0">
+     <StackPanel><TextBlock Text="הצטרפות ממכשיר נוסף בבית" FontSize="18" FontWeight="SemiBold"/>
+      <TextBlock x:Name="LanResultText" TextWrapping="Wrap" Margin="0,10,0,0"/>
+      <TextBox x:Name="LanRootFingerprint" IsReadOnly="True" FlowDirection="LeftToRight" TextWrapping="Wrap" FontSize="13" Margin="0,12,0,0" AutomationProperties.Name="טביעת SHA-256 של תעודת הבית, להשוואה ממכשיר נוסף"/>
+      <Button x:Name="SaveLanCertificate" Content="שמירת התעודה הציבורית" Click="SaveLanCertificate_Click" Margin="0,10,0,0"/>
+      <TextBlock Text="השוו את טביעת התעודה במכשיר החדש לטביעה שמופיעה כאן, לפני מתן אמון. הדף בטלפון אינו יודע לקרוא את הגדרות האמון. בדיקת HTTPS היא בדיקת חיבור בלבד; כשל אינו הוכחה שחסרה תעודה. אין לדלג על אזהרת דפדפן." TextWrapping="Wrap" FontSize="12" Margin="0,10,0,0"/>
+     </StackPanel>
+    </Border>
     <StackPanel x:Name="UninstallChoices" Visibility="Collapsed" Margin="0,22,0,0">
      <RadioButton x:Name="KeepOption" GroupName="RemovalMode" IsChecked="True" Checked="RemovalChanged" Style="{StaticResource RemovalCard}" TabIndex="0" AutomationProperties.Name="הסרת התוכנה ושמירת הנתונים. ברירת המחדל המומלצת.">
       <StackPanel><TextBlock Text="הסרת התוכנה ושמירת הנתונים" FontWeight="SemiBold" FontSize="16"/><TextBlock Text="ברירת המחדל" Foreground="#157C69" FontSize="12" Margin="0,5,0,7"/><TextBlock Text="השירות וקובצי התוכנה יוסרו. שיחות, משתמשים, מפתחות, נתוני חיבור WhatsApp וגיבויים יישארו להתקנה חוזרת." FontSize="13" Foreground="#5C716B" LineHeight="21"/></StackPanel>

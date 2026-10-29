@@ -54,7 +54,7 @@ internal sealed class LocalChildControlFactory:IChildControlFactory
 internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildControlFactory channels,JobProcessFaultInjection? fault=null):IPrivateAppLauncher
 {
     private static readonly HashSet<string> Allowed=new(StringComparer.Ordinal)
-    {"HOST","PORT","APP_ORIGIN","COOKIE_SECURE","DATA_DIR","MASTER_KEY_FILE","CONNECTOR","ALLOW_REAL_WHATSAPP","DIAGNOSTICS_ENABLED","SETUP_CAPABILITY_FILE"};
+    {"HOST","PORT","APP_ORIGIN","APP_ADDITIONAL_ORIGINS","COOKIE_SECURE","DATA_DIR","MASTER_KEY_FILE","CONNECTOR","ALLOW_REAL_WHATSAPP","DIAGNOSTICS_ENABLED","SETUP_CAPABILITY_FILE"};
     public Task<IContainedAppSession> StartAsync(AppRelease release,CancellationToken cancellation)
     {
         cancellation.ThrowIfCancellationRequested();

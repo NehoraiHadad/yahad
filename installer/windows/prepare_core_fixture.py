@@ -14,6 +14,25 @@ import shutil
 import subprocess
 
 
+def stage_public_lan_help(repo, app):
+    """Only these two public source assets belong in the native app payload."""
+    repo, app = Path(repo), Path(app)
+    names = ('lan-help.html', 'lan-capabilities.json')
+    sources = [repo/'deploy'/name for name in names]
+    if not any(path.exists() for path in sources): return []  # pre-LAN checkpoints
+    if any(not path.is_file() or path.is_symlink() or path.stat().st_size > 65536 for path in sources):
+        raise ValueError('Complete public LAN help assets required')
+    marker = json.loads(sources[1].read_text(encoding='utf-8'))
+    expected = dict(format=1, localHttps=True, exactAdditionalOrigins=True,
+                    ownerLoopbackBootstrap=True, publicHelpTemplate='deploy/lan-help.html')
+    if marker != expected or type(marker.get('format')) is not int or any(marker.get(name) is not True for name in
+            ('localHttps', 'exactAdditionalOrigins', 'ownerLoopbackBootstrap')):
+        raise ValueError('Unsupported LAN help contract')
+    target = app/'deploy'; target.mkdir()
+    for path in sources: shutil.copyfile(path, target/path.name)
+    return ['deploy/'+name for name in names]
+
+
 def prepare(repo, output, node, dotnet, cache):
     repo, output, node, dotnet, cache = (Path(p).resolve() for p in (repo, output, node, dotnet, cache))
     # A clean tracked source checkpoint makes the recorded source commit useful.
@@ -25,6 +44,7 @@ def prepare(repo, output, node, dotnet, cache):
     app = output/'app'; app.mkdir()
     for name in ('package.json', 'package-lock.json'): shutil.copyfile(repo/name, app/name)
     for name in ('src', 'dist', 'fixtures'): shutil.copytree(repo/name, app/name)
+    stage_public_lan_help(repo, app)
     shutil.copytree(repo/'installer/artifacts/Yahad.Platform.Bundle', app/'native')
     environment = {k:v for k,v in os.environ.items() if not k.upper().startswith(('NPM_CONFIG_', 'NODE_', 'DOTNET_', 'CORECLR_', 'COR_'))}
     environment.update(PATH=str(node)+os.pathsep+str(Path(os.environ['SystemRoot'])/'System32'),

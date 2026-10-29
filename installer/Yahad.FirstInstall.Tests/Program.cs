@@ -12,9 +12,41 @@ using Yahad.Install;
 using Yahad.Service;
 using Yahad.Setup;
 
+if(args is ["--store-schema-only",var schemaRepo])
+{
+    foreach(var expected in new[]{5,6,17})
+        if(ProductionFixture.ParseSourceSchema($"// fixture\nexport const DATABASE_SCHEMA = {expected};\n")!=expected)throw new IOException("STORE_SCHEMA_PARSER");
+    foreach(var invalid in new[]{"export const DATABASE_SCHEMA = 0;","export const DATABASE_SCHEMA = 6 + 1;","export const DATABASE_SCHEMA = 6;\nexport const DATABASE_SCHEMA = 7;","// export const DATABASE_SCHEMA = 6;","export const DATABASE_SCHEMA = 999999999999999999999;"})
+    {
+        var refused=false;try{ProductionFixture.ParseSourceSchema(invalid);}catch(IOException){refused=true;}
+        if(!refused)throw new IOException("STORE_SCHEMA_PARSER_ADMITTED_INVALID_SOURCE");
+    }
+    var observed=ProductionFixture.ReadSourceSchema(schemaRepo);
+    Console.WriteLine(JsonSerializer.Serialize(new{suite="store-schema-source-pure",ok=true,schema=observed,declaredSchemasTested=new[]{5,6,17},nativeOperations=false,storeOpened=false}));return 0;
+}
+if(args is ["--lan-integration-only"])
+{
+    var observations=new List<object>();var failed=0;
+    await LanIntegrationTests.RunAsync(async(name,run)=>
+    {
+        try{await run();observations.Add(new{name,status="PASS"});Console.WriteLine("PASS "+name);}
+        catch(Exception failure){failed++;observations.Add(new{name,status="FAIL",reason=failure.GetType().Name});Console.WriteLine("FAIL "+name+" "+failure);}
+    });
+    Console.WriteLine(JsonSerializer.Serialize(new{suite="lan-integration-pure",ok=failed==0,failed,nativeOperations=false,cases=observations}));return failed==0?0:1;
+}
 if(args is ["--elevation-framing-only"])
 {
     var result=await ElevationFramingRegression.RunAsync();Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));return result.Ok?0:1;
+}
+if(args is ["--lan-runtime-only"])
+{
+    var observations=new List<object>();var failed=0;
+    await LanRuntimeTests.RunAsync(async(name,run)=>
+    {
+        try{await run();observations.Add(new{name,status="PASS"});Console.WriteLine("PASS "+name);}
+        catch(Exception failure){failed++;observations.Add(new{name,status="FAIL",reason=failure.GetType().Name});Console.WriteLine("FAIL "+name+" "+failure);}
+    });
+    Console.WriteLine(JsonSerializer.Serialize(new{suite="lan-runtime-pure",ok=failed==0,failed,nativeOperations=false,cases=observations}));return failed==0?0:1;
 }
 if(args is not [var node,var repo,var helper,var output])throw new IOException("TEST_INPUTS_REQUIRED");
 Directory.CreateDirectory(output);var cases=new List<object>();int failures=0;
@@ -130,13 +162,13 @@ await Check("locked or hardlinked synthetic data fails before deletion",()=>
 await Check("interrupted synthetic purge retains outside intent and resumes exact remaining tree",()=>
 {RemovalTests.Interrupted();return Task.CompletedTask;});
 using var f=await ProductionFixture.Create(node,repo,helper);
-await Check("real Store first startup creates schema5 only after one-use authorization",async()=>
+await Check($"real Store first startup creates schema{f.Schema} only after one-use authorization",async()=>
 {
  var original=Path.Combine(f.Data,"app.sqlite");File.Move(original,f.PathOf("original-seeded.sqlite"));f.ClearSignals();var head=NativeJson.Read<InstalledActivation>(File.ReadAllBytes(f.PathOf("activation.json")));var consumed=0;
  var fresh=new FreshDataAuthorization(f.InstallationId,f.OriginalDataId,head.ReleaseDigest,()=>{if(++consumed!=1)throw new IOException("seed replay");});
  var resolver=new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,connectorProfile:RuntimeConnectorProfile.Synthetic,fresh:fresh);
  var controller=new ServiceController(new ResolverStart(resolver,()=>f.Binding));var result=await controller.RunAsync(r=>{if(r.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);});
- Assert(result.Failure==ServiceFailure.None&&consumed==1&&File.Exists(original));var schema=await FrozenAdmissionSchema.ReadAsync(node,original,f.PathOf("temporary"),default);Assert(schema==5);
+ Assert(result.Failure==ServiceFailure.None&&consumed==1&&File.Exists(original));var schema=await FrozenAdmissionSchema.ReadAsync(node,original,f.PathOf("temporary"),default);Assert(schema==f.Schema);
  File.Move(original,f.PathOf("new-seeded.sqlite"));f.ClearSignals();await Refuse(()=>f.Resolve());File.Move(f.PathOf("new-seeded.sqlite"),original);
 });
 await Check("existing verified database retires a leftover initial grant without reinitializing",async()=>
@@ -200,7 +232,7 @@ await Check("uncertain first-start cleanup retains both retry evidence and exclu
 });
 await Check("verified DB from an interrupted attempt retires grants before retry and never resets data",async()=>
 {
- f.ClearSignals();var receipt=CreateInitialGrants();var schema=await FrozenAdmissionSchema.ReadAsync(node,Path.Combine(f.Data,"app.sqlite"),f.PathOf("temporary"),default);Assert(schema==5);
+ f.ClearSignals();var receipt=CreateInitialGrants();var schema=await FrozenAdmissionSchema.ReadAsync(node,Path.Combine(f.Data,"app.sqlite"),f.PathOf("temporary"),default);Assert(schema==f.Schema);
  var before=File.ReadAllBytes(Path.Combine(f.Data,"app.sqlite"));var grant=await new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,connectorProfile:RuntimeConnectorProfile.Synthetic,fresh:ReadInitialGrants(receipt)).ResolveAsync(f.Binding,default);
  try{await grant.Recovery.RequireStartAllowedAsync(grant.Release,default);Assert(File.Exists(f.PathOf("initial-retry.json")));}finally{grant.Dispose();}
  var controller=new ServiceController(new ResolverStart(new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,connectorProfile:RuntimeConnectorProfile.Synthetic,fresh:ReadInitialGrants(receipt)),()=>f.Binding));
@@ -216,7 +248,7 @@ await Check("SQLite handles a crash-left WAL under actual exclusive lease withou
  f.ClearSignals();var signal=f.PathOf("wal-ready");var code="const fs=require('node:fs'),{DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(process.argv[1]);db.exec('PRAGMA journal_mode=WAL;CREATE TABLE IF NOT EXISTS first_install_wal(value INTEGER);INSERT INTO first_install_wal VALUES(73)');fs.writeFileSync(process.argv[2],'ready');setInterval(()=>{},1000)";
  using(var writer=JobProcess.Start(node,["-e",code,Path.Combine(f.Data,"app.sqlite"),signal],f.Root,LaunchEnvironment.Clean(f.Root)))
  {using var limit=new CancellationTokenSource(TimeSpan.FromSeconds(15));while(!File.Exists(signal))await Task.Delay(20,limit.Token);await writer.TerminateAndWaitForTreeEmptyAsync(limit.Token);}
- Assert(File.Exists(Path.Combine(f.Data,"app.sqlite-wal")));using var lease=WindowsFileBoundary.AcquireDataLease(f.Data);var schema=await FirstInstallWal.ReconcileAsync(node,Path.Combine(f.Data,"app.sqlite"),f.PathOf("temporary"),default);Assert(schema==5&&!File.Exists(Path.Combine(f.Data,"app.sqlite-wal")));
+ Assert(File.Exists(Path.Combine(f.Data,"app.sqlite-wal")));using var lease=WindowsFileBoundary.AcquireDataLease(f.Data);var schema=await FirstInstallWal.ReconcileAsync(node,Path.Combine(f.Data,"app.sqlite"),f.PathOf("temporary"),default);Assert(schema==f.Schema&&!File.Exists(Path.Combine(f.Data,"app.sqlite-wal")));
 });
 await Check("native RTL window renders at desktop and minimum size without showing or installing",async()=>
 {

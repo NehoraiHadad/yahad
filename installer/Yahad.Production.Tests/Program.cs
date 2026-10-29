@@ -7,6 +7,18 @@ using System.Text.Json;
 using Yahad.Install;
 using Yahad.Service;
 
+if(args is ["--store-schema-only",var schemaRepo])
+{
+    foreach(var expected in new[]{5,6,17})
+        if(ProductionFixture.ParseSourceSchema($"// fixture\nexport const DATABASE_SCHEMA = {expected};\n")!=expected)throw new IOException("STORE_SCHEMA_PARSER");
+    foreach(var invalid in new[]{"export const DATABASE_SCHEMA = 0;","export const DATABASE_SCHEMA = 6 + 1;","export const DATABASE_SCHEMA = 6;\nexport const DATABASE_SCHEMA = 7;","// export const DATABASE_SCHEMA = 6;","export const DATABASE_SCHEMA = 999999999999999999999;"})
+    {
+        var refused=false;try{ProductionFixture.ParseSourceSchema(invalid);}catch(IOException){refused=true;}
+        if(!refused)throw new IOException("STORE_SCHEMA_PARSER_ADMITTED_INVALID_SOURCE");
+    }
+    var observed=ProductionFixture.ReadSourceSchema(schemaRepo);
+    Console.WriteLine(JsonSerializer.Serialize(new{suite="production-store-schema-source-pure",ok=true,schema=observed,declaredSchemasTested=new[]{5,6,17},nativeOperations=false,storeOpened=false}));return 0;
+}
 var endpointOnly=args is ["--endpoint-only",..];if(endpointOnly)args=args[1..];bool endpointChecks=false;
 string? preparedPayload=null;
 if(args.Length==10&&args[^2]=="--prepared"){preparedPayload=args[^1];args=args[..^2];}
@@ -30,7 +42,7 @@ await Check("omitted owner expiry is not silently promoted to a persistent capab
     var document=System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllBytes(f.PathOf("owner-intent.json")))!.AsObject();document.Remove("ExpiresUnix");
     await Reject(()=>{NativeJson.Read<InstalledOwnerIntent>(JsonSerializer.SerializeToUtf8Bytes(document));return Task.CompletedTask;});
 });
-await Check("same concrete resolver reads fixture capabilities and observes actual Store schema 5",async()=>{using var grant=await f.Resolve();await grant.Recovery.RequireStartAllowedAsync(grant.Release,default);Assert(f.Control.Creates==0);});
+await Check($"same concrete resolver reads fixture capabilities and observes actual Store schema {f.Schema}",async()=>{using var grant=await f.Resolve();await grant.Recovery.RequireStartAllowedAsync(grant.Release,default);Assert(f.Control.Creates==0);});
 foreach(var mutation in new[]{"epoch","head","owner","policy","pin","pending","phase"})
 await Check("protected-state binding refuses "+mutation,async()=>
 {
@@ -170,9 +182,9 @@ await Check("actual recovery output is verified but cannot start before protecte
     f.Reset();f.ClearSignals();using var empty=JobProcess.Start(node,["-e",""],f.Root,LaunchEnvironment.Clean(f.Root));await empty.WaitAsync(default);await empty.WaitForTreeEmptyAsync(default);
     using(var inspector=new NativeSqliteInspector(node,ProductionFixture.Hash(File.ReadAllBytes(node))))
     using(var recovery=await NativeRecoveryFixture.OpenAsync(f.Dataset,empty,inspector))
-    {backup=await recovery.BackupAsync();restored=await recovery.RestoreToNewDirectoryAsync(backup.BackupId,5,5);}
+    {backup=await recovery.BackupAsync();restored=await recovery.RestoreToNewDirectoryAsync(backup.BackupId,f.Schema,f.Schema);}
     f.Recovery=new(f.OriginalDataId,backup.BackupId,restored.OperationId,backup.ReceiptDigest);f.DataId=Guid.NewGuid().ToString("N");f.Phase="recovered";f.Publish();
-    await Reject(async()=>{using var grant=await f.Resolve();},"INSTALLED_RECOVERY_COMMIT_REQUIRED");Assert(restored.ObservedSchema==5);
+    await Reject(async()=>{using var grant=await f.Resolve();},"INSTALLED_RECOVERY_COMMIT_REQUIRED");Assert(restored.ObservedSchema==f.Schema);
 });
 await Check("actual receipt MAC corruption is refused even with matching control digest",async()=>
 {
@@ -274,7 +286,7 @@ await Check("expired interrupted operation needs fresh authenticated reconciliat
 await Check("install operation requires fresh control state and authenticated install scope",async()=>
 {
     using var fresh=await ProductionFixture.Create(node,repo,helper);var head=NativeJson.Read<InstalledActivation>(File.ReadAllBytes(fresh.PathOf("activation.json")));var web=NativeJson.Read<InstalledWeb>(File.ReadAllBytes(fresh.PathOf("web.json")));
-    var op=new ProtectedOperation(1,"install",fresh.InstallationId,0,"",head.ReleaseDigest,head.DataId,5,5,head.MasterKeyDigest,head.PolicyDigest,head.PinDigest,web,null,fresh.Now.AddMinutes(2).ToUnixTimeSeconds(),Guid.NewGuid().ToString("N"));
+    var op=new ProtectedOperation(1,"install",fresh.InstallationId,0,"",head.ReleaseDigest,head.DataId,fresh.Schema,fresh.Schema,head.MasterKeyDigest,head.PolicyDigest,head.PinDigest,web,null,fresh.Now.AddMinutes(2).ToUnixTimeSeconds(),Guid.NewGuid().ToString("N"));
     foreach(var name in new[]{"activation.json","epoch.json","owner-intent.json","web.json","bootstrap.json"})File.Delete(fresh.PathOf(name));
     var auth=new ApprovedOperations(fresh.InstallationId,()=>fresh.Now);auth.Approve(op);await new ProtectedStateTransactionWriter(fresh.Root,fresh.InstallationId,writerJob,auth,fresh.Control,()=>fresh.Now).CommitAsync(op);
     using var grant=await fresh.Resolve();Assert(NativeJson.Read<InstalledEpoch>(File.ReadAllBytes(fresh.PathOf("epoch.json"))).Epoch==1);
@@ -323,7 +335,7 @@ await Check("recovery commit is bound to actual backup receipt and verified rest
 {
     PrepareState();var op=Operation("recover");NativeBackupResult b;NativeRestoreResult restoredCandidate;
     using(var inspector=new NativeSqliteInspector(node,ProductionFixture.Hash(File.ReadAllBytes(node))))using(var recovery=await NativeRecoveryFixture.OpenAsync(f.Dataset,writerJob,inspector))
-    {b=await recovery.BackupAsync();restoredCandidate=await recovery.RestoreToNewDirectoryAsync(b.BackupId,5,5);}
+    {b=await recovery.BackupAsync();restoredCandidate=await recovery.RestoreToNewDirectoryAsync(b.BackupId,f.Schema,f.Schema);}
     op=op with{DataId=Guid.NewGuid().ToString("N"),Recovery=new(f.OriginalDataId,b.BackupId,restoredCandidate.OperationId,b.ReceiptDigest)};
     var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);await Writer(auth).CommitAsync(op);using var grant=await f.Resolve();
     Assert(NativeJson.Read<InstalledActivation>(File.ReadAllBytes(f.PathOf("activation.json"))).Phase=="committed");
@@ -335,7 +347,7 @@ const string OwnerSid="S-1-5-21-100-101-102-1001",RuntimeSid="S-1-5-80-1-2-3-4-5
 var ownerPeer=new AuthorityPeer(OwnerSid,111,123,1,true);var runtimePeer=new AuthorityPeer(RuntimeSid,222,124,0,false);
 OwnerApprovalLedger Ledger()=>new(f.Root,f.InstallationId,OwnerSid,()=>f.Now);
 OperationFacts Facts()=>new("0.5.2","0.5.3","stable",Operation().Web.Origin,1000,Operation().PolicyDigest,Operation().PinDigest);
-RoutineDelegation Policy(int count=2)=>new(1,Guid.NewGuid().ToString("N"),f.InstallationId,OwnerSid,Operation().DataId,Operation().PolicyDigest,Operation().PinDigest,Operation().MasterKeyDigest,"stable",Operation().Web.Origin,null,"0.5.3","0.5.9",5,f.Now.AddDays(2).ToUnixTimeSeconds(),count,10000000);
+RoutineDelegation Policy(int count=2)=>new(1,Guid.NewGuid().ToString("N"),f.InstallationId,OwnerSid,Operation().DataId,Operation().PolicyDigest,Operation().PinDigest,Operation().MasterKeyDigest,"stable",Operation().Web.Origin,null,"0.5.3","0.5.9",f.Schema,f.Now.AddDays(2).ToUnixTimeSeconds(),count,10000000);
 void Approve(OwnerApprovalLedger ledger,ProtectedOperation op,bool reconcile=false){var c=ledger.Challenge(op,reconcile);ledger.Approve(ownerPeer,new(1,c.Id,c.Digest,true));}
 void Delegate(OwnerApprovalLedger ledger,RoutineDelegation d){var c=ledger.DelegationChallenge(d);ledger.Delegate(d,ownerPeer,new(1,c.Id,c.Digest,true));}
 await Check("actual role validator allows only the exact authority/runtime file class",()=>
@@ -396,14 +408,14 @@ foreach(var mismatch in new[]{"downgrade","channel","policy","pins","key","origi
 {
  PrepareState();var l=Ledger();var d=Policy();Delegate(l,d);var op=Operation();var facts=Facts();
  if(mismatch=="downgrade")facts=facts with{TargetVersion="0.5.1"};if(mismatch=="channel")facts=facts with{Channel="preview"};if(mismatch=="policy")op=op with{PolicyDigest=new string('0',64)};if(mismatch=="pins")facts=facts with{IntakePinDigest=new string('0',64)};
- if(mismatch=="key")op=op with{MasterKeyDigest=new string('0',64)};if(mismatch=="origin")facts=facts with{Origin="https://other.invalid"};if(mismatch=="bytes")facts=facts with{PayloadBytes=d.MaximumPayloadBytes+1};if(mismatch=="schema")op=op with{MaximumSchema=6};if(mismatch=="data")op=op with{DataId=Guid.NewGuid().ToString("N")};if(mismatch=="recovery")op=op with{Kind="recover"};if(mismatch=="expired")f.Now=f.Now.AddDays(3);
+ if(mismatch=="key")op=op with{MasterKeyDigest=new string('0',64)};if(mismatch=="origin")facts=facts with{Origin="https://other.invalid"};if(mismatch=="bytes")facts=facts with{PayloadBytes=d.MaximumPayloadBytes+1};if(mismatch=="schema")op=op with{MaximumSchema=f.Schema+1};if(mismatch=="data")op=op with{DataId=Guid.NewGuid().ToString("N")};if(mismatch=="recovery")op=op with{Kind="recover"};if(mismatch=="expired")f.Now=f.Now.AddDays(3);
  await Denied(()=>{l.AuthorizeRoutine(op,facts,d.Id);return Task.CompletedTask;});Assert(!File.Exists(f.PathOf("pending.json")));
 });
 await Check("routine delegated update retains actual committed recovery selection without authorizing another restore",async()=>
 {
  PrepareState();NativeBackupResult saved;NativeRestoreResult recovered;
  using(var inspector=new NativeSqliteInspector(node,ProductionFixture.Hash(File.ReadAllBytes(node))))using(var recovery=await NativeRecoveryFixture.OpenAsync(f.Dataset,writerJob,inspector))
- {saved=await recovery.BackupAsync();recovered=await recovery.RestoreToNewDirectoryAsync(saved.BackupId,5,5);}
+ {saved=await recovery.BackupAsync();recovered=await recovery.RestoreToNewDirectoryAsync(saved.BackupId,f.Schema,f.Schema);}
  f.ResetRecovery(saved,recovered);f.Phase="committed";f.Publish();File.WriteAllBytes(f.PathOf("bootstrap.json"),JsonSerializer.SerializeToUtf8Bytes(new{schema=1,service=ServiceDefinition.Name,installationId=f.InstallationId,activationReceiptDigest=f.Binding.ActivationReceiptDigest}));
  f.ClearSignals();var controller=new ServiceController(new DirectAuthorization(f));var result=await controller.RunAsync(r=>{if(r.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);});Assert(result.Failure==ServiceFailure.None,"recovered routine startup failure="+result.Failure+" stop="+f.Control.StopError);
  var op=Operation() with{Recovery=f.Recovery};var d=Policy() with{Recovery=f.Recovery};var l=Ledger();Delegate(l,d);l.AuthorizeRoutine(op,Facts(),d.Id);
@@ -542,7 +554,7 @@ string StageCandidate(string version)
  }
  var head=NativeJson.Read<InstalledActivation>(File.ReadAllBytes(f.PathOf("activation.json")));
  var total=manifest["files"]!.AsArray().Sum(v=>v!["size"]!.GetValue<long>());
- var receipt=JsonSerializer.SerializeToUtf8Bytes(new IntakeReceipt(1,f.InstallationId,digest,version,"stable",total,5,head.PolicyDigest,head.PinDigest));
+  var receipt=JsonSerializer.SerializeToUtf8Bytes(new IntakeReceipt(1,f.InstallationId,digest,version,"stable",total,f.Schema,head.PolicyDigest,head.PinDigest));
  var receiptDigest=ProductionFixture.Hash(receipt);File.WriteAllBytes(f.PathOf("intake/receipt-"+receiptDigest+".json"),receipt);
  File.WriteAllBytes(f.PathOf("intake/available.json"),JsonSerializer.SerializeToUtf8Bytes(new IntakePointer(1,f.InstallationId,receiptDigest)));return receiptDigest;
 }
@@ -630,7 +642,7 @@ await Check("intake rejects corrupt receipt and inconsistent schema policy paylo
  File.AppendAllText(path," ");await Denied(()=>Request(c.Router,"install",target));File.WriteAllBytes(path,bytes);
  foreach(var mutation in new[]{"schema","policy","payload"})
  {
-  var r=NativeJson.Read<IntakeReceipt>(bytes);r=mutation=="schema"?r with{Schema=6}:mutation=="policy"?r with{PolicyDigest=new string('0',64)}:r with{PayloadBytes=r.PayloadBytes+1};
+   var r=NativeJson.Read<IntakeReceipt>(bytes);r=mutation=="schema"?r with{Schema=r.Schema+1}:mutation=="policy"?r with{PolicyDigest=new string('0',64)}:r with{PayloadBytes=r.PayloadBytes+1};
   var encoded=JsonSerializer.SerializeToUtf8Bytes(r);var digest=ProductionFixture.Hash(encoded);File.WriteAllBytes(f.PathOf("intake/receipt-"+digest+".json"),encoded);File.WriteAllBytes(f.PathOf("intake/available.json"),JsonSerializer.SerializeToUtf8Bytes(new IntakePointer(1,f.InstallationId,digest)));await Denied(()=>Request(c.Router,"install",digest));
  }
  File.WriteAllBytes(f.PathOf("intake/mode.json.partial-test"),"{}"u8.ToArray());await Denied(()=>Observe(c.Router));
@@ -741,12 +753,13 @@ internal sealed class ProductionFixture:IDisposable
 {
     internal readonly string Root,Dataset,OriginalDataId=Guid.NewGuid().ToString("N"),InstallationId=Guid.NewGuid().ToString("N"),Payload,Node,Repo;
     internal string DataId,Phase="committed";internal long AnchorEpoch=1;internal string? AnchorDigest,OwnerRelease;internal long? Expiry;
+    internal int Schema {get;}
     internal InstalledRecovery? Recovery;internal DateTimeOffset Now=DateTimeOffset.UtcNow;internal readonly FileControl Control;
     internal string Data=>Recovery is null?Path.Combine(Dataset,"data"):Path.Combine(Dataset,"restore-"+Recovery.OperationId,"completed","data");
     internal string Policy=>Path.Combine(Dataset,"update-policy");private string release="";
     private ProductionFixture(string repo)
     {
-        Repo=repo;Root=SafeDirectory.CreatePrivateSession(Path.GetTempPath());Directory.CreateDirectory(Path.Combine(Root,"datasets"));
+        Repo=repo;Schema=ReadSourceSchema(repo);Root=SafeDirectory.CreatePrivateSession(Path.GetTempPath());Directory.CreateDirectory(Path.Combine(Root,"datasets"));
         var source=SafeDirectory.CreatePrivateSession(Path.Combine(Root,"datasets"));Dataset=Path.Combine(Root,"datasets",OriginalDataId);
         if(!Path.GetFullPath(source).StartsWith(Root+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)||!Path.GetFullPath(Dataset).StartsWith(Root+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))throw new IOException("TEST_MOVE_SCOPE");Directory.Move(source,Dataset);
         DataId=OriginalDataId;Payload=Path.Combine(Root,"payload-stage");Directory.CreateDirectory(Payload);Node=Path.Combine(Payload,"runtime/node/node.exe");Directory.CreateDirectory(Path.GetDirectoryName(Node)!);Control=new(this);
@@ -759,7 +772,7 @@ internal sealed class ProductionFixture:IDisposable
         Put("runtime/ffmpeg/ffmpeg.exe","synthetic-ffmpeg-not-executed");Put("runtime/caddy/caddy.exe","synthetic-caddy-not-executed");
         Put("app/package.json","{\"type\":\"module\"}");Put("app/node_modules/tsx/package.json","{\"type\":\"module\",\"exports\":\"./index.mjs\"}");
         Put("app/node_modules/tsx/index.mjs","export * from "+JsonSerializer.Serialize(new Uri(Path.Combine(repo,"node_modules/tsx/dist/loader.mjs")).AbsoluteUri)+";");
-        Put("legal/build-inputs.json","{\"databaseSchema\":5}");
+        Put("legal/build-inputs.json",JsonSerializer.Serialize(new{databaseSchema=f.Schema}));
         Put("app/src/main.ts",f.Worker());
         var records=Directory.GetFiles(f.Payload,"*",SearchOption.AllDirectories).Order(StringComparer.Ordinal).Select(p=>new{path=Path.GetRelativePath(f.Payload,p).Replace('\\','/'),size=new FileInfo(p).Length,sha256=Hash(File.ReadAllBytes(p))}).ToArray();
         var manifest=JsonSerializer.SerializeToUtf8Bytes(new{version="0.5.2",schema=1,kind="windows-runtime-candidate",target="win-x64",profile="full",authority="application-updater",
@@ -778,7 +791,7 @@ internal sealed class ProductionFixture:IDisposable
         string Write<T>(string name,T value){var bytes=JsonSerializer.SerializeToUtf8Bytes(value);File.WriteAllBytes(PathOf(name),bytes);return Hash(bytes);}
         var owner=Write("owner-intent.json",new InstalledOwnerIntent(1,InstallationId,1,Guid.NewGuid().ToString("N"),OwnerRelease??release,DataId,Recovery is not null?"recover":"activate","synthetic-owner",Now.AddSeconds(-1).ToUnixTimeSeconds(),Expiry));
         var web=Write("web.json",new InstalledWeb(1,InstallationId,"https://yahad.invalid",32000));
-        var head=Write("activation.json",new InstalledActivation(1,InstallationId,1,release,DataId,5,5,Hash(File.ReadAllBytes(Path.Combine(Dataset,"master-key"))),Hash(File.ReadAllBytes(Policy)),Hash(File.ReadAllBytes(Path.Combine(Dataset,"update-pin"))),owner,web,Phase,Recovery));
+        var head=Write("activation.json",new InstalledActivation(1,InstallationId,1,release,DataId,Schema,Schema,Hash(File.ReadAllBytes(Path.Combine(Dataset,"master-key"))),Hash(File.ReadAllBytes(Policy)),Hash(File.ReadAllBytes(Path.Combine(Dataset,"update-pin"))),owner,web,Phase,Recovery));
         Write("epoch.json",new InstalledEpoch(1,InstallationId,AnchorEpoch,AnchorDigest??head));
     }
     internal InstallationBinding Binding=>new(InstallationId,Hash(File.ReadAllBytes(PathOf("activation.json"))));
@@ -793,6 +806,8 @@ internal sealed class ProductionFixture:IDisposable
     private string Worker()=>"import fs from 'node:fs';import path from 'node:path';import{Store}from "+JsonSerializer.Serialize(new Uri(Path.Combine(Repo,"src/store.ts")).AbsoluteUri)+";import{createPlatformFiles}from "+JsonSerializer.Serialize(new Uri(Path.Combine(Repo,"src/platform-files.ts")).AbsoluteUri)+";"+"const data=process.env.DATA_DIR;const release=await createPlatformFiles('win32',path.resolve('native/Yahad.Platform.exe')).acquireDataLock(data);const config={dataDir:data,masterKey:Buffer.from(fs.readFileSync(process.env.MASTER_KEY_FILE,'utf8').trim(),'base64'),connector:'mock',realAllowed:false,host:'127.0.0.1',port:32000,origin:'https://yahad.invalid',secureCookie:true,maxMedia:16777216,maxStorage:2147483648,childIdleMs:900000,sessionMs:43200000,diagnosticsEnabled:false};const store=new Store(config);store.db.exec('CREATE TABLE IF NOT EXISTS native_activation_probe(value INTEGER);INSERT INTO native_activation_probe VALUES(1)');fs.writeFileSync(path.join(data,'native-ready.partial'),JSON.stringify({pid:process.pid,PATH:process.env.PATH,clean:!process.env.NODE_OPTIONS&&!process.env.DOTNET_STARTUP_HOOKS}));fs.renameSync(path.join(data,'native-ready.partial'),path.join(data,'native-ready'));const wait=n=>new Promise(resolve=>{const timer=setInterval(()=>{if(fs.existsSync(path.join(data,n))){clearInterval(timer);resolve();}},10)});await wait('native-stop');store.close();await release();fs.writeFileSync(path.join(data,'native-closed'),'closed');await wait('native-exit');";
     internal void SelectPreparedPayload(string prepared)
     {
+        var build=NativeJson.Read<JsonElement>(File.ReadAllBytes(Path.Combine(prepared,"legal/build-inputs.json")));
+        if(build.GetProperty("databaseSchema").GetInt32()!=Schema)throw new IOException("STORE_FIXTURE_SCHEMA_MISMATCH");
         var manifest=File.ReadAllBytes(Path.Combine(prepared,"bundle.json"));release=Hash(manifest);var target=Path.Combine(Root,"payloads",release);
         Directory.CreateDirectory(target);
         foreach(var path in Directory.GetFiles(prepared,"*",SearchOption.AllDirectories))
@@ -801,6 +816,19 @@ internal sealed class ProductionFixture:IDisposable
     }
     internal VerifiedProcessSpec RawSpec(WindowsFileBoundary.DataLease lease)=>new(Path.Combine(Package,"runtime/node/node.exe"),Hash(File.ReadAllBytes(Path.Combine(Package,"runtime/node/node.exe"))),["--import","tsx","src/main.ts"],Path.Combine(Package,"app"),Path.Combine(Root,"temporary"),Path.Combine(Package,"runtime/ffmpeg/ffmpeg.exe"),new Dictionary<string,string>{{"DATA_DIR",Data},{"MASTER_KEY_FILE",Path.Combine(Dataset,"master-key")}},lease);
     internal static string Hash(byte[] value)=>Convert.ToHexStringLower(SHA256.HashData(value));
+    internal static int ReadSourceSchema(string repo)
+    {
+        var path=Path.Combine(repo,"src/database-schema.ts");if(!File.Exists(path))path=Path.Combine(repo,"src/db.ts");
+        var file=new FileInfo(path);if(!file.Exists||file.Length is <1 or >131072)throw new IOException("STORE_FIXTURE_SCHEMA_SOURCE");
+        return ParseSourceSchema(File.ReadAllText(path));
+    }
+    internal static int ParseSourceSchema(string source)
+    {
+        var matches=System.Text.RegularExpressions.Regex.Matches(source,@"(?m)^\s*export\s+const\s+DATABASE_SCHEMA\s*=\s*([1-9][0-9]*)\s*;\s*$",System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        if(matches.Count!=1||!int.TryParse(matches[0].Groups[1].Value,System.Globalization.NumberStyles.None,System.Globalization.CultureInfo.InvariantCulture,out var schema)||schema is <1 or >100000)
+            throw new IOException("STORE_FIXTURE_SCHEMA_SOURCE");
+        return schema;
+    }
     private static void Copy(string source,string target){Directory.CreateDirectory(target);foreach(var file in Directory.GetFiles(source))File.Copy(file,Path.Combine(target,Path.GetFileName(file)));}
     public void Dispose(){} // synthetic data stays private; never included in source or runtime artifacts
 }

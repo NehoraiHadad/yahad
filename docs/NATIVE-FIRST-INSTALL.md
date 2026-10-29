@@ -43,12 +43,13 @@ uninstall UI relocates to a private temporary folder so installed executable
 files can be removed without forcing a reboot. Temporary installer/runtime
 caches and Windows-owned service events/profile bookkeeping may remain.
 
-The first package binds only `127.0.0.1` and opens numeric loopback HTTP, which
-the existing app explicitly supports. Caddy is bundled but not started. No
-firewall, CA trust, domain, tunnel, UPnP or public exposure is configured. The
+The default path binds only `127.0.0.1` and opens numeric loopback HTTP, which
+the existing app explicitly supports. An explicitly selected and consented LAN
+path now configures a separate Caddy service and scoped firewall rules; see
+[LAN-INSTALL.md](LAN-INSTALL.md). No CA trust, domain, tunnel, UPnP or public exposure is configured. The
 family server runs as a Windows service and survives closing the installer;
-LAN/tablet access and its secure certificate path remain a separate explicit
-configuration. The user package enables the existing Baileys connector. The authenticated parent initiates linking in the existing web UI; no account is connected by installation or tests. Synthetic/mock mode is an explicit internal test profile only.
+LAN/tablet access requires explicit certificate trust and actual device verification.
+The user package enables the existing Baileys connector. The authenticated parent initiates linking in the existing web UI; no account is connected by installation or tests. Synthetic/mock mode is an explicit internal test profile only.
 
 The existing consent is the parent-only `POST /api/parent/connect`, protected by the current session, exact Origin and CSRF token. The existing account-link panel displays the unofficial-connection warning and QR; no native family/QR wizard is duplicated. A fresh family has `linked=0` and no connector is constructed at setup. The existing `linked=1` state preserves previously requested automatic reconnect. Native configuration enables the connector through its existing `ALLOW_REAL_WHATSAPP` startup gate; it does not manufacture an account, WhatsApp credentials or a web connect request. The added regression injects a no-network test transport and checks unauthenticated/CSRF/origin rejection, explicit parent action, QR rendering and consent-preserving restart.
 

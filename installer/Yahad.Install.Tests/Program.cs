@@ -15,6 +15,19 @@ Dictionary<string,string> FixtureEnvironment(string directory)
     return clean;
 }
 JobProcess FixtureJob(string executable,IEnumerable<string> arguments,string directory) => JobProcess.Start(executable,arguments,directory,FixtureEnvironment(directory));
+// Pure LAN planning/certificate tests only: no native boundary, ACL, service,
+// firewall, trust-store or listener fixture is created on this execution path.
+if(args is ["--lan-only"])
+{
+    var lanResults = new List<object>(); var lanFailures = 0;
+    await LanDeploymentTests.Run(async (name, test) =>
+    {
+        try { await test(); Console.WriteLine("PASS " + name); lanResults.Add(new { name, status = "PASS" }); }
+        catch (Exception error) { lanFailures++; Console.WriteLine("FAIL " + name + " " + error.GetType().Name + " " + error.Message); lanResults.Add(new { name, status = "FAIL" }); }
+    });
+    Console.WriteLine(JsonSerializer.Serialize(new { suite = "lan-only", failed = lanFailures, results = lanResults }));
+    return lanFailures == 0 ? 0 : 1;
+}
 if(args is ["--environment",var environmentOutput])
 {
     var names=new[]{"NODE_OPTIONS","NODE_PATH","DOTNET_STARTUP_HOOKS","CORECLR_ENABLE_PROFILING","COR_ENABLE_PROFILING","OPENSSL_CONF","ESBUILD_BINARY_PATH","PATH","TEMP","SystemRoot"};
@@ -230,6 +243,7 @@ await Check("occupied loopback port is a recoverable conflict", () =>
 });
 await NativeBoundaryTests.Run(root, Check);
 await InstallerPlanningTests.Run(Check);
+await LanDeploymentTests.Run(Check);
 await AppLifecycleTests.Run(Check);
 await UpdateRecoveryTests.Run(Check);
 await LifecycleCleanupTests.Run(root,Check);

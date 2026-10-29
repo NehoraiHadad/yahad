@@ -2,7 +2,7 @@ using System.IO;
 using Yahad.Service;
 namespace Yahad.Setup;
 
-internal sealed record InstallerState(int Format,string InstallationId,string DataId,string PackageDigest,string PayloadDigest,string SourceCommit,string OwnerSid,int Port,string Phase,InstallMember[] Files,string ServiceSid,string SetupSha256);
+internal sealed record InstallerState(int Format,string InstallationId,string DataId,string PackageDigest,string PayloadDigest,string SourceCommit,string OwnerSid,int Port,string Phase,InstallMember[] Files,string ServiceSid,string SetupSha256,int PayloadSchema=5);
 internal static class InstallLocations
 {
     internal static string State=>FirstInstallProfile.StateRoot;

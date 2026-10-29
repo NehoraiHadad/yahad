@@ -11,7 +11,7 @@ using Yahad.Install;
 using Yahad.Service;
 namespace Yahad.Setup;
 
-internal sealed class NativeSetupHost(InstallPackage package):ISetupHostOperations,IDisposable
+internal sealed class NativeSetupHost(InstallPackage package):ISetupHostOperations,ILanSetupHostOperations,IDisposable
 {
     private InstallerState? state;private NativeServiceInstall? service;private string? staging,setupToken;private bool existing,reinstalling;private WindowsFileBoundary.DataLease? preservedLease;private bool rootCreated,binariesCreated;
     private static string Hash(byte[] bytes)=>Convert.ToHexStringLower(SHA256.HashData(bytes));
@@ -20,7 +20,7 @@ internal sealed class NativeSetupHost(InstallPackage package):ISetupHostOperatio
     private static InstallerState ReadState(string? selected=null)
     {
         using var file=WindowsFileBoundary.OpenInstallerMetadata(selected??InstallLocations.StateFile);var state=NativeJson.Read<InstallerState>(file.Small(16777216));
-        if(state.Format!=1||!Guid.TryParseExact(state.InstallationId,"N",out _)||!Guid.TryParseExact(state.DataId,"N",out _)||!state.ServiceSid.StartsWith("S-1-5-80-",StringComparison.Ordinal)||!state.OwnerSid.StartsWith("S-1-5-21-",StringComparison.Ordinal)||state.Port is <1024 or >65535||state.Files.Length is <10 or >50000)throw new IOException("INSTALL_STATE_INVALID");
+        if(state.Format!=1||!Guid.TryParseExact(state.InstallationId,"N",out _)||!Guid.TryParseExact(state.DataId,"N",out _)||!state.ServiceSid.StartsWith("S-1-5-80-",StringComparison.Ordinal)||!state.OwnerSid.StartsWith("S-1-5-21-",StringComparison.Ordinal)||state.Port is <1024 or >65535||state.Files.Length is <10 or >50000||state.PayloadSchema is <1 or >64)throw new IOException("INSTALL_STATE_INVALID");
         foreach(var member in state.Files)InstallPackage.Name(member.Path);return state;
     }
     private void SaveState(string phase)
@@ -69,7 +69,9 @@ internal sealed class NativeSetupHost(InstallPackage package):ISetupHostOperatio
         package.Extract(staging,p=>progress(new("extracting",10+p*55/100)),cancellation,dir=>NativeInstallFiles.EnsureStageDirectory(staging,dir,NativeInstallFiles.Descriptor(state.ServiceSid)),NativeInstallFiles.CreateNewFile);
         var manifest=NativeJson.Read<JsonElement>(File.ReadAllBytes(Path.Combine(staging,"payload/bundle.json")));
         if(manifest.GetProperty("version").GetString()!="0.5.3"||manifest.GetProperty("target").GetString()!="win-x64"||manifest.GetProperty("profile").GetString()!="full")throw new IOException("PAYLOAD_VERSION");
-        var build=NativeJson.Read<JsonElement>(File.ReadAllBytes(Path.Combine(staging,"payload/legal/build-inputs.json")));if(build.GetProperty("databaseSchema").GetInt32()!=5)throw new IOException("PAYLOAD_SCHEMA");
+        var build=NativeJson.Read<JsonElement>(File.ReadAllBytes(Path.Combine(staging,"payload/legal/build-inputs.json")));var payloadSchema=PayloadSchema.Read(build);
+        if(reinstalling&&state.PayloadSchema!=payloadSchema)throw new IOException("PAYLOAD_SCHEMA");
+        if(state.PayloadSchema!=payloadSchema){state=state with{PayloadSchema=payloadSchema};SaveState(state.Phase);}
     },cancellation);
     public Task PublishServiceAsync(OwnerProcess owner,Action<SetupProgress> progress,CancellationToken cancellation)=>Task.Run(()=>
     {
@@ -123,7 +125,7 @@ internal sealed class NativeSetupHost(InstallPackage package):ISetupHostOperatio
         if(File.Exists(capabilityPath))NativeInstallFiles.ReplaceOwned(capabilityPath,capability);else NativeInstallFiles.WriteNew(capabilityPath,capability);
         var intent=Json(new InstalledOwnerIntent(1,s.InstallationId,1,Guid.NewGuid().ToString("N"),s.PayloadDigest,s.DataId,"activate",s.OwnerSid,DateTimeOffset.UtcNow.ToUnixTimeSeconds(),null));
         var web=Json(new InstalledWeb(1,s.InstallationId,"http://127.0.0.1:"+s.Port,s.Port));
-        var activation=Json(new InstalledActivation(1,s.InstallationId,1,s.PayloadDigest,s.DataId,5,5,Hash(key),Hash(NativeInstallFiles.ReadOwned(policyPath,s.ServiceSid)),Hash(NativeInstallFiles.ReadOwned(pinPath,s.ServiceSid)),Hash(intent),Hash(web),"committed",null));
+        var activation=Json(new InstalledActivation(1,s.InstallationId,1,s.PayloadDigest,s.DataId,s.PayloadSchema,s.PayloadSchema,Hash(key),Hash(NativeInstallFiles.ReadOwned(policyPath,s.ServiceSid)),Hash(NativeInstallFiles.ReadOwned(pinPath,s.ServiceSid)),Hash(intent),Hash(web),"committed",null));
         void Record(string name,byte[] bytes){var path=Path.Combine(InstallLocations.State,name);if(File.Exists(path))NativeInstallFiles.ReplaceOwned(path,bytes);else NativeInstallFiles.WriteNew(path,bytes);}
         Record("owner-intent.json",intent);Record("web.json",web);Record("activation.json",activation);Record("epoch.json",Json(new InstalledEpoch(1,s.InstallationId,1,Hash(activation))));
         Record("bootstrap.json",Json(new{schema=1,service=InstallLocations.ServiceName,installationId=s.InstallationId,activationReceiptDigest=Hash(activation)}));
@@ -158,7 +160,15 @@ internal sealed class NativeSetupHost(InstallPackage package):ISetupHostOperatio
             {var cap=NativeJson.Read<JsonElement>(NativeInstallFiles.ReadOwned(capPath,s.ServiceSid));if(cap.GetProperty("expiresAt").GetInt64()<=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())throw new IOException("SERVER_NOT_READY");setupToken=cap.GetProperty("token").GetString();}
             else throw new IOException("SERVER_NOT_READY");
         }
-        return new(true,"READY",url,setupToken);
+        var lan=await new NativeLanInstall(s).ObserveAsync(cancellation);
+        return new(true,"READY",url,setupToken,Lan:lan);
+    }
+    public async Task ConfigureLanAsync(OwnerProcess owner,LanSetupRequest request,Action<SetupProgress> progress,CancellationToken cancellation)
+    {
+        var s=state??throw new IOException("INSTALL_NOT_PREPARED");if(s.OwnerSid!=owner.Sid)throw new IOException("INSTALL_OWNER_CHANGED");
+        var network=new NativeLanInstall(s);network.Preflight(request);
+        await service!.StopAsync(cancellation);service.RequireCleanStop();
+        await network.ConfigureAsync(request,progress,cancellation);
     }
     public async Task<SetupResult> UninstallAsync(OwnerProcess owner,Action<SetupProgress> progress,CancellationToken cancellation,UninstallMode mode=UninstallMode.KeepData)
     {
@@ -193,6 +203,7 @@ internal sealed class NativeSetupHost(InstallPackage package):ISetupHostOperatio
         if(NativeServiceInstall.Exists())
         {service=NativeServiceInstall.OpenOwned();progress(new("stopping_server",10));await service.StopAsync(cancellation);service.RequireCleanStop();}
         else if(s.Phase is not("uninstalled" or "removing_all_data" or "removing_keep_data"))throw new IOException("INSTALL_REPAIR_REQUIRED");
+        LanSetupResult? lanRemoval=null;
         using var dataPin=Directory.Exists(InstallLocations.State)?WindowsFileBoundary.PinInstallerRemovalRoot(InstallLocations.State,sid):null;
         var data=Path.Combine(InstallLocations.State,"datasets",s.DataId,"data");
         WindowsFileBoundary.DataLease? lease=Directory.Exists(data)?WindowsFileBoundary.AcquireInstallerDataLease(data,sid):null;
@@ -207,6 +218,9 @@ internal sealed class NativeSetupHost(InstallPackage package):ISetupHostOperatio
             if(File.Exists(InstallLocations.RemovalStateFile))NativeInstallFiles.ReplaceOwned(InstallLocations.RemovalStateFile,intent);else NativeInstallFiles.WriteNew(InstallLocations.RemovalStateFile,intent);
             NativeInstallFiles.SetOwnedFile(InstallLocations.RemovalStateFile,NativeInstallFiles.Descriptor(s.ServiceSid));
             if(File.Exists(InstallLocations.StateFile))SaveState(state.Phase);
+            // Record the owner's removal choice durably before any LAN CA or
+            // proxy binaries can be deleted. A retry cannot switch modes.
+            lanRemoval=await new NativeLanInstall(s).UninstallAsync(mode,cancellation);
             if(service is not null){service.Delete();service.Dispose();service=null;await NativeServiceInstall.WaitUntilRemovedAsync(cancellation);}
             lease?.Dispose();lease=null;
             if(mode==UninstallMode.DeleteData&&tree is not null)
@@ -222,7 +236,7 @@ internal sealed class NativeSetupHost(InstallPackage package):ISetupHostOperatio
         Registry.LocalMachine.DeleteSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\Yahad.FirstInstall",false);
         if(mode==UninstallMode.KeepData)SaveState("uninstalled");
         Directory.Delete(InstallLocations.Binaries);File.Delete(InstallLocations.RemovalStateFile);
-        progress(new("removed",100));return new(true,mode==UninstallMode.DeleteData?"REMOVED_ALL":"REMOVED","http://127.0.0.1:"+s.Port+"/",DataPreserved:mode==UninstallMode.KeepData);
+        progress(new("removed",100));return new(true,mode==UninstallMode.DeleteData?"REMOVED_ALL":"REMOVED","http://127.0.0.1:"+s.Port+"/",DataPreserved:mode==UninstallMode.KeepData,Lan:lanRemoval);
     }
     private void RequireExistingHost()
     {
