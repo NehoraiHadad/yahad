@@ -1,0 +1,7 @@
+{
+  "format": 1,
+  "localHttps": true,
+  "exactAdditionalOrigins": true,
+  "ownerLoopbackBootstrap": true,
+  "publicHelpTemplate": "deploy/lan-help.html"
+}

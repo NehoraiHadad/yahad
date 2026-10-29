@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { platformFiles, type PlatformFiles } from './platform-files.js';
 import { resolve } from 'node:path';
 import { z } from 'zod';
+import { parseAdditionalOrigins } from './allowed-origins.js';
 export interface Config {
   dataDir: string;
   masterKey: Buffer;
@@ -10,6 +11,7 @@ export interface Config {
   host: string;
   port: number;
   origin: string;
+  additionalOrigins?: string[];
   secureCookie: boolean;
   maxMedia: number;
   maxStorage: number;
@@ -31,6 +33,7 @@ export function loadConfig(files: PlatformFiles = platformFiles): Config {
       HOST: z.string().default('127.0.0.1'),
       PORT: z.coerce.number().int().min(1).max(65535).default(3000),
       APP_ORIGIN: z.url(),
+      APP_ADDITIONAL_ORIGINS: z.string().max(4096).default(''),
       COOKIE_SECURE: z.enum(['true', 'false']).default('true'),
       MAX_MEDIA_MB: z.coerce.number().min(1).max(32).default(16),
       MAX_STORAGE_MB: z.coerce.number().min(64).default(2048),
@@ -60,6 +63,7 @@ export function loadConfig(files: PlatformFiles = platformFiles): Config {
     host: env.HOST,
     port: env.PORT,
     origin,
+    additionalOrigins: parseAdditionalOrigins(env.APP_ADDITIONAL_ORIGINS, env.COOKIE_SECURE === 'true'),
     secureCookie: env.COOKIE_SECURE === 'true',
     maxMedia: env.MAX_MEDIA_MB * 1024 ** 2,
     maxStorage: env.MAX_STORAGE_MB * 1024 ** 2,

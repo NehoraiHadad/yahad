@@ -14,6 +14,7 @@ import QRCode from 'qrcode';
 import { hash, verifyPassword, passwordHash } from './crypto.js';
 import { timingSafeEqual, randomUUID } from 'node:crypto';
 import type { Config } from './config.js';
+import { parseAdditionalOrigins } from './allowed-origins.js';
 import { Store, type Session } from './store.js';
 import { UsageError } from './usage.js';
 import { ChildAccessError } from './child-access.js';
@@ -42,6 +43,9 @@ export async function createApp(
   options: { windowsUpdates?: WindowsUpdateTransport; store?: Store; factory?: (h: ConnectorHooks) => Connector; boot?: boolean;
     bootstrap?: { token: string; expiresAt: number } } = {},
 ) {
+  const acceptedOrigins = new Set([config.origin,
+    ...parseAdditionalOrigins((config.additionalOrigins ?? []).join(','), config.secureCookie)]);
+  const acceptedOrigin = (origin: string | undefined) => origin !== undefined && acceptedOrigins.has(origin);
   const app = Fastify({
     logger: false,
     bodyLimit: 100_000,
@@ -107,13 +111,13 @@ export async function createApp(
       );
     if (!req.url.startsWith('/api/')) return;
     const origin = req.headers.origin;
-    if (origin && origin !== config.origin) throw new AppError(403, 'ORIGIN_DENIED');
+    if (origin && !acceptedOrigin(origin)) throw new AppError(403, 'ORIGIN_DENIED');
     if (req.url === '/api/login' || req.url === '/api/setup' || req.url === '/api/setup/status') return;
     const s = store.session(req.cookies.sid || '');
     if (!s) throw new AppError(401, 'SIGN_IN_REQUIRED');
     req.session = s;
     if (!['GET', 'HEAD'].includes(req.method)) {
-      if (origin !== config.origin || req.headers['x-csrf-token'] !== s.csrf)
+      if (!acceptedOrigin(origin) || req.headers['x-csrf-token'] !== s.csrf)
         throw new AppError(403, 'CSRF_DENIED');
       if (req.url !== '/api/logout') store.session(s.sid, true);
     }
@@ -172,7 +176,7 @@ export async function createApp(
   app.post('/api/setup', async (req, reply) => {
     const capability = req.headers['x-setup-token'];
     const bootstrap = options.bootstrap;
-    if (req.headers.origin !== config.origin) throw new AppError(403, 'ORIGIN_DENIED');
+    if (!acceptedOrigin(req.headers.origin)) throw new AppError(403, 'ORIGIN_DENIED');
     if (!bootstrap || Date.now() > bootstrap.expiresAt || typeof capability !== 'string' ||
         !timingSafeEqual(Buffer.from(hash(capability)), Buffer.from(hash(bootstrap.token))) ||
         store.one('SELECT 1 FROM families LIMIT 1')) throw new AppError(403, 'SETUP_CLOSED');
@@ -195,7 +199,7 @@ export async function createApp(
     } finally { settingUp = false; }
   });
   app.post('/api/login', async (req, reply) => {
-    if (req.headers.origin !== config.origin) throw new AppError(403, 'ORIGIN_DENIED');
+    if (!acceptedOrigin(req.headers.origin)) throw new AppError(403, 'ORIGIN_DENIED');
     const input = z
       .object({ name: accountNameSchema, password: z.string().max(256) }).strict()
       .parse(req.body);

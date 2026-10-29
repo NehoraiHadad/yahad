@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>יחד · חיבור מכשיר בבית</title>
+  <style>
+    :root{font-family:"Segoe UI",Arial,sans-serif;color:#253d36;background:#f4f7f2;line-height:1.65;font-size:17px}
+    *{box-sizing:border-box}body{margin:0}main{max-width:800px;margin:0 auto;padding:36px 20px 60px}
+    .brand{color:#176a54;font-weight:700;letter-spacing:.03em}h1{font-size:clamp(1.8rem,6vw,2.7rem);line-height:1.2;margin:14px 0 20px}
+    h2{font-size:1.3rem;margin:0 0 12px}p{margin:10px 0}.lead{color:#4c6259;font-size:1.08rem}
+    section,details{background:white;border:1px solid #dce6dc;border-radius:16px;padding:22px;margin:18px 0}
+    .important{border-inline-start:5px solid #a56e1f;background:#fff9eb}.note{color:#52655c;font-size:.94rem}
+    a{color:#146b54;text-underline-offset:.2em}a.button{display:inline-block;background:#176b54;color:white;border-radius:9px;padding:11px 18px;font-weight:600;text-decoration:none;margin:8px 0}
+    a.secondary{background:#edf4ee;color:#176b54;border:1px solid #aac8b5}a:focus-visible,summary:focus-visible{outline:3px solid #2768ab;outline-offset:4px}
+    .address,.fingerprint{direction:ltr;unicode-bidi:isolate;display:block;overflow-wrap:anywhere;background:#f0f5ef;border-radius:7px;padding:12px;font: .91rem/1.6 Consolas,monospace}
+    ol{padding-inline-start:25px}li{margin:8px 0}summary{cursor:pointer;font-weight:650}details p:first-of-type{margin-top:14px}footer{margin-top:30px;color:#52655c;font-size:.9rem}
+    @media(max-width:480px){main{padding:24px 14px 40px}section,details{padding:17px}.button{width:100%;text-align:center}}
+  </style>
+</head>
+<body>
+<main>
+  <div class="brand">יחד · בתוך הבית</div>
+  <h1>מחברים את המכשיר<br>למחשב המשפחתי</h1>
+  <p class="lead">המכשיר והמחשב צריכים להיות מחוברים לאותה רשת ביתית. המחשב צריך להיות דלוק וער. אין צורך בחשבון חיצוני או במנוי.</p>
+
+  <section aria-labelledby="check-heading">
+    <h2 id="check-heading">1. קודם מנסים את הכתובת המאובטחת</h2>
+    <span class="address">__LAN_HTTPS_ORIGIN__</span>
+    <a class="button" href="__LAN_HTTPS_ORIGIN__/" rel="noreferrer">בדיקת חיבור HTTPS</a>
+    <p>אם יחד נפתחת בלי אזהרת אבטחה, אפשר להתחבר לחשבון שם. בדיקת הקישור בודקת חיבור בלבד; הדף הזה אינו יכול לקרוא את הגדרות האמון של המכשיר.</p>
+    <p class="note">אם החיבור נכשל, זה לא מוכיח שחסרה תעודה. ייתכן שהמחשב ישן, כתובתו השתנתה, המכשירים ברשתות שונות או שיש חסימת רשת. רשת אורחים עשויה להפריד בין מכשירים.</p>
+    <p><strong>מופיעה אזהרת דפדפן? אל תדלגו עליה.</strong> חזרו לכאן והיעזרו בשלבים הבאים.</p>
+  </section>
+
+  <section class="important" aria-labelledby="verify-heading">
+    <h2 id="verify-heading">2. מאמתים מול מסך המחשב המארח</h2>
+    <p>התעודה מאפשרת למכשיר לזהות את המחשב של יחד ולהצפין את החיבור אליו. התקינו אותה רק לאחר שהשוויתם את טביעת האצבע של <strong>קובץ התעודה שהורדתם</strong> לזו שמוצגת במסך ההתקנה במחשב המארח, או בערוץ עצמאי שאתם סומכים עליו.</p>
+    <p><strong>הדף הזה וההורדה נשלחים ב־HTTP. טביעת אצבע שמופיעה רק כאן אינה הוכחת אמינות.</strong> אל תאשרו אמון אם אין לכם את טביעת האצבע ממסך המחשב או אם הערכים אינם זהים.</p>
+    <p>אם המכשיר אינו מציג את טביעת SHA-256 ואין דרך אמינה לחשב אותה, אל תתקינו קובץ שהגיע רק מהדף הזה. אפשר להעביר את התעודה הציבורית ישירות מהמחשב המארח בכבל או בערוץ עצמאי מאומת.</p>
+    <p class="note">טביעת SHA-256 המפורסמת כאן, לעזר בלבד:</p>
+    <span class="fingerprint">__ROOT_SHA256__</span>
+    <a class="button secondary" href="/certificate.crt" download="yahad-home-root.crt">הורדת התעודה הציבורית</a>
+    <p class="note">זהו קובץ תעודה ציבורית בלבד. אין צורך להוריד מפתח פרטי. אישור תעודת שורש הוא שינוי אמון במכשיר; אשרו רק את התעודה הייחודית של ההתקנה שלכם.</p>
+  </section>
+
+  <section aria-labelledby="device-heading">
+    <h2 id="device-heading">3. מאשרים פעם אחת במכשיר הזה</h2>
+    <p>בחרו את ההסבר למכשיר שלכם. שמות התפריטים משתנים בין גרסאות ויצרנים. אם המכשיר מנוהל או חוסם התקנת תעודות, פנו למי שמנהל אותו.</p>
+    <details>
+      <summary>iPhone או iPad</summary>
+      <ol>
+        <li>הורידו את התעודה. פתחו את הגדרות המכשיר ואת הפרופיל שהורד. לפני ההתקנה, פתחו את פרטי התעודה והשוו את SHA-256 למסך המחשב המארח.</li>
+        <li>אם הערכים זהים, התקינו את פרופיל התעודה באמצעות הגדרות המכשיר.</li>
+        <li>עברו אל כללי ← אודות ← הגדרות אמון בתעודות, והפעילו אמון מלא לתעודת השורש של יחד שאימתם.</li>
+        <li>חזרו לקישור HTTPS למעלה. רק לאחר שנפתח ללא אזהרה מתחברים לחשבון ומאשרים מיקרופון, אם רוצים להקליט.</li>
+      </ol>
+    </details>
+    <details>
+      <summary>Android</summary>
+      <ol>
+        <li>הורידו את התעודה ופתחו את פרטי הקובץ/התעודה. השוו את SHA-256 למסך המחשב המארח לפני שמאשרים אמון.</li>
+        <li>בהגדרות, חפשו ״התקנת תעודה״ או ״אישור CA״. הנתיב בדרך כלל נמצא תחת אבטחה ופרטיות ← הגדרות אבטחה נוספות ← הצפנה ופרטי כניסה.</li>
+        <li>בחרו התקנת <strong>אישור CA</strong>, בחרו את הקובץ שאימתם ואשרו לפי הנחיות המכשיר. ייתכן שתידרש נעילת מסך. אין צורך בתעודת משתמש או בתעודת Wi-Fi.</li>
+        <li>פתחו שוב את קישור HTTPS בדפדפן. אם נשארת אזהרה, עצרו ובדקו את התאימות לדפדפן ולגרסת המכשיר.</li>
+      </ol>
+    </details>
+    <details>
+      <summary>Windows נוסף בבית</summary>
+      <ol>
+        <li>שמרו את קובץ התעודה. כדי לחשב SHA-256 של הקובץ לפני הייבוא, פתחו PowerShell והשתמשו בפקודת Get-FileHash עם Algorithm SHA256 ונתיב הקובץ שהורדתם. השוו את התוצאה למסך המחשב המארח.</li>
+        <li>רק אם הערכים זהים, פתחו את התעודה ובחרו ״התקנת אישור״ למשתמש הנוכחי, ואז את מאגר ״רשויות אישורים בסיסיות מהימנות״ (Trusted Root Certification Authorities).</li>
+        <li>אשרו את אזהרת התקנת תעודת השורש שאימתם. זו פעולה בהגדרות מערכת ההפעלה; אין לדלג על אזהרת אתר בדפדפן.</li>
+        <li>פתחו מחדש את קישור HTTPS. חלק מהדפדפנים מנהלים מאגר אמון נפרד; אם נשארת אזהרה יש לבדוק את הוראות הדפדפן.</li>
+      </ol>
+    </details>
+    <p class="note">הוראות אלה הן הדרכה להגדרה ידנית. הצלחה במחשב המארח אינה הוכחה שהמכשיר השני כבר סומך על התעודה.</p>
+  </section>
+
+  <section aria-labelledby="later-heading">
+    <h2 id="later-heading">אם הכתובת השתנתה או שמסירים את יחד</h2>
+    <p>אחרי שינוי כתובת רשת, פתחו שוב את כלי ההתקנה במחשב המארח ובחרו את הרשת הנכונה. אל תאשרו תעודה חדשה בלי לאמת אותה מחדש מול המחשב.</p>
+    <p>בהסרת יחד מהמחשב, האמון שאישרתם בטאבלטים ובמכשירים אחרים אינו נמחק מרחוק. הסירו גם אותו: ב־iPhone/iPad דרך כללי ← VPN וניהול מכשיר והגדרות אמון בתעודות; ב־Android דרך אישורים מהימנים/אישורים שהותקנו; ב־Windows דרך ניהול אישורי המשתמש (certmgr.msc), במאגר רשויות בסיסיות מהימנות.</p>
+    <p><strong>מחקו רק את התעודה של ההתקנה הזו, לפי טביעת האצבע שאימתם.</strong> אל תמחקו תעודות אחרות. ההחלטה לשמור או למחוק נתוני משפחה בהסרת התוכנה היא בחירה נפרדת.</p>
+  </section>
+  <footer>זהו דף עזרה ציבורי ברשת הביתית בלבד. אין כאן כניסה לחשבון, שיחות או פרטי משפחה. הגישה דרך האינטרנט אינה מופעלת כאן.</footer>
+</main>
+</body>
+</html>
