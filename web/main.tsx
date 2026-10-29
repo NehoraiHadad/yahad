@@ -1889,7 +1889,11 @@ function Parent({
     }
   };
   const selectedChild = data ? familyProgress(data).children.find(item => item.id === child) : undefined;
+  // Existing accounts/catalog are persisted setup evidence, not the current
+  // connection state: a temporary disconnect must never hide family management.
+  const familySetupAvailable = !!data && (data.state === 'connected' || data.children.length > 0 || data.groups.length > 0);
   const connectionReadUnavailable = overviewFailed || !browserOnline;
+  const connectionPending = ['connecting', 'reconnecting', 'qr'].includes(data?.state || '');
   const stateLabels: Record<string, string> = {
     connected: 'מחובר',
     connecting: 'מתחברים…',
@@ -1930,20 +1934,6 @@ function Parent({
           </div>
         )}
         {data && familyProgress(data).completed < 3 && <FamilyProgress data={data} busy={busy} stale={overviewStale} onAdd={() => setAddingChild(true)} onSelect={id => { setChild(id); setCreatedChild(''); }} />}
-        <ChildManagement data={data} selected={child} busy={busy} stale={overviewStale} createdChild={createdChild}
-          photoRetryKey={`${data?.state || 'idle'}:${groupPhotoRevision}`}
-          onAdd={() => setAddingChild(true)} onSelect={id => { setChild(id); setCreatedChild(''); }}
-          onSettings={(id, mode) => { setSettingsChild(id); setSettingsMode(mode); setSettings(true); }}
-          onRetry={() => void load()} onRefresh={() => void act('/parent/sync-groups')}
-          onAccess={change => act('/parent/child-access', change, 'PUT')}
-          onGrant={change => { setCreatedChild(''); return act('/parent/grant', change, 'PUT'); }}>
-          <IdentitySettings key={child} childId={child} disabled={busy || overviewStale}
-            value={data?.children.find(account => account.id === child)?.senderLabel || ''}
-            onSave={async label => {
-              const saved = await act('/parent/identity', { childId: child, label }, 'PUT');
-              if (!saved) throw new Error('לא התקבל אישור לשמירת החתימה. בדקו את המצב לאחר הרענון.');
-            }} onError={onError}/>
-        </ChildManagement>
         <details className="parent-connection-details" open={connectionReadUnavailable || data?.state !== 'connected' || !!data?.disconnect}>
           <summary>חיבור החשבון <span>{!connectionReadUnavailable && data?.state === 'connected' && !data?.disconnect ? 'מחובר' : 'נדרשת בדיקה'}</span></summary>
           <section className="parent-card" id="family-connection" tabIndex={-1}>
@@ -1982,11 +1972,11 @@ function Parent({
             ) : (
               <button
                 className="primary"
-                disabled={busy}
+                disabled={busy || !data || overviewStale || !browserOnline || connectionPending}
                 onClick={() => void act('/parent/connect')}
               >
                 {busy ? <LoaderCircle className="spin" size={18} /> : <Plus size={19} />}{' '}
-                {me.connector === 'mock' ? 'הפעלת המתאם המדומה' : 'קישור החשבון'}
+                {connectionPending ? (data?.state === 'qr' ? 'ממתינים לסריקת הקוד' : 'ממתינים לחיבור…') : me.connector === 'mock' ? 'הפעלת המתאם המדומה' : 'קישור החשבון'}
               </button>
             )}
             {data && <DisconnectPanel active={!!data.linked || data.state !== 'idle'} busy={busy}
@@ -2004,9 +1994,30 @@ function Parent({
             </div>
           </section>
         </details>
-        <ChildTabletSetup child={selectedChild} loaded={!!data} stale={overviewStale} busy={busy}
-          origin={location.origin} openChat={openChat}
-          onPassword={id => { setSettingsChild(id); setSettingsMode('password'); setSettings(true); }}/>
+        {familySetupAvailable ? <>
+          <ChildManagement data={data} selected={child} busy={busy} stale={overviewStale} createdChild={createdChild}
+            photoRetryKey={`${data?.state || 'idle'}:${groupPhotoRevision}`}
+            onAdd={() => setAddingChild(true)} onSelect={id => { setChild(id); setCreatedChild(''); }}
+            onSettings={(id, mode) => { setSettingsChild(id); setSettingsMode(mode); setSettings(true); }}
+            onRetry={() => void load()} onRefresh={() => void act('/parent/sync-groups')}
+            onAccess={change => act('/parent/child-access', change, 'PUT')}
+            onGrant={change => { setCreatedChild(''); return act('/parent/grant', change, 'PUT'); }}>
+            <IdentitySettings key={child} childId={child} disabled={busy || overviewStale}
+              value={data?.children.find(account => account.id === child)?.senderLabel || ''}
+              onSave={async label => {
+                const saved = await act('/parent/identity', { childId: child, label }, 'PUT');
+                if (!saved) throw new Error('לא התקבל אישור לשמירת החתימה. בדקו את המצב לאחר הרענון.');
+              }} onError={onError}/>
+          </ChildManagement>
+          <ChildTabletSetup child={selectedChild} loaded={!!data} stale={overviewStale} busy={busy}
+            origin={location.origin} openChat={openChat}
+            onPassword={id => { setSettingsChild(id); setSettingsMode('password'); setSettings(true); }}/>
+        </> : <section className="parent-card" aria-label="השלבים הבאים" aria-live="polite">
+          <h2>אחרי חיבור החשבון</h2>
+          <p>2. מוסיפים ילד או ילדה. 3. בוחרים אילו שיחות להציג להם.</p>
+          <p>{!data ? 'טוענים את מצב החשבון…' : 'קודם מחברים את WhatsApp למעלה. לאחר החיבור אפשר להמשיך להגדרת הילדים והשיחות.'}</p>
+          {overviewFailed && <button type="button" className="outline-button" disabled={busy} onClick={() => void load()}>ניסיון נוסף</button>}
+        </section>}
         <DiagnosticsPanel />
         <UpdatesPanel />
         <details className="transparency">

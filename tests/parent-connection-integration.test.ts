@@ -7,11 +7,12 @@ import ts from 'typescript';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ConnectionGuidance } from '../web/ConnectionGuidanceView';
+import { familyProgress, type FamilyOverview } from '../web/FamilyProgress';
 
 // Execute the real Parent render with deterministic hooks, then inspect its
 // connection disclosure and the real guidance component's rendered output.
 // This is not browser geometry/focus QA.
-function parent(sample: { failed?: boolean; online?: boolean; state?: string; qr?: string | null; paused?: boolean } = {}) {
+function parent(sample: { failed?: boolean; stale?: boolean; online?: boolean; loading?: boolean; state?: string; qr?: string | null; paused?: boolean; children?: FamilyOverview['children']; groups?: FamilyOverview['groups']; linked?: boolean; disconnect?: string } = {}) {
   const source = readFileSync(new URL('../web/main.tsx', import.meta.url), 'utf8');
   const file = ts.createSourceFile('main.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const declaration = file.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'Parent');
@@ -25,15 +26,15 @@ function parent(sample: { failed?: boolean; online?: boolean; state?: string; qr
   tags(declaration);
   let index = 0;
   const child = { id: 'a', name: 'Synthetic child', paused: !!sample.paused, accessRevision: sample.paused ? 1 : 0 };
-  const data = { state: sample.state || 'connected', children: [child], groups: [], grants: [] };
-  const values: Record<number, unknown> = { 4: !!sample.failed, 5: !!sample.failed, 6: data, 7: sample.qr ?? null };
+  const data = sample.loading ? null : { state: sample.state || 'connected', children: sample.children ?? [child], groups: sample.groups ?? [], grants: [], linked: sample.linked, disconnect: sample.disconnect };
+  const values: Record<number, unknown> = { 4: !!sample.failed || !!sample.stale, 5: !!sample.failed, 6: data, 7: sample.qr ?? null };
   const module = { exports: {} };
   Object.assign(context, {
     module, exports: module.exports, require: createRequire(new URL('../web/main.tsx', import.meta.url)),
     useState(initial: any) { const i = index++; return [i in values ? values[i] : typeof initial === 'function' ? initial() : initial, () => {}]; },
     useRef: (value: unknown) => ({ current: value }), useEffect() {}, useCallback: (fn: unknown) => fn,
     useBrowserOnline: () => sample.online !== false, readChildSelection: () => 'a',
-    familyProgress: () => ({ completed: 3, children: [child] }), location: { origin: 'http://localhost:3000' },
+    familyProgress, location: { origin: 'http://localhost:3000' },
   });
   const code = ts.transpileModule(declaration.getText(file) + '\nmodule.exports=Parent;', {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
@@ -84,4 +85,61 @@ test('Parent passes actual QR visibility and retains child access management whi
   assert.equal(visible.guidance.props.input.qrVisible, true);
   assert.match(visible.html(), /scan_qr/);
   assert.ok(visible.all.some(node => node.type === 'img' && node.props.src === 'data:synthetic-qr'));
+});
+
+
+test('first setup renders connection before all child/group controls and waits for a confirmed connection', () => {
+  for (const state of ['idle', 'connecting', 'qr', 'reconnecting', 'needs_pairing', 'conflict']) {
+    const h = parent({ state, children: [], linked: true });
+    assert.equal(h.all.some(node => node.type === h.context.ChildManagement), false, state);
+    assert.equal(h.all.some(node => node.type === h.context.ChildTabletSetup), false, state);
+    assert.ok(h.all.some(node => node.props?.['aria-label'] === 'השלבים הבאים'), state);
+    assert.equal(h.details.props.open, true, state);
+    const connect = h.all.find(node => node.type === 'button' && node.props.onClick?.toString().includes('/parent/connect'));
+    assert.equal(connect.props.disabled, ['connecting', 'reconnecting', 'qr'].includes(state), state);
+  }
+  const connected = parent({ state: 'connected', children: [] });
+  const childIndex = connected.all.findIndex(node => node.type === connected.context.ChildManagement);
+  assert.ok(childIndex > connected.all.indexOf(connected.details));
+  assert.equal(connected.all.some(node => node.props?.['aria-label'] === 'השלבים הבאים'), false);
+  assert.equal(connected.all.find(node => node.type === connected.context.FamilyProgress).props.data.state, 'connected');
+});
+
+test('reload and screen re-entry derive setup from server evidence; a linking attempt is not a completed connection', () => {
+  for (let entry = 0; entry < 2; entry++) {
+    for (const sample of [
+      { state: 'idle', children: [] },
+      { state: 'connected', children: [] },
+      { state: 'reconnecting', children: [], linked: true },
+      { state: 'qr', children: [], linked: true },
+      { state: 'connecting', children: [], linked: true },
+      { state: 'needs_pairing', children: [{ id: 'saved', name: 'Saved synthetic child' }] },
+      { state: 'idle', children: [], groups: [{ id: 'saved-group', title: 'Synthetic saved catalog' }] },
+    ]) {
+      const h = parent(sample);
+      assert.equal(h.all.some(node => node.type === h.context.ChildManagement), sample.state === 'connected' || !!sample.children.length || !!sample.groups?.length);
+    }
+  }
+});
+
+test('existing family management remains available through every disconnected state', () => {
+  for (const state of ['idle', 'connecting', 'qr', 'reconnecting', 'needs_pairing', 'conflict']) {
+    const h = parent({ state });
+    const management = h.all.find(node => node.type === h.context.ChildManagement);
+    assert.ok(management, state);
+    assert.equal(management.props.stale, false, state);
+    assert.equal(typeof management.props.onAccess, 'function');
+    assert.ok(h.all.indexOf(h.details) < h.all.indexOf(management));
+  }
+});
+
+test('loading and stale reads do not enable connection mutations or first-child setup', () => {
+  for (const sample of [{ loading: true }, { state: 'idle', children: [], failed: true }, { state: 'idle', children: [], online: false }]) {
+    const h = parent(sample);
+    assert.equal(h.all.some(node => node.type === h.context.ChildManagement), false);
+    const connect = h.all.find(node => node.type === 'button' && node.props.onClick?.toString().includes('/parent/connect'));
+    assert.equal(connect.props.disabled, true);
+  }
+  const existing = parent({ state: 'needs_pairing', failed: true });
+  assert.equal(existing.all.find(node => node.type === existing.context.ChildManagement).props.stale, true);
 });
