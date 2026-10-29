@@ -76,19 +76,21 @@ test('poll types are identified honestly without exposing results, voting, secre
  const f=await fixture();try{
   for(const field of ['pollCreationMessage','pollCreationMessageV2','pollCreationMessageV3','pollUpdateMessage','pollResultSnapshotMessage']){
    await f.ingest(raw(field,{[field]:poll,messageContextInfo:{messageSecret:Buffer.alloc(32,7)}}));
-   const m=f.get(field)!;assert.equal(m.kind,'unsupported');assert.ok(m.unsupportedReason?.startsWith('poll'));assert.equal(m.raw,undefined);
-   const exposed=f.service.public(f.a.familyId,m);assert.equal(exposed.actions!.reactions,false);assert.ok(!JSON.stringify(exposed).includes('Synthetic question'));assert.equal((exposed as any).votes,undefined);
+   const m=f.get(field)!;assert.equal(m.kind,field.startsWith('pollCreation')?'poll':'unsupported');assert.equal(m.raw,undefined);
+   const exposed=f.service.public(f.a.familyId,m);assert.equal(exposed.actions!.reactions,false);assert.equal((exposed as any).votes,undefined);
+   if(m.kind==='poll'){assert.equal(m.text,poll.name);assert.deepEqual(exposed.poll?.options,['A','B']);}
+   else assert.ok(!JSON.stringify(exposed).includes('Synthetic question'));
   }
-  assert.deepEqual(f.connector.capabilities.polls,{identify:true,create:false,vote:false,results:false});
+  assert.deepEqual(f.connector.capabilities.polls,{identify:true,display:true,create:false,vote:false,results:false});
   assert.equal((await f.request('/polls','POST',poll)).statusCode,404);
   const temporary=normalizeIncoming(raw('temp',{ephemeralMessage:{message:{pollCreationMessageV3:poll}}}))!;assert.equal(temporary.restricted,true);assert.equal(temporary.unsupportedReason,undefined);assert.equal(temporary.raw,undefined);
   await f.ingest(raw('unknown',{interactiveResponseMessage:{}}));assert.equal(f.get('unknown')!.unsupportedReason,undefined);
  }finally{await f.close();}
 });
 
-test('authorized same-ID redelivery can replace a legacy generic poll explanation without reconstructing payload',async()=>{
+test('authorized same-ID redelivery can display a legacy poll only from newly supplied provider content',async()=>{
  const f=await fixture();try{
   await f.service.ingest(f.a.familyId,{id:'legacy',groupId:group,sender:'Synthetic',fromMe:false,time:Date.now(),kind:'unsupported',text:'Legacy generic explanation'});
-  await f.ingest(raw('legacy',{pollCreationMessageV3:poll}));assert.equal(f.get('legacy')!.unsupportedReason,'poll');assert.equal(f.get('legacy')!.raw,undefined);assert.match(f.get('legacy')!.text,/WhatsApp/);
+  await f.ingest(raw('legacy',{pollCreationMessageV3:poll}));assert.equal(f.get('legacy')!.kind,'poll');assert.equal(f.get('legacy')!.raw,undefined);assert.equal(f.get('legacy')!.text,poll.name);
  }finally{await f.close();}
 });

@@ -1,7 +1,7 @@
 import type { Connector, StoredMessage } from './connectors/types.js';
 
 export function messageActions(message: StoredMessage,connector?: Connector) {
-  const available=!!connector && !message.deleted && !message.restricted && message.kind!=='unsupported' &&
+  const available=!!connector && !message.deleted && !message.restricted && message.kind!=='unsupported' && message.kind!=='poll' &&
     message.status!=='pending' && message.status!=='failed' &&
     (!connector.originalAvailable || connector.originalAvailable(message));
   return {reply:available && !!connector?.capabilities.reply,reactions:available && !!connector?.capabilities.reactions,

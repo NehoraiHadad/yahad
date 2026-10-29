@@ -9,7 +9,7 @@ import {createApp} from '../../src/server.js';
 import type {Config} from '../../src/config.js';
 export const group='120363001@g.us',other='120363002@g.us';
 export const raw=(id:string,message:any,extra:any={}):WAMessage=>({key:{id,remoteJid:group,fromMe:false,participant:'100@lid'},pushName:'Synthetic',messageTimestamp:Math.floor(Date.now()/1000)-10,message,...extra});
-export async function fixture(){
+export async function fixture(options:{child?:boolean}={}){
  const dir=mkdtempSync(join(tmpdir(),'yahad-message-fix-'));
  const config:Config={dataDir:dir,masterKey:randomBytes(32),connector:'mock',realAllowed:false,host:'127.0.0.1',port:3000,origin:'http://localhost:3000',secureCookie:false,maxMedia:1048576,maxStorage:67108864,childIdleMs:900000,sessionMs:3600000,diagnosticsEnabled:false};
  const ev=new EventEmitter(),sent:any[]=[];
@@ -18,7 +18,8 @@ export async function fixture(){
  presenceSubscribe:async()=>{},end:()=>{},updateMediaMessage:async()=>{throw new Error('Network forbidden in test');}};
  let connector!:BaileysConnector;
  const {app,store,service}=await createApp(config,{boot:false,factory:h=>connector=new BaileysConnector(h,()=>socket)});
- const a=await store.createFamily('Synthetic family',{name:'test-parent',password:randomBytes(24).toString('hex')});
+ const a=await store.createFamily('Synthetic family',{name:'test-parent',password:randomBytes(24).toString('hex')},
+   options.child?{name:'test-child',password:randomBytes(24).toString('hex')}:undefined);
  store.syncGroups(a.familyId,[{id:group,title:'Synthetic group'},{id:other,title:'Synthetic other'}]);
  await service.connect(a.familyId);ev.emit('connection.update',{connection:'open'});await new Promise<void>(r=>setImmediate(r));
  const s=store.createSession(store.user(store.one('SELECT * FROM users WHERE id=?',a.parentId)));

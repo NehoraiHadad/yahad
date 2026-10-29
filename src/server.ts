@@ -21,7 +21,7 @@ import { ChatService, AppError, deny } from './service.js';
 import { voiceToOpus } from './media.js';
 import { validReaction } from './message-actions.js';
 import { updateStatus, requestUpdate, updateTargetSchema } from './updates.js';
-import type { ConnectorHooks, Connector, StoredMessage, Kind } from './connectors/types.js';
+import type { ConnectorHooks, Connector, StoredMessage, SendKind } from './connectors/types.js';
 const textSchema = z.string().trim().max(12000);
 const accountNameSchema = z.string().max(240).transform((value, ctx) => {
   try { return normalizeAccountName(value); }
@@ -166,7 +166,7 @@ export async function createApp(
   };
   const requireOriginal = (s: Session,m: StoredMessage) => {
     const c=service.connector(s.user.familyId);
-    if (m.restricted || m.kind==='unsupported' || c.originalAvailable && !c.originalAvailable(m))
+    if (m.restricted || m.kind==='unsupported' || m.kind==='poll' || c.originalAvailable && !c.originalAvailable(m))
       throw new AppError(409,'ORIGINAL_UNAVAILABLE');
   };
   let settingUp = false;
@@ -414,7 +414,7 @@ export async function createApp(
     s: Session,
     g: string,
     data: z.infer<typeof sendSchema>,
-    attachment?: { bytes: Buffer; mime: string; filename: string; kind: Kind },
+    attachment?: { bytes: Buffer; mime: string; filename: string; kind: SendKind },
   ) {
     current(s, g);
     const f = s.user.familyId;
@@ -570,7 +570,7 @@ export async function createApp(
       const { fileTypeFromBuffer } = await import('file-type');
       const type = await fileTypeFromBuffer(bytes);
       const detected = (type?.mime || 'application/octet-stream').split(';')[0];
-      let kind: Kind = 'document';
+      let kind: SendKind = 'document';
       if (fields.voice === 'true') {
         capable(s, 'audio');
         if (

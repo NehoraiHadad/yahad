@@ -1,0 +1,5 @@
+.poll-card { min-width: 0; max-width: 100%; }
+.poll-question { margin: 0 0 12px; font-weight: 700; white-space: pre-wrap; overflow-wrap: anywhere; }
+.poll-options { margin: 0; padding-inline-start: 26px; }
+.poll-options li { margin: 0 0 8px; padding: 8px 10px; border: 1px solid #9bb3a8; border-radius: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.poll-limitation { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid #9bb3a8; font-size: .9rem; line-height: 1.5; overflow-wrap: anywhere; }

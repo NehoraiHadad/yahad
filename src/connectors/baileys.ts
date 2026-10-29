@@ -3,6 +3,7 @@ import { fetchGroupPhoto } from '../group-photos.js';
 import { IngestionQueue } from './ingestion.js';
 import { restrictedMessage, restrictedStoredMessage, temporaryMessageText } from './message-retention.js';
 import { editedEnvelope, historicalReactions, reactionActor, reactionTime } from './message-updates.js';
+import { normalizePoll } from './poll-content.js';
 import makeWASocket, {
   BufferJSON,
   initAuthCreds,
@@ -110,6 +111,7 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
   const content = normalizeMessageContent(raw.message);
   if (!content) return;
   const restricted = restrictedMessage(raw);
+  const poll=!restricted && !content.protocolMessage && !content.reactionMessage ? normalizePoll(content) : undefined;
   const base: Incoming = {
     id,
     groupId,
@@ -121,7 +123,7 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
     status: receipt(raw.status),
     edited: editedEnvelope(raw.message) || undefined,
     historicalReactions: restricted ? undefined : historicalReactions(raw),
-    raw: restricted ? undefined : stringify(stripEmbeddedContext(raw)),
+    raw: restricted || poll ? undefined : stringify(stripEmbeddedContext(raw)),
   };
   if(base.edited)base.editTime=base.time;
   if (restricted) {
@@ -131,12 +133,7 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
       id: p?.type === proto.Message.ProtocolMessage.Type.MESSAGE_EDIT ? p.key?.id || id : id,
       text: temporaryMessageText };
   }
-  if (content.pollCreationMessage || content.pollCreationMessageV2 || content.pollCreationMessageV3)
-    return {...base,raw:undefined,unsupportedReason:'poll',text:'סקר ב־WhatsApp — פרטי הסקר, ההצבעה והתוצאות זמינים כרגע ב־WhatsApp בלבד'};
-  if (content.pollUpdateMessage)
-    return {...base,raw:undefined,unsupportedReason:'poll-vote',text:'עדכון הצבעה בסקר — פרטי ההצבעה זמינים כרגע ב־WhatsApp בלבד'};
-  if (content.pollResultSnapshotMessage)
-    return {...base,raw:undefined,unsupportedReason:'poll-results',text:'תוצאות סקר — זמינות כרגע ב־WhatsApp בלבד'};
+  if(poll)return {...base,...poll};
   if (content.reactionMessage) {
     const r = content.reactionMessage;
     if (r.key?.remoteJid && r.key.remoteJid !== groupId) return;
@@ -242,7 +239,7 @@ export async function incomingMediaStream(raw:WAMessage,reuploadRequest:WASocket
 }
 export class BaileysConnector implements Connector {
   readonly capabilities: Capabilities = {
-    polls: {identify:true,create:false,vote:false,results:false},
+    polls: {identify:true,display:true,create:false,vote:false,results:false},
     reply: true,
     reactions: true,
     image: true,
@@ -501,7 +498,7 @@ export class BaileysConnector implements Connector {
     return parse(m.raw!).key;
   }
   originalAvailable(m: StoredMessage) {
-    if (!m.raw || m.deleted || restrictedStoredMessage(m) || m.kind==='unsupported') return false;
+    if (!m.raw || m.deleted || restrictedStoredMessage(m) || m.kind==='unsupported' || m.kind==='poll') return false;
     try {
       const original=parse(m.raw);
       return !!original.message && original.key?.id===m.id && original.key?.remoteJid===m.groupId;
@@ -526,6 +523,7 @@ export class BaileysConnector implements Connector {
     } catch { return; }
   }
   async send(m: Outgoing) {
+    if((m.kind as string)==='poll')throw new Error('Poll sending unavailable');
     if (m.reply && !this.originalAvailable(m.reply)) throw new Error('Original message unavailable');
     const sock = this.require();
     const content: any =

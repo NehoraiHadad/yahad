@@ -15,6 +15,8 @@ import { ChatCelebration, useChatCelebration } from './ChatCelebrationView';
 import './chatCelebration.css';
 import { HistoryPanel } from './HistoryPanel';
 import { MessageImage } from './MessageImage';
+import { PollMessage } from './PollMessage';
+import './poll-message.css';
 import { DisconnectPanel } from './DisconnectPanel';
 import { GroupAvatar } from './GroupAvatar';
 import { ErrorToast } from './ErrorToast';
@@ -1193,7 +1195,7 @@ function Message({
       <div className={'bubble ' + (m.kind === 'sticker' ? 'sticker-bubble' : '')}>
         <div className="bubble-top">
           {!m.fromMe && <b className="sender">{m.sender}</b>}
-          {!m.deleted && (
+          {!m.deleted && m.kind!=='poll' && (
             <IconButton className="message-menu-button" label="פעולות בהודעה" onClick={onMenu}>
               <MoreHorizontal size={17} />
             </IconButton>
@@ -1209,6 +1211,7 @@ function Message({
           <p className="deleted">ההודעה נמחקה</p>
         ) : (
           <>
+            {m.kind==='poll' && <PollMessage question={m.text} options={m.poll?.options}/>}
             {url && (m.kind === 'image' || m.kind === 'sticker') && (
               <MessageImage key={url} url={url} sticker={m.kind==='sticker'} alt={m.kind==='sticker'?'מדבקה':m.text||'תמונה שנשלחה בשיחה'}/>
             )}
@@ -1235,13 +1238,13 @@ function Message({
                 <Download size={19} />
               </a>
             )}
-            {!url && m.kind !== 'text' && m.kind !== 'unsupported' && (
+            {!url && m.kind !== 'text' && m.kind !== 'unsupported' && m.kind!=='poll' && (
               <p className="media-missing">
                 <AlertCircle size={15} /> המדיה לא נשמרה או שכבר אינה זמינה
               </p>
             )}
             {!url&&!m.text&&(m.kind==='text'||m.kind==='unsupported')&&<p className="media-missing" role="status">תוכן ההודעה אינו זמין בתצוגה הזאת.</p>}
-            {m.text && (
+            {m.text && m.kind!=='poll' && (
               <p className="message-text" dir="auto">
                 {m.text}
               </p>

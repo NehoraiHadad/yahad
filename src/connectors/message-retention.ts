@@ -2,7 +2,7 @@ import type { proto, WAMessage } from '@whiskeysockets/baileys';
 import type { StoredMessage } from './types.js';
 
 const wrappers = ['documentWithCaptionMessage', 'editedMessage', 'associatedChildMessage',
-  'groupStatusMessage', 'groupStatusMessageV2'] as const;
+  'groupStatusMessage', 'groupStatusMessageV2', 'pollCreationMessageV4', 'pollCreationOptionImageMessage'] as const;
 
 export const temporaryMessageText='הודעה זמנית או לצפייה חד־פעמית — לפתיחה ב־WhatsApp בלבד';
 export function restrictedMessage(raw: WAMessage): boolean {

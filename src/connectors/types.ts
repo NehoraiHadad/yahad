@@ -1,8 +1,10 @@
-export type Kind = 'text' | 'image' | 'video' | 'document' | 'sticker' | 'audio' | 'unsupported';
+export type Kind = 'text' | 'image' | 'video' | 'document' | 'sticker' | 'audio' | 'poll' | 'unsupported';
+export type SendKind=Exclude<Kind,'poll'>;
+export interface PollOptions {options:string[]}
 export type Receipt = 'pending' | 'sent' | 'delivered' | 'read' | 'unknown' | 'failed';
 export interface ReactionUpdate { target: string; actor: string; emoji: string; time?: number }
 export interface Capabilities {
-  polls?: { identify: boolean; create: boolean; vote: boolean; results: boolean };
+  polls?: { identify: boolean; display?: boolean; create: boolean; vote: boolean; results: boolean };
   reply: boolean;
   reactions: boolean;
   image: boolean;
@@ -35,7 +37,8 @@ export interface Incoming {
   time: number;
   kind: Kind;
   text: string;
-  unsupportedReason?: 'poll' | 'poll-vote' | 'poll-results';
+  unsupportedReason?: 'poll' | 'poll-vote' | 'poll-results' | 'poll-variant' | 'poll-invalid';
+  poll?: PollOptions;
   replyId?: string;
   mime?: string;
   filename?: string;
@@ -58,7 +61,8 @@ export interface StoredMessage {
   time: number;
   kind: Kind;
   text: string;
-  unsupportedReason?: 'poll' | 'poll-vote' | 'poll-results';
+  unsupportedReason?: 'poll' | 'poll-vote' | 'poll-results' | 'poll-variant' | 'poll-invalid';
+  poll?: PollOptions;
   replyId?: string;
   mediaId?: string;
   mime?: string;
@@ -81,7 +85,7 @@ export interface Outgoing {
   groupId: string;
   id: string;
   text: string;
-  kind: Kind;
+  kind: SendKind;
   reply?: StoredMessage;
   bytes?: Buffer;
   mime?: string;

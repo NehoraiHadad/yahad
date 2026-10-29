@@ -44,7 +44,8 @@ export class IngestionQueue {
         totals.set(message.groupId, notice);
       }
       notice.received++;
-      const size = Buffer.byteLength(message.raw || '') + Buffer.byteLength(message.text) + 256;
+      const size = Buffer.byteLength(message.raw || '') + Buffer.byteLength(message.text) +
+        (message.poll ? Buffer.byteLength(JSON.stringify(message.poll)) : 0) + 256;
       if (size > 256 * 1024 || this.count + messages.length >= this.limits.messages ||
           this.bytes + bytes + size > this.limits.bytes || this.batches.length >= this.limits.batches || (this.budget.active>0&&!this.draining)) {
         notice.phase = 'overload'; continue;
