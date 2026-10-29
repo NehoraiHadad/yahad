@@ -53,6 +53,12 @@ public static class WindowsFileBoundary
         try { ValidateAcl(Security(pinned.Leaf), ApplicationSid(), false); return new(pinned); }
         catch { pinned.Dispose(); throw; }
     }
+    internal static PrivateReadLease OpenInstalledRead(string path)
+    {
+        var pinned=Pin(path,false,true);
+        try{ValidateAcl(Security(pinned.Leaf),ApplicationSid(),true);return new(pinned);}
+        catch{pinned.Dispose();throw;}
+    }
     internal static IDisposable PinPrivateDirectory(string path)
     {
         var pinned = Pin(path, true, false);
@@ -226,9 +232,37 @@ public static class WindowsFileBoundary
         private readonly PinnedPath pinned; private readonly SafeFileHandle gate;
         private readonly RemoteGate? remote;
         internal DataLease(PinnedPath pinned, SafeFileHandle gate, RemoteGate? remote) { this.pinned = pinned; this.gate = gate; this.remote = remote; }
+        internal ulong DuplicateTo(SafeProcessHandle child)
+        {
+            if(gate.IsClosed||child.IsInvalid||child.IsClosed)throw new IOException("NATIVE_HANDOFF_CLOSED");
+            RequireSameIdentity(child);
+            if(!Native.DuplicateHandle(Native.GetCurrentProcess(),gate.DangerousGetHandle(),child.DangerousGetHandle(),out var copy,0,false,2))throw new Win32Exception();
+            return unchecked((ulong)copy.ToInt64()); // child owns this noninheritable duplicate until exit
+        }
         public void Dispose() { try { remote?.Dispose(); } finally { gate.Dispose(); pinned.Dispose(); } }
     }
 
+    private static void RequireSameIdentity(SafeProcessHandle owner)
+    {
+        if(!Native.OpenProcessToken(owner,8,out var token))throw new Win32Exception();
+        using(token)using(var identity=new WindowsIdentity(token.DangerousGetHandle()))
+            if(identity.User?.Equals(ApplicationSid())!=true)throw new IOException("NATIVE_LOCK_OWNER_IDENTITY");
+    }
+    public static void ValidateHostLease(string descriptor,string directory,int ownerPid,string nonce)
+    {
+        using var file=OpenPrivateRead(descriptor);
+        var grant=NativeJson.Read<HostLeaseGrant>(file.Small(4096));
+        if(grant.Format!=1||grant.ProcessId!=ownerPid||ownerPid<1||grant.Nonce!=nonce||nonce.Length!=64||
+            !string.Equals(grant.DataDirectory,directory,StringComparison.OrdinalIgnoreCase)||grant.Handle==0||grant.Handle>long.MaxValue)throw new IOException("NATIVE_HANDOFF_IDENTITY");
+        using var owner=Native.OpenProcess(0x1000|0x40,false,ownerPid);if(owner.IsInvalid)throw new Win32Exception();RequireSameIdentity(owner);
+        if(!Native.DuplicateHandle(owner.DangerousGetHandle(),(IntPtr)(long)grant.Handle,Native.GetCurrentProcess(),out var local,0,false,2))throw new Win32Exception();
+        using var duplicate=new SafeFileHandle(local,true);CheckKind(duplicate,false);ValidateAcl(Security(duplicate),ApplicationSid(),false);
+        using var expected=Pin(Path.Combine(directory,"process.lock"),false,false);
+        if(!Native.GetFileInformationByHandle(duplicate,out var actual)||!Native.GetFileInformationByHandle(expected.Leaf,out var other))throw new Win32Exception();
+        if(actual.Volume!=other.Volume||actual.IndexHigh!=other.IndexHigh||actual.IndexLow!=other.IndexLow)throw new IOException("NATIVE_HANDOFF_FILE");
+        var contender=Native.CreateFileW(Extended(Path.Combine(directory,"process.lock")),GenericRead|0x40000000,0,IntPtr.Zero,3,0x00200000,IntPtr.Zero);
+        using(contender){if(!contender.IsInvalid)throw new IOException("NATIVE_HANDOFF_NOT_LOCKED");if(Marshal.GetLastPInvokeError()!=32)throw new IOException("NATIVE_HANDOFF_UNOBSERVED");}
+    }
     internal sealed class RemoteGate : IDisposable
     {
         private readonly SafeProcessHandle owner; private readonly IntPtr remote; private bool disposed;

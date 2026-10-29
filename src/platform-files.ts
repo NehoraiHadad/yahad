@@ -73,6 +73,16 @@ export function createPlatformFiles(target: NodeJS.Platform = process.platform,
     readSetupCapability: path => read(path, true),
     setupCapabilityPath: () => win32.join(process.env.ProgramData || 'C:\\ProgramData', 'Yahad', 'Secrets', 'setup-capability.json'),
     acquireDataLock(directory) {
+      const descriptor = process.env.YAHAD_NATIVE_LEASE_FILE, nonce = process.env.YAHAD_NATIVE_LEASE_NONCE;
+      if (descriptor || nonce) {
+        if (!descriptor || !win32.isAbsolute(descriptor) || !nonce || !/^[a-f0-9]{64}$/.test(nonce)) throw new Error('Native host lease refused');
+        const reply = decodeReply(execFileSync(helper, ['adopt-host-lease', descriptor, directory, String(process.pid), nonce],
+          { encoding: 'utf8', timeout: 10000, maxBuffer: 8192, windowsHide: true, env: helperEnvironment(), stdio: ['ignore', 'pipe', 'pipe'] }));
+        if (reply.locked !== true) throw new Error('Native host lease refused');
+        // Keep the duplicated kernel gate alive until this process exits, after
+        // Store.close(). Never release it early or reacquire through a gap.
+        return Promise.resolve(async () => {});
+      }
       return new Promise((accept, reject) => {
         const child = spawn(helper, ['lock-data', directory, String(process.pid)], { windowsHide: true, env: helperEnvironment(), stdio: ['pipe', 'pipe', 'pipe'] });
         let buffer = '', settled = false, acquired = false, released = false;

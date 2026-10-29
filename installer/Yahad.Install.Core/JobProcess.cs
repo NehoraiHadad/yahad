@@ -14,7 +14,7 @@ public sealed class JobProcess : IDisposable
     private JobProcess(SafeFileHandle job, SafeProcessHandle process, int id)
     { this.job = job; this.process = process; ProcessId = id; }
 
-    public static JobProcess Start(string executable, IEnumerable<string> arguments, string directory, IReadOnlyDictionary<string,string>? environment = null)
+    public static JobProcess Start(string executable, IEnumerable<string> arguments, string directory, IReadOnlyDictionary<string,string>? environment = null, Action<SafeProcessHandle,int>? beforeResume = null)
     {
         if (!Path.IsPathFullyQualified(executable) || !File.Exists(executable)) throw new IOException("EXECUTABLE_REQUIRED");
         var environmentBlock = LaunchEnvironment.Block(environment ?? LaunchEnvironment.Clean(directory));
@@ -34,6 +34,7 @@ public sealed class JobProcess : IDisposable
             if (!Native.CreateProcessW(executable, command, IntPtr.Zero, IntPtr.Zero, false,
                     0x00000004 | 0x08000000 | 0x00000400, environmentPointer, directory, ref start, out process)) throw new Win32Exception();
             if (!Native.AssignProcessToJobObject(job, process.Process)) throw new Win32Exception();
+            using(var suspended = new SafeProcessHandle(process.Process, false)) beforeResume?.Invoke(suspended,(int)process.Id);
             if (Native.ResumeThread(process.Thread) == uint.MaxValue) throw new Win32Exception();
             var result = new JobProcess(job, new SafeProcessHandle(process.Process, true), (int)process.Id);
             process.Process = IntPtr.Zero; // Result owns the exact process handle, avoiding PID reuse.

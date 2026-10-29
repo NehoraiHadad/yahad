@@ -7,10 +7,10 @@ using Yahad.Install;
 
 namespace Yahad.Service;
 
-// These values must be supplied by the still-unconfigured installed activation
-// resolver after authenticated release/recovery admission. No JSON/CLI factory.
+// Supplied only by installed activation admission after protected identity and
+// observed recovery checks. No executable/argument JSON or CLI factory.
 internal sealed record VerifiedProcessSpec(string Image,string ImageSha256,string[] Arguments,string WorkingDirectory,
-    string PrivateTemporaryDirectory,string PrivateFFmpeg,IReadOnlyDictionary<string,string> AppEnvironment);
+    string PrivateTemporaryDirectory,string PrivateFFmpeg,IReadOnlyDictionary<string,string> AppEnvironment,WindowsFileBoundary.DataLease? DataLease=null,Action? BeforeMutableStart=null);
 internal readonly record struct ChildReady(uint PeerPid,string Type);
 internal interface IChildControl:IDisposable
 {
@@ -62,7 +62,7 @@ internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildCont
         var ffmpeg=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(spec.PrivateFFmpeg));
         SafeDirectory.NoReparseAncestors(image);SafeDirectory.NoReparseAncestors(spec.WorkingDirectory);SafeDirectory.NoReparseAncestors(spec.PrivateTemporaryDirectory);
         var pinned=new FileStream(image,FileMode.Open,FileAccess.Read,FileShare.Read);
-        IChildControl? channel=null;
+        IChildControl? channel=null;LaunchLease? handoff=null;
         try
         {
             if(Convert.ToHexStringLower(SHA256.HashData(pinned))!=spec.ImageSha256)throw new IOException("SERVICE_IMAGE_CHANGED");
@@ -74,23 +74,48 @@ internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildCont
             }
             environment.Add("NODE_ENV","production");environment.Add("FFMPEG_PATH",ffmpeg);
             channel=channels.Create();environment.Add("YAHAD_NATIVE_PIPE",channel.Endpoint);
-            var job=JobProcess.Start(image,spec.Arguments,spec.WorkingDirectory,environment);
-            return Task.FromResult<IContainedAppSession>(new Session(job,channel,pinned));
+            if(spec.DataLease is not null)
+            {
+                handoff=new LaunchLease(spec.PrivateTemporaryDirectory,environment);
+            }
+            else if(spec.BeforeMutableStart is not null)throw new IOException("SERVICE_HANDOFF_MISSING");
+            var job=JobProcess.Start(image,spec.Arguments,spec.WorkingDirectory,environment,(process,pid)=>
+            {spec.BeforeMutableStart?.Invoke();if(handoff is not null)handoff.Publish(spec.DataLease!,process,pid,spec.AppEnvironment["DATA_DIR"]);});
+            return Task.FromResult<IContainedAppSession>(new Session(job,channel,pinned,handoff));
         }
-        catch{channel?.Dispose();pinned.Dispose();throw;}
+        catch{handoff?.Dispose();channel?.Dispose();pinned.Dispose();throw;}
     }
     public async Task WaitForHealthyAsync(IContainedAppSession session,CancellationToken cancellation)
     {
         var native=(Session)session;var ready=await native.Channel.ReadyAsync(native.Job.ProcessId,cancellation);
         if(ready.PeerPid!=(uint)native.Job.ProcessId||ready.Type!="ready")throw new IOException("SERVICE_CHILD_READY");
     }
-    private sealed class Session(JobProcess job,IChildControl channel,FileStream pinned):IContainedAppSession
+    private sealed class LaunchLease:IDisposable
+    {
+        private readonly string directory,path,nonce;private IDisposable? pin;
+        internal LaunchLease(string temporary,Dictionary<string,string> environment)
+        {
+            directory=Path.Combine(temporary,"launch-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
+            using var check=WindowsFileBoundary.PinPrivateDirectory(directory);
+            path=Path.Combine(directory,"lease.json");nonce=Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
+            environment.Add("YAHAD_NATIVE_LEASE_FILE",path);environment.Add("YAHAD_NATIVE_LEASE_NONCE",nonce);
+        }
+        internal void Publish(WindowsFileBoundary.DataLease lease,Microsoft.Win32.SafeHandles.SafeProcessHandle child,int pid,string data)
+        {
+            var remote=lease.DuplicateTo(child);
+            var bytes=JsonSerializer.SerializeToUtf8Bytes(new HostLeaseGrant(1,pid,remote,data,nonce));
+            using(var output=new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.None,4096,FileOptions.WriteThrough)){output.Write(bytes);output.Flush(true);}
+            pin=WindowsFileBoundary.OpenPrivateRead(path);
+        }
+        public void Dispose(){pin?.Dispose();if(File.Exists(path))File.Delete(path);Directory.Delete(directory,false);}
+    }
+    private sealed class Session(JobProcess job,IChildControl channel,FileStream pinned,LaunchLease? handoff):IContainedAppSession
     {
         internal JobProcess Job=>job;internal IChildControl Channel=>channel;
         public Task RequestGracefulStopAsync(CancellationToken cancellation)=>channel.StopAsync(cancellation);
         public Task<int> WaitForRootExitAsync(CancellationToken cancellation)=>job.WaitAsync(cancellation);
         public Task WaitForTreeEmptyAsync(CancellationToken cancellation)=>job.WaitForTreeEmptyAsync(cancellation);
         public Task TerminateAndWaitForTreeEmptyAsync(CancellationToken cancellation)=>job.TerminateAndWaitForTreeEmptyAsync(cancellation);
-        public ValueTask DisposeAsync(){channel.Dispose();job.Dispose();pinned.Dispose();return ValueTask.CompletedTask;}
+        public ValueTask DisposeAsync(){channel.Dispose();job.Dispose();pinned.Dispose();handoff?.Dispose();return ValueTask.CompletedTask;}
     }
 }

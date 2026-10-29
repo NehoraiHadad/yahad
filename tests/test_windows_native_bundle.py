@@ -61,6 +61,15 @@ class WindowsBundleTests(unittest.TestCase):
         self.assertFalse(result['familyInstallationReady'])
         with self.assertRaisesRegex(bundle.BundleError,'New extraction'): verify_archive.verify(self.root/'verified.zip',self.root/'unpacked')
 
+    def test_installed_manifest_retains_exact_verified_bytes_without_trust_claim(self):
+        path=self.root/'installed.zip';bundle.build(self.prepared,path)
+        result=verify_archive.verify(path,self.root/'installed',retain_manifest=True)
+        with zipfile.ZipFile(path) as archive: raw=archive.read('bundle.json')
+        self.assertEqual((self.root/'installed/bundle.json').read_bytes(),raw)
+        self.assertEqual(result['manifestSha256'],hashlib.sha256(raw).hexdigest())
+        self.assertTrue(result['retainedInstalledManifest'])
+        self.assertFalse(result['releaseSignatureVerified'])
+
     def test_extra_candidate_archive_entry_is_refused_before_extraction(self):
         path=self.root/'extra.zip'; bundle.build(self.prepared,path)
         with zipfile.ZipFile(path,'a') as archive: archive.writestr('../escape',b'fixture')

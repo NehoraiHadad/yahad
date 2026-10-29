@@ -1,3 +1,5 @@
+> Historical account of checkpoint 6de1892. The current installed entry and its remaining authority gates are described in [NATIVE-INSTALLED-ADMISSION.md](NATIVE-INSTALLED-ADMISSION.md).
+
 # Native activation admission: bounded fixture contract
 
 This checkpoint adds a **test-profile admission resolver**, linked to the existing

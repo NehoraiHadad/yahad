@@ -20,6 +20,8 @@ try
         { Reply(new { schema = 1, ok = true, exists = false }); }
         return 0;
     }
+    if(args is ["adopt-host-lease",var descriptor,var data,var pidText,var nonce]&&int.TryParse(pidText,out var pid))
+    {WindowsFileBoundary.ValidateHostLease(descriptor,data,pid,nonce);Reply(new{schema=1,ok=true,locked=true});return 0;}
     if (args is ["lock-data", var directory, var ownerText] && int.TryParse(ownerText, out var owner) && owner > 0)
     {
         using var lease = WindowsFileBoundary.AcquireDataLease(directory, owner);

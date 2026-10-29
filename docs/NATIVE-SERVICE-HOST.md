@@ -1,3 +1,5 @@
+> Historical account of checkpoint 2621ea6. The current installed entry and its remaining authority gates are described in [NATIVE-INSTALLED-ADMISSION.md](NATIVE-INSTALLED-ADMISSION.md).
+
 # Native SCM host source checkpoint
 
 This slice starts from preserved `ce4f62b` in `C:\projects\yahad-native-service`, branch `feat/native-service-host`. It implements `Yahad.ServiceHost`, a real Windows own-process SCM executable. It contains no service/account installation APIs and does not turn the earlier feasibility executable into a service wrapper.
