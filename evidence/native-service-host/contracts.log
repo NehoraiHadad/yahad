@@ -1,0 +1,46 @@
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  Yahad.Install.Core -> C:\projects\yahad-native-service\installer\Yahad.Install.Core\bin\Release\net10.0-windows\Yahad.Install.Core.dll
+  Yahad.ServiceHost -> C:\projects\yahad-native-service\installer\Yahad.ServiceHost\bin\Release\net10.0-windows\Yahad.ServiceHost.dll
+  Yahad.ServiceHost.Tests -> C:\projects\yahad-native-service\installer\Yahad.ServiceHost.Tests\bin\Release\net10.0-windows\Yahad.ServiceHost.Tests.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:03.19
+PASS SCM native status ABI is seven DWORDs
+PASS actual current token observation cannot grant the acceptance service SID
+PASS identity rejects {"UserSid":"S-1-5-18","ServiceLogon":true,"Administrator":false,"Privileges":["SeChangeNotifyPrivilege"]}
+PASS identity rejects {"UserSid":"S-1-5-80-1-2-3-4-5","ServiceLogon":false,"Administrator":false,"Privileges":["SeChangeNotifyPrivilege"]}
+PASS identity rejects {"UserSid":"S-1-5-80-1-2-3-4-5","ServiceLogon":true,"Administrator":true,"Privileges":["SeChangeNotifyPrivilege"]}
+PASS identity rejects {"UserSid":"S-1-5-80-1-2-3-4-5","ServiceLogon":true,"Administrator":false,"Privileges":["SeChangeNotifyPrivilege","SeDebugPrivilege"]}
+PASS identity rejects {"UserSid":"S-1-5-80-1-2-3-4-5","ServiceLogon":true,"Administrator":false,"Privileges":[]}
+PASS dedicated identity policy accepts only expected minimal observation
+PASS bootstrap descriptor exact schema parses
+PASS bootstrap rejects malformed duplicate foreign or executable fields 2
+PASS bootstrap rejects malformed duplicate foreign or executable fields 23
+PASS bootstrap rejects malformed duplicate foreign or executable fields 182
+PASS bootstrap rejects malformed duplicate foreign or executable fields 210
+PASS identity denial occurs before bootstrap or activation access
+PASS bootstrap ACL/read failure cannot reach activation
+PASS default production activation resolver always fails closed
+PASS SCM application registers before first status and rejects extra start arguments
+PASS authorization failure never reports RUNNING or launches a child
+PASS stop during authorization cancels startup without blocking handler
+PASS recovery barrier denies launch before process creation
+PASS noncooperative read-only recovery barrier times out without launching a process
+PASS authorization returning after cancellation has its resources revoked
+PASS normal lifecycle reports real milestones and graceful stop before STOPPED
+PASS failed health aborts owned session and never reports RUNNING
+PASS unexpected root exit is failure without automatic restart or update
+PASS unknown cleanup never emits STOPPED and invokes failed native exit contract
+PASS status transport failure triggers failed exit without false readiness
+PASS service host has no payload update authority
+PASS non-listening real native job with synthetic control channel: normal
+PASS non-listening real native job with synthetic control channel: bad-peer
+PASS non-listening real native job with synthetic control channel: timeout
+PASS non-listening real native job with synthetic control channel: unexpected
+PASS unknown child environment keys refuse before opening any control endpoint
+PASS changed child image hash refuses before process/channel creation
+34 passed; 0 failed. No SCM calls/listeners. Fixture: C:\projects\yahad-native-service\installer\.scratch\service-host\temp\yahad-fixture-54fb9363ff364a289899a1326a1623ed

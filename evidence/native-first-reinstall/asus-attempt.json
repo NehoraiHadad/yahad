@@ -1,0 +1,26 @@
+{
+  "host": "ASUSHADAD",
+  "fullInstallerSource": "2d1b547cb7cadd0ed08c6cdb3584c78ae9060f51",
+  "fullInstallerSha256": "540906a07c4b5c25f5a92250c5bb54eed2a31b9a144c9458ed9da318c41966fe",
+  "ownerInstallCheckUninstallApprovalReceived": true,
+  "preflight": {
+    "serviceAbsent": true,
+    "binaryRootAbsent": true,
+    "stateRootAbsent": true,
+    "applicationProcessesAbsent": true,
+    "existingFamilyAuthCouldNotBeReconnected": true
+  },
+  "launchResult": "Supported exact-path launch selected unrelated Visual Studio Installer. No interaction with unrelated app.",
+  "reconciliation": "Repeated read-only fresh-state preflight passed; no Yahad process/service/roots.",
+  "exactFileFallback": "Read-only selection of existing File Explorer window 131896 requested through Computer Use; app approval timed out before access.",
+  "approvalState": "timed_out_not_pending",
+  "installExecuted": false,
+  "serviceRegistered": false,
+  "machinePermissionsChanged": false,
+  "firewallChanged": false,
+  "certificateTrustChanged": false,
+  "whatsAppLinked": false,
+  "webAcceptance": false,
+  "uninstallExecuted": false,
+  "nextGate": "Working Computer Use permission for exact file selection/launch and any action-time Windows consent. General install/test/uninstall scope already approved."
+}

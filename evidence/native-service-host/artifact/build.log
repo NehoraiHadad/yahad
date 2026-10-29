@@ -1,0 +1,6 @@
+  Determining projects to restore...
+  Restored C:\projects\yahad-native-service\installer\Yahad.Install.Core\Yahad.Install.Core.csproj (in 973 ms).
+  Restored C:\projects\yahad-native-service\installer\Yahad.ServiceHost\Yahad.ServiceHost.csproj (in 988 ms).
+  Yahad.Install.Core -> C:\projects\yahad-native-service\installer\Yahad.Install.Core\bin\Release\net10.0-windows\Yahad.Install.Core.dll
+  Yahad.ServiceHost -> C:\projects\yahad-native-service\installer\Yahad.ServiceHost\bin\Release\net10.0-windows\win-x64\Yahad.ServiceHost.dll
+  Yahad.ServiceHost -> C:\projects\yahad-native-service\installer\artifacts\Yahad.ServiceHost-615b291\

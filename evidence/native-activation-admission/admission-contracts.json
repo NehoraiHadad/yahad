@@ -1,0 +1,193 @@
+{
+  "kind": "signed-fixture-admission-only",
+  "passed": 45,
+  "failed": 0,
+  "productionWired": false,
+  "signingPrivateKeysPersisted": false,
+  "syntheticMasterKeysInPrivateFixtures": true,
+  "scmInvoked": false,
+  "listenersOpened": false,
+  "activeDataReplaced": false,
+  "tests": [
+    {
+      "name": "valid signed fixture links exact release and data to service lifecycle while holding actual lease",
+      "status": "PASS"
+    },
+    {
+      "name": "signed interrupted phase refuses: prepared",
+      "status": "PASS"
+    },
+    {
+      "name": "signed interrupted phase refuses: publish-intent",
+      "status": "PASS"
+    },
+    {
+      "name": "signed interrupted phase refuses: candidate-start-intent",
+      "status": "PASS"
+    },
+    {
+      "name": "signed interrupted phase refuses: recovery-pending",
+      "status": "PASS"
+    },
+    {
+      "name": "signed interrupted phase refuses: unknown",
+      "status": "PASS"
+    },
+    {
+      "name": "stale signed epoch fails the independently supplied fixture floor",
+      "status": "PASS"
+    },
+    {
+      "name": "exact head digest anchor rejects a different valid signed current head",
+      "status": "PASS"
+    },
+    {
+      "name": "foreign installation identity refuses",
+      "status": "PASS"
+    },
+    {
+      "name": "changed signed document bytes refuse: release.json",
+      "status": "PASS"
+    },
+    {
+      "name": "changed signed document bytes refuse: selection.json",
+      "status": "PASS"
+    },
+    {
+      "name": "changed signed document bytes refuse: intent.json",
+      "status": "PASS"
+    },
+    {
+      "name": "changed signed document bytes refuse: owner.json",
+      "status": "PASS"
+    },
+    {
+      "name": "unknown pinned key identity cannot be selected from the envelope",
+      "status": "PASS"
+    },
+    {
+      "name": "signature purpose separation rejects a control-key head signed for owner purpose",
+      "status": "PASS"
+    },
+    {
+      "name": "correctly signed duplicate payload fields still refuse",
+      "status": "PASS"
+    },
+    {
+      "name": "observation output must be an existing pinned private directory",
+      "status": "PASS"
+    },
+    {
+      "name": "expired owner authorization refuses before launch",
+      "status": "PASS"
+    },
+    {
+      "name": "missing owner authorization refuses",
+      "status": "PASS"
+    },
+    {
+      "name": "owner approval for a different intent nonce refuses",
+      "status": "PASS"
+    },
+    {
+      "name": "observed policy/pin drift refuses: update-policy",
+      "status": "PASS"
+    },
+    {
+      "name": "observed policy/pin drift refuses: update-pin",
+      "status": "PASS"
+    },
+    {
+      "name": "data master-key identity mismatch refuses",
+      "status": "PASS"
+    },
+    {
+      "name": "selected data identity cannot be retargeted to another data set",
+      "status": "PASS"
+    },
+    {
+      "name": "payload bytes and complete member closure are observed",
+      "status": "PASS"
+    },
+    {
+      "name": "extra payload file refuses even when signed member hashes still match",
+      "status": "PASS"
+    },
+    {
+      "name": "signed schema range cannot replace actual SQLite observation",
+      "status": "PASS"
+    },
+    {
+      "name": "WAL-mode clean database is inspected immutably without creating source sidecars",
+      "status": "PASS"
+    },
+    {
+      "name": "actual crash-left committed WAL is refused and never checkpointed or deleted",
+      "status": "PASS"
+    },
+    {
+      "name": "actual busy job blocks admission without a Boolean override",
+      "status": "PASS"
+    },
+    {
+      "name": "actual competing data lease blocks admission",
+      "status": "PASS"
+    },
+    {
+      "name": "owner expiration is rechecked immediately before lifecycle start",
+      "status": "PASS"
+    },
+    {
+      "name": "reservation pins data bytes and rejects a late new member",
+      "status": "PASS"
+    },
+    {
+      "name": "case-insensitive interrupted artifact refuses: PENDING.JSON",
+      "status": "PASS"
+    },
+    {
+      "name": "case-insensitive interrupted artifact refuses: HEAD.JSON.PARTIAL.crash",
+      "status": "PASS"
+    },
+    {
+      "name": "case-insensitive interrupted artifact refuses: Selection.Json.Partial",
+      "status": "PASS"
+    },
+    {
+      "name": "late extra payload file refuses again immediately before start",
+      "status": "PASS"
+    },
+    {
+      "name": "released reservation cannot become a later start grant",
+      "status": "PASS"
+    },
+    {
+      "name": "recovered data requires complete receipt and matching actual tree/schema/key/policy",
+      "status": "PASS"
+    },
+    {
+      "name": "a signed recovery receipt cannot hide changed recovered data",
+      "status": "PASS"
+    },
+    {
+      "name": "incomplete signed recovery record refuses",
+      "status": "PASS"
+    },
+    {
+      "name": "missing recovery owner scope refuses",
+      "status": "PASS"
+    },
+    {
+      "name": "actual interrupted publisher leaves durable pending evidence that blocks old selection",
+      "status": "PASS"
+    },
+    {
+      "name": "new verified recovered data selection leaves previous data bytes untouched",
+      "status": "PASS"
+    },
+    {
+      "name": "production entry still has no fixture trust or activation wiring",
+      "status": "PASS"
+    }
+  ]
+}

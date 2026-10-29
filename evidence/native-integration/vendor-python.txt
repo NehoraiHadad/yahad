@@ -1,0 +1,20 @@
+test_archive_link_refused_even_if_not_selected (tests.test_windows_dependencies.DependencyTests.test_archive_link_refused_even_if_not_selected) ... ok
+test_changed_publisher_proof_refused (tests.test_windows_dependencies.DependencyTests.test_changed_publisher_proof_refused) ... ok
+test_corrupt_archive_refused_before_any_output (tests.test_windows_dependencies.DependencyTests.test_corrupt_archive_refused_before_any_output) ... ok
+test_corrupt_checksum_file_refused_before_any_output (tests.test_windows_dependencies.DependencyTests.test_corrupt_checksum_file_refused_before_any_output) ... ok
+test_existing_output_preserved (tests.test_windows_dependencies.DependencyTests.test_existing_output_preserved) ... ok
+test_license_bytes_are_pinned_too (tests.test_windows_dependencies.DependencyTests.test_license_bytes_are_pinned_too) ... ok
+test_member_pin_not_just_archive_name (tests.test_windows_dependencies.DependencyTests.test_member_pin_not_just_archive_name) ... ok
+test_offline_stage_exact_files_and_provenance (tests.test_windows_dependencies.DependencyTests.test_offline_stage_exact_files_and_provenance) ... ok
+test_publisher_checksum_record_independently_required (tests.test_windows_dependencies.DependencyTests.test_publisher_checksum_record_independently_required) ... ok
+test_staged_dll_corruption_refused (tests.test_windows_dependencies.DependencyTests.test_staged_dll_corruption_refused) ... ok
+test_unpinned_runtime_dll_refused (tests.test_windows_dependencies.DependencyTests.test_unpinned_runtime_dll_refused) ... ok
+test_unsafe_extra_archive_path_refused (tests.test_windows_dependencies.DependencyTests.test_unsafe_extra_archive_path_refused) ... ok
+test_backend_port_cannot_create_an_extra_listener_or_inject_config (tests.test_windows_network_config.NetworkConfigTests.test_backend_port_cannot_create_an_extra_listener_or_inject_config) ... ok
+test_private_only_config_explicitly_disables_trust_admin_and_redirect_listener (tests.test_windows_network_config.NetworkConfigTests.test_private_only_config_explicitly_disables_trust_admin_and_redirect_listener) ... ok
+test_public_loopback_and_noncanonical_addresses_refused (tests.test_windows_network_config.NetworkConfigTests.test_public_loopback_and_noncanonical_addresses_refused) ... ok
+
+----------------------------------------------------------------------
+Ran 15 tests in 0.710s
+
+OK

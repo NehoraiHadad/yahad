@@ -1,0 +1,65 @@
+{
+  "kind": "concrete-installed-adapters-synthetic-inputs",
+  "passed": 12,
+  "failed": 0,
+  "productionEntryWired": true,
+  "productionAuthorityEntryEnabled": false,
+  "endpointOnly": true,
+  "actualAdminProvisioningTested": false,
+  "actualStoreWrites": true,
+  "actualReceiptProducer": true,
+  "scmInvoked": false,
+  "networkListenersOpened": false,
+  "productionTrustOrOwnerStateCreated": false,
+  "fullRebuiltPayloadInspected": false,
+  "tests": [
+    {
+      "name": "complete composition routes exact intake through one owner view to actual Store health",
+      "status": "PASS"
+    },
+    {
+      "name": "router rejects wrong endpoint role wrong owner and client authority fields",
+      "status": "PASS"
+    },
+    {
+      "name": "confirmation view is bound expires and never resends an uncertain answer",
+      "status": "PASS"
+    },
+    {
+      "name": "changed intake between summary and approval cannot mint approval or mutate head",
+      "status": "PASS"
+    },
+    {
+      "name": "request replay cannot substitute a mode or selected release",
+      "status": "PASS"
+    },
+    {
+      "name": "cancelled confirmation is durable and restart does not infer unfinished approval",
+      "status": "PASS"
+    },
+    {
+      "name": "automatic mode uses one bounded owner approval for two actual routine launches",
+      "status": "PASS"
+    },
+    {
+      "name": "intake rejects corrupt receipt and inconsistent schema policy payload",
+      "status": "PASS"
+    },
+    {
+      "name": "same bounded connection parser works in memory and refuses oversized frame",
+      "status": "PASS"
+    },
+    {
+      "name": "router keeps an unobserved concrete admission probe and exclusive lease for explicit cleanup",
+      "status": "PASS"
+    },
+    {
+      "name": "synthetic installed-role projection is actually enforced at the composition boundary",
+      "status": "PASS"
+    },
+    {
+      "name": "cancelled replacement keeps the actual running generation owned for the next update",
+      "status": "PASS"
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+import type { WindowsUpdateTransport } from './windows-update-client.js';
 import Fastify from 'fastify';
 import { CredentialThrottle } from './credential-throttle.js';
 import { performance } from 'node:perf_hooks';
@@ -13,6 +14,7 @@ import QRCode from 'qrcode';
 import { hash, verifyPassword, passwordHash } from './crypto.js';
 import { timingSafeEqual, randomUUID } from 'node:crypto';
 import type { Config } from './config.js';
+import { parseAdditionalOrigins } from './allowed-origins.js';
 import { Store, type Session } from './store.js';
 import { UsageError } from './usage.js';
 import { ChildAccessError } from './child-access.js';
@@ -39,9 +41,12 @@ declare module 'fastify' {
 }
 export async function createApp(
   config: Config,
-  options: { store?: Store; factory?: (h: ConnectorHooks) => Connector; boot?: boolean;
+  options: { windowsUpdates?: WindowsUpdateTransport; store?: Store; factory?: (h: ConnectorHooks) => Connector; boot?: boolean;
     bootstrap?: { token: string; expiresAt: number } } = {},
 ) {
+  const acceptedOrigins = new Set([config.origin,
+    ...parseAdditionalOrigins((config.additionalOrigins ?? []).join(','), config.secureCookie)]);
+  const acceptedOrigin = (origin: string | undefined) => origin !== undefined && acceptedOrigins.has(origin);
   const app = Fastify({
     logger: false,
     bodyLimit: 100_000,
@@ -107,13 +112,13 @@ export async function createApp(
       );
     if (!req.url.startsWith('/api/')) return;
     const origin = req.headers.origin;
-    if (origin && origin !== config.origin) throw new AppError(403, 'ORIGIN_DENIED');
+    if (origin && !acceptedOrigin(origin)) throw new AppError(403, 'ORIGIN_DENIED');
     if (req.url === '/api/login' || req.url === '/api/setup' || req.url === '/api/setup/status') return;
     const s = store.session(req.cookies.sid || '');
     if (!s) throw new AppError(401, 'SIGN_IN_REQUIRED');
     req.session = s;
     if (!['GET', 'HEAD'].includes(req.method)) {
-      if (origin !== config.origin || req.headers['x-csrf-token'] !== s.csrf)
+      if (!acceptedOrigin(origin) || req.headers['x-csrf-token'] !== s.csrf)
         throw new AppError(403, 'CSRF_DENIED');
       if (req.url !== '/api/logout') store.session(s.sid, true);
     }
@@ -177,7 +182,7 @@ export async function createApp(
   app.post('/api/setup', async (req, reply) => {
     const capability = req.headers['x-setup-token'];
     const bootstrap = options.bootstrap;
-    if (req.headers.origin !== config.origin) throw new AppError(403, 'ORIGIN_DENIED');
+    if (!acceptedOrigin(req.headers.origin)) throw new AppError(403, 'ORIGIN_DENIED');
     if (!bootstrap || Date.now() > bootstrap.expiresAt || typeof capability !== 'string' ||
         !timingSafeEqual(Buffer.from(hash(capability)), Buffer.from(hash(bootstrap.token))) ||
         store.one('SELECT 1 FROM families LIMIT 1')) throw new AppError(403, 'SETUP_CLOSED');
@@ -200,7 +205,7 @@ export async function createApp(
     } finally { settingUp = false; }
   });
   app.post('/api/login', async (req, reply) => {
-    if (req.headers.origin !== config.origin) throw new AppError(403, 'ORIGIN_DENIED');
+    if (!acceptedOrigin(req.headers.origin)) throw new AppError(403, 'ORIGIN_DENIED');
     const input = z
       .object({ name: accountNameSchema, password: z.string().max(256) }).strict()
       .parse(req.body);
@@ -776,7 +781,7 @@ export async function createApp(
   });
   app.get('/api/parent/updates', async req => {
     parent(req.session);
-    return updateStatus(config, req.session.user);
+    return updateStatus(config, req.session.user, options.windowsUpdates);
   });
   app.post('/api/parent/updates', async req => {
     parent(req.session);
@@ -786,7 +791,7 @@ export async function createApp(
       z.object({action:z.literal('set_mode'),mode:z.enum(['notify','auto'])}).strict(),
     ]).parse(req.body);
     const state = await requestUpdate(config, req.session.user, request.action, 'mode' in request?request.mode:undefined,
-      request.action==='install'?request.target:undefined);
+      'target' in request?request.target:undefined, options.windowsUpdates);
     if (state === 'unavailable') throw new AppError(409, 'UPDATES_UNAVAILABLE');
     if (state === 'target_changed') throw new AppError(409, 'UPDATES_TARGET_CHANGED');
     if (state === 'mode_locked') throw new AppError(409, 'UPDATES_MODE_LOCKED');

@@ -1,0 +1,148 @@
+{
+  "kind": "SCM-host-noninstalling-contracts",
+  "passed": 34,
+  "failed": 0,
+  "nativeScmInvoked": false,
+  "serviceInstalled": false,
+  "listenersOpened": false,
+  "realNativeJobTests": 4,
+  "privateNodeSha256": "1c331340fa6cac5e4294725959070a143fa0507195a78ad77eed7943f719aac9",
+  "tests": [
+    {
+      "name": "SCM native status ABI is seven DWORDs",
+      "status": "PASS"
+    },
+    {
+      "name": "actual current token observation cannot grant the acceptance service SID",
+      "status": "PASS"
+    },
+    {
+      "name": "identity rejects {\u0022UserSid\u0022:\u0022S-1-5-18\u0022,\u0022ServiceLogon\u0022:true,\u0022Administrator\u0022:false,\u0022Privileges\u0022:[\u0022SeChangeNotifyPrivilege\u0022]}",
+      "status": "PASS"
+    },
+    {
+      "name": "identity rejects {\u0022UserSid\u0022:\u0022S-1-5-80-1-2-3-4-5\u0022,\u0022ServiceLogon\u0022:false,\u0022Administrator\u0022:false,\u0022Privileges\u0022:[\u0022SeChangeNotifyPrivilege\u0022]}",
+      "status": "PASS"
+    },
+    {
+      "name": "identity rejects {\u0022UserSid\u0022:\u0022S-1-5-80-1-2-3-4-5\u0022,\u0022ServiceLogon\u0022:true,\u0022Administrator\u0022:true,\u0022Privileges\u0022:[\u0022SeChangeNotifyPrivilege\u0022]}",
+      "status": "PASS"
+    },
+    {
+      "name": "identity rejects {\u0022UserSid\u0022:\u0022S-1-5-80-1-2-3-4-5\u0022,\u0022ServiceLogon\u0022:true,\u0022Administrator\u0022:false,\u0022Privileges\u0022:[\u0022SeChangeNotifyPrivilege\u0022,\u0022SeDebugPrivilege\u0022]}",
+      "status": "PASS"
+    },
+    {
+      "name": "identity rejects {\u0022UserSid\u0022:\u0022S-1-5-80-1-2-3-4-5\u0022,\u0022ServiceLogon\u0022:true,\u0022Administrator\u0022:false,\u0022Privileges\u0022:[]}",
+      "status": "PASS"
+    },
+    {
+      "name": "dedicated identity policy accepts only expected minimal observation",
+      "status": "PASS"
+    },
+    {
+      "name": "bootstrap descriptor exact schema parses",
+      "status": "PASS"
+    },
+    {
+      "name": "bootstrap rejects malformed duplicate foreign or executable fields 2",
+      "status": "PASS"
+    },
+    {
+      "name": "bootstrap rejects malformed duplicate foreign or executable fields 23",
+      "status": "PASS"
+    },
+    {
+      "name": "bootstrap rejects malformed duplicate foreign or executable fields 182",
+      "status": "PASS"
+    },
+    {
+      "name": "bootstrap rejects malformed duplicate foreign or executable fields 210",
+      "status": "PASS"
+    },
+    {
+      "name": "identity denial occurs before bootstrap or activation access",
+      "status": "PASS"
+    },
+    {
+      "name": "bootstrap ACL/read failure cannot reach activation",
+      "status": "PASS"
+    },
+    {
+      "name": "default production activation resolver always fails closed",
+      "status": "PASS"
+    },
+    {
+      "name": "SCM application registers before first status and rejects extra start arguments",
+      "status": "PASS"
+    },
+    {
+      "name": "authorization failure never reports RUNNING or launches a child",
+      "status": "PASS"
+    },
+    {
+      "name": "stop during authorization cancels startup without blocking handler",
+      "status": "PASS"
+    },
+    {
+      "name": "recovery barrier denies launch before process creation",
+      "status": "PASS"
+    },
+    {
+      "name": "noncooperative read-only recovery barrier times out without launching a process",
+      "status": "PASS"
+    },
+    {
+      "name": "authorization returning after cancellation has its resources revoked",
+      "status": "PASS"
+    },
+    {
+      "name": "normal lifecycle reports real milestones and graceful stop before STOPPED",
+      "status": "PASS"
+    },
+    {
+      "name": "failed health aborts owned session and never reports RUNNING",
+      "status": "PASS"
+    },
+    {
+      "name": "unexpected root exit is failure without automatic restart or update",
+      "status": "PASS"
+    },
+    {
+      "name": "unknown cleanup never emits STOPPED and invokes failed native exit contract",
+      "status": "PASS"
+    },
+    {
+      "name": "status transport failure triggers failed exit without false readiness",
+      "status": "PASS"
+    },
+    {
+      "name": "service host has no payload update authority",
+      "status": "PASS"
+    },
+    {
+      "name": "non-listening real native job with synthetic control channel: normal",
+      "status": "PASS"
+    },
+    {
+      "name": "non-listening real native job with synthetic control channel: bad-peer",
+      "status": "PASS"
+    },
+    {
+      "name": "non-listening real native job with synthetic control channel: timeout",
+      "status": "PASS"
+    },
+    {
+      "name": "non-listening real native job with synthetic control channel: unexpected",
+      "status": "PASS"
+    },
+    {
+      "name": "unknown child environment keys refuse before opening any control endpoint",
+      "status": "PASS"
+    },
+    {
+      "name": "changed child image hash refuses before process/channel creation",
+      "status": "PASS"
+    }
+  ]
+}

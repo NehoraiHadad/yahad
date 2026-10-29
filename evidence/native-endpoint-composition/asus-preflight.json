@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "host": "ASUSHADAD",
+  "utc": "2026-10-29T07:55:03.8026913Z",
+  "readOnly": true,
+  "services": [
+    {
+      "Name": "Yahad.Acceptance",
+      "Present": false,
+      "Status": null
+    },
+    {
+      "Name": "Yahad.Acceptance.Authority",
+      "Present": false,
+      "Status": null
+    }
+  ],
+  "paths": [
+    {
+      "path": "C:\\Program Files\\Yahad.Acceptance",
+      "exists": false
+    },
+    {
+      "path": "C:\\ProgramData\\Yahad.Acceptance",
+      "exists": false
+    }
+  ],
+  "noDirectoryContentsRead": true,
+  "noPortsOpened": true,
+  "noMachineChanges": true
+}

@@ -1,0 +1,74 @@
+{
+  "kind": "read-only-isolated-windows-test-inventory",
+  "computer": "ASUSHADAD",
+  "observedUtc": "2026-10-29T06:49:58.1689324Z",
+  "actionsPerformed": [
+    "registry/feature/service/module/VM metadata reads only"
+  ],
+  "features": [
+    {
+      "name": "Containers-DisposableClientVM",
+      "state": "unknown",
+      "reason": "The requested operation requires elevation.\r\n"
+    },
+    {
+      "name": "Microsoft-Hyper-V-All",
+      "state": "unknown",
+      "reason": "The requested operation requires elevation.\r\n"
+    },
+    {
+      "name": "Microsoft-Hyper-V-Hypervisor",
+      "state": "unknown",
+      "reason": "The requested operation requires elevation.\r\n"
+    },
+    {
+      "name": "Microsoft-Hyper-V-Management-PowerShell",
+      "state": "unknown",
+      "reason": "The requested operation requires elevation.\r\n"
+    },
+    {
+      "name": "VirtualMachinePlatform",
+      "state": "unknown",
+      "reason": "The requested operation requires elevation.\r\n"
+    },
+    {
+      "name": "HypervisorPlatform",
+      "state": "unknown",
+      "reason": "The requested operation requires elevation.\r\n"
+    }
+  ],
+  "services": [
+    {
+      "name": "vmms",
+      "reason": "Cannot find any service with service name 'vmms'.",
+      "status": "unavailable"
+    },
+    {
+      "startType": "Manual",
+      "name": "vmcompute",
+      "status": "Running"
+    },
+    {
+      "startType": "Manual",
+      "name": "HvHost",
+      "status": "Running"
+    }
+  ],
+  "virtualizationTools": [],
+  "vmQuery": {
+    "vms": [],
+    "status": "cmdlet_unavailable"
+  },
+  "machineChanged": false,
+  "guestStarted": false,
+  "guestContentsRead": false,
+  "os": {
+    "ubr": 9457,
+    "edition": "Core",
+    "product": "Windows 10 Home",
+    "displayVersion": "24H2",
+    "build": "26100"
+  },
+  "windowsSandboxExecutablePresent": false,
+  "hyperVPowerShellModulePresent": false
+}

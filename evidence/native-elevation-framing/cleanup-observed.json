@@ -1,0 +1,12 @@
+{
+  "originalUiClosedNormally": true,
+  "helperPid": 20616,
+  "helperIdentityVerified": true,
+  "helperImageSha256": "540906a07c4b5c25f5a92250c5bb54eed2a31b9a144c9458ed9da318c41966fe",
+  "helperCreatedUtc": "2026-10-29T15:31:04.810173+00:00",
+  "terminationRequested": true,
+  "exitObserved": true,
+  "noPrivilegesEnabled": true,
+  "noPermissionsChanged": true,
+  "subsequentFreshTestPreflightPassed": true
+}

@@ -1,0 +1,44 @@
+{
+  "generatedUtc": "2026-10-29T21:47:44.1078221+00:00",
+  "codeHead": "430f589815a7b5a1714eb92f8eac4befa1af9b15",
+  "sourceBlob": "bdb1c8ebc3a8b0cb3d2e6530c31685bc87f74476",
+  "coreSourceSha256": "d73b4b490529e1e7966748ce616e10a517f489a4d8427a5a14e7ff1aa46927c6",
+  "coreAssembly": "C:\\Users\\nehor\\Documents\\Codex\\2026-10-29\\task-2\\yahad-lan-combined\\installer\\Yahad.Install.Core\\bin\\Debug\\net10.0-windows\\Yahad.Install.Core.dll",
+  "coreAssemblySha256": "2654ab1a03c4d1e0dc36373ce4c0e9eb5ffc21977b80765e59c08fd0e9e733ac",
+  "planGeneratedBy": "Yahad.Install.LanDeployment.Create from combined compiled Core",
+  "command": "adapt --config <synthetic-generated-Caddyfile> --adapter caddyfile",
+  "caddyVersion": "2.11.7",
+  "caddySha256": "5f93a9bd555f3aac9d33af2756ba14b3519d8cca4ffd55256bdaeab444c9db2a",
+  "exitCode": 0,
+  "listenersDescribed": [
+    "192.168.4.5:443",
+    "192.168.4.5:80"
+  ],
+  "defaultLogger": "discard",
+  "accessLogsEnabled": false,
+  "httpMethodGuardFirst": true,
+  "httpPublicPathAllowlist": [
+    "/",
+    "/index.html",
+    "/certificate.crt"
+  ],
+  "ownerRoutesBlockedBeforeProxy": true,
+  "upstream": "127.0.0.1:47123",
+  "protocols": [
+    "h1",
+    "h2"
+  ],
+  "trustAutoInstall": false,
+  "certificateIssuer": "internal",
+  "listenerStarted": false,
+  "caStorageCreated": false,
+  "publicJoinDirectoryCreated": false,
+  "certificateTrustChanged": false,
+  "firewallChanged": false,
+  "dotnetInvocations": 0,
+  "config": "C:\\Users\\nehor\\Documents\\Codex\\2026-10-29\\task-2\\yahad-lan-combined\\.local\\caddy-adapt-final\\Caddyfile",
+  "configSha256": "c5da99df5c37e94b38376540154d4fa8092affa0ee9905b68ee3566c20932392",
+  "adaptedJson": "C:\\Users\\nehor\\Documents\\Codex\\2026-10-29\\task-2\\yahad-lan-combined\\.local\\caddy-adapt-final\\adapted.json",
+  "adaptedJsonSha256": "93e29a903f205e3b8a220712cadfeecfddcce4b17e36b3bb8067b949d9a5079c",
+  "stderr": "{\"level\":\"warn\",\"ts\":1793310463.8483472,\"logger\":\"caddyfile\",\"msg\":\"Caddyfile input is not formatted; run 'caddy fmt --overwrite' to fix inconsistencies\",\"file\":\"C:\\\\Users\\\\nehor\\\\Documents\\\\Codex\\\\2026-10-29\\\\task-2\\\\yahad-lan-combined\\\\.local\\\\caddy-adapt-final\\\\Caddyfile\",\"line\":2}\n"
+}

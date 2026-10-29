@@ -1,0 +1,153 @@
+{
+  "kind": "synthetic-native-backup-restore",
+  "nodeSha256": "1c331340fa6cac5e4294725959070a143fa0507195a78ad77eed7943f719aac9",
+  "actualStoreIntegration": true,
+  "passed": 36,
+  "failed": 0,
+  "tests": [
+    {
+      "name": "inspector exception cannot leave plaintext in backup artifacts",
+      "status": "PASS"
+    },
+    {
+      "name": "cancellation after private SQLite copy never creates a backup artifact",
+      "status": "PASS"
+    },
+    {
+      "name": "killed backup worker leaves only private owned residue and admission reconciles it",
+      "status": "PASS"
+    },
+    {
+      "name": "metadata-only interrupted probe creation cleans safely but unowned payload stays quarantined",
+      "status": "PASS"
+    },
+    {
+      "name": "receipt codec exact encoded capacity and one-byte overflow share the intake bound",
+      "status": "PASS"
+    },
+    {
+      "name": "10000-record long-path receipt is rejected by metadata preflight",
+      "status": "PASS"
+    },
+    {
+      "name": "200-character source member passes but 201 refuses before encryption",
+      "status": "PASS"
+    },
+    {
+      "name": "10000 payload records plus receipt pass the real 10001-file artifact verifier",
+      "status": "PASS"
+    },
+    {
+      "name": "actual nonempty job refuses offline boundary",
+      "status": "PASS"
+    },
+    {
+      "name": "actual exclusive data lease prevents backup admission",
+      "status": "PASS"
+    },
+    {
+      "name": "encrypted complete snapshot and new-directory restore preserve all source bytes",
+      "status": "PASS"
+    },
+    {
+      "name": "actual schema-5 Store preserves family login session grants encrypted history media and auth",
+      "status": "PASS"
+    },
+    {
+      "name": "future observed SQLite schema refuses older target before restore writes",
+      "status": "PASS"
+    },
+    {
+      "name": "actual SQLite probe defeats an authenticated false schema claim",
+      "status": "PASS"
+    },
+    {
+      "name": "backup rejects SQLite sidecars instead of guessing a checkpoint",
+      "status": "PASS"
+    },
+    {
+      "name": "corrupted SQLite is not accepted as a backup",
+      "status": "PASS"
+    },
+    {
+      "name": "changed master-key refuses old backup identity or policy",
+      "status": "PASS"
+    },
+    {
+      "name": "changed update-policy refuses old backup identity or policy",
+      "status": "PASS"
+    },
+    {
+      "name": "changed update-pin refuses old backup identity or policy",
+      "status": "PASS"
+    },
+    {
+      "name": "corrupt receipt refuses before publishing restored data",
+      "status": "PASS"
+    },
+    {
+      "name": "corrupt cipher refuses before publishing restored data",
+      "status": "PASS"
+    },
+    {
+      "name": "authenticated traversal member is refused",
+      "status": "PASS"
+    },
+    {
+      "name": "actual locked source file leaves active data unchanged",
+      "status": "PASS"
+    },
+    {
+      "name": "hardlink alias created after admission still refuses backup",
+      "status": "PASS"
+    },
+    {
+      "name": "cancellation between encrypted chunks refuses backup receipt",
+      "status": "PASS"
+    },
+    {
+      "name": "cancellation between encrypted chunks refuses restore publication",
+      "status": "PASS"
+    },
+    {
+      "name": "injected backup disk-full never publishes a receipt",
+      "status": "PASS"
+    },
+    {
+      "name": "partial receipt flush remains uncommitted and cannot restore",
+      "status": "PASS"
+    },
+    {
+      "name": "injected restore disk-full quarantines partial attempt then retries into fresh directory",
+      "status": "PASS"
+    },
+    {
+      "name": "three interrupted extraction attempts quarantine further retries",
+      "status": "PASS"
+    },
+    {
+      "name": "journal tampering refuses automatic retry",
+      "status": "PASS"
+    },
+    {
+      "name": "retry refuses changed receipt or schema policy",
+      "status": "PASS"
+    },
+    {
+      "name": "existing unexpected completed directory is preserved and refused",
+      "status": "PASS"
+    },
+    {
+      "name": "actual worker termination at restore-chunk-written reconciles without touching live DB",
+      "status": "PASS"
+    },
+    {
+      "name": "actual worker termination at after-restore-publication reconciles without touching live DB",
+      "status": "PASS"
+    },
+    {
+      "name": "completed output deletion is refused rather than replaying writes",
+      "status": "PASS"
+    }
+  ]
+}

@@ -4,6 +4,9 @@ import { loadConfig } from './config.js';
 import { createApp } from './server.js';
 import { acquireDataLock } from './lock.js';
 import { readBootstrap } from './bootstrap.js';
+import { platformFiles } from './platform-files.js';
+import { installNativeControl } from './native-control.js';
+import { installRuntimeShutdown } from './runtime-shutdown.js';
 try {
   loadEnvFile('.env');
 } catch {}
@@ -20,16 +23,12 @@ process.on('unhandledRejection', () => {
 try {
   const config = loadConfig();
   const release = await acquireDataLock(config.dataDir);
-  const { app } = await createApp(config, { bootstrap: readBootstrap(process.env.SETUP_CAPABILITY_FILE || '/etc/yachad/setup-capability.json') });
+  const { app } = await createApp(config, { bootstrap: readBootstrap(process.env.SETUP_CAPABILITY_FILE || platformFiles.setupCapabilityPath()) });
   await app.listen({ host: config.host, port: config.port });
   process.stdout.write(`Yachad listening (${config.connector}) on port ${config.port}\n`);
-  for (const signal of ['SIGTERM', 'SIGINT'] as const)
-    process.once(signal, () => {
-      void app.close().then(async () => {
-        await release();
-        process.exit(0);
-      });
-    });
+  const stop = installRuntimeShutdown(() => app.close(), release);
+  installNativeControl(stop);
+  if (process.connected && process.send) process.send({ type: 'yahad.ready' }, undefined, undefined, () => {});
 } catch {
   process.stderr.write(
     'Startup failed. Check local configuration, file permissions, and port availability. No secrets logged.\n',

@@ -1,0 +1,1 @@
+<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><UseWPF>true</UseWPF></PropertyGroup><ItemGroup><ProjectReference Include="../Yahad.Setup/Yahad.Setup.csproj"/><ProjectReference Include="../Yahad.ServiceHost/Yahad.ServiceHost.csproj"/></ItemGroup></Project>

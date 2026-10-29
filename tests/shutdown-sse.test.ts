@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { privateFixtureDirectory } from './fixtures/private-directory.js';
 import { createApp } from '../src/server.js';
 import { acquireDataLock } from '../src/lock.js';
 import { createBackup } from '../scripts/backup-lib.js';
@@ -20,7 +21,7 @@ async function bounded<T>(operation: Promise<T>, milliseconds = 2000): Promise<T
 }
 
 async function fixture(preClose?: () => Promise<void>, captureResponse?: (response: http.ServerResponse) => void) {
-  const root = mkdtempSync(join(tmpdir(), 'yachad-shutdown-test-'));
+  const root = privateFixtureDirectory('yachad-shutdown-test-');
   const dataDir = join(root, 'data'), key = join(root, 'key');
   const masterKey = randomBytes(32);
   writeFileSync(key, masterKey.toString('base64'), { mode: 0o600 });
@@ -28,6 +29,7 @@ async function fixture(preClose?: () => Promise<void>, captureResponse?: (respon
     host: '127.0.0.1', port: 3000, origin: 'http://localhost:3000', secureCookie: false,
     maxMedia: 1048576, maxStorage: 64 * 1048576, childIdleMs: 60000, sessionMs: 3600000,
     diagnosticsEnabled: false };
+  mkdirSync(dataDir,{recursive:true,mode:0o700});
   const releaseLock = await acquireDataLock(dataDir);
   let released: Promise<void> | undefined;
   const release = () => released ||= releaseLock();
@@ -70,7 +72,7 @@ async function stream(url: string, cookie: string) {
   return incoming;
 }
 
-test('open authenticated SSE drains before HTTP shutdown and immediately permits a backup', { timeout: 10000 }, async () => {
+test('open authenticated SSE drains before HTTP shutdown and immediately permits a backup', { timeout: 10000, skip: process.platform==='win32' ? 'Requires the Linux backup adapter; native Windows backup acceptance remains blocked' : false }, async () => {
   const f = await fixture();
   try {
     const denied = await response(f.url);

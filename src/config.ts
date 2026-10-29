@@ -1,6 +1,8 @@
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { platformFiles, type PlatformFiles } from './platform-files.js';
 import { resolve } from 'node:path';
 import { z } from 'zod';
+import { parseAdditionalOrigins } from './allowed-origins.js';
 export interface Config {
   dataDir: string;
   masterKey: Buffer;
@@ -9,6 +11,7 @@ export interface Config {
   host: string;
   port: number;
   origin: string;
+  additionalOrigins?: string[];
   secureCookie: boolean;
   maxMedia: number;
   maxStorage: number;
@@ -20,7 +23,7 @@ export interface Config {
   diagnosticsFlushSeconds?: number;
   tls?: { cert: Buffer; key: Buffer };
 }
-export function loadConfig(): Config {
+export function loadConfig(files: PlatformFiles = platformFiles): Config {
   const env = z
     .object({
       DATA_DIR: z.string().default('./data'),
@@ -30,6 +33,7 @@ export function loadConfig(): Config {
       HOST: z.string().default('127.0.0.1'),
       PORT: z.coerce.number().int().min(1).max(65535).default(3000),
       APP_ORIGIN: z.url(),
+      APP_ADDITIONAL_ORIGINS: z.string().max(4096).default(''),
       COOKIE_SECURE: z.enum(['true', 'false']).default('true'),
       MAX_MEDIA_MB: z.coerce.number().min(1).max(32).default(16),
       MAX_STORAGE_MB: z.coerce.number().min(64).default(2048),
@@ -41,9 +45,7 @@ export function loadConfig(): Config {
     })
     .parse(process.env);
   const path = resolve(env.MASTER_KEY_FILE);
-  const st = statSync(path);
-  if (st.mode & 0o077) throw new Error('Master key file must have mode 0600');
-  const masterKey = Buffer.from(readFileSync(path, 'utf8').trim(), 'base64');
+  const masterKey = Buffer.from(files.readMasterKey(path).toString('utf8').trim(), 'base64');
   if (masterKey.length !== 32) throw new Error('Master key must be 32 random bytes in base64');
   if (env.CONNECTOR === 'baileys' && env.ALLOW_REAL_WHATSAPP !== 'I_APPROVE_UNOFFICIAL_LINK')
     throw new Error('Real WhatsApp needs explicit local approval');
@@ -61,6 +63,7 @@ export function loadConfig(): Config {
     host: env.HOST,
     port: env.PORT,
     origin,
+    additionalOrigins: parseAdditionalOrigins(env.APP_ADDITIONAL_ORIGINS, env.COOKIE_SECURE === 'true'),
     secureCookie: env.COOKIE_SECURE === 'true',
     maxMedia: env.MAX_MEDIA_MB * 1024 ** 2,
     maxStorage: env.MAX_STORAGE_MB * 1024 ** 2,

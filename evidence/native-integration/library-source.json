@@ -1,0 +1,13 @@
+{
+  "library_file_id": "libfile_57028d67b75c8191a9a29d54978ff0aa",
+  "file_id": "file_00000000d20c820a882c7ead416d9526",
+  "version": 1,
+  "file_name": "yahad-usage-d5f787f-review.zip",
+  "bytes": 359173,
+  "sha256": "1acba0bb9d55c1a22f26e26c4a2d4e754b218dd5d6bb35886e65204ef88a9d7f",
+  "realNTFSMetadataVerified": true,
+  "head": "d5f787fe1a924a0689541abed1a24c6c185dd004",
+  "prerequisite": "4c41d5ef80ea349d0f678ee9c572e4975a2d776d",
+  "helperUnmodified": true,
+  "windowsCompatibility": "process-local real NTFS EA adapter; fixture self-test verified both attrs, move and unchanged bytes"
+}

@@ -1,0 +1,199 @@
+{
+  "schema": 1,
+  "kind": "proposed-normal-windows-host-acceptance",
+  "status": "blocked-code-and-artifact-incomplete",
+  "authorized": false,
+  "executionEligible": false,
+  "baselineSource": "09dfba8585b1caea3bfeebb3a22b0d1305cfee63",
+  "purpose": "Real Windows service identities, exact file roles, authenticated local owner channel, gated process containment and synthetic activation/recovery; no family app listener.",
+  "requiredBeforeAnyExecution": [
+    "Complete concrete authority/runtime SCM waiting-host handshake and outer-job lifecycle, protected intake publisher and installed bootstrap/repair/uninstall composition; production entry remains denied.",
+    "Freeze new source commit, exact enabled installer/package SHA256 and complete executable/dependency inventory; disabled development binaries are evidence only.",
+    "Repeat exact service/path collision checks on ASUSHADAD; abort on existing state and preserve all existing family data and unrelated services.",
+    "Record and authenticate the actual unelevated owner SID without creating accounts or treating an over-the-shoulder administrator as owner.",
+    "Obtain action-specific owner approval of the populated manifest SHA256 and exact package for ASUSHADAD before installation or security changes."
+  ],
+  "machine": {
+    "host": "ASUSHADAD",
+    "selectedByOwner": true,
+    "disposable": false,
+    "vmRequired": false,
+    "newUserAccounts": [],
+    "runtimesPreinstalledRequired": false,
+    "actualCleanMachineProof": false,
+    "existingOwnerSid": null,
+    "network": "No firewall, CA trust, DNS, tunnel, router or public exposure changes; web ports require separately populated phase."
+  },
+  "artifacts": {
+    "newSourceCommit": null,
+    "newPackageSha256": null,
+    "completeFileManifestSha256": null,
+    "newExecutables": [
+      {
+        "path": "bootstrap/authority/Yahad.Authority.exe",
+        "sha256": null
+      },
+      {
+        "path": "bootstrap/runtime/Yahad.ServiceHost.exe",
+        "sha256": null
+      },
+      {
+        "path": "bootstrap/owner/Yahad.Owner.exe",
+        "sha256": null
+      },
+      {
+        "path": "bootstrap/probe/node/node.exe",
+        "sha256": null
+      }
+    ],
+    "allSelfContainedDependenciesMustBeInventoried": true,
+    "referenceOnlyNotRunnableAsNewAdapter": {
+      "source": "b1ea1bd5be33693fa7d3e2f7e375d3d1a1d0444d",
+      "archive": "yahad-service-host-b1ea1bd-win-x64.zip",
+      "sha256": "faabf68cc6aae8f4e096900433e0a59f892dbf95c077261721eae84fff6aa262",
+      "reason": "No authority/owner-channel executable exists in that package; do not substitute it."
+    }
+  },
+  "installationAuthority": {
+    "executor": "elevated administrator on ASUSHADAD after exact manifest/artifact approval",
+    "purpose": "Only two exact demand-start acceptance service registrations and new target trees; capture actual unelevated owner with OS authentication and one native confirmation.",
+    "persistentCredentialsCreated": false,
+    "productionCapabilitiesCreated": false,
+    "temporarySyntheticApprovalLedgerAllowedOnlyAfterApproval": true
+  },
+  "services": [
+    {
+      "name": "Yahad.Acceptance.Authority",
+      "account": "NT SERVICE\\Yahad.Acceptance.Authority",
+      "type": "SERVICE_WIN32_OWN_PROCESS",
+      "imagePath": "\"C:\\Program Files\\Yahad.Acceptance\\bootstrap\\authority\\Yahad.Authority.exe\" --service",
+      "startType": "SERVICE_DEMAND_START",
+      "sidType": "SERVICE_SID_TYPE_UNRESTRICTED",
+      "requiredPrivileges": [
+        "SeChangeNotifyPrivilege"
+      ],
+      "failureActions": [],
+      "delayedAutoStart": false,
+      "objectOwner": "BUILTIN\\Administrators",
+      "serviceObjectAccess": {
+        "SYSTEM": "SERVICE_ALL_ACCESS",
+        "BUILTIN\\Administrators": "SERVICE_ALL_ACCESS",
+        "runtime": "none",
+        "registeredOwner": "QUERY_CONFIG|QUERY_STATUS only for mutual server authentication; no start/stop/configuration/DACL writes"
+      }
+    },
+    {
+      "name": "Yahad.Acceptance",
+      "account": "NT SERVICE\\Yahad.Acceptance",
+      "type": "SERVICE_WIN32_OWN_PROCESS",
+      "imagePath": "\"C:\\Program Files\\Yahad.Acceptance\\bootstrap\\runtime\\Yahad.ServiceHost.exe\" --service",
+      "startType": "SERVICE_DEMAND_START",
+      "sidType": "SERVICE_SID_TYPE_UNRESTRICTED",
+      "requiredPrivileges": [
+        "SeChangeNotifyPrivilege"
+      ],
+      "failureActions": [],
+      "delayedAutoStart": false,
+      "objectOwner": "BUILTIN\\Administrators",
+      "serviceObjectAccess": {
+        "SYSTEM": "SERVICE_ALL_ACCESS",
+        "BUILTIN\\Administrators": "SERVICE_ALL_ACCESS",
+        "NT SERVICE\\Yahad.Acceptance.Authority": "0x000200b5: READ_CONTROL, QUERY_CONFIG, QUERY_STATUS, START, STOP, INTERROGATE",
+        "runtime": "no extra service control rights",
+        "registeredOwner": "none; requests through pipe"
+      }
+    }
+  ],
+  "persistentChangeAllowlist": [
+    "HKLM\\SYSTEM\\CurrentControlSet\\Services\\Yahad.Acceptance.Authority and its exact child configuration",
+    "HKLM\\SYSTEM\\CurrentControlSet\\Services\\Yahad.Acceptance and its exact child configuration",
+    "C:\\Program Files\\Yahad.Acceptance: new verified bootstrap/runtime/owner/probe/test executable tree only",
+    "C:\\ProgramData\\Yahad.Acceptance: new synthetic installation/control/data/payload/approval/status/backup/recovery tree only",
+    "OS-generated SCM event records and virtual-service-logon/profile bookkeeping: observe and retain inventory; do not edit or delete shared profiles; preserve/report Windows-owned residue; no shared-profile/event-log deletion"
+  ],
+  "fileRoles": [
+    {
+      "path": "C:\\Program Files\\Yahad.Acceptance",
+      "owner": "BUILTIN\\Administrators",
+      "daclProtected": true,
+      "access": {
+        "SYSTEM": "FullControl",
+        "Administrators": "FullControl",
+        "authority": "ReadAndExecute",
+        "runtime": "ReadAndExecute on runtime/worker/probe closure only",
+        "registeredOwner": "ReadAndExecute on owner companion/dependency closure only"
+      },
+      "others": "none; scoped execute-only ancestor traversal as required, never secrets"
+    },
+    {
+      "path": "C:\\ProgramData\\Yahad.Acceptance\\installation.json",
+      "owner": "BUILTIN\\Administrators",
+      "daclProtected": true,
+      "access": {
+        "SYSTEM": "FullControl",
+        "Administrators": "FullControl",
+        "authority": "Read",
+        "runtime": "Read"
+      },
+      "others": "none"
+    },
+    {
+      "path": "C:\\ProgramData\\Yahad.Acceptance: dynamic bootstrap/activation/epoch/owner/web and payload tree",
+      "owner": "authority SID",
+      "daclProtected": true,
+      "access": {
+        "SYSTEM": "FullControl",
+        "Administrators": "FullControl",
+        "authority": "Modify",
+        "runtime": "Read; admitted payload ReadAndExecute"
+      },
+      "others": "none"
+    },
+    {
+      "path": "C:\\ProgramData\\Yahad.Acceptance: .authority approval/nonce/pending/quarantine records and backup/recovery staging",
+      "owner": "authority SID",
+      "daclProtected": true,
+      "access": {
+        "SYSTEM": "FullControl",
+        "Administrators": "FullControl",
+        "authority": "Modify"
+      },
+      "others": "none; publish separate bounded runtime-readable status only"
+    },
+    {
+      "path": "C:\\ProgramData\\Yahad.Acceptance\\datasets: live synthetic data/media",
+      "owner": "authority root; runtime-created leaves may be runtime owned",
+      "daclProtected": true,
+      "access": {
+        "SYSTEM": "FullControl",
+        "Administrators": "FullControl",
+        "runtime": "Modify",
+        "authority": "ReadAndExecute; exclusive lock file read/write; Modify only separate authority-created backup/restore/probe roots"
+      },
+      "others": "none"
+    },
+    {
+      "path": "C:\\ProgramData\\Yahad.Acceptance: synthetic master-key/update-policy/update-pin",
+      "owner": "authority SID or Administrators according to anchored class",
+      "daclProtected": true,
+      "access": {
+        "SYSTEM": "FullControl",
+        "Administrators": "FullControl",
+        "authority": "Read; authority-owned policy publication only after exact approval",
+        "runtime": "Read"
+      },
+      "others": "none"
+    }
+  ],
+  "rollback": {
+    "stop": "Stop only receipt-bound owned services; require observed root/tree exit, retain recovery state on uncertainty.",
+    "remove": "Delete only the two exact newly installed SCM registrations and receipt-bound Program Files binary members after owner approval.",
+    "preserve": "Keep ProgramData data, keys, policy/pins, backups and recovery journals by default; permanent removal requires separate explicit owner action.",
+    "limits": "Windows-owned SCM events/virtual-service bookkeeping may remain; no snapshot or bitwise OS rollback is promised."
+  },
+  "acceptanceLimitations": [
+    "No clean-machine proof on this developer host; empty-PATH package tests are separate evidence.",
+    "No automatic startup, reboot, public network, LAN firewall or certificate trust changes included.",
+    "No real family data or WhatsApp provider used in synthetic service checks."
+  ]
+}

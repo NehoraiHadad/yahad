@@ -1,0 +1,283 @@
+{
+  "kind": "concrete-installed-adapters-synthetic-inputs",
+  "passed": 67,
+  "failed": 0,
+  "productionEntryWired": true,
+  "actualAdminProvisioningTested": false,
+  "actualStoreWrites": true,
+  "actualReceiptProducer": true,
+  "scmInvoked": false,
+  "networkListenersOpened": false,
+  "productionTrustOrOwnerStateCreated": false,
+  "fullRebuiltPayloadInspected": false,
+  "tests": [
+    {
+      "name": "production admin boundary rejects current-user fixture records",
+      "status": "PASS"
+    },
+    {
+      "name": "production resolver refuses absent protected activation state",
+      "status": "PASS"
+    },
+    {
+      "name": "stale bootstrap digest cannot select a different protected activation",
+      "status": "PASS"
+    },
+    {
+      "name": "missing owner record refuses the concrete resolver",
+      "status": "PASS"
+    },
+    {
+      "name": "locked selected payload refuses without changing selected data",
+      "status": "PASS"
+    },
+    {
+      "name": "omitted owner expiry is not silently promoted to a persistent capability",
+      "status": "PASS"
+    },
+    {
+      "name": "same concrete resolver reads fixture capabilities and observes actual Store schema 5",
+      "status": "PASS"
+    },
+    {
+      "name": "protected-state binding refuses epoch",
+      "status": "PASS"
+    },
+    {
+      "name": "protected-state binding refuses head",
+      "status": "PASS"
+    },
+    {
+      "name": "protected-state binding refuses owner",
+      "status": "PASS"
+    },
+    {
+      "name": "protected-state binding refuses policy",
+      "status": "PASS"
+    },
+    {
+      "name": "protected-state binding refuses pin",
+      "status": "PASS"
+    },
+    {
+      "name": "protected-state binding refuses pending",
+      "status": "PASS"
+    },
+    {
+      "name": "protected-state binding refuses phase",
+      "status": "PASS"
+    },
+    {
+      "name": "owner expiration is observed again at mutable start barrier",
+      "status": "PASS"
+    },
+    {
+      "name": "exact pinned release bytes cannot be substituted",
+      "status": "PASS"
+    },
+    {
+      "name": "protected-control anchor cannot conceal a crash-left WAL",
+      "status": "PASS"
+    },
+    {
+      "name": "concrete production resolver launches real mutable Store through continuous handoff",
+      "status": "PASS"
+    },
+    {
+      "name": "child duplicate prevents a second writer even after host lease handle is closed",
+      "status": "PASS"
+    },
+    {
+      "name": "wrong host-lease nonce or data identity cannot authorize Store",
+      "status": "PASS"
+    },
+    {
+      "name": "callback failure after duplicating the data lease observes root death before returning",
+      "status": "PASS"
+    },
+    {
+      "name": "failure before job assignment observes the separate suspended root and empty job",
+      "status": "PASS"
+    },
+    {
+      "name": "controller releases a failed handoff reservation only after observed root and tree exit",
+      "status": "PASS"
+    },
+    {
+      "name": "unobserved root after failed handoff retains session and reservation without STOPPED",
+      "status": "PASS"
+    },
+    {
+      "name": "unobserved tree after failed handoff retains session and reservation without STOPPED",
+      "status": "PASS"
+    },
+    {
+      "name": "actual admission SQLite probe retains reservation when root observation is unavailable",
+      "status": "PASS"
+    },
+    {
+      "name": "actual admission SQLite probe retains reservation when tree observation is unavailable",
+      "status": "PASS"
+    },
+    {
+      "name": "actual recovery probe failure retains recovery lease and private scratch until observed retry",
+      "status": "PASS"
+    },
+    {
+      "name": "actual recovery output is verified but cannot start before protected commit",
+      "status": "PASS"
+    },
+    {
+      "name": "actual receipt MAC corruption is refused even with matching control digest",
+      "status": "PASS"
+    },
+    {
+      "name": "actual completed-journal truncation refuses recovered selection",
+      "status": "PASS"
+    },
+    {
+      "name": "changed actual recovered plaintext refuses without overwriting original data",
+      "status": "PASS"
+    },
+    {
+      "name": "protected committed recovery selection launches real Store and restarts after writes",
+      "status": "PASS"
+    },
+    {
+      "name": "protected transaction publishes authenticated owner and coherent records consumed by actual resolver",
+      "status": "PASS"
+    },
+    {
+      "name": "transaction nonce is single-use even for a newly authenticated replay",
+      "status": "PASS"
+    },
+    {
+      "name": "client cannot supply owner principal or grant scope fields",
+      "status": "PASS"
+    },
+    {
+      "name": "transaction refuses bound-operation mismatch: scope",
+      "status": "PASS"
+    },
+    {
+      "name": "transaction refuses bound-operation mismatch: principal-installation",
+      "status": "PASS"
+    },
+    {
+      "name": "transaction refuses bound-operation mismatch: operation-digest",
+      "status": "PASS"
+    },
+    {
+      "name": "transaction refuses bound-operation mismatch: stale-epoch",
+      "status": "PASS"
+    },
+    {
+      "name": "transaction refuses bound-operation mismatch: stale-digest",
+      "status": "PASS"
+    },
+    {
+      "name": "transaction refuses bound-operation mismatch: expired",
+      "status": "PASS"
+    },
+    {
+      "name": "transaction refuses bound-operation mismatch: release",
+      "status": "PASS"
+    },
+    {
+      "name": "transaction refuses bound-operation mismatch: data",
+      "status": "PASS"
+    },
+    {
+      "name": "exclusive authority denies concurrent committer",
+      "status": "PASS"
+    },
+    {
+      "name": "actual busy app job blocks publication without a quiescence Boolean",
+      "status": "PASS"
+    },
+    {
+      "name": "actual selected-data lease blocks publication",
+      "status": "PASS"
+    },
+    {
+      "name": "interrupted protected transaction stays blocked then consistently resumes: pending-published",
+      "status": "PASS"
+    },
+    {
+      "name": "interrupted protected transaction stays blocked then consistently resumes: nonce-reserved",
+      "status": "PASS"
+    },
+    {
+      "name": "interrupted protected transaction stays blocked then consistently resumes: record-owner-intent.json",
+      "status": "PASS"
+    },
+    {
+      "name": "interrupted protected transaction stays blocked then consistently resumes: record-web.json",
+      "status": "PASS"
+    },
+    {
+      "name": "interrupted protected transaction stays blocked then consistently resumes: partial-activation.json",
+      "status": "PASS"
+    },
+    {
+      "name": "interrupted protected transaction stays blocked then consistently resumes: record-activation.json",
+      "status": "PASS"
+    },
+    {
+      "name": "interrupted protected transaction stays blocked then consistently resumes: record-epoch.json",
+      "status": "PASS"
+    },
+    {
+      "name": "interrupted protected transaction stays blocked then consistently resumes: record-bootstrap.json",
+      "status": "PASS"
+    },
+    {
+      "name": "interrupted protected transaction stays blocked then consistently resumes: commit-receipt",
+      "status": "PASS"
+    },
+    {
+      "name": "pending contents and operation binding cannot be swapped during recovery",
+      "status": "PASS"
+    },
+    {
+      "name": "expired interrupted operation needs fresh authenticated reconciliation scope",
+      "status": "PASS"
+    },
+    {
+      "name": "install operation requires fresh control state and authenticated install scope",
+      "status": "PASS"
+    },
+    {
+      "name": "install cannot reset an authority root with existing committed history",
+      "status": "PASS"
+    },
+    {
+      "name": "full partial pending record resumes only after reauthentication and old-state validation",
+      "status": "PASS"
+    },
+    {
+      "name": "truncated pending record is preserved and cannot authorize any mutation",
+      "status": "PASS"
+    },
+    {
+      "name": "committed receipt forbids replay over older control records",
+      "status": "PASS"
+    },
+    {
+      "name": "completed receipt still revalidates selected data before clearing pending",
+      "status": "PASS"
+    },
+    {
+      "name": "unconfigured authentication boundary cannot publish protected state",
+      "status": "PASS"
+    },
+    {
+      "name": "recovery commit is bound to actual backup receipt and verified restored plaintext",
+      "status": "PASS"
+    },
+    {
+      "name": "production default still denies while real committer/channel is unconfigured",
+      "status": "PASS"
+    }
+  ]
+}
