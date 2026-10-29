@@ -12,11 +12,12 @@ using Microsoft.Win32.SafeHandles;
 using Yahad.Install;
 namespace Yahad.Setup;
 
-internal sealed record SetupWire(int Format,string Kind,SetupProgress? Progress,SetupResult? Result);
+internal sealed record SetupWire(int Format,string Kind,SetupProgress? Progress,SetupResult? Result,UninstallMode? Removal=null);
 internal static class SetupElevation
 {
-    internal static async Task<SetupResult> RunAsync(bool uninstall,Action<SetupProgress> progress,CancellationToken cancellation)
+    internal static async Task<SetupResult> RunAsync(bool uninstall,Action<SetupProgress> progress,CancellationToken cancellation,UninstallMode mode=UninstallMode.KeepData)
     {
+        UninstallChoice.Require(mode);if(!uninstall&&mode!=UninstallMode.KeepData)throw new IOException("UNINSTALL_MODE_INVALID");
         var nonce=Guid.NewGuid().ToString("N");var name="Yahad.Setup."+nonce;using var identity=WindowsIdentity.GetCurrent();var sid=identity.User??throw new IOException("OWNER_IDENTITY");
         using var server=Server(name,sid.Value);var source=Environment.ProcessPath??throw new IOException("SETUP_IMAGE");
         var temporary=SafeDirectory.CreatePrivateSession(Path.GetTempPath());var helper=Path.Combine(temporary,"Yahad.Setup.exe");File.Copy(source,helper,false);
@@ -28,7 +29,7 @@ internal static class SetupElevation
         var connection=server.WaitForConnectionAsync(deadline.Token);
         var winner=await Task.WhenAny(connection,child.WaitForExitAsync(deadline.Token));if(winner!=connection){await winner;throw new IOException("ELEVATION_EXITED");}await connection;
         if(!GetNamedPipeClientProcessId(server.SafePipeHandle,out var peer)||peer!=(uint)child.Id||child.HasExited)throw new IOException("ELEVATION_PEER");
-        await WriteAsync(server,new SetupWire(1,uninstall?"uninstall":"install",null,null),deadline.Token);
+        await WriteAsync(server,new SetupWire(1,uninstall?"uninstall":"install",null,null,uninstall?mode:null),deadline.Token);
         while(true)
         {
             var frame=await ReadAsync(server,deadline.Token);
@@ -48,15 +49,17 @@ internal static class SetupElevation
         var owner=Owner(parent,(int)pid);if(owner.ImageSha256!=HashFile(Environment.ProcessPath!))throw new IOException("SETUP_UI_IMAGE");
         using var stream=new NamedPipeClientStream(PipeDirection.InOut,true,true,handle);var request=await ReadAsync(stream,deadline.Token);
         if(request.Format!=1||request.Kind!=(uninstall?"uninstall":"install")||request.Progress is not null||request.Result is not null)throw new IOException("SETUP_COMMAND");
+        if(uninstall){if(request.Removal is null)throw new IOException("UNINSTALL_MODE_INVALID");UninstallChoice.Require(request.Removal.Value);}else if(request.Removal is not null)throw new IOException("UNINSTALL_MODE_INVALID");
+        var mode=request.Removal??UninstallMode.KeepData;
         SetupResult result;
         try
         {
             using var installLock=new SetupInstallLock();using var payload=InstallPackage.Embedded();using var host=new NativeSetupHost(payload);var gate=new object();
             void Progress(SetupProgress p){lock(gate)WriteAsync(stream,new SetupWire(1,"progress",p,null),deadline.Token).GetAwaiter().GetResult();}
-            result=await new InstallFlow(host).RunAsync(owner,uninstall,Progress,deadline.Token);
+            result=await new InstallFlow(host).RunAsync(owner,uninstall,Progress,deadline.Token,mode);
         }
         catch(Exception failure)
-        {result=new(false,Code(failure),DataPreserved:true);}
+        {result=new(false,Code(failure),DataPreserved:mode==UninstallMode.KeepData);}
         await WriteAsync(stream,new SetupWire(1,"result",null,result),deadline.Token);return result.Ok?0:1;
     }
     internal static string Code(Exception error)=>error switch
@@ -69,7 +72,7 @@ internal static class SetupElevation
         IOException io when KnownCodes.Contains(io.Message)=>io.Message,
         _=>"INSTALL_FAILED"
     };
-    private static readonly HashSet<string> KnownCodes=new(StringComparer.Ordinal){"PACKAGE_NOT_EMBEDDED","PACKAGE_HASH","PACKAGE_MEMBER_HASH","PAYLOAD_VERSION","PAYLOAD_SCHEMA","INSTALL_COLLISION","EXISTING_DATA_PRESERVED","INSTALL_REPAIR_REQUIRED","INSTALL_OWNER_CHANGED","INSTALL_SERVICE_IDENTITY","INSTALL_TARGET_CHANGED","INSTALL_BOOTSTRAP_CHANGED","DISK_SPACE","NO_LOCAL_PORT","SERVICE_START_FAILED","SERVER_NOT_READY","SERVICE_NOT_OWNED","SERVICE_IMAGE_CHANGED","UNINSTALL_UNOWNED_FILE_PRESERVED","INSTALL_STATE_INVALID","ELEVATION_EXITED","ELEVATION_PEER","SETUP_UI_PEER","SETUP_UI_IMAGE","ADMIN_REQUIRED","INSTALL_BUSY"};
+    private static readonly HashSet<string> KnownCodes=new(StringComparer.Ordinal){"PACKAGE_NOT_EMBEDDED","PACKAGE_HASH","PACKAGE_MEMBER_HASH","PAYLOAD_VERSION","PAYLOAD_SCHEMA","INSTALL_COLLISION","EXISTING_DATA_PRESERVED","INSTALL_REPAIR_REQUIRED","INSTALL_OWNER_CHANGED","INSTALL_SERVICE_IDENTITY","INSTALL_TARGET_CHANGED","INSTALL_BOOTSTRAP_CHANGED","DISK_SPACE","NO_LOCAL_PORT","SERVICE_START_FAILED","SERVER_NOT_READY","SERVICE_NOT_OWNED","SERVICE_IMAGE_CHANGED","UNINSTALL_UNOWNED_FILE_PRESERVED","INSTALL_STATE_INVALID","ELEVATION_EXITED","ELEVATION_PEER","SETUP_UI_PEER","SETUP_UI_IMAGE","ADMIN_REQUIRED","INSTALL_BUSY","UNINSTALL_MODE_INVALID","UNINSTALL_MODE_CHANGED","UNINSTALL_INCOMPLETE","UNINSTALL_INTENT_INVALID","UNINSTALL_QUIESCENCE_UNCONFIRMED","UNINSTALL_SERVICE_REMOVAL_PENDING","UNINSTALL_LINK_PRESERVED","UNINSTALL_ROOT_NOT_EMPTY","UNINSTALL_TREE_LIMIT"};
     internal static string HashFile(string path){using var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read);return Convert.ToHexStringLower(SHA256.HashData(file));}
     internal static string RelocateForUninstall()
     {var folder=SafeDirectory.CreatePrivateSession(Path.GetTempPath());var target=Path.Combine(folder,"Yahad.Setup.exe");File.Copy(Environment.ProcessPath!,target,false);if(HashFile(target)!=HashFile(Environment.ProcessPath!))throw new IOException("SETUP_COPY_CHANGED");return target;}

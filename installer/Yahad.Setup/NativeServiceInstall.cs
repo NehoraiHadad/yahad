@@ -73,6 +73,16 @@ internal sealed class NativeServiceInstall:IDisposable
         while(Status().State!=1)await Task.Delay(200,deadline.Token);
         if(process is not null)await process.WaitForExitAsync(deadline.Token);
     }
+    internal void RequireCleanStop(){RequireOwned();var status=Status();if(status.State!=1||status.Win32!=0||status.Specific!=0)throw new IOException("UNINSTALL_QUIESCENCE_UNCONFIRMED");}
+    internal static async Task WaitUntilRemovedAsync(CancellationToken cancellation)
+    {
+        var started=System.Diagnostics.Stopwatch.StartNew();
+        while(true)
+        {
+            cancellation.ThrowIfCancellationRequested();try{if(!Exists())return;}catch(Win32Exception e)when(e.NativeErrorCode==1072){}
+            if(started.Elapsed>TimeSpan.FromSeconds(10))throw new IOException("UNINSTALL_SERVICE_REMOVAL_PENDING");await Task.Delay(100,cancellation);
+        }
+    }
     internal void Delete(){RequireOwned();if(Status().State!=1)throw new IOException("SERVICE_NOT_QUIESCENT");if(!DeleteService(service))throw new Win32Exception();}
     private StatusProcess Status(){if(!QueryServiceStatusEx(service,0,out var status,(uint)Marshal.SizeOf<StatusProcess>(),out _))throw new Win32Exception();return status;}
     public void Dispose(){service.Dispose();manager.Dispose();}

@@ -9,6 +9,7 @@ internal static class InstallLocations
     internal static string Binaries=>FirstInstallProfile.BinaryRoot;
     internal static string ServiceImage=>Path.Combine(Binaries,"host","Yahad.ServiceHost.exe");
     internal static string InstallerImage=>Path.Combine(Binaries,"Yahad.Setup.exe");
+    internal static string RemovalStateFile=>Binaries+".uninstall-state.json";
     internal static string StateFile=>Path.Combine(State,"installer-state.json");
     internal static string ServiceName=>ServiceDefinition.Name;
 }

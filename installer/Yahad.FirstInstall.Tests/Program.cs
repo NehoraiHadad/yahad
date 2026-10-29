@@ -101,6 +101,34 @@ await Check("reinstall cached payload verification rejects changed missing and a
 });
 await Check("elevated progress frame completes while the calling UI context is synchronously blocked",async()=>
 {var result=await ElevationFramingRegression.RunAsync();Assert(result.Ok,"ELEVATION_PROGRESS_CONTEXT_DEADLOCK");});
+await Check("removal defaults to keeping data and full removal requires exact explicit confirmation",()=>
+{
+ var choice=new UninstallChoice();Assert(choice.Mode==UninstallMode.KeepData&&choice.CanBegin);
+ choice.Select(UninstallMode.DeleteData);Assert(!choice.CanBegin);
+ foreach(var text in new[]{"","מחק","DELETE","מחיקה "}){choice.Confirmation=text;Assert(!choice.CanBegin);}
+ choice.Confirmation="מחיקה";Assert(choice.Confirmed()==UninstallMode.DeleteData);
+ choice.Select(UninstallMode.KeepData);choice.Select(UninstallMode.DeleteData);Assert(!choice.CanBegin&&choice.Confirmation=="");return Task.CompletedTask;
+});
+await Check("authenticated flow carries full removal mode and refuses unknown or switched intent",async()=>
+{
+ var ops=new FakeHost();var result=await new InstallFlow(ops).RunAsync(owner,true,_=>{},default,UninstallMode.DeleteData);Assert(result.Ok&&!result.DataPreserved&&ops.LastRemoval==UninstallMode.DeleteData);
+ var invalid=new FakeHost();await Refuse(()=>new InstallFlow(invalid).RunAsync(owner,true,_=>{},default,(UninstallMode)99));Assert(invalid.Calls.Count==0);
+ await Refuse(()=>{UninstallChoice.RequireSameIntent("removing_keep_data",UninstallMode.DeleteData);return Task.CompletedTask;});
+ await Refuse(()=>{UninstallChoice.RequireSameIntent("removing_all_data",UninstallMode.KeepData);return Task.CompletedTask;});UninstallChoice.RequireSameIntent("removing_all_data",UninstallMode.DeleteData);
+ var serviceSid="S-1-5-80-123-456-789-123-456";
+ WindowsFileBoundary.ValidateInstallerMetadataAcl(new System.Security.AccessControl.RawSecurityDescriptor(NativeInstallFiles.Descriptor(serviceSid)));
+ await Refuse(()=>{WindowsFileBoundary.ValidateInstallerMetadataAcl(new System.Security.AccessControl.RawSecurityDescriptor(NativeInstallFiles.Descriptor(serviceSid,ownerSid:owner.Sid)));return Task.CompletedTask;});
+ var s=new InstallerState(1,"install","data","package","payload","source","owner",47123,"committed",[new("host/file",5,"hash")],"service","setup");
+ Assert(UninstallChoice.SameInstallation(s,s with{Phase="removing_all_data",Files=[..s.Files]}));
+ foreach(var other in new[]{s with{Port=47124},s with{PayloadDigest="changed"},s with{SetupSha256="changed"},s with{Files=[new("host/file",6,"hash")]}})Assert(!UninstallChoice.SameInstallation(s,other));
+ Assert(!InstallLocations.RemovalStateFile.StartsWith(InstallLocations.Binaries+System.IO.Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase));
+});
+await Check("full removal deletes only the inspected private synthetic tree and keeps external backup",()=>
+{RemovalTests.Complete();return Task.CompletedTask;});
+await Check("locked or hardlinked synthetic data fails before deletion",()=>
+{RemovalTests.LockedAndHardlink();return Task.CompletedTask;});
+await Check("interrupted synthetic purge retains outside intent and resumes exact remaining tree",()=>
+{RemovalTests.Interrupted();return Task.CompletedTask;});
 using var f=await ProductionFixture.Create(node,repo,helper);
 await Check("real Store first startup creates schema5 only after one-use authorization",async()=>
 {
@@ -195,6 +223,19 @@ await Check("native RTL window renders at desktop and minimum size without showi
  var completed=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);var thread=new Thread(()=>
  {try{var app=new App();app.InitializeComponent();foreach(var size in new[]{new Size(980,730),new Size(760,620)})
   {var window=new MainWindow();var root=(FrameworkElement)window.Content;root.Width=size.Width;root.Height=size.Height;root.Measure(size);root.Arrange(new Rect(size));root.UpdateLayout();var bitmap=new RenderTargetBitmap((int)size.Width,(int)size.Height,96,96,PixelFormats.Pbgra32);bitmap.Render(root);var png=new PngBitmapEncoder();png.Frames.Add(BitmapFrame.Create(bitmap));using var file=File.Create(Path.Combine(output,"setup-"+size.Width+".png"));png.Save(file);Assert(root.FlowDirection==FlowDirection.RightToLeft);}
+  foreach(var size in new[]{new Size(980,730),new Size(760,620)})foreach(var full in new[]{false,true})
+  {
+   var window=new MainWindow(true);var keep=(System.Windows.Controls.RadioButton)window.FindName("KeepOption");var remove=(System.Windows.Controls.RadioButton)window.FindName("DeleteOption");var input=(System.Windows.Controls.TextBox)window.FindName("ConfirmationInput");var primary=(System.Windows.Controls.Button)window.FindName("Primary");
+   Assert(keep.IsChecked==true&&primary.IsEnabled);if(full){remove.IsChecked=true;Assert(!primary.IsEnabled);input.Text="מחיקה";Assert(primary.IsEnabled);input.Text="";Assert(!primary.IsEnabled);}
+   var root=(FrameworkElement)window.Content;root.Width=size.Width;root.Height=size.Height;root.Measure(size);root.Arrange(new Rect(size));root.UpdateLayout();var bitmap=new RenderTargetBitmap((int)size.Width,(int)size.Height,96,96,PixelFormats.Pbgra32);bitmap.Render(root);var png=new PngBitmapEncoder();png.Frames.Add(BitmapFrame.Create(bitmap));using var file=File.Create(Path.Combine(output,"uninstall-"+(full?"delete":"keep")+"-"+size.Width+".png"));png.Save(file);Assert(root.FlowDirection==FlowDirection.RightToLeft);
+   if(full)
+   {
+    input.Text=UninstallChoice.ConfirmationPhrase;var scroll=(System.Windows.Controls.ScrollViewer)window.FindName("ContentScroll");scroll.ScrollToEnd();root.UpdateLayout();
+    Assert(primary.IsEnabled&&primary.TabIndex>input.TabIndex);var position=input.TransformToAncestor(scroll).Transform(new Point(0,0));Assert(position.Y>=0&&position.Y+input.ActualHeight<=scroll.ActualHeight);
+    var confirmed=new RenderTargetBitmap((int)size.Width,(int)size.Height,96,96,PixelFormats.Pbgra32);confirmed.Render(root);var ready=new PngBitmapEncoder();ready.Frames.Add(BitmapFrame.Create(confirmed));using var final=File.Create(Path.Combine(output,"uninstall-confirmed-"+size.Width+".png"));ready.Save(final);
+    keep.IsChecked=true;remove.IsChecked=true;Assert(input.Text==""&&!primary.IsEnabled);
+   }
+  }
   completed.SetResult();}catch(Exception e){completed.SetException(e);}});thread.SetApartmentState(ApartmentState.STA);thread.Start();await completed.Task;thread.Join();
 });
 File.WriteAllText(Path.Combine(output,"tests.json"),JsonSerializer.Serialize(new{kind="first-install-synthetic-host-operations",passed=cases.Count-failures,failed=failures,nativeScmInvoked=false,hostAclProvisioned=false,setupCapabilityProvisioned=false,networkListenersOpened=false,offscreenUiOnly=true,tests=cases},new JsonSerializerOptions{WriteIndented=true}));
@@ -210,12 +251,12 @@ Console.WriteLine($"{cases.Count-failures} passed; {failures} failed. No native 
 }
 internal sealed class FakeHost:ISetupHostOperations
 {
- internal readonly List<string> Calls=[];internal string? Failure;internal Action? AfterPrepare;internal SetupResult Result=new(true,"READY","http://127.0.0.1:47123/",new string('a',43));
+ internal UninstallMode? LastRemoval;internal readonly List<string> Calls=[];internal string? Failure;internal Action? AfterPrepare;internal SetupResult Result=new(true,"READY","http://127.0.0.1:47123/",new string('a',43));
  private Task Call(string name,CancellationToken c){c.ThrowIfCancellationRequested();Calls.Add(name);if(Failure==name)throw new IOException("injected");return Task.CompletedTask;}
  public async Task PrepareAsync(OwnerProcess o,Action<SetupProgress> p,CancellationToken c){await Call("prepare",c);AfterPrepare?.Invoke();}
  public Task PublishServiceAsync(OwnerProcess o,Action<SetupProgress> p,CancellationToken c)=>Call("publish",c);
  public async Task<SetupResult> StartAndObserveAsync(Action<SetupProgress> p,CancellationToken c){await Call("ready",c);return Result;}
- public async Task<SetupResult> UninstallAsync(OwnerProcess o,Action<SetupProgress> p,CancellationToken c){await Call("uninstall",c);return new(true,"REMOVED",DataPreserved:true);}
+ public async Task<SetupResult> UninstallAsync(OwnerProcess o,Action<SetupProgress> p,CancellationToken c,UninstallMode mode=UninstallMode.KeepData){LastRemoval=mode;await Call("uninstall",c);return new(true,"REMOVED",DataPreserved:mode==UninstallMode.KeepData);}
 }
 internal sealed class ResolverStart(InstalledActivationResolver resolver,Func<InstallationBinding> binding):IServiceStartAuthorizer,IObservedAdmission
 {

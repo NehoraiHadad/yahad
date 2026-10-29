@@ -54,7 +54,14 @@ public static class WindowsFileBoundary
     {
         var pin=Pin(path,false,true);try
         {
-            var acl=Security(pin.Leaf);var admins=new SecurityIdentifier("S-1-5-32-544");var system=new SecurityIdentifier("S-1-5-18");
+            ValidateInstallerMetadataAcl(Security(pin.Leaf));
+            return new(pin);
+        }
+        catch{pin.Dispose();throw;}
+    }
+    internal static void ValidateInstallerMetadataAcl(RawSecurityDescriptor acl)
+    {
+            var admins=new SecurityIdentifier("S-1-5-32-544");var system=new SecurityIdentifier("S-1-5-18");
             if(acl.Owner!=admins&&acl.Owner!=system||acl.DiscretionaryAcl is null)throw new IOException("INSTALL_METADATA_OWNER");
             foreach(GenericAce raw in acl.DiscretionaryAcl)
             {
@@ -64,12 +71,18 @@ public static class WindowsFileBoundary
                 if(ace.SecurityIdentifier==admins||ace.SecurityIdentifier==system)continue;
                 if(!ace.SecurityIdentifier.Value.StartsWith("S-1-5-80-",StringComparison.Ordinal)||(ace.AccessMask&~0x1200a9)!=0)throw new IOException("INSTALL_METADATA_ACCESS");
             }
-            return new(pin);
-        }
-        catch{pin.Dispose();throw;}
     }
     internal static IDisposable PinSingleServiceDirectory(string path,bool immutable)
     {var pin=Pin(path,true,false);try{ValidateAcl(Security(pin.Leaf),ApplicationSid(),immutable);return pin;}catch{pin.Dispose();throw;}}
+    internal static IDisposable PinInstallerRemovalRoot(string path,SecurityIdentifier application)
+    {var pin=Pin(path,true,false);try{ValidateAcl(Security(pin.Leaf),application,true);return pin;}catch{pin.Dispose();throw;}}
+    internal static void ValidateRemovalMember(string path,bool directory,SecurityIdentifier application,bool requireDeleteAccess=false)
+    {using var pin=Pin(path,directory,false,requireDeleteAccess);ValidateAcl(Security(pin.Leaf),application,false);}
+    internal static void DeleteRemovalMember(string path,bool directory,SecurityIdentifier application)
+    {
+        using(var pin=Pin(path,directory,false,true))
+        {ValidateAcl(Security(pin.Leaf),application,false);byte disposition=1;if(!SetFileInformationByHandle(pin.Leaf,4,ref disposition,1))throw new Win32Exception();}
+    }
     internal static void ValidateInitialSeedAcl(RawSecurityDescriptor acl,SecurityIdentifier service)
     {
         var copy=new RawSecurityDescriptor(acl.GetSddlForm(AccessControlSections.All));

@@ -11,16 +11,17 @@ internal interface ISetupHostOperations
     Task PrepareAsync(OwnerProcess owner,Action<SetupProgress> progress,CancellationToken cancellation);
     Task PublishServiceAsync(OwnerProcess owner,Action<SetupProgress> progress,CancellationToken cancellation);
     Task<SetupResult> StartAndObserveAsync(Action<SetupProgress> progress,CancellationToken cancellation);
-    Task<SetupResult> UninstallAsync(OwnerProcess owner,Action<SetupProgress> progress,CancellationToken cancellation);
+    Task<SetupResult> UninstallAsync(OwnerProcess owner,Action<SetupProgress> progress,CancellationToken cancellation,UninstallMode mode=UninstallMode.KeepData);
 }
 internal sealed class InstallFlow(ISetupHostOperations host)
 {
     private int started;
-    internal async Task<SetupResult> RunAsync(OwnerProcess owner,bool uninstall,Action<SetupProgress> progress,CancellationToken cancellation)
+    internal async Task<SetupResult> RunAsync(OwnerProcess owner,bool uninstall,Action<SetupProgress> progress,CancellationToken cancellation,UninstallMode mode=UninstallMode.KeepData)
     {
+        UninstallChoice.Require(mode);if(!uninstall&&mode!=UninstallMode.KeepData)throw new IOException("UNINSTALL_MODE_INVALID");
         if(Interlocked.Exchange(ref started,1)!=0)throw new IOException("INSTALL_ALREADY_RUNNING");
         if(!owner.Sid.StartsWith("S-1-5-21-",StringComparison.Ordinal)||owner.ProcessId<1||owner.Created<=0||owner.ImageSha256.Length!=64)throw new IOException("INSTALL_OWNER_IDENTITY");
-        if(uninstall)return await host.UninstallAsync(owner,progress,cancellation);
+        if(uninstall)return await host.UninstallAsync(owner,progress,cancellation,mode);
         progress(new("checking",0));await host.PrepareAsync(owner,progress,cancellation);
         cancellation.ThrowIfCancellationRequested();progress(new("installing_service",70));await host.PublishServiceAsync(owner,progress,cancellation);
         progress(new("starting_server",85));var result=await host.StartAndObserveAsync(progress,cancellation);
