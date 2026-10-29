@@ -93,6 +93,16 @@ await Check("normal lifecycle reports real milestones and graceful stop before S
     Assert(reports.All(r=>r.State==ServiceState.Running?r.AcceptedControls==5:r.AcceptedControls==0));Assert(reports[^1].State==ServiceState.Stopped&&reports[^1].Win32ExitCode==0);
     Assert(controller.Control(ServiceDefinition.Stop)==1062&&controller.Control(ServiceDefinition.Interrogate)==0&&controller.Control(128)==120);
 });
+foreach(var control in new[]{ServiceDefinition.Stop,ServiceDefinition.Shutdown})
+foreach(var phase in new[]{"graceful","root","tree"})
+await Check("requested control "+control+" with stuck "+phase+" stop reports failure after forced cleanup",async()=>
+{
+    var app=new FakeApp{StuckGraceful=phase=="graceful",StuckRoot=phase=="root",StuckTree=phase=="tree"};
+    var controller=new ServiceController(new TestAuthorization(app),TimeSpan.FromSeconds(2),TimeSpan.FromMilliseconds(100));var reports=new List<ServiceReport>();
+    var result=await controller.RunAsync(r=>{reports.Add(r);if(r.State==ServiceState.Running)controller.Control(control);}).WaitAsync(TimeSpan.FromSeconds(3));
+    Assert(result.Failure==ServiceFailure.StopFailed&&result.QuiescenceConfirmed&&app.Calls.Contains("abort"));
+    Assert(reports[^1].State==ServiceState.Stopped&&reports[^1].Win32ExitCode==1066&&reports[^1].ServiceSpecificExitCode==(uint)ServiceFailure.StopFailed);
+});
 await Check("failed health aborts owned session and never reports RUNNING",async()=>
 {
     var app=new FakeApp{BadHealth=true};var reports=new List<ServiceReport>();var result=await new ServiceController(new TestAuthorization(app)).RunAsync(reports.Add);
@@ -166,15 +176,15 @@ internal sealed class TestAuthorization(FakeApp app,Func<AuthorizedServiceStart>
 internal sealed class FakeApp:IPrivateAppLauncher,IAppRecoveryBarrier
 {
     internal readonly List<string> Calls=[];internal readonly TaskCompletionSource<int> Exit=new(TaskCreationOptions.RunContinuationsAsynchronously);
-    internal bool DenyRecovery,BadHealth,CleanupUnknown,StuckRecovery;
+    internal bool DenyRecovery,BadHealth,CleanupUnknown,StuckRecovery,StuckGraceful,StuckRoot,StuckTree;
     public Task RequireStartAllowedAsync(AppRelease release,CancellationToken cancellation){Calls.Add("barrier");if(StuckRecovery)return new TaskCompletionSource().Task;if(DenyRecovery)throw new IOException("RECOVERY_DENIED");return Task.CompletedTask;}
     public Task<IContainedAppSession> StartAsync(AppRelease release,CancellationToken cancellation){Calls.Add("start");return Task.FromResult<IContainedAppSession>(new Session(this));}
     public Task WaitForHealthyAsync(IContainedAppSession session,CancellationToken cancellation){Calls.Add("healthy");if(BadHealth)throw new IOException("UNHEALTHY");return Task.CompletedTask;}
     private sealed class Session(FakeApp owner):IContainedAppSession
     {
-        public Task RequestGracefulStopAsync(CancellationToken cancellation){owner.Calls.Add("graceful");owner.Exit.TrySetResult(0);return Task.CompletedTask;}
+        public Task RequestGracefulStopAsync(CancellationToken cancellation){owner.Calls.Add("graceful");if(owner.StuckGraceful)return Task.Delay(Timeout.Infinite,cancellation);if(!owner.StuckRoot)owner.Exit.TrySetResult(0);return Task.CompletedTask;}
         public Task<int> WaitForRootExitAsync(CancellationToken cancellation)=>owner.Exit.Task.WaitAsync(cancellation);
-        public Task WaitForTreeEmptyAsync(CancellationToken cancellation){owner.Calls.Add("tree-empty");if(owner.CleanupUnknown)throw new IOException("UNKNOWN");return Task.CompletedTask;}
+        public Task WaitForTreeEmptyAsync(CancellationToken cancellation){owner.Calls.Add("tree-empty");if(owner.StuckTree)return Task.Delay(Timeout.Infinite,cancellation);if(owner.CleanupUnknown)throw new IOException("UNKNOWN");return Task.CompletedTask;}
         public Task TerminateAndWaitForTreeEmptyAsync(CancellationToken cancellation){owner.Calls.Add("abort");if(owner.CleanupUnknown)throw new IOException("UNKNOWN");owner.Exit.TrySetResult(1);return Task.CompletedTask;}
         public ValueTask DisposeAsync(){owner.Calls.Add("disposed");return ValueTask.CompletedTask;}
     }

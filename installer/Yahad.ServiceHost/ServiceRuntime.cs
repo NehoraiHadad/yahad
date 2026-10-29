@@ -119,7 +119,14 @@ internal sealed class ServiceController
             else await lifecycle.StopAsync();
         }
         catch(ServiceStartDenied denied){failure=denied.Failure;}
-        catch(OperationCanceledException){failure=stop.Task.IsCompleted?ServiceFailure.None:ServiceFailure.StartFailed;}
+        catch(OperationCanceledException)
+        {
+            // Expected cancellation before RUNNING differs from a failed stop
+            // after RUNNING. Forced cleanup must never turn that timeout into
+            // a successful STOPPED status merely because STOP was requested.
+            failure=pending==ServiceState.StopPending?ServiceFailure.StopFailed:
+                stop.Task.IsCompleted?ServiceFailure.None:ServiceFailure.StartFailed;
+        }
         catch{failure=pending==ServiceState.StopPending?ServiceFailure.StopFailed:ServiceFailure.StartFailed;}
         finally
         {
