@@ -1,0 +1,24 @@
+{
+  "baseCheckpoint": "213a75a67a4b9ff3093910d1e82829f1fa815456",
+  "scope": "private fixture backup and restore to a NEW directory only",
+  "platform": "Windows x64",
+  "nativeChecks": 81,
+  "recoveryChecks": 28,
+  "actualStoreSourceCommit": "ae406ed5e2e9f1757df16b5e3ea954b939e0f824",
+  "actualStoreArchiveSha256": "1a193dd9df1d678b4442665f931062f5ce63d29f528d3154222e9f8b4d1dd8bc",
+  "privateNodeSha256": "1c331340fa6cac5e4294725959070a143fa0507195a78ad77eed7943f719aac9",
+  "nodeVersion": "24.22.2",
+  "productionServiceBinding": false,
+  "activeDataDirectoryReplacement": false,
+  "format": "fixture-only AES-GCM chunks and HMAC receipt/journal",
+  "actualProcessTerminationCases": [
+    "during extraction",
+    "after directory publication before complete record"
+  ],
+  "diskFull": "injected HRESULT 0x80070070; host disk not filled",
+  "lockedFile": "actual Windows exclusive file handle",
+  "compilerWarnings": 0,
+  "compilerErrors": 0,
+  "networkListenersOpened": false,
+  "hostInstallationPerformed": false
+}
