@@ -525,7 +525,7 @@ export class ChatService {
     }
     return {
       ...safe,
-      ...((m.kind==='contact'||m.kind==='location')&&!m.deleted&&!m.restricted&&!sharedText(m.text)?
+      ...((m.kind==='contact'||m.kind==='location'||m.kind==='interactive')&&!m.deleted&&!m.restricted&&!sharedText(m.text)?
         {kind:'unsupported' as const,text:'פרטי ההודעה אינם זמינים לתצוגה.',unsupportedReason:'content-variant' as const}:{}),
       ...(m.kind==='poll'&&!m.deleted&&!m.restricted ? display ? {poll:display.poll} : {kind:'unsupported' as const,text:invalidPollText,unsupportedReason:'poll-invalid' as const} : {}),
       pollResults:observedPollResults(m),

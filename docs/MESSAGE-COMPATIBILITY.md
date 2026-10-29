@@ -19,7 +19,8 @@ Scope: local fixes based on Yahad 0.5.3, integrated commit `0bf1e9d4d71221fcb77c
 | Contact cards / arrays | Receive-only text: bounded vCard FN/TEL subset (name and phone numbers), no raw/card import, photos, links or notes | Sending/importing contacts not enabled |
 | Static location | Receive-only name, address and explicit finite coordinates as text; no map/URL/thumbnail load | Sharing a location not enabled |
 | Live location | Explicit unavailable-tracking explanation, no coordinate projection | Not enabled |
-| Lottie, business interactive types and unverified envelopes | Remain unsupported | Not enabled |
+| Textual buttons/lists/hydrated templates and common replies | Bounded read-only text/labels; explicit inactive-actions notice | No interactive commands, callbacks or CTA actions |
+| Lottie, media/carousel/commerce interactive variants and unverified envelopes | Specific fallback / unsupported | Not enabled |
 
 The public DTO includes optional per-message `actions` so the UI does not offer an action that the API cannot perform. The API is authoritative, including for old clients. Raw payloads, reaction timestamps, edit timestamps and original-time bookkeeping are not exposed in the public DTO. `mine` for reactions still means the linked family WhatsApp account, not an individual child.
 
@@ -98,3 +99,13 @@ Contact display accepts vCard 2.1/3.0/4.0 FN/TEL text fields, basic line folding
 Static locations require explicit latitude and longitude fields, finite values in [-90,90]/[-180,180], a name <=256 and address <=1,024 code units. Missing protobuf fields cannot silently turn into (0,0). Location URLs, thumbnails, context, speed and other metadata are not retained. A live-location envelope or isLive flag receives an explicit tracking-unavailable explanation without coordinates.
 
 These kinds retain only plain text in the existing encrypted message body. The service strips raw/media/download/reply payloads again; the public projection and React renderer bound text and escape it. Temporary markers, including per-card expiration in an array, still run before projection. Existing family/conversation/child access gates apply. Generic placeholders can upgrade only upon fresh authorized provider redelivery. Receive-only kinds are excluded from outgoing types and per-message actions at UI/API/connector levels. Edits cannot smuggle a different format or poll metadata into them; deletion and restriction remain irreversible across replay.
+
+### Textual interactive messages
+
+Known buttonsMessage, listMessage, hydrated template, basic interactive body text and common button/template/list/interactive response formats now project plain text as a receive-only interactive kind. The UI states that buttons/actions are unavailable. It does not parse native-flow JSON or retain callback IDs, selected row IDs, URLs, phone CTA targets, generic context, previews or nested media. Labels are text, not clickable commands. Unsupported media headers, carousel/commerce/product lists, unverified highly structured templates, linked-device-masked templates, ambiguous variants and malformed/oversized content receive a precise fallback without content/raw.
+
+Bounds: 256 code units per title/label, 4,096 per body, 512 per footer/description, at most ten buttons/sections and 32 list rows, and the shared 16,384-code-unit text cap. Sparse/missing/invalid structures fail closed. Own nested button/template/interactive header/footer media, template children and carousel cards are inspected for temporary markers before projection. Embedded quoted payloads remain excluded from both traversal and persistence. Existing receive-only, family/child, edit/deletion and safe React text rules apply. No business interaction or vote sending is activated.
+
+### Remaining boundaries
+
+This is a concrete, bounded compatibility implementation, not complete WhatsApp parity. Lottie animated stickers need a reviewed supported decoder/player path; no random fork or decoder dependency was adopted. View-once/temporary content intentionally remains unavailable. Live-location tracking, media/carousel/commerce interactive actions, unverified poll V4/V5/image/quiz variants, complete poll history/results and casting votes have no verified end-to-end implementation here. Poll creation exists in the official library but has no product compose/send flow in this stage. Standard media still depends on download availability and browser codecs. These limits are explicit; unavailable payloads are not reconstructed from previously discarded content.

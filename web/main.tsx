@@ -1213,7 +1213,7 @@ function Message({
           <p className="deleted">ההודעה נמחקה</p>
         ) : (
           <>
-            {(m.kind==='contact'||m.kind==='location') && <SharedContentMessage text={m.text}/>}
+            {(m.kind==='contact'||m.kind==='location'||m.kind==='interactive') && <SharedContentMessage text={m.text}/>}
             {m.kind==='poll' && <PollMessage question={m.text} options={m.poll?.options} results={m.pollResults}/>}
             {url && (m.kind === 'image' || m.kind === 'sticker') && (
               <MessageImage key={url} url={url} sticker={m.kind==='sticker'} alt={m.kind==='sticker'?'מדבקה':m.text||'תמונה שנשלחה בשיחה'}/>

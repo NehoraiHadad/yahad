@@ -1,3 +1,4 @@
+import {normalizeInteractive} from './interactive-content.js';
 import {unavailablePollVoting} from '../polls/sending.js';
 import {pollContext,pollVote} from '../polls/normalize.js';
 import { conversationKind } from '../conversation-id.js';
@@ -116,6 +117,7 @@ export function normalizeIncoming(raw: WAMessage,self?:{id?:string;lid?:string})
   if (!content) return;
   const restricted = restrictedMessage(raw);
   const poll=!restricted && !content.protocolMessage && !content.reactionMessage ? normalizePoll(content) : undefined;
+  const interactive=!restricted && !content.protocolMessage && !content.reactionMessage ? normalizeInteractive(content) : undefined;
   const shared=!restricted && !content.protocolMessage && !content.reactionMessage ? normalizeSharedContent(content) : undefined;
   const base: Incoming = {
     id,
@@ -128,7 +130,7 @@ export function normalizeIncoming(raw: WAMessage,self?:{id?:string;lid?:string})
     status: receipt(raw.status),
     edited: editedEnvelope(raw.message) || undefined,
     historicalReactions: restricted ? undefined : historicalReactions(raw),
-    raw: restricted || poll || shared ? undefined : stringify(stripEmbeddedContext(raw)),
+    raw: restricted || poll || shared || interactive ? undefined : stringify(stripEmbeddedContext(raw)),
   };
   if(base.edited)base.editTime=base.time;
   if (restricted) {
@@ -142,6 +144,7 @@ export function normalizeIncoming(raw: WAMessage,self?:{id?:string;lid?:string})
     pollContext:poll.kind==='poll'?pollContext(raw,content,self):undefined,
     pollVote:poll.unsupportedReason==='poll-vote'?pollVote(raw,content,self):undefined};
   if(shared)return {...base,...shared};
+  if(interactive)return {...base,...interactive};
   if (content.reactionMessage) {
     const r = content.reactionMessage;
     if (r.key?.remoteJid && r.key.remoteJid !== groupId) return;
@@ -259,6 +262,7 @@ export async function incomingMediaStream(raw:WAMessage,reuploadRequest:WASocket
 export class BaileysConnector implements Connector {
   readonly pollVoting=unavailablePollVoting;
   readonly capabilities: Capabilities = {
+    interactive:{textDisplay:true,actions:false},
     contacts:{display:true,send:false},
     location:{display:true,live:false,send:false},
     roundVideo:{receive:true,send:false},

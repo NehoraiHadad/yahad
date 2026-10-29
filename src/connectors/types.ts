@@ -1,11 +1,12 @@
 import type {PollVoteSending} from '../polls/sending.js';
 import type {PollContext,EncryptedPollVote,PollState} from '../polls/types.js';
-export type Kind = 'text' | 'image' | 'video' | 'document' | 'sticker' | 'audio' | 'poll' | 'contact' | 'location' | 'unsupported';
-export type SendKind=Exclude<Kind,'poll'|'contact'|'location'>;
+export type Kind = 'text' | 'image' | 'video' | 'document' | 'sticker' | 'audio' | 'poll' | 'contact' | 'location' | 'interactive' | 'unsupported';
+export type SendKind=Exclude<Kind,'poll'|'contact'|'location'|'interactive'>;
 export interface PollOptions {options:string[]}
 export type Receipt = 'pending' | 'sent' | 'delivered' | 'read' | 'unknown' | 'failed';
 export interface ReactionUpdate { target: string; actor: string; emoji: string; time?: number }
 export interface Capabilities {
+  interactive?: {textDisplay:boolean;actions:boolean};
   contacts?: {display:boolean;send:boolean};
   location?: {display:boolean;live:boolean;send:boolean};
   roundVideo?: {receive:boolean;send:boolean};
@@ -44,7 +45,7 @@ export interface Incoming {
   time: number;
   kind: Kind;
   text: string;
-  unsupportedReason?: 'poll' | 'poll-vote' | 'poll-results' | 'poll-variant' | 'poll-invalid' | 'contact-variant' | 'location-invalid' | 'live-location' | 'content-variant';
+  unsupportedReason?: 'poll' | 'poll-vote' | 'poll-results' | 'poll-variant' | 'poll-invalid' | 'contact-variant' | 'location-invalid' | 'live-location' | 'content-variant' | 'interactive-variant';
   poll?: PollOptions;
   replyId?: string;
   mime?: string;
@@ -69,7 +70,7 @@ export interface StoredMessage {
   time: number;
   kind: Kind;
   text: string;
-  unsupportedReason?: 'poll' | 'poll-vote' | 'poll-results' | 'poll-variant' | 'poll-invalid' | 'contact-variant' | 'location-invalid' | 'live-location' | 'content-variant';
+  unsupportedReason?: 'poll' | 'poll-vote' | 'poll-results' | 'poll-variant' | 'poll-invalid' | 'contact-variant' | 'location-invalid' | 'live-location' | 'content-variant' | 'interactive-variant';
   poll?: PollOptions;
   replyId?: string;
   mediaId?: string;

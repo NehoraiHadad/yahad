@@ -84,7 +84,7 @@ test('poll types are identified honestly without exposing results, voting, secre
   assert.deepEqual(f.connector.capabilities.polls,{identify:true,display:true,observedResults:true,create:false,vote:false,results:false});
   assert.equal((await f.request('/polls','POST',poll)).statusCode,404);
   const temporary=normalizeIncoming(raw('temp',{ephemeralMessage:{message:{pollCreationMessageV3:poll}}}))!;assert.equal(temporary.restricted,true);assert.equal(temporary.unsupportedReason,undefined);assert.equal(temporary.raw,undefined);
-  await f.ingest(raw('unknown',{interactiveResponseMessage:{}}));assert.equal(f.get('unknown')!.unsupportedReason,undefined);
+  await f.ingest(raw('unknown',{interactiveResponseMessage:{}}));assert.equal(f.get('unknown')!.unsupportedReason,'interactive-variant');
  }finally{await f.close();}
 });
 

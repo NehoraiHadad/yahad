@@ -1,4 +1,4 @@
-/** Internal only. Persisted inside the existing conversation-encrypted body;
+/** Internal only. Persisted in a separate table sealed with the conversation key;
  * never spread into an API response, notification or log. */
 export interface PollContext {secret?:string;creators:string[];selectable:number}
 export interface EncryptedPollVote {target:string;id:string;time:number;voters:string[];payload:string;iv:string}
