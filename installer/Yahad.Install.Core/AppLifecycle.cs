@@ -147,7 +147,9 @@ public sealed class AppLifecycle : IAsyncDisposable
         await serial.WaitAsync();
         try
         {
-            if (disposed) return;
+            // Repeated disposal retries an unresolved owned session. A previous
+            // failure never turns the next call into a false success.
+            if (disposed && session is null) return;
             disposed = true;
             if (session is not null)
             {

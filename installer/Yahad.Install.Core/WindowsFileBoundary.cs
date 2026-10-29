@@ -45,6 +45,34 @@ public static class WindowsFileBoundary
         catch { pinned.Dispose(); throw; }
     }
 
+    // Recovery reads use the same pinned path, no-follow, link-count and ACL
+    // checks as secrets, with bounded streaming rather than loading media in RAM.
+    internal static PrivateReadLease OpenPrivateRead(string path)
+    {
+        var pinned = Pin(path, false, true);
+        try { ValidateAcl(Security(pinned.Leaf), ApplicationSid(), false); return new(pinned); }
+        catch { pinned.Dispose(); throw; }
+    }
+    internal static IDisposable PinPrivateDirectory(string path)
+    {
+        var pinned = Pin(path, true, false);
+        try { ValidateAcl(Security(pinned.Leaf), ApplicationSid(), false); return pinned; }
+        catch { pinned.Dispose(); throw; }
+    }
+    internal sealed class PrivateReadLease(PinnedPath pinned) : IDisposable
+    {
+        public long Length { get { if (!Native.GetFileSizeEx(pinned.Leaf, out var length)) throw new Win32Exception(); return length; } }
+        public int Read(long offset, Span<byte> bytes) => RandomAccess.Read(pinned.Leaf, bytes, offset);
+        public byte[] Small(int maximum)
+        {
+            var length=Length; if(length<1||length>maximum)throw new IOException("RECOVERY_FILE_BOUND");
+            var bytes=new byte[(int)length];var offset=0;
+            while(offset<bytes.Length){var count=Read(offset,bytes.AsSpan(offset));if(count==0)throw new IOException("RECOVERY_SHORT_READ");offset+=count;}
+            return bytes;
+        }
+        public void Dispose()=>pinned.Dispose();
+    }
+
     public static DataLease AcquireDataLease(string directory, int? ownerProcessId = null)
     {
         var pinned = Pin(directory, leafDirectory: true, readContents: false);
@@ -55,7 +83,7 @@ public static class WindowsFileBoundary
             AssertPrivateTree(directory);
             var lockPath = Path.Combine(directory, "process.lock");
             // OPEN_ALWAYS + OPEN_REPARSE_POINT: atomically create/open without following a final link.
-            gate = Native.CreateFileW(lockPath, GenericRead | 0x40000000 | ReadControl, 0, IntPtr.Zero,
+            gate = Native.CreateFileW(Extended(lockPath), GenericRead | 0x40000000 | ReadControl, 0, IntPtr.Zero,
                 4, 0x00200000, IntPtr.Zero);
             if (gate.IsInvalid) throw new Win32Exception();
             CheckKind(gate, false);
@@ -132,9 +160,11 @@ public static class WindowsFileBoundary
         catch { result.Dispose(); throw; }
     }
 
+    private static string Extended(string canonical) => @"\\?\" + canonical;
+
     private static SafeFileHandle Open(string path, bool directory, bool contents)
     {
-        var handle = Native.CreateFileW(path, ReadControl | ReadAttributes | (contents ? GenericRead : 0),
+        var handle = Native.CreateFileW(Extended(path), ReadControl | ReadAttributes | (contents ? GenericRead : 0),
             contents ? 1u : 3u, IntPtr.Zero, 3, 0x00200000 | 0x02000000, IntPtr.Zero);
         if (handle.IsInvalid) { var error = Marshal.GetLastPInvokeError(); handle.Dispose(); throw new Win32Exception(error); }
         try { CheckKind(handle, directory); return handle; }

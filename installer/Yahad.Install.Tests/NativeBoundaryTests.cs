@@ -19,6 +19,14 @@ internal static class NativeBoundaryTests
         }
         await check("native handle reads private bytes", () =>
         { var path = FileFixture(out _); using var lease = WindowsFileBoundary.OpenSecret(path, SecretRole.MasterKey); Assert(Encoding.UTF8.GetString(lease.Read()) == "synthetic-private-file"); return Task.CompletedTask; });
+        await check("native private handle supports canonical paths beyond MAX_PATH", () =>
+        {
+            var root=SafeDirectory.CreatePrivateSession(parent);var directory=root;
+            while(directory.Length<300)directory=Path.Combine(directory,"long-component");
+            Directory.CreateDirectory(directory);var path=Path.Combine(directory,"master-key");File.WriteAllText(path,"long-private-fixture");
+            using var file=WindowsFileBoundary.OpenSecret(path,SecretRole.MasterKey);
+            Assert(Encoding.UTF8.GetString(file.Read())=="long-private-fixture");return Task.CompletedTask;
+        });
         await check("native pinned ancestors and leaf refuse rename", () =>
         {
             var path = FileFixture(out var root); using var lease = WindowsFileBoundary.OpenSecret(path, SecretRole.MasterKey);

@@ -6,14 +6,14 @@ internal static class AppLifecycleTests
     {
         public readonly List<string> Calls = [];
         public int RootExit;
-        public bool StuckTree, DenyRecovery, FailActivation, FailNewHealth;
+        public bool StuckTree, DenyRecovery, FailActivation, FailNewHealth, FailCleanup;
         private sealed class Session(Fixture owner) : IContainedAppSession
         {
             public Task RequestGracefulStopAsync(CancellationToken cancellation) { owner.Calls.Add("stop"); return Task.CompletedTask; }
             public Task<int> WaitForRootExitAsync(CancellationToken cancellation) { owner.Calls.Add("root-exit"); return Task.FromResult(owner.RootExit); }
             public async Task WaitForTreeEmptyAsync(CancellationToken cancellation)
             { owner.Calls.Add("tree-empty"); if (owner.StuckTree) await Task.Delay(Timeout.Infinite, cancellation); }
-            public Task TerminateAndWaitForTreeEmptyAsync(CancellationToken cancellation) { owner.Calls.Add("abort-tree-empty"); return Task.CompletedTask; }
+            public Task TerminateAndWaitForTreeEmptyAsync(CancellationToken cancellation) { owner.Calls.Add("abort-tree-empty"); if(owner.FailCleanup) throw new IOException("QUIESCENCE_UNKNOWN"); return Task.CompletedTask; }
             public ValueTask DisposeAsync() { owner.Calls.Add("dispose-session"); return ValueTask.CompletedTask; }
         }
         public Task RequireStartAllowedAsync(AppRelease release, CancellationToken cancellation)
@@ -62,6 +62,17 @@ internal static class AppLifecycleTests
         {
             var f = new Fixture { FailNewHealth = true }; await using var host = f.Host(); await host.StartAsync(); await Reject(() => host.UpdateAsync(new("new")));
             Assert(host.State == AppLifecycleState.RecoveryRequired && f.Calls.Count(c => c == "start:old") == 1);
+        });
+        await check("repeated disposal retries unresolved cleanup and never reports false success", async () =>
+        {
+            var f=new Fixture { FailCleanup=true };var host=f.Host();await host.StartAsync();
+            await Reject(async()=>await host.DisposeAsync());
+            await Reject(async()=>await host.DisposeAsync());
+            Assert(host.QuiescenceReconciliationRequired&&f.Calls.Count(c=>c=="abort-tree-empty")==2&&!f.Calls.Contains("dispose-session"));
+            await Reject(()=>host.StartAsync());
+            f.FailCleanup=false;await host.DisposeAsync();
+            Assert(!host.QuiescenceReconciliationRequired&&f.Calls.Count(c=>c=="abort-tree-empty")==3&&f.Calls.Count(c=>c=="dispose-session")==1);
+            await host.DisposeAsync();Assert(f.Calls.Count(c=>c=="abort-tree-empty")==3);
         });
         await check("cancelled request cannot stop or activate running app", async () =>
         {
