@@ -9,7 +9,7 @@ namespace Yahad.Install;
 // it can deny observations, never manufacture successful native observations.
 internal sealed class JobProcessFaultInjection
 {
-    internal bool FailBeforeAssignment,FailAfterHandoff,RootObservationUnavailable,TreeObservationUnavailable;
+    internal bool FailBeforeAssignment,FailAfterHandoff,FailResumeThread,RootObservationUnavailable,TreeObservationUnavailable;
     internal JobProcess? CreatedProcess;
     internal IContainedAppSession? FailedStartSession;
     internal bool RootExitObserved,TreeEmptyObserved;
@@ -67,6 +67,7 @@ public sealed class JobProcess : IDisposable
             if (!Native.AssignProcessToJobObject(job, child.process.DangerousGetHandle())) throw new Win32Exception();
             using(var borrowed=new SafeProcessHandle(child.process.DangerousGetHandle(),false))beforeResume?.Invoke(borrowed,child.ProcessId);
             if(fault?.FailAfterHandoff==true)throw new IOException("INJECTED_HANDOFF_FAILURE");
+            if(fault?.FailResumeThread==true)throw new Win32Exception(6); // failure-only synthetic injection
             if (Native.ResumeThread(process.Thread) == uint.MaxValue) throw new Win32Exception();
             return child;
         }

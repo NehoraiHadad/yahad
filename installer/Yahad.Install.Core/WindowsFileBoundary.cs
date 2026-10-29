@@ -116,6 +116,12 @@ public static class WindowsFileBoundary
         finally{Marshal.FreeHGlobal(pointer);descriptor.Free();}
     }
     [StructLayout(LayoutKind.Sequential)]private struct CreationSecurity{public int Length;public IntPtr Descriptor;public int Inherit;}
+    internal static IDisposable PinLiveDataFile(string path)
+    {
+        // Metadata-only, share read/write but never delete: compatible with a
+        // live SQLite writer while preventing a missing-DB completion race.
+        var pin=Pin(path,false,false);try{ValidateAcl(Security(pin.Leaf),ApplicationSid(),false);return pin;}catch{pin.Dispose();throw;}
+    }
     internal static PrivateReadLease OpenPrivateRead(string path)
     {
         var installed=InstalledProcessState.ForPath(path);if(installed is not null)return installed.Open(path);

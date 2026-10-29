@@ -10,7 +10,7 @@ namespace Yahad.Service;
 // Supplied only by installed activation admission after protected identity and
 // observed recovery checks. No executable/argument JSON or CLI factory.
 internal sealed record VerifiedProcessSpec(string Image,string ImageSha256,string[] Arguments,string WorkingDirectory,
-    string PrivateTemporaryDirectory,string PrivateFFmpeg,IReadOnlyDictionary<string,string> AppEnvironment,WindowsFileBoundary.DataLease? DataLease=null,Action? BeforeMutableStart=null,InstalledStateFiles? StateFiles=null);
+    string PrivateTemporaryDirectory,string PrivateFFmpeg,IReadOnlyDictionary<string,string> AppEnvironment,WindowsFileBoundary.DataLease? DataLease=null,Action? BeforeMutableStart=null,InstalledStateFiles? StateFiles=null,Action? AfterHealthy=null);
 internal readonly record struct ChildReady(uint PeerPid,string Type);
 internal interface IChildControl:IDisposable
 {
@@ -99,6 +99,7 @@ internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildCont
     {
         var native=(Session)session;if(native.StartFailure is not null)throw new IOException("SERVICE_PROCESS_START_FAILED",native.StartFailure);var ready=await native.Channel.ReadyAsync(native.Job.ProcessId,cancellation);
         if(ready.PeerPid!=(uint)native.Job.ProcessId||ready.Type!="ready")throw new IOException("SERVICE_CHILD_READY");
+        spec.AfterHealthy?.Invoke();
     }
     private sealed class LaunchLease:IDisposable
     {

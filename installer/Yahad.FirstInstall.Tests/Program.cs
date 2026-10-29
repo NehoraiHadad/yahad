@@ -66,17 +66,77 @@ await Check("real Store first startup creates schema5 only after one-use authori
  Assert(result.Failure==ServiceFailure.None&&consumed==1&&File.Exists(original));var schema=await FrozenAdmissionSchema.ReadAsync(node,original,f.PathOf("temporary"),default);Assert(schema==5);
  File.Move(original,f.PathOf("new-seeded.sqlite"));f.ClearSignals();await Refuse(()=>f.Resolve());File.Move(f.PathOf("new-seeded.sqlite"),original);
 });
-await Check("ordinary restart never consumes a fresh-data capability",async()=>
+await Check("existing verified database retires a leftover initial grant without reinitializing",async()=>
 {
  f.ClearSignals();var head=NativeJson.Read<InstalledActivation>(File.ReadAllBytes(f.PathOf("activation.json")));var count=0;
  var resolver=new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,fresh:new(f.InstallationId,f.OriginalDataId,head.ReleaseDigest,()=>count++));
- var controller=new ServiceController(new ResolverStart(resolver,()=>f.Binding));var result=await controller.RunAsync(r=>{if(r.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);});Assert(result.Failure==ServiceFailure.None&&count==0);
+ var controller=new ServiceController(new ResolverStart(resolver,()=>f.Binding));var result=await controller.RunAsync(r=>{if(r.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);});Assert(result.Failure==ServiceFailure.None&&count==1);
 });
 await Check("missing database plus unrelated data refuses fresh initialization and keeps files",async()=>
 {
  f.ClearSignals();var db=Path.Combine(f.Data,"app.sqlite");File.Move(db,f.PathOf("held-db.sqlite"));var sentinel=Path.Combine(f.Data,"family-marker");File.WriteAllText(sentinel,"preserve");var count=0;var head=NativeJson.Read<InstalledActivation>(File.ReadAllBytes(f.PathOf("activation.json")));
  try{var resolver=new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,fresh:new(f.InstallationId,f.OriginalDataId,head.ReleaseDigest,()=>count++));await Refuse(()=>resolver.ResolveAsync(f.Binding,default));Assert(count==0&&File.ReadAllText(sentinel)=="preserve"&&!File.Exists(db));}
  finally{File.Delete(sentinel);File.Move(f.PathOf("held-db.sqlite"),db);}
+});
+// Exercise the same two-file authorization used by the production resolver.
+FirstInstallReceipt CreateInitialGrants()
+{
+ var head=NativeJson.Read<InstalledActivation>(File.ReadAllBytes(f.PathOf("activation.json")));
+ byte[] Grant()=>JsonSerializer.SerializeToUtf8Bytes(new FirstInstallSeed(1,f.InstallationId,f.OriginalDataId,head.ReleaseDigest,Guid.NewGuid().ToString("N")));
+ var seed=Grant();var retry=Grant();File.WriteAllBytes(f.PathOf("initial-seed.json"),seed);File.WriteAllBytes(f.PathOf("initial-retry.json"),retry);
+ return new(2,f.InstallationId,f.OriginalDataId,head.ReleaseDigest,"0.5.3",ProductionFixture.Hash(seed),32000,new string('b',64),"committed",ProductionFixture.Hash(retry));
+}
+FreshDataAuthorization? ReadInitialGrants(FirstInstallReceipt receipt)
+{
+ byte[] Read(string path){using var file=WindowsFileBoundary.OpenPrivateRead(path);return file.Small(4096);}
+ void Consume(string path,string digest){if(ProductionFixture.Hash(Read(path))!=digest)throw new IOException("PRIVATE_GRANT_CHANGED");File.Delete(path);}
+ return FirstInstallInitialization.Read(f.Root,receipt,Read,Consume);
+}
+foreach(var failure in new[]{"handoff","resume","early-crash"})await Check("initial "+failure+" retains durable retry grant and a quiescent retry succeeds",async()=>
+{
+ f.ClearSignals();var db=Path.Combine(f.Data,"app.sqlite");var saved=f.PathOf("before-"+failure+".sqlite");File.Move(db,saved);var receipt=CreateInitialGrants();
+ var fresh=ReadInitialGrants(receipt)!;JobProcessFaultInjection? fault=null;
+ if(failure=="handoff"){var original=fresh.Begin;fresh=fresh with{Begin=()=>{original?.Invoke();throw new IOException("INJECTED_BEFORE_DESCRIPTOR");}};}
+ if(failure=="resume")fault=new(){FailResumeThread=true};
+ if(failure=="early-crash")File.WriteAllText(f.PathOf("crash-before-store"),"synthetic");
+ var resolver=new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,fresh:fresh,startFault:fault);
+ var reports=new List<ServiceReport>();var controller=new ServiceController(new ResolverStart(resolver,()=>f.Binding),lifecycleDeadline:TimeSpan.FromSeconds(8));
+ var failed=await controller.RunAsync(reports.Add);Assert(failed.Failure!=ServiceFailure.None&&failed.QuiescenceConfirmed&&!reports.Any(x=>x.State==ServiceState.Running));
+ Assert(!File.Exists(db)&&!File.Exists(f.PathOf("initial-seed.json"))&&File.Exists(f.PathOf("initial-retry.json")));
+ using(var observed=WindowsFileBoundary.AcquireDataLease(f.Data)){} // actual empty-job lease reacquisition, not a UI boolean
+ if(failure=="early-crash")File.Delete(f.PathOf("crash-before-store"));
+ f.ClearSignals();var retry=ReadInitialGrants(receipt);Assert(retry is not null);
+ var next=new ServiceController(new ResolverStart(new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,fresh:retry),()=>f.Binding));
+ var success=await next.RunAsync(report=>{if(report.State==ServiceState.Running)next.Control(ServiceDefinition.Stop);});
+ Assert(success.Failure==ServiceFailure.None&&File.Exists(db)&&!File.Exists(f.PathOf("initial-retry.json")));
+ // Once observed ready, deleting even every DB file cannot re-open first setup.
+ f.ClearSignals();var initialized=f.PathOf("after-"+failure+".sqlite");File.Move(db,initialized);Assert(ReadInitialGrants(receipt) is null);await Refuse(()=>f.Resolve());Assert(!File.Exists(db));File.Move(initialized,db);
+});
+await Check("uncertain first-start cleanup retains both retry evidence and exclusive lease until observed reconciliation",async()=>
+{
+ f.ClearSignals();var db=Path.Combine(f.Data,"app.sqlite");File.Move(db,f.PathOf("before-uncertain.sqlite"));var receipt=CreateInitialGrants();
+ var fault=new JobProcessFaultInjection{FailAfterHandoff=true,TreeObservationUnavailable=true};
+ var resolver=new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,fresh:ReadInitialGrants(receipt),startFault:fault);
+ var reports=new List<ServiceReport>();var controller=new ServiceController(new ResolverStart(resolver,()=>f.Binding),lifecycleDeadline:TimeSpan.FromSeconds(2));
+ var result=await controller.RunAsync(reports.Add);Assert(!result.QuiescenceConfirmed&&controller.CleanupReconciliationRequired&&!reports.Any(x=>x.State==ServiceState.Stopped)&&File.Exists(f.PathOf("initial-retry.json"))&&!File.Exists(db));
+ try{using var wrong=WindowsFileBoundary.AcquireDataLease(f.Data);throw new Exception("early lease release");}catch(Win32Exception ex)when(ex.NativeErrorCode==32){}
+ fault.TreeObservationUnavailable=false;await controller.RetryAdmissionCleanupAsync(default);Assert(!controller.CleanupReconciliationRequired);
+ using(var observed=WindowsFileBoundary.AcquireDataLease(f.Data)){}
+ var retry=new ServiceController(new ResolverStart(new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,fresh:ReadInitialGrants(receipt)),()=>f.Binding));
+ var recovered=await retry.RunAsync(report=>{if(report.State==ServiceState.Running)retry.Control(ServiceDefinition.Stop);});Assert(recovered.Failure==ServiceFailure.None&&!File.Exists(f.PathOf("initial-retry.json")));
+});
+await Check("verified DB from an interrupted attempt retires grants before retry and never resets data",async()=>
+{
+ f.ClearSignals();var receipt=CreateInitialGrants();var schema=await FrozenAdmissionSchema.ReadAsync(node,Path.Combine(f.Data,"app.sqlite"),f.PathOf("temporary"),default);Assert(schema==5);
+ var before=File.ReadAllBytes(Path.Combine(f.Data,"app.sqlite"));var grant=await new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,fresh:ReadInitialGrants(receipt)).ResolveAsync(f.Binding,default);
+ try{await grant.Recovery.RequireStartAllowedAsync(grant.Release,default);Assert(File.Exists(f.PathOf("initial-retry.json")));}finally{grant.Dispose();}
+ var controller=new ServiceController(new ResolverStart(new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,fresh:ReadInitialGrants(receipt)),()=>f.Binding));
+ var result=await controller.RunAsync(report=>{if(report.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);});Assert(result.Failure==ServiceFailure.None&&!File.Exists(f.PathOf("initial-seed.json"))&&!File.Exists(f.PathOf("initial-retry.json")));
+});
+await Check("inconsistent or corrupt initial grant state fails closed and creates no replacement",async()=>
+{
+ f.ClearSignals();var receipt=CreateInitialGrants();File.Delete(f.PathOf("initial-retry.json"));await Refuse(()=>{ReadInitialGrants(receipt);return Task.CompletedTask;});Assert(!File.Exists(f.PathOf("initial-retry.json")));File.Delete(f.PathOf("initial-seed.json"));
+ receipt=CreateInitialGrants();File.WriteAllText(f.PathOf("initial-retry.json"),"corrupt");await Refuse(()=>{ReadInitialGrants(receipt);return Task.CompletedTask;});File.Delete(f.PathOf("initial-seed.json"));File.Delete(f.PathOf("initial-retry.json"));
 });
 await Check("SQLite handles a crash-left WAL under actual exclusive lease without deleting live data",async()=>
 {

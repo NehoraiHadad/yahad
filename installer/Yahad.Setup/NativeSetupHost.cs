@@ -32,7 +32,7 @@ internal sealed class NativeSetupHost(InstallPackage package):ISetupHostOperatio
         {
             state=ReadState();if(state.OwnerSid!=owner.Sid)throw new UnauthorizedAccessException("INSTALL_OWNER_CHANGED");
             if(state.Phase=="committed")
-            {service=NativeServiceInstall.OpenOwned();RequireExistingHost();existing=true;return;}
+            {if(state.PackageDigest!=package.Manifest.ZipSha256)throw new IOException("INSTALL_UPGRADE_REQUIRED");service=NativeServiceInstall.OpenOwned();RequireExistingHost();existing=true;return;}
             if(state.Phase!="preparing"||state.PackageDigest!=package.Manifest.ZipSha256||state.PayloadDigest!=package.Manifest.PayloadDigest||!Directory.Exists(InstallLocations.Binaries))throw new IOException("EXISTING_DATA_PRESERVED");
             if(!NativeServiceInstall.Exists())throw new IOException("INSTALL_REPAIR_REQUIRED");service=NativeServiceInstall.OpenOwned();if(ServiceSid()!=state.ServiceSid)throw new IOException("INSTALL_SERVICE_IDENTITY");
         }
@@ -87,6 +87,13 @@ internal sealed class NativeSetupHost(InstallPackage package):ISetupHostOperatio
             NativeInstallFiles.SetOwnedFile(seedPath,NativeInstallFiles.Descriptor().Replace("D:P","D:P(A;;0x1300a9;;;"+s.ServiceSid+")"));
         }
         else{using var seed=WindowsFileBoundary.OpenInstallerInitialSeed(seedPath,new SecurityIdentifier(s.ServiceSid));seedBytes=seed.Small(4096);var record=NativeJson.Read<FirstInstallSeed>(seedBytes);if(record.InstallationId!=s.InstallationId||record.DataId!=s.DataId||record.ReleaseDigest!=s.PayloadDigest)throw new IOException("INSTALL_SEED_CHANGED");}
+        var retryPath=Path.Combine(InstallLocations.State,"initial-retry.json");byte[] retryBytes;
+        if(!File.Exists(retryPath))
+        {
+            retryBytes=Json(new FirstInstallSeed(1,s.InstallationId,s.DataId,s.PayloadDigest,Guid.NewGuid().ToString("N")));NativeInstallFiles.WriteNew(retryPath,retryBytes);
+            NativeInstallFiles.SetOwnedFile(retryPath,NativeInstallFiles.Descriptor().Replace("D:P","D:P(A;;0x1300a9;;;"+s.ServiceSid+")"));
+        }
+        else{using var retry=WindowsFileBoundary.OpenInstallerInitialSeed(retryPath,new SecurityIdentifier(s.ServiceSid));retryBytes=retry.Small(4096);var record=NativeJson.Read<FirstInstallSeed>(retryBytes);if(record.InstallationId!=s.InstallationId||record.DataId!=s.DataId||record.ReleaseDigest!=s.PayloadDigest)throw new IOException("INSTALL_SEED_CHANGED");}
         setupToken=Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+','-').Replace('/','_');
         var capability=Json(new{token=setupToken,expiresAt=DateTimeOffset.UtcNow.AddMinutes(15).ToUnixTimeMilliseconds()});var capabilityPath=Path.Combine(InstallLocations.State,"Secrets/setup-capability.json");
         if(File.Exists(capabilityPath))NativeInstallFiles.ReplaceOwned(capabilityPath,capability);else NativeInstallFiles.WriteNew(capabilityPath,capability);
@@ -96,7 +103,7 @@ internal sealed class NativeSetupHost(InstallPackage package):ISetupHostOperatio
         void Record(string name,byte[] bytes){var path=Path.Combine(InstallLocations.State,name);if(File.Exists(path))NativeInstallFiles.ReplaceOwned(path,bytes);else NativeInstallFiles.WriteNew(path,bytes);}
         Record("owner-intent.json",intent);Record("web.json",web);Record("activation.json",activation);Record("epoch.json",Json(new InstalledEpoch(1,s.InstallationId,1,Hash(activation))));
         Record("bootstrap.json",Json(new{schema=1,service=InstallLocations.ServiceName,installationId=s.InstallationId,activationReceiptDigest=Hash(activation)}));
-        Record("installation.json",Json(new FirstInstallReceipt(1,s.InstallationId,s.DataId,s.PayloadDigest,"0.5.3",Hash(seedBytes),s.Port,s.PackageDigest,"committed")));
+        Record("installation.json",Json(new FirstInstallReceipt(2,s.InstallationId,s.DataId,s.PayloadDigest,"0.5.3",Hash(seedBytes),s.Port,s.PackageDigest,"committed",Hash(retryBytes))));
         service!.EnableAutomaticStart();RegisterUninstall();SaveState("committed");progress(new("installing_service",80));
     },cancellation);
     public async Task<SetupResult> StartAndObserveAsync(Action<SetupProgress> progress,CancellationToken cancellation)

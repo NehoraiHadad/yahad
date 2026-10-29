@@ -30,10 +30,10 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
     internal static string StateRoot=>Path.GetDirectoryName(WindowsInstallationReader.DescriptorPath)!;
     private readonly string root;private readonly IInstalledControlFiles control;private readonly IChildControlFactory channels;
     private readonly FreshDataAuthorization? fresh;private readonly bool committerUnconfigured;private readonly InstalledStateFiles files;
-    private readonly Func<DateTimeOffset> clock;private readonly JobProcessFaultInjection? probeFault;
+    private readonly Func<DateTimeOffset> clock;private readonly JobProcessFaultInjection? probeFault,startFault;
     internal InstalledActivationResolver():this(StateRoot,new AdminInstalledControlFiles(),new LocalChildControlFactory(),()=>DateTimeOffset.UtcNow){committerUnconfigured=true;}
-    internal InstalledActivationResolver(string root,IInstalledControlFiles control,IChildControlFactory channels,Func<DateTimeOffset> clock,JobProcessFaultInjection? probeFault=null,InstalledStateFiles? stateFiles=null,FreshDataAuthorization? fresh=null)
-    {this.fresh=fresh;this.root=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(root));this.control=control;this.channels=channels;this.clock=clock;this.probeFault=probeFault;files=stateFiles??InstalledStateFiles.Private(root);}
+    internal InstalledActivationResolver(string root,IInstalledControlFiles control,IChildControlFactory channels,Func<DateTimeOffset> clock,JobProcessFaultInjection? probeFault=null,InstalledStateFiles? stateFiles=null,FreshDataAuthorization? fresh=null,JobProcessFaultInjection? startFault=null)
+    {this.startFault=startFault;this.fresh=fresh;this.root=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(root));this.control=control;this.channels=channels;this.clock=clock;this.probeFault=probeFault;files=stateFiles??InstalledStateFiles.Private(root);}
     public Task<AuthorizedServiceStart> ResolveAsync(InstallationBinding binding,CancellationToken cancellation)=>ResolveCore(binding,false,null,cancellation);
     internal Task<AuthorizedServiceStart> InspectCommitCandidateAsync(InstallationBinding binding,string? pendingDigest,CancellationToken cancellation)
         =>ResolveCore(binding,true,pendingDigest,cancellation);
@@ -89,7 +89,7 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
             if(initializing)
             {
                 if(fresh is null||fresh.InstallationId!=binding.InstallationId||fresh.DataId!=head.DataId||fresh.ReleaseDigest!=head.ReleaseDigest||head.Recovery is not null)throw new IOException("INSTALLED_DATABASE_MISSING");
-                reservation.Initialize=fresh.Consume;
+                reservation.Initialize=fresh.Begin;reservation.CompleteInitialization=fresh.Consume;
             }
             else if(files.IsSingleService&&new[]{"app.sqlite-wal","app.sqlite-shm","app.sqlite-journal"}.Any(n=>Path.Exists(Path.Combine(reservation.Data,n))))
                 _=await FirstInstallWal.ReconcileAsync(probe,Path.Combine(reservation.Data,"app.sqlite"),probeTemporary,cancellation);
@@ -110,13 +110,17 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
                     selected,key,policy,pins,reservation.DataPins,files);
                 if(baseline<head.MinimumSchema||baseline>head.MaximumSchema||schema<baseline)throw new IOException("INSTALLED_RECOVERY_SCHEMA");
             }
+            // A DB left by an interrupted first attempt is admitted without
+            // reset. Retire the pending grants while its validated file pins
+            // are still held, before any new mutable child can run.
+            if(!initializing&&fresh is not null)reservation.Initialize=()=>{fresh.Begin?.Invoke();fresh.Consume();};
             reservation.Release=head.ReleaseDigest;await reservation.RequireStartAllowedAsync(new(head.ReleaseDigest),cancellation);
             var environment=new Dictionary<string,string>{{"HOST","127.0.0.1"},{"PORT",web.Port.ToString(System.Globalization.CultureInfo.InvariantCulture)},
                 {"APP_ORIGIN",origin.GetLeftPart(UriPartial.Authority)},{"COOKIE_SECURE",origin.Scheme=="https"?"true":"false"},{"DATA_DIR",reservation.Data},{"MASTER_KEY_FILE",key},
                 {"CONNECTOR","mock"},{"ALLOW_REAL_WHATSAPP","no"},{"SETUP_CAPABILITY_FILE",Path.Combine(root,"Secrets","setup-capability.json")}};
             var spec=new VerifiedProcessSpec(node,reservation.NodeDigest,["--import","tsx","src/main.ts"],Path.Combine(payload,"app"),temporary,
-                Path.Combine(payload,"runtime","ffmpeg","ffmpeg.exe"),environment,reservation.Lease,reservation.BeginMutableStart,files);
-            return new(new(head.ReleaseDigest),new ServiceProcessLauncher(spec,channels),reservation,reservation);
+                Path.Combine(payload,"runtime","ffmpeg","ffmpeg.exe"),environment,reservation.Lease,reservation.BeginMutableStart,files,reservation.ObserveHealthy);
+            return new(new(head.ReleaseDigest),new ServiceProcessLauncher(spec,channels,startFault),reservation,reservation);
         }
         catch(ProbeOwnershipException owned){owned.Retain(reservation);throw;}
         catch{reservation.Dispose();throw;}
@@ -159,7 +163,7 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
             {if(depth>64)throw new IOException("INSTALLED_DEPTH");using var pinned=files.PinDirectory(path);foreach(var child in Directory.EnumerateFileSystemEntries(path)){cancellation.ThrowIfCancellationRequested();work();if((File.GetAttributes(child)&FileAttributes.ReparsePoint)!=0)throw new IOException("INSTALLED_REPARSE");if(Directory.Exists(child))Walk(child,depth+1);else{names.Add(Path.GetRelativePath(directory,child).Replace('\\','/'));if(names.Count>max)throw new IOException("INSTALLED_MEMBERS");}}}
             Walk(directory,0);return names.Order(StringComparer.Ordinal).ToArray();
         }
-        internal Action? Initialize;
+        internal Action? Initialize,CompleteInitialization;
         internal void PinData(bool initializing=false)
         {
             dataMembers=Names(Data,100001).Where(n=>n!="process.lock").ToArray();if(initializing?dataMembers.Length!=0:!dataMembers.Contains("app.sqlite"))throw new IOException("INSTALLED_DATABASE_MISSING");
@@ -195,6 +199,15 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
         {
             CheckStart(new(Release),admissionCancellation);Initialize?.Invoke();mutable=true;
             for(var i=DataPins.Count-1;i>=0;i--)DataPins[i].Dispose();DataPins.Clear(); // exclusive OS gate is continuously retained
+        }
+        internal void ObserveHealthy()
+        {
+            if(CompleteInitialization is null)return;
+            // Trusted, PID-checked ready follows Store initialization. Hold the
+            // actual DB against deletion while retiring the retry grant. This
+            // is after successful resume, never merely after requesting it.
+            using var database=WindowsFileBoundary.PinLiveDataFile(Path.Combine(Data,"app.sqlite"));
+            CompleteInitialization();CompleteInitialization=null;
         }
         public void Dispose(){if(disposed)return;disposed=true;for(var i=DataPins.Count-1;i>=0;i--)DataPins[i].Dispose();for(var i=Resources.Count-1;i>=0;i--)Resources[i].Dispose();}
     }
