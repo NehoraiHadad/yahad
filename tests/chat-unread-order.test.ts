@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { DATABASE_SCHEMA } from '../src/database-schema';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -103,7 +104,7 @@ test('read-state persists across reopen, and additive initialization does not ba
    try {
      assert.equal(unreadCount(upgraded, user, first), 0);
      assert.ok(upgraded.getMessage(f.family.familyId, first, 'persist'));
-     assert.equal(upgraded.one('SELECT version FROM schema_version').version, 5);
+     assert.equal(upgraded.one('SELECT version FROM schema_version').version, DATABASE_SCHEMA);
    } finally { upgraded.close(); }
  } finally { await f.close(); }
 });

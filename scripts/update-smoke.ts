@@ -55,7 +55,8 @@ try {
   // This is NOT a runtime downgrade or restore path.
   const legacy = new DatabaseSync(join(upgradeConfig.dataDir, 'app.sqlite'));
   try {
-    legacy.exec('UPDATE schema_version SET version=4;');
+    legacy.exec('DROP TABLE child_access; UPDATE schema_version SET version=5;');
+    if (source < 5) legacy.exec('UPDATE schema_version SET version=4;');
     if (source < 4) legacy.exec('DROP TABLE usage_calendar; UPDATE schema_version SET version=3;');
     if (source < 3) legacy.exec('DROP TABLE usage_bonus; DROP TABLE usage_leases; DROP TABLE usage_days; DROP TABLE usage_policy; DROP TABLE usage_families; UPDATE schema_version SET version=2;');
     if (source === 1)
@@ -87,7 +88,7 @@ try {
     assert.equal(login.statusCode, 200);
   } finally { await upgraded.app.close(); }
   };
-  const migrationFixtures = new Map<number, () => Promise<void>>([[1, () => migrationFixture(1)], [2, () => migrationFixture(2)], [3, () => migrationFixture(3)], [4, () => migrationFixture(4)]]);
+  const migrationFixtures = new Map<number, () => Promise<void>>([[1, () => migrationFixture(1)], [2, () => migrationFixture(2)], [3, () => migrationFixture(3)], [4, () => migrationFixture(4)], [5, () => migrationFixture(5)]]);
   for (const source of DATABASE_MIGRATIONS_FROM) {
     const fixture = migrationFixtures.get(source);
     if (!fixture) throw new Error(`No synthetic migration fixture for schema ${source}`);

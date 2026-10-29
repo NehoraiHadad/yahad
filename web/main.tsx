@@ -1923,6 +1923,7 @@ function Parent({
           onAdd={() => setAddingChild(true)} onSelect={id => { setChild(id); setCreatedChild(''); }}
           onSettings={(id, mode) => { setSettingsChild(id); setSettingsMode(mode); setSettings(true); }}
           onRetry={() => void load()} onRefresh={() => void act('/parent/sync-groups')}
+          onAccess={change => act('/parent/child-access', change, 'PUT')}
           onGrant={change => { setCreatedChild(''); return act('/parent/grant', change, 'PUT'); }}>
           <IdentitySettings key={child} childId={child} disabled={busy || overviewStale}
             value={data?.children.find(account => account.id === child)?.senderLabel || ''}

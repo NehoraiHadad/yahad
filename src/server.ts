@@ -15,6 +15,7 @@ import { timingSafeEqual, randomUUID } from 'node:crypto';
 import type { Config } from './config.js';
 import { Store, type Session } from './store.js';
 import { UsageError } from './usage.js';
+import { ChildAccessError } from './child-access.js';
 import { unreadCount, markLocallyViewed } from './chat-read-state.js';
 import { ChatService, AppError, deny } from './service.js';
 import { voiceToOpus } from './media.js';
@@ -74,7 +75,7 @@ export async function createApp(
   app.setErrorHandler((error, req, reply) => {
     const e = error as any;
     const status =
-      e instanceof AppError || e instanceof UsageError
+      e instanceof AppError || e instanceof UsageError || e instanceof ChildAccessError
         ? e.status
         : e instanceof z.ZodError
           ? 400
@@ -83,7 +84,7 @@ export async function createApp(
             : 500;
     reply.code(status).send({
       error:
-        e instanceof AppError || e instanceof UsageError
+        e instanceof AppError || e instanceof UsageError || e instanceof ChildAccessError
           ? e.code
           : status === 400
             ? 'INVALID_INPUT'
@@ -123,7 +124,10 @@ export async function createApp(
     if (req.url.split('?')[0].startsWith('/api/groups')) store.usage.require(req.session);
   });
   app.addHook('onSend', async (req, reply, payload) => {
-    if (reply.statusCode < 400 && req.url.split('?')[0].startsWith('/api/groups') && req.session) store.usage.require(req.session);
+    if (reply.statusCode < 400 && req.url.split('?')[0].startsWith('/api/groups') && req.session) {
+      if (!store.session(req.session.sid)) throw new AppError(401, 'SIGN_IN_REQUIRED');
+      store.usage.require(req.session);
+    }
     return payload;
   });
   const group = (s: Session, g: string) => { store.usage.require(s); return service.requireGroup(s.user, g); };
@@ -195,6 +199,7 @@ export async function createApp(
       .object({ name: accountNameSchema, password: z.string().max(256) }).strict()
       .parse(req.body);
     const row = store.one('SELECT * FROM users WHERE name_key=?', accountNameKey(input.name));
+    const accessRevision = row?.role === 'child' ? store.childAccess(row.family_id, row.id).revision : 0;
     if (activeLogins >= 3) throw new AppError(429, 'SLOW_DOWN');
     const credentialKey = row ? `account:${row.family_id}:${row.id}` : `unknown:${accountNameKey(input.name)}`;
     if (!credentialThrottle.reserve(credentialKey, req.ip)) {
@@ -209,6 +214,11 @@ export async function createApp(
     const authenticated = store.one('SELECT * FROM users WHERE family_id=? AND id=? AND name_key=? AND password=?',
       row.family_id, row.id, accountNameKey(input.name), row.password);
     if (!authenticated) throw new AppError(401, 'INVALID_CREDENTIALS');
+    if (authenticated.role === 'child') {
+      const access = store.childAccess(authenticated.family_id, authenticated.id);
+      if (access.paused) throw new AppError(403, 'CHILD_ACCESS_PAUSED');
+      if (access.revision !== accessRevision) throw new AppError(401, 'SIGN_IN_REQUIRED');
+    }
     if (req.cookies.sid) {
       store.usage.pauseSession(req.cookies.sid);
       store.run('DELETE FROM sessions WHERE id=?', hash(req.cookies.sid));
@@ -731,7 +741,10 @@ export async function createApp(
     return {
       children: store
         .all('SELECT id,name FROM users WHERE family_id=? AND role=?', f, 'child')
-        .map((u) => ({ ...u, senderLabel: store.identityLabel(f, u.id) })),
+        .map(u => {
+          const access = store.childAccess(f, u.id);
+          return { ...u, senderLabel: store.identityLabel(f, u.id), paused: access.paused, accessRevision: access.revision };
+        }),
       groups: store.groups(f),
       grants: store.all('SELECT user_id,group_id FROM grants WHERE family_id=?', f),
       state: service.states.get(f)?.state || 'idle',
@@ -826,6 +839,13 @@ export async function createApp(
     store.setIdentityLabel(s.user.familyId, data.childId, data.label);
     service.notify(s.user.familyId, undefined, 'identity');
     return { ok: true };
+  });
+  app.put('/api/parent/child-access', async req => {
+    parent(req.session);
+    const data = z.object({ childId: z.uuid(), paused: z.boolean(), revision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER - 1) }).strict().parse(req.body);
+    const access = store.setChildAccess(req.session.user.familyId, data.childId, data.paused, data.revision);
+    service.notify(req.session.user.familyId, undefined, 'session');
+    return { ok: true, childId: data.childId, ...access };
   });
   app.put('/api/parent/child-profile', async (req) => {
     const s = req.session;

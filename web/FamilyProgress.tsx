@@ -3,7 +3,7 @@ import React from 'react';
 import type { PickerGrant, PickerGroup } from './GroupPicker';
 import { childLabel } from './childLabels';
 
-export type FamilyChild = { id: string; name: string; senderLabel?: string };
+export type FamilyChild = { id: string; name: string; senderLabel?: string; paused?: boolean; accessRevision?: number };
 export type FamilyOverview = {
   children: FamilyChild[]; groups: PickerGroup[]; grants: PickerGrant[];
   state: string; linked?: boolean; disconnect?: string | null; disconnectHistory?: string | null;
@@ -16,7 +16,7 @@ export function familyProgress(data: FamilyOverview) {
     const granted = new Set(data.grants.filter(grant => grant.user_id === child.id).map(grant => grant.group_id));
     const groups = data.groups.filter(group => granted.has(group.id))
       .slice().sort(compareChatActivity);
-    return { ...child, groups, ready: connected && groups.length > 0 };
+    return { ...child, groups, ready: !child.paused && connected && groups.length > 0 };
   });
   const pendingChild = children.find(child => !child.groups.length);
   const next = !connected ? 'connect' : !children.length ? 'child' : pendingChild ? 'groups' : 'login';
@@ -61,7 +61,7 @@ export function ChildGroupSummary({ data, selected, busy, stale = false, onSelec
         <button type="button" className="text-button" disabled={busy} aria-pressed={selected === child.id}
           onClick={() => { onSelect(child.id); document.getElementById('family-groups')?.focus(); }}>
           בחירת שיחות עבור {childLabel(child)}</button></div>
-      <p>{child.groups.length} שיחות מאושרות · {stale ? 'ממתינים לאימות מול השרת' : child.ready ? 'מוכן לכניסה בטאבלט' : !child.groups.length ? 'נדרשת בחירת שיחות' : 'נדרש חיבור החשבון'}</p>
+      <p>{child.groups.length} שיחות מאושרות · {stale ? 'ממתינים לאימות מול השרת' : child.paused ? 'הגישה מושהית' : child.ready ? 'מוכן לכניסה בטאבלט' : !child.groups.length ? 'נדרשת בחירת שיחות' : 'נדרש חיבור החשבון'}</p>
       {!!child.groups.length && <ul className="child-group-titles" aria-label={'שיחות מאושרות עבור ' + childLabel(child)}>
         {child.groups.map(group => <li key={group.id}>{group.title}</li>)}
       </ul>}

@@ -12,7 +12,7 @@ export function migrateAccountNames(db: DatabaseSync) {
     return;
   }
   const versions = db.prepare('SELECT version FROM schema_version').all();
-  if (versions.length !== 1 || ![1, 2, 3, 4, DATABASE_SCHEMA].includes(Number(versions[0].version)))
+  if (versions.length !== 1 || ![1, 2, 3, 4, 5, DATABASE_SCHEMA].includes(Number(versions[0].version)))
     throw new Error('Unsupported database schema');
   if (Number(versions[0].version) >= 2) return;
   // Rebuilding the parent table must not cascade-delete sessions/grants. SQLite

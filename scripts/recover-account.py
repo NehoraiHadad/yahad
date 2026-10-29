@@ -12,7 +12,7 @@ import contextlib
 import re
 import unicodedata
 
-DATABASE_SCHEMA = 5
+DATABASE_SCHEMA = 6
 
 
 def account_name_key(value):

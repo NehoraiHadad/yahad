@@ -66,3 +66,11 @@ test('loopback origins are clearly marked as unusable on another device', () => 
     assert.doesNotMatch(html, /פותחים בדפדפן בטאבלט את הכתובת הזו/);
   }
 });
+
+test('paused child directs the parent to access management instead of WhatsApp connection', () => {
+  const html = render({ child: { ...child, paused: true, ready: false } });
+  assert.match(html, /הגישה לחשבון מושהית/);
+  assert.match(html, /href="#family-groups"/);
+  assert.doesNotMatch(html, /href="#family-connection"/);
+  assert.doesNotMatch(html, /החשבון מוכן לכניסה/);
+});

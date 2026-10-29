@@ -201,14 +201,17 @@ export class UsageBudgets {
     });
   }
   revokeUser(f: string, c: string) {
+    this.store.tx(() => this.revokeUserInTransaction(f, c));
+  }
+  /** Allows access policy and usage revocation to commit atomically. */
+  revokeUserInTransaction(f: string, c: string) {
+    if (!this.store.db.isTransaction) throw new Error('Usage revocation requires a transaction');
     const now = this.clock();
-    this.store.tx(() => {
-      const policy = this.store.one('SELECT cursor FROM usage_policy WHERE family_id=? AND child_id=?', f, c);
-      // Revocation must remain available during a clock rollback. Its existing
-      // high-water mark was already settled; it never grants new content time.
-      if (policy) this.settle(f, c, Math.max(now, policy.cursor));
-      this.store.run('UPDATE usage_leases SET until=0 WHERE family_id=? AND child_id=?', f, c);
-    });
+    const policy = this.store.one('SELECT cursor FROM usage_policy WHERE family_id=? AND child_id=?', f, c);
+    // Revocation must remain available during a clock rollback. Its existing
+    // high-water mark was already settled; it never grants new content time.
+    if (policy) this.settle(f, c, Math.max(now, policy.cursor));
+    this.store.run('UPDATE usage_leases SET until=0 WHERE family_id=? AND child_id=?', f, c);
   }
   restart() {
     const now = this.clock();
