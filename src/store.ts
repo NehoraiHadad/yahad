@@ -1,6 +1,7 @@
 import { conversationKind } from './conversation-id.js';
 import { DatabaseSync, backup } from 'node:sqlite';
 import { initializeChatReadState, recordUnread } from './chat-read-state.js';
+import { initializePendingReactions } from './message-reactions.js';
 import { Diagnostics } from './diagnostics.js';
 import { DATABASE_SCHEMA, USERS_TABLE, migrateAccountNames } from './db.js';
 import { migrateUsage, migrateUsageCalendar, migrateUsageAdmission } from './usage-schema.js';
@@ -86,6 +87,7 @@ export class Store {
           this.ensureGroupKey(row.family_id, row.id);
       });
       initializeChatReadState(this);
+      initializePendingReactions(this);
       this.cleanOrphans();
     } catch (error) { this.db.close(); throw error; }
   }
@@ -366,6 +368,7 @@ export class Store {
   purgeGroup(f: string, g: string) {
     const media = this.all('SELECT id FROM media WHERE family_id=? AND group_id=?', f, g);
     this.tx(() => {
+      this.run('DELETE FROM pending_message_reactions WHERE family_id=? AND group_id=?', f, g);
       this.run('DELETE FROM media WHERE family_id=? AND group_id=?', f, g);
       this.run('DELETE FROM messages WHERE family_id=? AND group_id=?', f, g);
       this.run('DELETE FROM group_keys WHERE family_id=? AND group_id=?', f, g);

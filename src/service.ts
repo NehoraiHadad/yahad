@@ -1,4 +1,5 @@
 import { conversationKind } from './conversation-id.js';
+import { applyReactions, queueReaction, pendingReactions, clearPendingReactions } from './message-reactions.js';
 import { GroupPhotoCache } from './group-photos.js';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { Store, type User } from './store.js';
@@ -22,8 +23,8 @@ export class AppError extends Error {
   }
 }
 export const deny = () => new AppError(404, 'NOT_FOUND');
-export interface PublicMessage extends Omit<StoredMessage, 'raw' | 'replyId' | 'reactions'> {
-  reply?: { id: string; text: string; sender: string };
+export interface PublicMessage extends Omit<StoredMessage, 'raw' | 'replyId' | 'reactions' | 'reactionTimes'> {
+  reply?: { id: string; text: string; sender: string; available?: boolean };
   reactions: { emoji: string; count: number; mine: boolean }[];
 }
 export class ChatService {
@@ -262,17 +263,17 @@ export class ChatService {
     if (!active() || !this.store.retained(f, g)) return;
     if (input.reaction && !input.restricted) {
       const target = this.store.getMessage(f, g, input.reaction.target);
-      if (!target || target.deleted || target.restricted) return;
-      const actor = input.reaction.actor;
-      const reactions = { ...target.reactions };
-      if (input.reaction.emoji) reactions[actor] = input.reaction.emoji.slice(0, 24);
-      else delete reactions[actor];
-      this.update(f, g, target.id, { reactions });
+      const event={...input.reaction,time:input.reaction.time??input.time};
+      if (!target) { queueReaction(this.store,f,g,event); return; }
+      if (target.deleted || target.restricted) return;
+      applyReactions(target,[event]);
+      this.store.putMessage(f,target,false);this.notify(f,g);
       return;
     }
     const existing = this.store.getMessage(f, g, input.id);
     if (existing?.deleted) return;
     if (input.restricted) {
+      clearPendingReactions(this.store,f,g,input.id);
       if (existing?.mediaId) this.store.deleteMedia(f, g, existing.mediaId);
       this.store.putMessage(f, { id: input.id, groupId: g, sender: existing?.sender || input.sender.slice(0,80),
         fromMe: existing?.fromMe ?? input.fromMe, time: existing?.time ?? Date.now(),
@@ -282,7 +283,7 @@ export class ChatService {
       return;
     }
     if (input.deleted) {
-      if (existing) this.update(f, g, input.id, { deleted: true, text: '' });
+      this.update(f, g, input.id, { deleted: true, text: '' });
       return;
     }
     // Never recover content that a prior provider envelope marked temporary.
@@ -291,9 +292,23 @@ export class ChatService {
       this.update(f, g, input.id, { text: input.text, edited: true, raw: input.raw });
       return;
     }
+    if (existing?.edited && !input.edited) {
+      // An edit can arrive before its original. Recover original ordering and
+      // sender metadata without replacing the edited content with old history.
+      if (input.raw && Number.isFinite(input.time) && input.time < existing.time) {
+        this.store.putMessage(f,{...existing,time:Math.max(0,input.time),sender:input.sender.slice(0,80)},false);
+        this.notify(f,g);
+      }
+      return;
+    }
     const repairMissingMedia=existing&&!existing.mediaId&&['sticker','image','video','audio','document'].includes(input.kind)&&
       (existing.kind===input.kind||(existing.kind==='text'&&!existing.text))&&!!(input.bytes||input.download);
     const explainLegacyBlank=existing?.kind==='text'&&!existing.text&&input.kind==='unsupported'&&!!input.text;
+    if (existing && input.historicalReactions?.length) {
+      applyReactions(existing,input.historicalReactions);
+      this.store.putMessage(f,existing,false);
+      this.notify(f,g);
+    }
     if (
       existing &&
       !repairMissingMedia && !explainLegacyBlank &&
@@ -312,6 +327,8 @@ export class ChatService {
       }
     }
     if (!active() || !this.store.retained(f, g) || this.store.groupKey(f, g).toString('hex') !== key) return;
+    const current=this.store.getMessage(f,g,input.id);
+    if(current?.deleted || current?.restricted || current?.edited && !input.edited)return;
     const m: StoredMessage = {
       id: input.id,
       groupId: g,
@@ -332,17 +349,19 @@ export class ChatService {
           ? existing.status
           : input.status || 'unknown',
       reactions: existing?.reactions || {},
+      reactionTimes: existing?.reactionTimes,
       raw: input.kind === 'unsupported' ? undefined : input.raw,
       clientId: existing?.clientId,
       authorUserId: existing?.authorUserId,
       authorLabel: existing?.authorLabel,
       edited: input.edited,
-      replyId:
-        input.replyId && this.store.getMessage(f, g, input.replyId) ? input.replyId : undefined,
+      replyId: input.replyId && input.replyId.length<=180 && input.replyId!==input.id ? input.replyId : undefined,
       mime: input.mime,
       filename: input.filename?.replace(/[\r\n\\/]/g, '_').slice(0, 160),
     };
+    applyReactions(m,[...pendingReactions(this.store,f,g,m.id),...(input.historicalReactions||[])]);
     this.store.putMessage(f, m, !input.history);
+    clearPendingReactions(this.store,f,g,m.id);
     if (bytes && bytes.length <= this.store.config.maxMedia) {
       const mediaId = randomUUID();
       try {
@@ -362,7 +381,10 @@ export class ChatService {
           'audio/webm',
           'video/webm',
         ];
-        m.mime = (type?.mime || 'application/octet-stream').split(';')[0];
+        const latest=this.store.getMessage(f,g,m.id);
+        if (!latest || latest.deleted || latest.restricted || latest.mediaId || latest.kind!==input.kind)return;
+        Object.assign(m,latest);
+        m.mime=(type?.mime || 'application/octet-stream').split(';')[0];
         if(m.kind==='sticker'&&m.mime!=='image/webp'){
           m.kind='unsupported';m.text='המדבקה אינה בקובץ WebP נתמך — אפשר לפתוח אותה ב־WhatsApp.';m.raw=undefined;m.mime=undefined;
           this.store.putMessage(f,m);this.notify(f,g);return;
@@ -381,8 +403,11 @@ export class ChatService {
     this.notify(f, g);
   }
   update(f: string, g: string, id: string, patch: Partial<StoredMessage>) {
-    const m = this.store.getMessage(f, g, id);
-    if (!m) return;
+    let m = this.store.getMessage(f, g, id);
+    if (!m) {
+      if (!patch.deleted || !this.store.retained(f,g)) return;
+      m={id,groupId:g,sender:'',fromMe:false,time:Date.now(),kind:'text',text:'',status:'unknown',reactions:{}};
+    }
     const allowed: Partial<StoredMessage> = {};
     for (const k of ['text', 'edited', 'deleted', 'status', 'reactions', 'raw'] as const)
       if (patch[k] !== undefined && (!m.restricted || k === 'deleted' || k === 'status'))
@@ -408,13 +433,15 @@ export class ChatService {
       m.raw = undefined;
       m.mediaId = undefined;
       m.reactions = {};
+      m.reactionTimes = undefined;
       m.replyId = undefined;
+      clearPendingReactions(this.store,f,g,id);
     }
     this.store.putMessage(f, m);
     this.notify(f, g);
   }
   public(f: string, m: StoredMessage): PublicMessage {
-    const { raw, replyId, reactions, ...safe } = m;
+    const { raw, replyId, reactions, reactionTimes, ...safe } = m;
     const target = replyId ? this.store.getMessage(f, m.groupId, replyId) : undefined;
     const aggregated = new Map<string, { emoji: string; count: number; mine: boolean }>();
     for (const [actor, emoji] of Object.entries(reactions)) {
@@ -426,12 +453,13 @@ export class ChatService {
     return {
       ...safe,
       reactions: [...aggregated.values()],
-      ...(target && !target.deleted
+      ...(replyId
         ? {
             reply: {
-              id: target.id,
-              text: target.text.slice(0, 100) || 'קובץ מצורף',
-              sender: target.sender,
+              id: replyId,
+              text: target && !target.deleted && !target.restricted ? target.text.slice(0,100) || 'קובץ מצורף' : 'ההודעה המקורית אינה זמינה',
+              sender: target && !target.deleted && !target.restricted ? target.sender : '',
+              available: !!target && !target.deleted && !target.restricted,
             },
           }
         : {}),

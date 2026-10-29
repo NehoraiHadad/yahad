@@ -1,5 +1,6 @@
 export type Kind = 'text' | 'image' | 'video' | 'document' | 'sticker' | 'audio' | 'unsupported';
 export type Receipt = 'pending' | 'sent' | 'delivered' | 'read' | 'unknown' | 'failed';
+export interface ReactionUpdate { target: string; actor: string; emoji: string; time?: number }
 export interface Capabilities {
   reply: boolean;
   reactions: boolean;
@@ -42,7 +43,8 @@ export interface Incoming {
   status?: Receipt;
   edited?: boolean;
   deleted?: boolean;
-  reaction?: { target: string; actor: string; emoji: string };
+  reaction?: ReactionUpdate;
+  historicalReactions?: ReactionUpdate[];
 }
 export interface StoredMessage {
   restricted?: boolean;
@@ -61,6 +63,7 @@ export interface StoredMessage {
   edited?: boolean;
   deleted?: boolean;
   reactions: Record<string, string>;
+  reactionTimes?: Record<string, number>;
   raw?: string;
   clientId?: string;
   authorUserId?: string;

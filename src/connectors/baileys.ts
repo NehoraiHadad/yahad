@@ -2,6 +2,7 @@ import { conversationKind } from '../conversation-id.js';
 import { fetchGroupPhoto } from '../group-photos.js';
 import { IngestionQueue } from './ingestion.js';
 import { restrictedContent } from './message-retention.js';
+import { editedEnvelope, historicalReactions, reactionActor, reactionTime } from './message-updates.js';
 import makeWASocket, {
   BufferJSON,
   initAuthCreds,
@@ -118,6 +119,8 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
     kind: 'unsupported',
     text: 'סוג הודעה זה עדיין אינו נתמך',
     status: receipt(raw.status),
+    edited: editedEnvelope(raw.message) || undefined,
+    historicalReactions: restricted ? undefined : historicalReactions(raw),
     raw: restricted ? undefined : stringify(stripEmbeddedContext(raw)),
   };
   if (restricted) {
@@ -136,8 +139,9 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
       text: '',
       reaction: {
         target: r.key?.id || '',
-        actor: raw.key.fromMe ? 'self' : raw.key.participant || 'unknown',
+        actor: reactionActor(raw.key,groupId),
         emoji: r.text || '',
+        time: reactionTime(r.senderTimestampMs,base.time),
       },
     };
   }
@@ -456,8 +460,9 @@ export class BaileysConnector implements Connector {
             text: '',
             reaction: {
               target: key.id || '',
-              actor: reaction.key?.fromMe ? 'self' : reaction.key?.participant || 'unknown',
+              actor: reactionActor(reaction.key,key.remoteJid),
               emoji: reaction.text || '',
+              time: reactionTime(reaction.senderTimestampMs,Date.now()),
             },
           })
           .catch(() => {});
