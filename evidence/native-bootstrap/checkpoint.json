@@ -1,0 +1,70 @@
+{
+  "launcherBytes": 490496,
+  "launcherSha256": "726ee0014bc91a395b72ca85962b3eba388c3bce57999d20c8aea82e12c4a7f2",
+  "payload": {
+    "version": "0.5.3",
+    "sourceCommit": "97b7ab4ae9c4b0a303c8cee10fe48d4a95222108",
+    "bytes": 290334518,
+    "sha256": "0ae76fb89c2df50ad68cc1b635d06003a893b5613f01aa9b9a4ba146269edf37",
+    "url": null,
+    "distributionConfigured": false,
+    "profile": "loopback-mock",
+    "offlineArtifactPreserved": true
+  },
+  "nativeImage": {
+    "machine": "AMD64",
+    "imports": [
+      "winhttp.dll",
+      "bcrypt.dll",
+      "shell32.dll",
+      "ole32.dll",
+      "advapi32.dll",
+      "comctl32.dll",
+      "gdi32.dll",
+      "user32.dll",
+      "api-ms-win-crt-heap-l1-1-0.dll",
+      "api-ms-win-crt-private-l1-1-0.dll",
+      "api-ms-win-crt-runtime-l1-1-0.dll",
+      "api-ms-win-crt-stdio-l1-1-0.dll",
+      "api-ms-win-crt-string-l1-1-0.dll",
+      "kernel32.dll",
+      "api-ms-win-crt-math-l1-1-0.dll",
+      "api-ms-win-crt-environment-l1-1-0.dll",
+      "api-ms-win-crt-convert-l1-1-0.dll",
+      "api-ms-win-crt-locale-l1-1-0.dll",
+      "api-ms-win-crt-time-l1-1-0.dll",
+      "api-ms-win-crt-multibyte-l1-1-0.dll"
+    ],
+    "initialDllSearchFlags": 2048,
+    "asInvoker": true,
+    "aslr": true,
+    "nx": true,
+    "highEntropyVa": true,
+    "privateRuntimeRequired": false
+  },
+  "hostInstallExecuted": false,
+  "compiler": "0.15.2",
+  "tests": {
+    "syntheticPassed": 39,
+    "syntheticFailed": 0,
+    "emptyPathAndContaminatedHooks": true,
+    "harmlessChildOnly": true,
+    "nativeHttps": {
+      "nativeHttpsVerified": true,
+      "cancelAndRetry": true,
+      "bytes": 92614574,
+      "source": "official-zig-0.15.2",
+      "downloadExecuted": false,
+      "actualProductHostingTested": false
+    },
+    "actualProductHostingTested": false,
+    "actualServiceInstallTested": false,
+    "realWhatsAppEnabled": false,
+    "modelSettingExposed": false
+  },
+  "testBinarySha256": {
+    "Yahad.Bootstrap.Tests.exe": "ef2086d439d1b4ba9d4b4c6f52c994f6467248044e71979c7a512251f00f73d6",
+    "Yahad.Http.Probe.exe": "96ad80ad70e0772ab8c78cff786953bcd091e96ecfb6a8dede82f61305018e02",
+    "Yahad.Harmless.Child.exe": "5829e505b018e2c13b04cd2342ac25c3e2b2143549a146974b3841af57ab2824"
+  }
+}

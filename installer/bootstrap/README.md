@@ -1,0 +1,78 @@
+# Native web installer
+
+Windows x64 native C++/Win32 launcher. It has no .NET, Node, Python, WebView or
+Visual C++ redistributable prerequisite. All imported DLLs must be stock Windows
+components; the C++ support libraries are linked statically. Build tooling is
+not installed on the family's computer.
+
+The launcher downloads the preserved full first-install EXE, not individual
+uncoordinated dependencies. This preserves the tested service installer and its
+single UAC step. Downloading does not require elevation. The existing installer
+shows installation/startup progress and opens the existing web onboarding.
+Closing that installer is not reported as observed installation success.
+
+## Distribution gate
+
+`payload-pin.json` identifies exactly the preserved 97b7ab4 offline installer:
+version 0.5.3, 290334518 bytes and SHA256
+`0ae76fb89c2df50ad68cc1b635d06003a893b5613f01aa9b9a4ba146269edf37`.
+No public upload or URL has been authorized. The default native artifact clearly
+shows that distribution is unconfigured and disables download. It never guesses
+a release URL or downloads a different/latest version. An authorized publisher
+must supply the immutable HTTPS URL to `build.py --payload-url` and verify the
+actual hosted bytes before linking the launcher from the landing page.
+
+The URL is compiled into an internal PE resource; no user-supplied URL, sidecar manifest, environment
+override, CLI payload override or unsigned remote version selection is accepted.
+Redirects are at most three, HTTPS only, same host; GitHub release downloads may
+also redirect to exactly release-assets.githubusercontent.com. Certificate
+validation is never disabled. Default Windows proxy configuration is used;
+automatic logon is disabled and proxy authentication errors have a useful message.
+
+## Integrity and cancellation
+
+Download and verification stream through bounded buffers. Content length, if
+provided, must match; EOF length and SHA256 must always match. Oversize, truncated,
+corrupt, unapproved redirect and HTTP-error responses never execute. Cancellation
+is checked around blocking calls and chunks; a blocked network call can take its
+configured timeout to return (5-second resolve/connect, 10-second send/receive).
+There is also a one-hour transfer deadline. Retry starts a fresh private file.
+
+Temporary directories are randomly named under the user's LocalAppData/Temp.
+They have a protected current-user/System DACL at creation. Ancestor directory
+handles reject reparse points and prevent rename while in use. The sealed file
+is opened read-only with no write/delete sharing, checked for links, rehashed,
+and held through the existing installer's process lifetime. Only the exact
+verified path is passed to CreateProcess; its environment is an explicit small
+whitelist without Node/.NET/Python hooks or development PATH entries.
+
+Cancellation applies to download/verification, not a running service install.
+Once the existing installer starts, its own UI owns installation and cancellation.
+Closing the download window does not kill that installer. Normal completion
+removes the tracked temporary EXE and empty directory. A crash or antivirus lock
+can leave public installer bytes in this private cache; no recursive cleanup or
+deletion of unrelated files is performed. No family data or credentials are
+downloaded or created by the bootstrap.
+
+## Scope and evidence
+
+The preserved payload is loopback-only with mocked WhatsApp, explicitly labeled
+in the UI. This launcher does not silently change that behavior or install a
+provider. Existing real WhatsApp opt-in remains a separate uncompleted step.
+No service registration, persistent machine permissions, firewall, certificates,
+network listener or public distribution is performed by the bootstrap tests.
+
+Tests use the same download/hash/file/launch code with synthetic readers and a
+harmless native child in a private test directory. The optional HTTP probe uses
+the same real WinHTTP intake on an exact official, hash-pinned Zig archive; it
+never executes the downloaded ZIP and is not proof of product hosting or service
+installation. Test programs are not distribution artifacts.
+
+Run `build.py` with an absolute verified portable Zig compiler and output folder.
+The checked source pins Zig 0.15.2 provenance separately; no compiler is embedded
+in the launcher. Review static support-library notices and the offline payload's
+existing source/license obligations, code signing and clean-host acceptance
+before public distribution. No new signing keys or trust enrollment are created.
+The native bootstrap includes the LLVM license/exception and MinGW copying text
+as an embedded resource, also available with the non-installing `--notices` mode.
+
