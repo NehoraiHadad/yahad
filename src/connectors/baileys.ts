@@ -3,6 +3,8 @@ import { fetchGroupPhoto } from '../group-photos.js';
 import { IngestionQueue } from './ingestion.js';
 import { restrictedMessage, restrictedStoredMessage, temporaryMessageText } from './message-retention.js';
 import { editedEnvelope, historicalReactions, reactionActor, reactionTime } from './message-updates.js';
+import { normalizeSharedContent } from './shared-content.js';
+import { readOnlyKind } from '../rich-content.js';
 import { normalizePoll } from './poll-content.js';
 import makeWASocket, {
   BufferJSON,
@@ -112,6 +114,7 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
   if (!content) return;
   const restricted = restrictedMessage(raw);
   const poll=!restricted && !content.protocolMessage && !content.reactionMessage ? normalizePoll(content) : undefined;
+  const shared=!restricted && !content.protocolMessage && !content.reactionMessage ? normalizeSharedContent(content) : undefined;
   const base: Incoming = {
     id,
     groupId,
@@ -123,7 +126,7 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
     status: receipt(raw.status),
     edited: editedEnvelope(raw.message) || undefined,
     historicalReactions: restricted ? undefined : historicalReactions(raw),
-    raw: restricted || poll ? undefined : stringify(stripEmbeddedContext(raw)),
+    raw: restricted || poll || shared ? undefined : stringify(stripEmbeddedContext(raw)),
   };
   if(base.edited)base.editTime=base.time;
   if (restricted) {
@@ -134,6 +137,7 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
       text: temporaryMessageText };
   }
   if(poll)return {...base,...poll};
+  if(shared)return {...base,...shared};
   if (content.reactionMessage) {
     const r = content.reactionMessage;
     if (r.key?.remoteJid && r.key.remoteJid !== groupId) return;
@@ -250,6 +254,9 @@ export async function incomingMediaStream(raw:WAMessage,reuploadRequest:WASocket
 }
 export class BaileysConnector implements Connector {
   readonly capabilities: Capabilities = {
+    contacts:{display:true,send:false},
+    location:{display:true,live:false,send:false},
+    roundVideo:{receive:true,send:false},
     polls: {identify:true,display:true,create:false,vote:false,results:false},
     reply: true,
     reactions: true,
@@ -509,7 +516,7 @@ export class BaileysConnector implements Connector {
     return parse(m.raw!).key;
   }
   originalAvailable(m: StoredMessage) {
-    if (!m.raw || m.deleted || restrictedStoredMessage(m) || m.kind==='unsupported' || m.kind==='poll') return false;
+    if (!m.raw || m.deleted || restrictedStoredMessage(m) || m.kind==='unsupported' || readOnlyKind(m.kind)) return false;
     try {
       const original=parse(m.raw);
       return !!original.message && original.key?.id===m.id && original.key?.remoteJid===m.groupId;
@@ -535,6 +542,7 @@ export class BaileysConnector implements Connector {
   }
   async send(m: Outgoing) {
     if((m.kind as string)==='poll')throw new Error('Poll sending unavailable');
+    if(readOnlyKind(m.kind))throw new Error('Shared content sending unavailable');
     if (m.reply && !this.originalAvailable(m.reply)) throw new Error('Original message unavailable');
     const sock = this.require();
     const content: any =

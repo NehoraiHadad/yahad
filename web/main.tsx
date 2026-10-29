@@ -1,3 +1,5 @@
+import {SharedContentMessage} from './SharedContentMessage';
+import {readOnlyKind} from '../src/rich-content';
 import { compareChatActivity } from './chatOrder';
 import { newClientId as newId } from './clientId';
 import { useVisibleChatRead } from './useVisibleChatRead';
@@ -1195,7 +1197,7 @@ function Message({
       <div className={'bubble ' + (m.kind === 'sticker' ? 'sticker-bubble' : '')}>
         <div className="bubble-top">
           {!m.fromMe && <b className="sender">{m.sender}</b>}
-          {!m.deleted && m.kind!=='poll' && (
+          {!m.deleted && !readOnlyKind(m.kind) && (
             <IconButton className="message-menu-button" label="פעולות בהודעה" onClick={onMenu}>
               <MoreHorizontal size={17} />
             </IconButton>
@@ -1211,6 +1213,7 @@ function Message({
           <p className="deleted">ההודעה נמחקה</p>
         ) : (
           <>
+            {(m.kind==='contact'||m.kind==='location') && <SharedContentMessage text={m.text}/>}
             {m.kind==='poll' && <PollMessage question={m.text} options={m.poll?.options}/>}
             {url && (m.kind === 'image' || m.kind === 'sticker') && (
               <MessageImage key={url} url={url} sticker={m.kind==='sticker'} alt={m.kind==='sticker'?'מדבקה':m.text||'תמונה שנשלחה בשיחה'}/>
@@ -1238,13 +1241,13 @@ function Message({
                 <Download size={19} />
               </a>
             )}
-            {!url && m.kind !== 'text' && m.kind !== 'unsupported' && m.kind!=='poll' && (
+            {!url && m.kind !== 'text' && m.kind !== 'unsupported' && !readOnlyKind(m.kind) && (
               <p className="media-missing">
                 <AlertCircle size={15} /> המדיה לא נשמרה או שכבר אינה זמינה
               </p>
             )}
             {!url&&!m.text&&(m.kind==='text'||m.kind==='unsupported')&&<p className="media-missing" role="status">תוכן ההודעה אינו זמין בתצוגה הזאת.</p>}
-            {m.text && m.kind!=='poll' && (
+            {m.text && !readOnlyKind(m.kind) && (
               <p className="message-text" dir="auto">
                 {m.text}
               </p>

@@ -1,3 +1,4 @@
+import {readOnlyKind,sharedText} from './rich-content.js';
 import { conversationKind } from './conversation-id.js';
 import { applyReactions, queueReaction, pendingReactions, clearPendingReactions } from './message-reactions.js';
 import { messageActions } from './message-actions.js';
@@ -266,6 +267,12 @@ export class ChatService {
   async ingest(f: string, input: Incoming, active: () => boolean = () => true) {
     const g = input.groupId;
     if (!active() || !this.store.retained(f, g)) return;
+    if(readOnlyKind(input.kind) && input.kind!=='poll' && !input.restricted){
+      const text=sharedText(input.text);
+      input={...input,kind:text?input.kind:'unsupported',text:text||'פרטי ההודעה אינם זמינים לתצוגה.',
+        unsupportedReason:text?undefined:'content-variant',raw:undefined,bytes:undefined,download:undefined,
+        mime:undefined,filename:undefined,replyId:undefined,poll:undefined};
+    }
     if(input.kind==='poll' && !input.restricted){
       const display=pollDisplay(input.text,input.poll?.options);
       input={...input,kind:display?'poll':'unsupported',text:display?.text||invalidPollText,poll:display?.poll,
@@ -302,13 +309,13 @@ export class ChatService {
     if (input.edited && existing) {
       const editTime=boundedEditTime(input.editTime??input.time);
       if(editTime<(existing.editTime??0))return;
-      if(input.kind==='unsupported' || input.kind==='poll' || existing.kind==='poll'){
+      if(input.kind==='unsupported' || readOnlyKind(input.kind) || readOnlyKind(existing.kind)){
         if(existing.mediaId)this.store.deleteMedia(f,g,existing.mediaId);
-        const mismatched=existing.kind==='poll' && input.kind!=='poll' && input.kind!=='unsupported';
-        this.store.putMessage(f,{...existing,kind:input.kind==='poll'?'poll':'unsupported',
-          text:mismatched?'עדכון לסקר בפורמט שלא אומת אינו מוצג כאן. אפשר לפתוח אותו ב־WhatsApp.':input.text.slice(0,65536),
-          poll:input.kind==='poll'?input.poll:undefined,raw:undefined,mediaId:undefined,
-          replyId:undefined,mime:undefined,filename:undefined,unsupportedReason:mismatched?'poll-variant':input.unsupportedReason,edited:true,editTime},false);
+        const mismatched=readOnlyKind(existing.kind) && input.kind!==existing.kind && input.kind!=='unsupported';
+        this.store.putMessage(f,{...existing,kind:!mismatched&&readOnlyKind(input.kind)?input.kind:'unsupported',
+          text:mismatched?'עדכון לפורמט הודעה שונה אינו מוצג כאן. אפשר לפתוח ב־WhatsApp.':input.text.slice(0,65536),
+          poll:!mismatched&&input.kind==='poll'?input.poll:undefined,raw:undefined,mediaId:undefined,
+          replyId:undefined,mime:undefined,filename:undefined,unsupportedReason:mismatched?'content-variant':input.unsupportedReason,edited:true,editTime},false);
         this.notify(f,g);return;
       }
       this.update(f, g, input.id, { text: input.text.slice(0,65536), edited: true, editTime,
@@ -319,7 +326,7 @@ export class ChatService {
       if(input.historicalReactions?.length)applyReactions(existing,input.historicalReactions);
       // An edit can arrive before its original. Recover original ordering and
       // sender metadata without replacing the edited content with old history.
-      if ((input.raw || input.kind==='poll') && Number.isFinite(input.time) && input.time <= existing.time) {
+      if ((input.raw || readOnlyKind(input.kind)) && Number.isFinite(input.time) && input.time <= existing.time) {
         this.store.putMessage(f,{...existing,time:Math.max(0,input.time),sender:input.sender.slice(0,80),
           raw:rawAtOriginalTime(existing.raw,input.time,input.raw),originalTimeKnown:true},false);
         this.notify(f,g);
@@ -330,7 +337,7 @@ export class ChatService {
       (existing.kind===input.kind||(existing.kind==='text'&&!existing.text))&&!!(input.bytes||input.download);
     const explainLegacyBlank=existing?.kind==='text'&&!existing.text&&input.kind==='unsupported'&&!!input.text;
     const explainUnsupported=existing?.kind==='unsupported'&&input.kind==='unsupported'&&!!input.unsupportedReason&&existing.unsupportedReason!==input.unsupportedReason;
-    const upgradePoll=existing?.kind==='unsupported'&&input.kind==='poll'&&(!existing.unsupportedReason||existing.unsupportedReason==='poll');
+    const upgradeDisplay=existing?.kind==='unsupported'&&readOnlyKind(input.kind);
     if (existing && input.historicalReactions?.length) {
       applyReactions(existing,input.historicalReactions);
       this.store.putMessage(f,existing,false);
@@ -338,10 +345,10 @@ export class ChatService {
     }
     if (
       existing &&
-      !repairMissingMedia && !explainLegacyBlank && !explainUnsupported && !upgradePoll &&
+      !repairMissingMedia && !explainLegacyBlank && !explainUnsupported && !upgradeDisplay &&
       existing.status !== 'pending' &&
       existing.status !== 'failed' &&
-      (!input.fromMe || !!existing.raw || existing.kind==='poll')
+      (!input.fromMe || !!existing.raw || readOnlyKind(existing.kind))
     )
       return;
     const key = this.store.groupKey(f, g).toString('hex');
@@ -380,7 +387,7 @@ export class ChatService {
           : input.status || 'unknown',
       reactions: previous?.reactions || {},
       reactionTimes: previous?.reactionTimes,
-      raw: input.kind === 'unsupported' || input.kind==='poll' ? undefined : input.raw || previous?.raw,
+      raw: input.kind === 'unsupported' || readOnlyKind(input.kind) ? undefined : input.raw || previous?.raw,
       clientId: previous?.clientId,
       authorUserId: previous?.authorUserId,
       authorLabel: previous?.authorLabel,
@@ -488,6 +495,8 @@ export class ChatService {
     }
     return {
       ...safe,
+      ...((m.kind==='contact'||m.kind==='location')&&!m.deleted&&!m.restricted&&!sharedText(m.text)?
+        {kind:'unsupported' as const,text:'פרטי ההודעה אינם זמינים לתצוגה.',unsupportedReason:'content-variant' as const}:{}),
       ...(m.kind==='poll'&&!m.deleted&&!m.restricted ? display ? {poll:display.poll} : {kind:'unsupported' as const,text:invalidPollText,unsupportedReason:'poll-invalid' as const} : {}),
       actions:messageActions(m,this.connectors.get(f)),
       reactions: [...aggregated.values()],

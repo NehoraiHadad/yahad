@@ -16,7 +16,10 @@ Scope: local fixes based on Yahad 0.5.3, integrated commit `0bf1e9d4d71221fcb77c
 | Poll V4/V5, quiz/image variants and image options | Specific unsupported-variant explanation; no question, answer or media projection | Not enabled |
 | Poll vote / result snapshot | Recognized with an explicit unavailable-details explanation | No inferred vote counts, results, or “zero votes” |
 | Round video (PTV) | Received through existing video player, subject to media availability, MIME, size and codec limits; conflicting PTV/media fields rejected | Recording/sending as a round video not added |
-| Contact cards, location/live location, Lottie, business interactive types | Remain unsupported | Not added in this change |
+| Contact cards / arrays | Receive-only text: bounded vCard FN/TEL subset (name and phone numbers), no raw/card import, photos, links or notes | Sending/importing contacts not enabled |
+| Static location | Receive-only name, address and explicit finite coordinates as text; no map/URL/thumbnail load | Sharing a location not enabled |
+| Live location | Explicit unavailable-tracking explanation, no coordinate projection | Not enabled |
+| Lottie, business interactive types and unverified envelopes | Remain unsupported | Not enabled |
 
 The public DTO includes optional per-message `actions` so the UI does not offer an action that the API cannot perform. The API is authoritative, including for old clients. Raw payloads, reaction timestamps, edit timestamps and original-time bookkeeping are not exposed in the public DTO. `mine` for reactions still means the linked family WhatsApp account, not an individual child.
 
@@ -74,3 +77,11 @@ node node_modules/vite/bin/vite.js build
 ```
 
 Run results and environment-specific limits are recorded in `evidence/message-support-audit/`. No live WhatsApp or real family data was used. Changes are local commits only and have not been pushed, installed or published.
+
+### Contact and location display
+
+Contact display accepts vCard 2.1/3.0/4.0 FN/TEL text fields, basic line folding and escaped punctuation. It intentionally rejects encoded FN/TEL fields (including quoted-printable/base64), missing phone/name, duplicate FN, malformed cards and phone values outside the plain display subset. Limits: 16 contacts, 16 KiB per input card, 256 code units per name, eight distinct phone numbers per card and 80 code units per phone; total projected text is at most 16,384 code units. Unsupported cards keep a specific explanation and discard raw. No contact is imported into an address book.
+
+Static locations require explicit latitude and longitude fields, finite values in [-90,90]/[-180,180], a name <=256 and address <=1,024 code units. Missing protobuf fields cannot silently turn into (0,0). Location URLs, thumbnails, context, speed and other metadata are not retained. A live-location envelope or isLive flag receives an explicit tracking-unavailable explanation without coordinates.
+
+These kinds retain only plain text in the existing encrypted message body. The service strips raw/media/download/reply payloads again; the public projection and React renderer bound text and escape it. Temporary markers, including per-card expiration in an array, still run before projection. Existing family/conversation/child access gates apply. Generic placeholders can upgrade only upon fresh authorized provider redelivery. Receive-only kinds are excluded from outgoing types and per-message actions at UI/API/connector levels. Edits cannot smuggle a different format or poll metadata into them; deletion and restriction remain irreversible across replay.

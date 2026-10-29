@@ -1,3 +1,4 @@
+import {readOnlyKind} from './rich-content.js';
 import Fastify from 'fastify';
 import { CredentialThrottle } from './credential-throttle.js';
 import { performance } from 'node:perf_hooks';
@@ -166,7 +167,7 @@ export async function createApp(
   };
   const requireOriginal = (s: Session,m: StoredMessage) => {
     const c=service.connector(s.user.familyId);
-    if (m.restricted || m.kind==='unsupported' || m.kind==='poll' || c.originalAvailable && !c.originalAvailable(m))
+    if (m.restricted || m.kind==='unsupported' || readOnlyKind(m.kind) || c.originalAvailable && !c.originalAvailable(m))
       throw new AppError(409,'ORIGINAL_UNAVAILABLE');
   };
   let settingUp = false;

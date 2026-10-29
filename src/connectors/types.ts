@@ -1,9 +1,12 @@
-export type Kind = 'text' | 'image' | 'video' | 'document' | 'sticker' | 'audio' | 'poll' | 'unsupported';
-export type SendKind=Exclude<Kind,'poll'>;
+export type Kind = 'text' | 'image' | 'video' | 'document' | 'sticker' | 'audio' | 'poll' | 'contact' | 'location' | 'unsupported';
+export type SendKind=Exclude<Kind,'poll'|'contact'|'location'>;
 export interface PollOptions {options:string[]}
 export type Receipt = 'pending' | 'sent' | 'delivered' | 'read' | 'unknown' | 'failed';
 export interface ReactionUpdate { target: string; actor: string; emoji: string; time?: number }
 export interface Capabilities {
+  contacts?: {display:boolean;send:boolean};
+  location?: {display:boolean;live:boolean;send:boolean};
+  roundVideo?: {receive:boolean;send:boolean};
   polls?: { identify: boolean; display?: boolean; create: boolean; vote: boolean; results: boolean };
   reply: boolean;
   reactions: boolean;
@@ -37,7 +40,7 @@ export interface Incoming {
   time: number;
   kind: Kind;
   text: string;
-  unsupportedReason?: 'poll' | 'poll-vote' | 'poll-results' | 'poll-variant' | 'poll-invalid';
+  unsupportedReason?: 'poll' | 'poll-vote' | 'poll-results' | 'poll-variant' | 'poll-invalid' | 'contact-variant' | 'location-invalid' | 'live-location' | 'content-variant';
   poll?: PollOptions;
   replyId?: string;
   mime?: string;
@@ -61,7 +64,7 @@ export interface StoredMessage {
   time: number;
   kind: Kind;
   text: string;
-  unsupportedReason?: 'poll' | 'poll-vote' | 'poll-results' | 'poll-variant' | 'poll-invalid';
+  unsupportedReason?: 'poll' | 'poll-vote' | 'poll-results' | 'poll-variant' | 'poll-invalid' | 'contact-variant' | 'location-invalid' | 'live-location' | 'content-variant';
   poll?: PollOptions;
   replyId?: string;
   mediaId?: string;

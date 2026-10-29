@@ -29,6 +29,8 @@ export function restrictedContent(message: proto.IMessage | null | undefined, de
     if (value && typeof value === 'object' &&
       ((value as any).viewOnce || (value as any).contextInfo?.expiration)) return true;
   }
+  const contacts=message.contactsArrayMessage?.contacts;
+  if(contacts?.some(body=>body?.contextInfo?.expiration || (body as any)?.viewOnce))return true;
   for (const field of wrappers)
     if (message[field] && restrictedContent(message[field]?.message, depth + 1)) return true;
   return restrictedContent(message.protocolMessage?.editedMessage, depth + 1);
