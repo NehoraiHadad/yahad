@@ -557,7 +557,11 @@ export class BaileysConnector implements Connector {
   }
   async edit(g: string, m: StoredMessage, text: string) {
     await this.require().sendMessage(g, { text, edit: this.key(m), linkPreview: null });
-    this.hooks.update(g, m.id, { text, edited: true });
+    // Subsequent quotes must contain the edited text, even before the echo.
+    // Preserve original key/time metadata, never restore the prior body.
+    const original=parse(m.raw!);
+    original.message={conversation:text};
+    this.hooks.update(g, m.id, { text, edited: true, editTime:Math.floor(Date.now()/1000)*1000, raw:stringify(original) });
   }
   async delete(g: string, m: StoredMessage) {
     await this.require().sendMessage(g, { delete: this.key(m) });

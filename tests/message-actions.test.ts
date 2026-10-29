@@ -6,6 +6,19 @@ import {validReaction} from '../src/message-actions.js';
 import {raw,fixture,group,other} from './helpers/message-fixture.js';
 const poll={name:'Synthetic question',options:[{optionName:'A'},{optionName:'B'}],selectableOptionsCount:1};
 
+test('a locally edited text is quoted with its current body before provider echo arrives',async()=>{
+ const f=await fixture();try{
+  await f.ingest(raw('own',{conversation:'Original'},{key:{id:'own',remoteJid:group,fromMe:true}}));const time=f.get('own')!.time;
+  const edited=await f.request('/messages/own','PATCH',{text:'Current text'});assert.equal(edited.statusCode,200);
+  const current=f.get('own')!;assert.equal(current.time,time);assert.equal(JSON.parse(current.raw!).message.conversation,'Current text');
+  assert.equal(f.connector.historyAnchor(group,current),true);
+  const response=await f.request('/messages','POST',{clientId:randomUUID(),text:'Reply',replyId:'own'});assert.equal(response.statusCode,200);
+  assert.equal(f.sent.at(-1).options.quoted.message.conversation,'Current text');
+  await f.emit('messages.update',[{key:{id:'own',remoteJid:group,fromMe:true},update:{message:{editedMessage:{message:{conversation:'Stale'}}},messageTimestamp:Math.floor(Date.now()/1000)-5}}]);
+  assert.equal(f.get('own')!.text,'Current text');
+ }finally{await f.close();}
+});
+
 test('quote eligibility and contents are rechecked after asynchronous preparation, before submission',async()=>{
  for(const change of ['delete','restrict','edit']){
   const f=await fixture();try{
