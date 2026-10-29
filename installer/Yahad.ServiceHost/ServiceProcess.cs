@@ -51,7 +51,7 @@ internal sealed class LocalChildControlFactory:IChildControlFactory
     }
 }
 
-internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildControlFactory channels):IPrivateAppLauncher
+internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildControlFactory channels,JobProcessFaultInjection? fault=null):IPrivateAppLauncher
 {
     private static readonly HashSet<string> Allowed=new(StringComparer.Ordinal)
     {"HOST","PORT","APP_ORIGIN","COOKIE_SECURE","DATA_DIR","MASTER_KEY_FILE","CONNECTOR","ALLOW_REAL_WHATSAPP","DIAGNOSTICS_ENABLED","SETUP_CAPABILITY_FILE"};
@@ -79,15 +79,25 @@ internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildCont
                 handoff=new LaunchLease(spec.PrivateTemporaryDirectory,environment);
             }
             else if(spec.BeforeMutableStart is not null)throw new IOException("SERVICE_HANDOFF_MISSING");
-            var job=JobProcess.Start(image,spec.Arguments,spec.WorkingDirectory,environment,(process,pid)=>
-            {spec.BeforeMutableStart?.Invoke();if(handoff is not null)handoff.Publish(spec.DataLease!,process,pid,spec.AppEnvironment["DATA_DIR"]);});
+            void Handoff(Microsoft.Win32.SafeHandles.SafeProcessHandle process,int pid)
+            {spec.BeforeMutableStart?.Invoke();if(handoff is not null)handoff.Publish(spec.DataLease!,process,pid,spec.AppEnvironment["DATA_DIR"]);}
+            var job=fault is null?JobProcess.Start(image,spec.Arguments,spec.WorkingDirectory,environment,Handoff):
+                JobProcess.StartWithFault(image,spec.Arguments,spec.WorkingDirectory,environment,Handoff,fault);
             return Task.FromResult<IContainedAppSession>(new Session(job,channel,pinned,handoff));
+        }
+        catch(JobStartQuiescenceUnconfirmedException failure)
+        {
+            // Return ownership before reporting failed health. AppLifecycle can
+            // now retry cleanup and preserve the grant/lease if still unknown.
+            var failed=new Session(failure.OwnedProcess,channel!,pinned,handoff,failure);
+            if(fault is not null)fault.FailedStartSession=failed;
+            return Task.FromResult<IContainedAppSession>(failed);
         }
         catch{handoff?.Dispose();channel?.Dispose();pinned.Dispose();throw;}
     }
     public async Task WaitForHealthyAsync(IContainedAppSession session,CancellationToken cancellation)
     {
-        var native=(Session)session;var ready=await native.Channel.ReadyAsync(native.Job.ProcessId,cancellation);
+        var native=(Session)session;if(native.StartFailure is not null)throw new IOException("SERVICE_PROCESS_START_FAILED",native.StartFailure);var ready=await native.Channel.ReadyAsync(native.Job.ProcessId,cancellation);
         if(ready.PeerPid!=(uint)native.Job.ProcessId||ready.Type!="ready")throw new IOException("SERVICE_CHILD_READY");
     }
     private sealed class LaunchLease:IDisposable
@@ -109,9 +119,9 @@ internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildCont
         }
         public void Dispose(){pin?.Dispose();if(File.Exists(path))File.Delete(path);Directory.Delete(directory,false);}
     }
-    private sealed class Session(JobProcess job,IChildControl channel,FileStream pinned,LaunchLease? handoff):IContainedAppSession
+    private sealed class Session(JobProcess job,IChildControl channel,FileStream pinned,LaunchLease? handoff,Exception? startFailure=null):IContainedAppSession
     {
-        internal JobProcess Job=>job;internal IChildControl Channel=>channel;
+        internal JobProcess Job=>job;internal IChildControl Channel=>channel;internal Exception? StartFailure=>startFailure;
         public Task RequestGracefulStopAsync(CancellationToken cancellation)=>channel.StopAsync(cancellation);
         public Task<int> WaitForRootExitAsync(CancellationToken cancellation)=>job.WaitAsync(cancellation);
         public Task WaitForTreeEmptyAsync(CancellationToken cancellation)=>job.WaitForTreeEmptyAsync(cancellation);

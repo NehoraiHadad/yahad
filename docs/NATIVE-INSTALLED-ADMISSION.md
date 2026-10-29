@@ -164,3 +164,34 @@ initial install, update commit/reboot/crash reconciliation, provider configurati
 TLS/LAN access and uninstall remain unaccepted. No usable disposable Windows VM
 has been verified through current access. Existing web family/WhatsApp setup is
 reused rather than duplicated in native setup.
+
+## Failed creation/handoff cleanup correction
+
+After successful CreateProcess, `JobProcess.Start` immediately owns the exact
+root handle, including failures before job assignment. A failed assignment,
+handoff callback, handoff publication or resume requests termination of both the
+job and exact root, then waits for a signaled root and an observed empty job.
+Termination API success alone is never treated as those observations. Cleanup is
+bounded to five seconds and does not depend on a captured UI synchronization
+context.
+
+If observation fails or times out, `JobStartQuiescenceUnconfirmedException`
+retains the exact process/job owner. The native service launcher transfers it,
+along with the image pin, handoff descriptor and control channel, into a failed
+session. Health then fails after AppLifecycle has stored that ownership. Its
+existing cleanup retries and recovery-required path therefore apply. Continued
+uncertainty yields QuiescenceUnknown without STOPPED or a released data grant.
+Other callers of JobProcess.Start must likewise retain/reconcile this exception's
+owned process rather than treating disposal or a termination request as proof.
+
+Five additional non-listening tests cover a throwing callback after duplicating
+the gate, failure before assignment, failure after actual handoff publication,
+and unavailable root/tree observations. The latter verify that reservations and
+handoff file pins remain held until a separate explicit retry obtains actual OS
+observations. Failure injection is internal, absent from production configuration
+and can only deny observations; it cannot manufacture successful observations.
+No services, accounts, machine ACLs, production state or network listeners are
+created by these tests. The protected owner/activation/epoch issuer and commit
+reconciliation blocker is unchanged.
+
+Windows documents [TerminateProcess](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-terminateprocess) as asynchronous; the process handle must be observed through [WaitForSingleObject](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-waitforsingleobject) before treating exit as complete.

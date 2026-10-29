@@ -74,6 +74,60 @@ await Check("wrong host-lease nonce or data identity cannot authorize Store",asy
     File.WriteAllText(descriptor,JsonSerializer.Serialize(new HostLeaseGrant(1,Environment.ProcessId,4,f.Data,new string('a',64))));
     await Reject(()=>{WindowsFileBoundary.ValidateHostLease(descriptor,f.Data,Environment.ProcessId,new string('b',64));return Task.CompletedTask;},"NATIVE_HANDOFF_IDENTITY");
 });
+await Check("callback failure after duplicating the data lease observes root death before returning",async()=>
+{
+    f.Reset();using var lease=WindowsFileBoundary.AcquireDataLease(f.Data);System.Diagnostics.Process? witness=null;
+    try
+    {
+        await Reject(()=>{_ =JobProcess.Start(node,["-e","require('node:fs').writeFileSync(process.argv[1],'ran')",Path.Combine(f.Data,"native-ready")],f.Root,LaunchEnvironment.Clean(f.Root),(process,pid)=>
+        {witness=System.Diagnostics.Process.GetProcessById(pid);_ =witness.SafeHandle;_ =lease.DuplicateTo(process);throw new IOException("INJECTED_CALLBACK_FAILURE");});return Task.CompletedTask;},"INJECTED_CALLBACK_FAILURE");
+        Assert(witness is not null&&witness.WaitForExit(0)&&!File.Exists(Path.Combine(f.Data,"native-ready")));
+    }
+    finally{witness?.Dispose();}
+});
+await Check("failure before job assignment observes the separate suspended root and empty job",async()=>
+{
+    f.Reset();var fault=new JobProcessFaultInjection{FailBeforeAssignment=true};
+    await Reject(()=>{_ =JobProcess.StartWithFault(node,["-e",""],f.Root,LaunchEnvironment.Clean(f.Root),null,fault);return Task.CompletedTask;},"INJECTED_BEFORE_ASSIGNMENT_FAILURE");
+    Assert(fault.CreatedProcess is not null&&fault.RootExitObserved&&fault.TreeEmptyObserved);
+});
+await Check("controller releases a failed handoff reservation only after observed root and tree exit",async()=>
+{
+    f.Reset();var fault=new JobProcessFaultInjection{FailAfterHandoff=true};var resource=new StartReservation(WindowsFileBoundary.AcquireDataLease(f.Data),fault);
+    var launcher=new ServiceProcessLauncher(f.RawSpec(resource.Lease),f.Control,fault);var reports=new List<ServiceReport>();
+    try
+    {
+        var result=await new ServiceController(new StartFailureAuthorization(launcher,resource)).RunAsync(reports.Add);
+        Assert(result.Failure==ServiceFailure.StartFailed&&result.QuiescenceConfirmed&&resource.Released&&fault.RootExitObserved&&fault.TreeEmptyObserved);
+        Assert(!reports.Any(r=>r.State==ServiceState.Running)&&!File.Exists(Path.Combine(f.Data,"native-ready")));
+        using var released=WindowsFileBoundary.AcquireDataLease(f.Data);
+    }
+    finally{if(!resource.Released)resource.Dispose();}
+});
+foreach(var missing in new[]{"root","tree"})
+await Check("unobserved "+missing+" after failed handoff retains session and reservation without STOPPED",async()=>
+{
+    f.Reset();var fault=new JobProcessFaultInjection{FailAfterHandoff=true,RootObservationUnavailable=missing=="root",TreeObservationUnavailable=missing=="tree"};
+    var resource=new StartReservation(WindowsFileBoundary.AcquireDataLease(f.Data),fault);var launcher=new ServiceProcessLauncher(f.RawSpec(resource.Lease),f.Control,fault);var reports=new List<ServiceReport>();
+    try
+    {
+        var result=await new ServiceController(new StartFailureAuthorization(launcher,resource)).RunAsync(reports.Add);
+        Assert(result.Failure==ServiceFailure.QuiescenceUnknown&&!result.QuiescenceConfirmed&&!resource.Released&&fault.FailedStartSession is not null);
+        Assert(!reports.Any(r=>r.State is ServiceState.Running or ServiceState.Stopped));
+        try{using var wrong=WindowsFileBoundary.AcquireDataLease(f.Data);throw new Exception("reservation released while observation unavailable");}catch(Win32Exception e)when(e.NativeErrorCode==32){}
+        var grants=Directory.GetFiles(Path.Combine(f.Root,"temporary"),"lease.json",SearchOption.AllDirectories);Assert(grants.Length==1);
+        try{using var write=new FileStream(grants[0],FileMode.Open,FileAccess.Write,FileShare.None);throw new Exception("handoff pin released before observation");}catch(IOException){}
+    }
+    finally
+    {
+        // A separate explicit retry uses real OS observations. Clearing this
+        // failure-only hook does not inject a successful exit observation.
+        fault.RootObservationUnavailable=false;fault.TreeObservationUnavailable=false;
+        if(fault.FailedStartSession is { } session){using var bound=new CancellationTokenSource(TimeSpan.FromSeconds(5));await session.TerminateAndWaitForTreeEmptyAsync(bound.Token);await session.DisposeAsync();}
+        Assert(fault.RootExitObserved&&fault.TreeEmptyObserved);resource.Dispose();
+    }
+    using var released=WindowsFileBoundary.AcquireDataLease(f.Data);
+});
 NativeBackupResult? backup=null;NativeRestoreResult? restored=null;
 await Check("actual recovery output is verified but cannot start before protected commit",async()=>
 {
@@ -239,4 +293,15 @@ internal sealed class ProductionFixture:IDisposable
     internal static string Hash(byte[] value)=>Convert.ToHexStringLower(SHA256.HashData(value));
     private static void Copy(string source,string target){Directory.CreateDirectory(target);foreach(var file in Directory.GetFiles(source))File.Copy(file,Path.Combine(target,Path.GetFileName(file)));}
     public void Dispose(){} // synthetic data stays private; never included in source or runtime artifacts
+}
+
+internal sealed class StartFailureAuthorization(IPrivateAppLauncher launcher,StartReservation resource):IServiceStartAuthorizer,IAppRecoveryBarrier
+{
+    public Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)=>Task.FromResult(new AuthorizedServiceStart(new("handoff-failure"),launcher,this,resource));
+    public Task RequireStartAllowedAsync(AppRelease release,CancellationToken cancellation){cancellation.ThrowIfCancellationRequested();return Task.CompletedTask;}
+}
+internal sealed class StartReservation(WindowsFileBoundary.DataLease lease,JobProcessFaultInjection fault):IDisposable
+{
+    internal WindowsFileBoundary.DataLease Lease=>lease;internal bool Released;
+    public void Dispose(){if(Released)return;if(!fault.RootExitObserved||!fault.TreeEmptyObserved)throw new Exception("reservation release before native exit observations");lease.Dispose();Released=true;}
 }

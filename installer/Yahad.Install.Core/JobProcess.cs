@@ -5,16 +5,42 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Yahad.Install;
 
-/// <summary>Native process containment spike. Not a registered Windows service.</summary>
+// Internal failure-only test injection. No production configuration/CLI surface;
+// it can deny observations, never manufacture successful native observations.
+internal sealed class JobProcessFaultInjection
+{
+    internal bool FailBeforeAssignment,FailAfterHandoff,RootObservationUnavailable,TreeObservationUnavailable;
+    internal JobProcess? CreatedProcess;
+    internal IContainedAppSession? FailedStartSession;
+    internal bool RootExitObserved,TreeEmptyObserved;
+}
+
+/// <summary>Retains the exact owned process/job after an unconfirmed failed start.
+/// Do not release data reservations until a later observed cleanup succeeds.</summary>
+public sealed class JobStartQuiescenceUnconfirmedException:IOException
+{
+    public JobProcess OwnedProcess {get;}
+    internal JobStartQuiescenceUnconfirmedException(JobProcess owned,Exception start,Exception cleanup)
+        :base("JOB_START_QUIESCENCE_UNCONFIRMED",new AggregateException(start,cleanup)){OwnedProcess=owned;}
+}
+
+/// <summary>Native owned process tree. No service registration APIs.</summary>
 public sealed class JobProcess : IDisposable
 {
     private readonly SafeFileHandle job;
     private readonly SafeProcessHandle process;
+    private readonly JobProcessFaultInjection? fault;
     public int ProcessId { get; }
-    private JobProcess(SafeFileHandle job, SafeProcessHandle process, int id)
-    { this.job = job; this.process = process; ProcessId = id; }
+    private JobProcess(SafeFileHandle job, SafeProcessHandle process, int id,JobProcessFaultInjection? fault)
+    { this.job = job; this.process = process; ProcessId = id;this.fault=fault; }
 
     public static JobProcess Start(string executable, IEnumerable<string> arguments, string directory, IReadOnlyDictionary<string,string>? environment = null, Action<SafeProcessHandle,int>? beforeResume = null)
+        =>StartCore(executable,arguments,directory,environment,beforeResume,null);
+    internal static JobProcess StartWithFault(string executable,IEnumerable<string> arguments,string directory,
+        IReadOnlyDictionary<string,string>? environment,Action<SafeProcessHandle,int>? beforeResume,JobProcessFaultInjection fault)
+        =>StartCore(executable,arguments,directory,environment,beforeResume,fault);
+    private static JobProcess StartCore(string executable,IEnumerable<string> arguments,string directory,
+        IReadOnlyDictionary<string,string>? environment,Action<SafeProcessHandle,int>? beforeResume,JobProcessFaultInjection? fault)
     {
         if (!Path.IsPathFullyQualified(executable) || !File.Exists(executable)) throw new IOException("EXECUTABLE_REQUIRED");
         var environmentBlock = LaunchEnvironment.Block(environment ?? LaunchEnvironment.Clean(directory));
@@ -23,7 +49,7 @@ public sealed class JobProcess : IDisposable
         if (job.IsInvalid) { Marshal.FreeHGlobal(environmentPointer); throw new Win32Exception(); }
         var info = new ExtendedLimit { Basic = new BasicLimit { LimitFlags = 0x2000 } }; // KILL_ON_JOB_CLOSE
         var buffer = Marshal.AllocHGlobal(Marshal.SizeOf<ExtendedLimit>());
-        ProcessInfo process = default;
+        ProcessInfo process = default;JobProcess? child=null;
         try
         {
             Marshal.StructureToPtr(info, buffer, false);
@@ -33,18 +59,34 @@ public sealed class JobProcess : IDisposable
             // No shell. Suspended creation closes the race where a child could spawn before containment.
             if (!Native.CreateProcessW(executable, command, IntPtr.Zero, IntPtr.Zero, false,
                     0x00000004 | 0x08000000 | 0x00000400, environmentPointer, directory, ref start, out process)) throw new Win32Exception();
-            if (!Native.AssignProcessToJobObject(job, process.Process)) throw new Win32Exception();
-            using(var suspended = new SafeProcessHandle(process.Process, false)) beforeResume?.Invoke(suspended,(int)process.Id);
+            child=new JobProcess(job,new SafeProcessHandle(process.Process,true),(int)process.Id,fault);
+            process.Process=IntPtr.Zero; // Ownership transfers immediately after successful creation.
+            if(fault is not null)fault.CreatedProcess=child;
+            if(fault?.FailBeforeAssignment==true)throw new IOException("INJECTED_BEFORE_ASSIGNMENT_FAILURE");
+            if (!Native.AssignProcessToJobObject(job, child.process.DangerousGetHandle())) throw new Win32Exception();
+            using(var borrowed=new SafeProcessHandle(child.process.DangerousGetHandle(),false))beforeResume?.Invoke(borrowed,child.ProcessId);
+            if(fault?.FailAfterHandoff==true)throw new IOException("INJECTED_HANDOFF_FAILURE");
             if (Native.ResumeThread(process.Thread) == uint.MaxValue) throw new Win32Exception();
-            var result = new JobProcess(job, new SafeProcessHandle(process.Process, true), (int)process.Id);
-            process.Process = IntPtr.Zero; // Result owns the exact process handle, avoiding PID reuse.
-            return result;
+            return child;
         }
-        catch
+        catch(Exception startFailure)
         {
-            // If assignment failed the suspended child is not yet owned by the job.
-            if (process.Process != IntPtr.Zero) Native.TerminateProcess(process.Process, 1);
-            job.Dispose();
+            if(child is null)job.Dispose();
+            else
+            {
+                try
+                {
+                    using var cleanup=new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    child.TerminateAndWaitForTreeEmptyAsync(cleanup.Token).GetAwaiter().GetResult();
+                }
+                catch(Exception cleanupFailure)
+                {
+                    // Keep the exact root and job handles owned. The service
+                    // launcher must transfer this owner into its failed session.
+                    throw new JobStartQuiescenceUnconfirmedException(child,startFailure,cleanupFailure);
+                }
+                child.Dispose();
+            }
             throw;
         }
         finally
@@ -61,14 +103,16 @@ public sealed class JobProcess : IDisposable
         while (true)
         {
             cancellation.ThrowIfCancellationRequested();
+            if(fault?.RootObservationUnavailable==true)throw new IOException("INJECTED_ROOT_OBSERVATION_UNAVAILABLE");
             var status = Native.WaitForSingleObject(process, 0);
             if (status == 0)
             {
                 if (!Native.GetExitCodeProcess(process, out var code)) throw new Win32Exception();
+                if(fault is not null)fault.RootExitObserved=true;
                 return unchecked((int)code);
             }
             if (status != 258) throw new Win32Exception(); // WAIT_TIMEOUT is the only continuing state.
-            await Task.Delay(20, cancellation);
+            await Task.Delay(20, cancellation).ConfigureAwait(false);
         }
     }
     // A root process exit is insufficient: a descendant may still hold the DB.
@@ -78,17 +122,21 @@ public sealed class JobProcess : IDisposable
         while (true)
         {
             cancellation.ThrowIfCancellationRequested();
+            if(fault?.TreeObservationUnavailable==true)throw new IOException("INJECTED_TREE_OBSERVATION_UNAVAILABLE");
             if (!Native.QueryInformationJobObject(job, 1, out var accounting,
                     (uint)Marshal.SizeOf<BasicAccounting>(), IntPtr.Zero)) throw new Win32Exception();
-            if (accounting.ActiveProcesses == 0) return;
-            await Task.Delay(20, cancellation);
+            if (accounting.ActiveProcesses == 0){if(fault is not null)fault.TreeEmptyObserved=true;return;}
+            await Task.Delay(20, cancellation).ConfigureAwait(false);
         }
     }
     public async Task TerminateAndWaitForTreeEmptyAsync(CancellationToken cancellation)
     {
-        // Keep the job handle until the OS reports every contained process gone.
-        if (!Native.TerminateJobObject(job,1)) throw new Win32Exception();
-        await WaitForTreeEmptyAsync(cancellation);
+        // Requests are not observations. Also terminate/wait the exact root:
+        // it may have been created successfully but not assigned to the job.
+        _=Native.TerminateJobObject(job,1);
+        _=Native.TerminateProcess(process.DangerousGetHandle(),1);
+        await WaitAsync(cancellation).ConfigureAwait(false);
+        await WaitForTreeEmptyAsync(cancellation).ConfigureAwait(false);
     }
     public void Dispose() { job.Dispose(); process.Dispose(); }
 
