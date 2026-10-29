@@ -1,0 +1,13 @@
+{
+  "kind": "private-synthetic-protected-state-transactions",
+  "productionCommitterConfigured": false,
+  "ownerAuthentication": "injected test registry; production boundary unconfigured and denied",
+  "testsUseActualConsumer": true,
+  "actualJobsAndFileLeases": true,
+  "actualBackupReceipts": true,
+  "interruption": "fault injection at durable filesystem cutpoints; not power loss acceptance",
+  "productionKeysCreated": false,
+  "serviceInstalled": false,
+  "networkListenersOpened": false,
+  "appPayloadSourceUnchanged": "146857134c5ef326d3451ac5085b2da14edbef0d"
+}

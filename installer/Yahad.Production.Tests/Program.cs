@@ -200,6 +200,132 @@ await Check("protected committed recovery selection launches real Store and rest
         Assert(result.Failure==ServiceFailure.None&&f.Control.HeldAfterClose&&f.Binding==committedBinding,"restart "+pass+" failure="+result.Failure+" held="+f.Control.HeldAfterClose+" anchorSame="+(f.Binding==committedBinding)+" stopError="+f.Control.StopError);f.ClearSignals();
     }
 });
+using var writerJob=JobProcess.Start(node,["-e",""],f.Root,LaunchEnvironment.Clean(f.Root));await writerJob.WaitAsync(default);await writerJob.WaitForTreeEmptyAsync(default);
+void PrepareState(){f.Reset();File.WriteAllBytes(f.PathOf("bootstrap.json"),JsonSerializer.SerializeToUtf8Bytes(new{schema=1,service=ServiceDefinition.Name,installationId=f.InstallationId,activationReceiptDigest=f.Binding.ActivationReceiptDigest}));}
+ProtectedOperation Operation(string kind="activate")
+{
+    var head=NativeJson.Read<InstalledActivation>(File.ReadAllBytes(f.PathOf("activation.json")));var web=NativeJson.Read<InstalledWeb>(File.ReadAllBytes(f.PathOf("web.json")));
+    return new(1,kind,f.InstallationId,head.Epoch,f.Binding.ActivationReceiptDigest,head.ReleaseDigest,head.DataId,head.MinimumSchema,head.MaximumSchema,head.MasterKeyDigest,head.PolicyDigest,head.PinDigest,web,null,f.Now.AddMinutes(2).ToUnixTimeSeconds(),Guid.NewGuid().ToString("N"));
+}
+async Task Denied(Func<Task> run){try{await run();}catch(Exception e)when(e is ServiceStartDenied or IOException or Win32Exception or UnauthorizedAccessException or JsonException or OperationCanceledException){return;}throw new Exception("transaction unexpectedly accepted");}
+ProtectedStateTransactionWriter Writer(IOwnerOperationAuthentication auth,JobProcess? job=null)=>new(f.Root,f.InstallationId,job??writerJob,auth,f.Control,()=>f.Now);
+await Check("protected transaction publishes authenticated owner and coherent records consumed by actual resolver",async()=>
+{
+    PrepareState();var op=Operation();var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);var binding=await Writer(auth).CommitAsync(op);
+    Assert(binding==f.Binding);using var grant=await f.Resolve();var owner=NativeJson.Read<InstalledOwnerIntent>(File.ReadAllBytes(f.PathOf("owner-intent.json")));
+    Assert(owner.Subject=="boundary-owner"&&owner.Nonce==op.Nonce&&NativeJson.Read<InstalledEpoch>(File.ReadAllBytes(f.PathOf("epoch.json"))).Epoch==2&&!File.Exists(f.PathOf("pending.json")));
+});
+await Check("transaction nonce is single-use even for a newly authenticated replay",async()=>
+{
+    PrepareState();var op=Operation();var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);var writer=Writer(auth);await writer.CommitAsync(op);await Denied(()=>writer.CommitAsync(op));
+});
+await Check("client cannot supply owner principal or grant scope fields",async()=>
+{
+    PrepareState();var document=System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.SerializeToUtf8Bytes(Operation()))!.AsObject();document["Subject"]="client-owner";await Denied(()=>{NativeJson.Read<ProtectedOperation>(JsonSerializer.SerializeToUtf8Bytes(document));return Task.CompletedTask;});
+});
+foreach(var kind in new[]{"scope","principal-installation","operation-digest","stale-epoch","stale-digest","expired","release","data"})
+await Check("transaction refuses bound-operation mismatch: "+kind,async()=>
+{
+    PrepareState();var op=Operation();if(kind=="stale-epoch")op=op with{ExpectedEpoch=2};if(kind=="stale-digest")op=op with{ExpectedActivationDigest=new string('0',64)};if(kind=="expired")op=op with{ExpiresUnix=f.Now.ToUnixTimeSeconds()-1};if(kind=="release")op=op with{ReleaseDigest=new string('0',64)};if(kind=="data")op=op with{DataId=Guid.NewGuid().ToString("N")};
+    var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);auth.Wrong=kind;var before=f.Binding;
+    await Denied(()=>Writer(auth).CommitAsync(op));Assert(before==f.Binding&&!File.Exists(f.PathOf("pending.json")));
+});
+await Check("exclusive authority denies concurrent committer",async()=>
+{
+    PrepareState();var op=Operation();var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);using var held=WindowsFileBoundary.AcquireDataLease(Path.Combine(f.Root,".authority"));await Denied(()=>Writer(auth).CommitAsync(op));
+});
+await Check("actual busy app job blocks publication without a quiescence Boolean",async()=>
+{
+    PrepareState();var op=Operation();var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);
+    using var busy=JobProcess.Start(node,["-e","setInterval(()=>{},1000)"],f.Root,LaunchEnvironment.Clean(f.Root));
+    try{using var bound=new CancellationTokenSource(150);await Denied(()=>Writer(auth,busy).CommitAsync(op,cancellation:bound.Token));Assert(!File.Exists(f.PathOf("pending.json")));}
+    finally{await busy.TerminateAndWaitForTreeEmptyAsync(default);}
+});
+await Check("actual selected-data lease blocks publication",async()=>
+{
+    PrepareState();var op=Operation();var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);using var lease=WindowsFileBoundary.AcquireDataLease(f.Data);await Denied(()=>Writer(auth).CommitAsync(op));Assert(!File.Exists(f.PathOf("pending.json")));
+});
+foreach(var point in new[]{"pending-published","nonce-reserved","record-owner-intent.json","record-web.json","partial-activation.json","record-activation.json","record-epoch.json","record-bootstrap.json","commit-receipt"})
+await Check("interrupted protected transaction stays blocked then consistently resumes: "+point,async()=>
+{
+    PrepareState();var op=Operation();var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);var writer=Writer(auth);
+    await Denied(()=>writer.CommitAsync(op,p=>{if(p==point)throw new IOException("INJECTED_TRANSACTION_INTERRUPTION");}));
+    Assert(File.Exists(f.PathOf("pending.json")));await Denied(async()=>{using var blocked=await f.Resolve();});
+    var result=await writer.ResumeAsync(op);Assert(result==f.Binding&&!File.Exists(f.PathOf("pending.json")));using var grant=await f.Resolve();
+    await Denied(()=>writer.CommitAsync(op));
+});
+await Check("pending contents and operation binding cannot be swapped during recovery",async()=>
+{
+    PrepareState();var op=Operation();var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);var writer=Writer(auth);
+    await Denied(()=>writer.CommitAsync(op,p=>{if(p=="pending-published")throw new IOException("interrupt");}));
+    var path=f.PathOf("pending.json");var bytes=File.ReadAllBytes(path);var pending=NativeJson.Read<ProtectedPending>(bytes);pending.After["activation.json"]=Convert.ToBase64String("tampered"u8.ToArray());File.WriteAllBytes(path,JsonSerializer.SerializeToUtf8Bytes(pending));
+    await Denied(()=>writer.ResumeAsync(op));File.WriteAllBytes(path,bytes);await writer.ResumeAsync(op);
+});
+await Check("expired interrupted operation needs fresh authenticated reconciliation scope",async()=>
+{
+    PrepareState();var op=Operation();var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);var writer=Writer(auth);
+    await Denied(()=>writer.CommitAsync(op,p=>{if(p=="record-activation.json")throw new IOException("interrupt");}));
+    f.Now=f.Now.AddMinutes(4);auth.AllowReconcile=false;try{await Denied(()=>writer.ResumeAsync(op));Assert(File.Exists(f.PathOf("pending.json")));auth.AllowReconcile=true;await writer.ResumeAsync(op);}finally{f.Now=f.Now.AddMinutes(-4);}
+});
+await Check("install operation requires fresh control state and authenticated install scope",async()=>
+{
+    using var fresh=await ProductionFixture.Create(node,repo,helper);var head=NativeJson.Read<InstalledActivation>(File.ReadAllBytes(fresh.PathOf("activation.json")));var web=NativeJson.Read<InstalledWeb>(File.ReadAllBytes(fresh.PathOf("web.json")));
+    var op=new ProtectedOperation(1,"install",fresh.InstallationId,0,"",head.ReleaseDigest,head.DataId,5,5,head.MasterKeyDigest,head.PolicyDigest,head.PinDigest,web,null,fresh.Now.AddMinutes(2).ToUnixTimeSeconds(),Guid.NewGuid().ToString("N"));
+    foreach(var name in new[]{"activation.json","epoch.json","owner-intent.json","web.json","bootstrap.json"})File.Delete(fresh.PathOf(name));
+    var auth=new ApprovedOperations(fresh.InstallationId,()=>fresh.Now);auth.Approve(op);await new ProtectedStateTransactionWriter(fresh.Root,fresh.InstallationId,writerJob,auth,fresh.Control,()=>fresh.Now).CommitAsync(op);
+    using var grant=await fresh.Resolve();Assert(NativeJson.Read<InstalledEpoch>(File.ReadAllBytes(fresh.PathOf("epoch.json"))).Epoch==1);
+});
+await Check("install cannot reset an authority root with existing committed history",async()=>
+{
+    PrepareState();var op=Operation("install") with{ExpectedEpoch=0,ExpectedActivationDigest=""};var before=new Dictionary<string,byte[]>();
+    foreach(var name in new[]{"activation.json","epoch.json","owner-intent.json","web.json","bootstrap.json"}){before[name]=File.ReadAllBytes(f.PathOf(name));File.Delete(f.PathOf(name));}
+    try{var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);await Denied(()=>Writer(auth).CommitAsync(op));}finally{foreach(var item in before)File.WriteAllBytes(f.PathOf(item.Key),item.Value);}
+});
+await Check("full partial pending record resumes only after reauthentication and old-state validation",async()=>
+{
+    PrepareState();var op=Operation();var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);var writer=Writer(auth);var before=f.Binding;
+    await Denied(()=>writer.CommitAsync(op,p=>{if(p=="partial-pending.json")throw new IOException("interrupt");}));
+    Assert(before==f.Binding&&!File.Exists(f.PathOf("pending.json")));await Denied(async()=>{using var grant=await f.Resolve();});await writer.ResumeAsync(op);using var accepted=await f.Resolve();
+});
+await Check("truncated pending record is preserved and cannot authorize any mutation",async()=>
+{
+    PrepareState();var op=Operation();var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);var writer=Writer(auth);var before=f.Binding;
+    await Denied(()=>writer.CommitAsync(op,p=>{if(p=="partial-pending.json")throw new IOException("interrupt");}));
+    var path=f.PathOf("pending.json.partial-"+op.Nonce);var complete=File.ReadAllBytes(path);File.WriteAllText(path,"{");await Denied(()=>writer.ResumeAsync(op));Assert(before==f.Binding&&File.ReadAllText(path)=="{");
+    File.WriteAllBytes(path,complete);await writer.ResumeAsync(op);
+});
+await Check("committed receipt forbids replay over older control records",async()=>
+{
+    PrepareState();var op=Operation();var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);var writer=Writer(auth);
+    await Denied(()=>writer.CommitAsync(op,p=>{if(p=="commit-receipt")throw new IOException("interrupt");}));
+    var pending=NativeJson.Read<ProtectedPending>(File.ReadAllBytes(f.PathOf("pending.json")));
+    File.WriteAllBytes(f.PathOf("activation.json"),Convert.FromBase64String(pending.Before["activation.json"]));await Denied(()=>writer.ResumeAsync(op));
+    File.WriteAllBytes(f.PathOf("activation.json"),Convert.FromBase64String(pending.After["activation.json"]));await writer.ResumeAsync(op);
+});
+await Check("completed receipt still revalidates selected data before clearing pending",async()=>
+{
+    PrepareState();var op=Operation();var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);var writer=Writer(auth);
+    await Denied(()=>writer.CommitAsync(op,p=>{if(p=="commit-receipt")throw new IOException("interrupt");}));
+    var database=Path.Combine(f.Data,"app.sqlite");var original=File.ReadAllBytes(database);File.WriteAllText(database,"corrupt synthetic data");
+    await Denied(()=>writer.ResumeAsync(op));Assert(File.Exists(f.PathOf("pending.json")));
+    File.WriteAllBytes(database,original);await writer.ResumeAsync(op);using var grant=await f.Resolve();
+});
+await Check("unconfigured authentication boundary cannot publish protected state",async()=>
+{
+    PrepareState();var before=f.Binding;await Denied(()=>Writer(new UnconfiguredOwnerOperationAuthentication()).CommitAsync(Operation()));
+    Assert(before==f.Binding&&!File.Exists(f.PathOf("pending.json")));
+});
+await Check("recovery commit is bound to actual backup receipt and verified restored plaintext",async()=>
+{
+    PrepareState();var op=Operation("recover");NativeBackupResult b;NativeRestoreResult restoredCandidate;
+    using(var inspector=new NativeSqliteInspector(node,ProductionFixture.Hash(File.ReadAllBytes(node))))using(var recovery=await NativeRecoveryFixture.OpenAsync(f.Dataset,writerJob,inspector))
+    {b=await recovery.BackupAsync();restoredCandidate=await recovery.RestoreToNewDirectoryAsync(b.BackupId,5,5);}
+    op=op with{DataId=Guid.NewGuid().ToString("N"),Recovery=new(f.OriginalDataId,b.BackupId,restoredCandidate.OperationId,b.ReceiptDigest)};
+    var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);await Writer(auth).CommitAsync(op);using var grant=await f.Resolve();
+    Assert(NativeJson.Read<InstalledActivation>(File.ReadAllBytes(f.PathOf("activation.json"))).Phase=="committed");
+});
+await Check("production default still denies while real committer/channel is unconfigured",async()=>
+{await Denied(()=>new InstalledActivationResolver().ResolveAsync(f.Binding,default));});
 if(preparedPayload is not null)await Check("exact rebuilt full payload passes installed release and runtime admission without app launch",async()=>
 {
     f.Reset();f.SelectPreparedPayload(preparedPayload);var admission=new VerificationOnlyAuthorization(f);var reports=new List<ServiceReport>();
@@ -343,4 +469,15 @@ internal sealed class ProbeAuthorization(ProductionFixture fixture,JobProcessFau
     private readonly InstalledActivationResolver resolver=fixture.CreateResolver(fault);public TimeSpan AdmissionBudget=>resolver.AdmissionBudget;
     public event Action? ObservedWork{add=>resolver.ObservedWork+=value;remove=>resolver.ObservedWork-=value;}
     public Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)=>Task.Run(()=>resolver.ResolveAsync(fixture.Binding,cancellation),cancellation);
+}
+
+internal sealed class ApprovedOperations(string installation,Func<DateTimeOffset> clock):IOwnerOperationAuthentication
+{
+    private readonly Dictionary<string,long> approved=new(StringComparer.Ordinal);internal string? Wrong;internal bool AllowReconcile=true;
+    internal void Approve(ProtectedOperation op)=>approved[InstalledActivationResolver.Hash(JsonSerializer.SerializeToUtf8Bytes(op))]=clock().AddSeconds(-1).ToUnixTimeSeconds();
+    public Task<VerifiedOperationOwner> AuthenticateAsync(string digest,string scope,CancellationToken cancellation)
+    {
+        cancellation.ThrowIfCancellationRequested();if(!approved.TryGetValue(digest,out var time)||scope=="reconcile"&&!AllowReconcile)throw new UnauthorizedAccessException("SYNTHETIC_AUTH_REFUSED");
+        return Task.FromResult(new VerifiedOperationOwner("boundary-owner",Wrong=="principal-installation"?Guid.NewGuid().ToString("N"):installation,Wrong=="operation-digest"?new string('0',64):digest,Wrong=="scope"?"child":scope,time,time+3600));
+    }
 }

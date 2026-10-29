@@ -29,12 +29,17 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
     public event Action? ObservedWork;
     internal static string StateRoot=>Path.GetDirectoryName(WindowsInstallationReader.DescriptorPath)!;
     private readonly string root;private readonly IInstalledControlFiles control;private readonly IChildControlFactory channels;
+    private readonly bool committerUnconfigured;
     private readonly Func<DateTimeOffset> clock;private readonly JobProcessFaultInjection? probeFault;
-    internal InstalledActivationResolver():this(StateRoot,new AdminInstalledControlFiles(),new LocalChildControlFactory(),()=>DateTimeOffset.UtcNow){}
+    internal InstalledActivationResolver():this(StateRoot,new AdminInstalledControlFiles(),new LocalChildControlFactory(),()=>DateTimeOffset.UtcNow){committerUnconfigured=true;}
     internal InstalledActivationResolver(string root,IInstalledControlFiles control,IChildControlFactory channels,Func<DateTimeOffset> clock,JobProcessFaultInjection? probeFault=null)
     {this.root=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(root));this.control=control;this.channels=channels;this.clock=clock;this.probeFault=probeFault;}
-    public async Task<AuthorizedServiceStart> ResolveAsync(InstallationBinding binding,CancellationToken cancellation)
+    public Task<AuthorizedServiceStart> ResolveAsync(InstallationBinding binding,CancellationToken cancellation)=>ResolveCore(binding,false,null,cancellation);
+    internal Task<AuthorizedServiceStart> InspectCommitCandidateAsync(InstallationBinding binding,string? pendingDigest,CancellationToken cancellation)
+        =>ResolveCore(binding,true,pendingDigest,cancellation);
+    private async Task<AuthorizedServiceStart> ResolveCore(InstallationBinding binding,bool commitInspection,string? pendingDigest,CancellationToken cancellation)
     {
+        if(committerUnconfigured)throw new ServiceStartDenied(ServiceFailure.ActivationUnavailable);
         var last=System.Diagnostics.Stopwatch.GetTimestamp();
         void Work()
         {
@@ -42,7 +47,7 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
             if(System.Diagnostics.Stopwatch.GetElapsedTime(Interlocked.Read(ref last),now)<TimeSpan.FromSeconds(1))return;
             Interlocked.Exchange(ref last,now);ObservedWork?.Invoke();
         }
-        var reservation=new InstalledReservation(root,clock,Work,cancellation);
+        var reservation=new InstalledReservation(root,clock,Work,cancellation,pendingDigest);
         try
         {
             cancellation.ThrowIfCancellationRequested();reservation.Hold(WindowsFileBoundary.PinPrivateDirectory(root));reservation.CheckPending();
@@ -87,7 +92,7 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
                     var restoredSchema=NativeRecoveryAdmission.VerifyCompleted(Path.Combine(root,"datasets",recovered.SourceDataId),source,recovered.BackupId,recovered.OperationId,recovered.ReceiptDigest,
                         selected,key,policy,pins,reservation.DataPins);
                     if(restoredSchema!=schema)throw new IOException("INSTALLED_RECOVERY_SCHEMA");
-                    throw new IOException("INSTALLED_RECOVERY_COMMIT_REQUIRED");
+                    if(!commitInspection)throw new IOException("INSTALLED_RECOVERY_COMMIT_REQUIRED");
                 }
                 var baseline=NativeRecoveryAdmission.VerifyCommittedEvidence(Path.Combine(root,"datasets",recovered.SourceDataId),source,recovered.BackupId,recovered.OperationId,recovered.ReceiptDigest,
                     selected,key,policy,pins,reservation.DataPins);
@@ -109,7 +114,7 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
     {using var h=IncrementalHash.CreateHash(HashAlgorithmName.SHA256);var b=new byte[1024*1024];long offset=0;try{int n;while((n=file.Read(offset,b))>0){h.AppendData(b,0,n);offset+=n;work();}return Convert.ToHexStringLower(h.GetHashAndReset());}finally{CryptographicOperations.ZeroMemory(b);}}
     internal static void Id(string id){if(!Guid.TryParseExact(id,"N",out var parsed)||parsed.ToString("N")!=id)throw new IOException("INSTALLED_IDENTIFIER");}
     internal static void Digest(string digest){if(!System.Text.RegularExpressions.Regex.IsMatch(digest,"^[a-f0-9]{64}$"))throw new IOException("INSTALLED_DIGEST");}
-    private sealed class InstalledReservation(string root,Func<DateTimeOffset> clock,Action work,CancellationToken admissionCancellation):IAppRecoveryBarrier,IDisposable
+    private sealed class InstalledReservation(string root,Func<DateTimeOffset> clock,Action work,CancellationToken admissionCancellation,string? expectedPendingDigest):IAppRecoveryBarrier,IDisposable
     {
         internal readonly List<IDisposable> Resources=[],DataPins=[];private bool disposed,mutable;
         internal WindowsFileBoundary.DataLease Lease=null!;internal InstalledOwnerIntent Owner=null!;internal string Data="",Release="",Payload="",NodeDigest="";internal int PayloadSchema;
@@ -118,7 +123,23 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
         internal byte[] PinBytes(string path,int max){var file=WindowsFileBoundary.OpenPrivateRead(path);Hold(file);return file.Small(max);}
         internal string PinDigest(string path){var file=WindowsFileBoundary.OpenPrivateRead(path);Hold(file);return FileHash(file,work);}
         internal void CheckOwner(){var now=clock().ToUnixTimeSeconds();if(Owner.ApprovedUnix>now||Owner.ExpiresUnix is { } expiry&&(expiry<=now||expiry<=Owner.ApprovedUnix))throw new IOException("INSTALLED_OWNER_EXPIRED");}
-        internal void CheckPending(){if(Directory.EnumerateFileSystemEntries(root).Select(Path.GetFileName).Any(n=>n!.Equals("pending.json",StringComparison.OrdinalIgnoreCase)||new[]{"activation.json","epoch.json","owner-intent.json","web.json","bootstrap.json"}.Any(p=>n.StartsWith(p+".partial",StringComparison.OrdinalIgnoreCase))))throw new IOException("INSTALLED_PENDING_ACTIVATION");}
+        internal void CheckPending()
+        {
+            string? nonce=null;
+            if(expectedPendingDigest is not null)
+            {
+                using var read=WindowsFileBoundary.OpenPrivateRead(Path.Combine(root,"pending.json"));var bytes=read.Small(128*1024);
+                if(Hash(bytes)!=expectedPendingDigest)throw new IOException("INSTALLED_PENDING_BINDING");
+                nonce=NativeJson.Read<ProtectedPending>(bytes).Operation.Nonce;Id(nonce);
+            }
+            foreach(var path in Directory.EnumerateFileSystemEntries(root))
+            {
+                var name=Path.GetFileName(path);var control=new[]{"activation.json","epoch.json","owner-intent.json","web.json","bootstrap.json","pending.json"};
+                if(name.Equals("pending.json",StringComparison.OrdinalIgnoreCase)){if(nonce is null)throw new IOException("INSTALLED_PENDING_ACTIVATION");continue;}
+                if(control.Any(n=>name.StartsWith(n+".partial",StringComparison.OrdinalIgnoreCase))&&
+                    !(nonce is not null&&control.Where(n=>n!="pending.json").Any(n=>name.Equals(n+".partial-"+nonce,StringComparison.Ordinal))))throw new IOException("INSTALLED_PENDING_ACTIVATION");
+            }
+        }
         internal void CheckWal(){foreach(var name in new[]{"app.sqlite-wal","app.sqlite-shm","app.sqlite-journal"})if(Path.Exists(Path.Combine(Data,name)))throw new IOException("INSTALLED_WAL_RECONCILIATION_REQUIRED");}
         internal string[] Names(string directory,int max=50001,CancellationToken cancellation=default)
         {
