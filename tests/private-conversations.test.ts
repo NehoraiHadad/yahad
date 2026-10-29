@@ -58,7 +58,7 @@ test('parent opens, reads, sends and repeats in known same-family direct convers
     assert.equal(sent.statusCode, 200, sent.body);
     assert.equal(sent.json().message.reply.id, 'received');
     const id = sent.json().message.id;
-    assert.equal((await f.req(f.parent, `/api/groups/${ungranted}/messages`, 'POST', { clientId, text: 'Repeat' })).json().message.id, id);
+    assert.equal((await f.req(f.parent, `/api/groups/${ungranted}/messages`, 'POST', { clientId, text: 'Parent sends', replyId: 'received' })).json().message.id, id);
     assert.equal(f.store.messages(f.family.familyId, ungranted).length, 2, 'repeat is idempotent');
     assert.equal((await f.req(f.parent, `/api/groups/${ungranted}/messages/${id}/reaction`, 'POST', { emoji: '👍' })).statusCode, 200);
     assert.equal((await f.req(f.parent, `/api/groups/${ungranted}/messages/${id}`, 'PATCH', { text: 'Edited by parent' })).statusCode, 200);

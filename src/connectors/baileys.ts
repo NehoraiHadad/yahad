@@ -1,3 +1,4 @@
+import { SendNotSubmittedError } from '../send-outcome.js';
 import { conversationKind } from '../conversation-id.js';
 import { fetchGroupPhoto } from '../group-photos.js';
 import { IngestionQueue } from './ingestion.js';
@@ -523,30 +524,35 @@ export class BaileysConnector implements Connector {
     } catch { return; }
   }
   async send(m: Outgoing) {
-    if((m.kind as string)==='poll')throw new Error('Poll sending unavailable');
-    if (m.reply && !this.originalAvailable(m.reply)) throw new Error('Original message unavailable');
-    const sock = this.require();
-    const content: any =
-      m.kind === 'text'
-        ? { text: m.text, linkPreview: null }
-        : m.kind === 'audio'
-          ? { audio: m.bytes, mimetype: m.mime, ptt: true }
-          : m.kind === 'sticker'
-            ? { sticker: m.bytes }
-            : m.kind === 'document'
-              ? { document: m.bytes, mimetype: m.mime, fileName: m.filename, caption: m.text }
-              : { [m.kind]: m.bytes, caption: m.text, mimetype: m.mime };
-    if (m.kind === 'audio' && m.bytes) {
-      const seconds = await getAudioDuration(m.bytes);
-      if (!Number.isFinite(seconds)) throw new Error('Audio duration unavailable');
-      content.seconds = seconds;
-      content.waveform = new Uint8Array(0);
-    }
-    if ((m.kind === 'image' || m.kind === 'video') && m.bytes)
-      content.jpegThumbnail = await thumbnail(m.bytes);
-    const quoted = m.reply?.raw ? parse(m.reply.raw) : undefined;
+    const prepare = async () => {
+      if((m.kind as string)==='poll')throw new Error('Poll sending unavailable');
+      if (m.reply && !this.originalAvailable(m.reply)) throw new Error('Original message unavailable');
+      const sock = this.require();
+      const content: any =
+        m.kind === 'text'
+          ? { text: m.text, linkPreview: null }
+          : m.kind === 'audio'
+            ? { audio: m.bytes, mimetype: m.mime, ptt: true }
+            : m.kind === 'sticker'
+              ? { sticker: m.bytes }
+              : m.kind === 'document'
+                ? { document: m.bytes, mimetype: m.mime, fileName: m.filename, caption: m.text }
+                : { [m.kind]: m.bytes, caption: m.text, mimetype: m.mime };
+      if (m.kind === 'audio' && m.bytes) {
+        const seconds = await getAudioDuration(m.bytes);
+        if (!Number.isFinite(seconds)) throw new Error('Audio duration unavailable');
+        content.seconds = seconds;
+        content.waveform = new Uint8Array(0);
+      }
+      if ((m.kind === 'image' || m.kind === 'video') && m.bytes)
+        content.jpegThumbnail = await thumbnail(m.bytes);
+      const quoted = m.reply?.raw ? parse(m.reply.raw) : undefined;
+      return { sock, content, quoted };
+    };
+    let prepared: Awaited<ReturnType<typeof prepare>>;
+    try { prepared = await prepare(); } catch (error) { throw new SendNotSubmittedError(error); }
     m.beforeSend?.();
-    const sent = await sock.sendMessage(m.groupId, content, { messageId: m.id, quoted });
+    const sent = await prepared.sock.sendMessage(m.groupId, prepared.content, { messageId: m.id, quoted: prepared.quoted });
     if (!sent) throw new Error('No acknowledgement');
     return normalizeIncoming(sent)!;
   }

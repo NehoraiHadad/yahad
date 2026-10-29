@@ -1,3 +1,4 @@
+import { SendNotSubmittedError } from '../src/send-outcome.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -452,4 +453,16 @@ test('documented setup CLI creates real separate accounts and a protected random
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test('adapter proves preparation rejection only before handoff; provider failures and guard rejection retain their identity', async () => {
+  const { h } = hooks(), connector = new BaileysConnector(h); let calls = 0;
+  const message = { id: 'synthetic-proof', groupId: '1@g.us', kind: 'text' as const, text: 'Synthetic only' };
+  await assert.rejects(connector.send(message), error => error instanceof SendNotSubmittedError);
+  connector.sock = { sendMessage: async () => { calls++; throw new Error('Synthetic lost ACK'); } } as any;
+  const rejected = new Error('Synthetic permission revoked');
+  await assert.rejects(connector.send({ ...message, beforeSend: () => { throw rejected; } }), error => error === rejected);
+  assert.equal(calls, 0);
+  await assert.rejects(connector.send(message), error => error instanceof Error && !(error instanceof SendNotSubmittedError));
+  assert.equal(calls, 1);
 });

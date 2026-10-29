@@ -421,7 +421,8 @@ test('send, idempotency, scoped replies, real media bytes, edit, delete and reac
       clientId,
       text: 'duplicate',
     });
-    assert.equal(r.json().message.id, id);
+    assert.equal(r.statusCode, 409);
+    assert.equal(r.json().error, 'SEND_ID_CONFLICT');
     assert.equal(
       f.store.all('SELECT id FROM messages WHERE family_id=? AND group_id=?', f.a.familyId, group)
         .length,

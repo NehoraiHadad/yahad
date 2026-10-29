@@ -2565,3 +2565,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 .connection-guidance p { margin:4px 0; }
 .connection-guidance ol { margin:6px 0; padding-inline-start:20px; }
 .connection-guidance small { display:block; opacity:.85; }
+
+.send-resolution { padding: .65rem; border: 1px solid var(--border); border-radius: .75rem; }
+.send-resolution p { margin: 0 0 .5rem; }
+.send-resolution button { margin-inline-end: .5rem; margin-block: .2rem; }

@@ -1,3 +1,4 @@
+import { confirmedSend } from './send-outcome.js';
 import { conversationKind } from './conversation-id.js';
 import { applyReactions, queueReaction, pendingReactions, clearPendingReactions } from './message-reactions.js';
 import { messageActions } from './message-actions.js';
@@ -27,7 +28,7 @@ export class AppError extends Error {
   }
 }
 export const deny = () => new AppError(404, 'NOT_FOUND');
-export interface PublicMessage extends Omit<StoredMessage, 'raw' | 'replyId' | 'reactions' | 'reactionTimes' | 'editTime' | 'originalTimeKnown'> {
+export interface PublicMessage extends Omit<StoredMessage, 'raw' | 'replyId' | 'reactions' | 'reactionTimes' | 'editTime' | 'originalTimeKnown' | 'sendRequestHash' | 'sendAcknowledged'> {
   reply?: { id: string; text: string; sender: string; available?: boolean };
   reactions: { emoji: string; count: number; mine: boolean }[];
   actions?: {reply:boolean;reactions:boolean;edit:boolean;delete:boolean};
@@ -341,6 +342,7 @@ export class ChatService {
       !repairMissingMedia && !explainLegacyBlank && !explainUnsupported && !upgradePoll &&
       existing.status !== 'pending' &&
       existing.status !== 'failed' &&
+      !(existing.status === 'unknown' && confirmedSend(input.status)) &&
       (!input.fromMe || !!existing.raw || existing.kind==='poll')
     )
       return;
@@ -382,6 +384,9 @@ export class ChatService {
       reactionTimes: previous?.reactionTimes,
       raw: input.kind === 'unsupported' || input.kind==='poll' ? undefined : input.raw || previous?.raw,
       clientId: previous?.clientId,
+      sendRequestHash: previous?.sendRequestHash,
+      sendAcknowledged: previous?.sendAcknowledged,
+      retrySafe: previous?.retrySafe,
       authorUserId: previous?.authorUserId,
       authorLabel: previous?.authorLabel,
       edited: input.edited,
@@ -476,7 +481,7 @@ export class ChatService {
   }
   public(f: string, m: StoredMessage): PublicMessage {
     if(!m.deleted && restrictedStoredMessage(m))m=restrictedPlaceholder(m);
-    const { raw, replyId, reactions, reactionTimes, editTime, originalTimeKnown, poll, ...safe } = m;
+    const { raw, replyId, reactions, reactionTimes, editTime, originalTimeKnown, poll, sendRequestHash, sendAcknowledged, ...safe } = m;
     const display=!m.deleted && !m.restricted && m.kind==='poll'?pollDisplay(m.text,poll?.options):undefined;
     const target = replyId ? this.store.getMessage(f, m.groupId, replyId) : undefined;
     const aggregated = new Map<string, { emoji: string; count: number; mine: boolean }>();
@@ -488,6 +493,8 @@ export class ChatService {
     }
     return {
       ...safe,
+      ...(m.clientId ? { retrySafe: m.status === 'failed' && m.retrySafe === true,
+        status: m.status === 'failed' && m.retrySafe !== true ? 'unknown' as const : m.status } : {}),
       ...(m.kind==='poll'&&!m.deleted&&!m.restricted ? display ? {poll:display.poll} : {kind:'unsupported' as const,text:invalidPollText,unsupportedReason:'poll-invalid' as const} : {}),
       actions:messageActions(m,this.connectors.get(f)),
       reactions: [...aggregated.values()],
