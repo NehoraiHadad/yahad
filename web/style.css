@@ -2559,3 +2559,9 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 .child-access-settings h4 { margin: 0 0 8px; }
 .child-access-settings p { line-height: 1.65; overflow-wrap: anywhere; }
 .child-access-settings .modal { max-height: 90dvh; overflow-y: auto; }
+.connection-guidance { border-radius:12px; padding:14px 16px; margin:14px 0; line-height:1.8; font-size:13px; background:#fff3d8; color:#63542a; }
+.connection-guidance.action { background:#fde8e4; color:#7a3a30; }
+.connection-guidance b { display:block; font-size:14px; }
+.connection-guidance p { margin:4px 0; }
+.connection-guidance ol { margin:6px 0; padding-inline-start:20px; }
+.connection-guidance small { display:block; opacity:.85; }

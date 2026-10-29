@@ -11,7 +11,7 @@ import { insertEmoji, rememberEmoji } from './emojiSelection';
 import { loadStickerFile } from './stickerFile';
 import './emoji-picker.css';
 import './groupAvatar.css';
-import { ChatCelebration, useChatCelebration } from './ChatCelebration';
+import { ChatCelebration, useChatCelebration } from './ChatCelebrationView';
 import './chatCelebration.css';
 import { HistoryPanel } from './HistoryPanel';
 import { MessageImage } from './MessageImage';
@@ -81,6 +81,7 @@ import { api, isTransientApiError, setCsrf } from './api';
 import './style.css';
 import './child-management.css';
 import { DiagnosticsPanel } from './DiagnosticsPanel';
+import { ConnectionGuidance, useBrowserOnline } from './ConnectionGuidanceView';
 import { UpdatesPanel } from './UpdatesPanel';
 import type { PublicMessage } from '../src/service';
 import type { Capabilities } from '../src/connectors/types';
@@ -1811,7 +1812,7 @@ function Parent({
   const [createdChild, setCreatedChild] = useState('');
   const [settingsChild, setSettingsChild] = useState('');
   const [settingsMode, setSettingsMode] = useState<'profile' | 'password'>('profile');
-  const [overviewStale, setOverviewStale] = useState(false);
+  const [overviewStale, setOverviewStale] = useState(false), [overviewFailed, setOverviewFailed] = useState(false);
   const [data, setData] = useState<FamilyOverview | null>(null),
     [qr, setQr] = useState<string | null>(null),
     [busy, setBusy] = useState(false),
@@ -1822,6 +1823,7 @@ function Parent({
     [password, setPassword] = useState(''),
     [confirmError, setConfirmError] = useState('');
   useEffect(() => { if (data) saveChildSelection(me.user.id, child); }, [me.user.id, child, !!data]);
+  const browserOnline = useBrowserOnline();
   const acting = useRef(false), overviewRequest = useRef(0);
   const load = useCallback(async (background = false) => {
     const request = ++overviewRequest.current;
@@ -1831,14 +1833,23 @@ function Parent({
       setData(d);
       setChild(prev => reconcileChildSelection(d, prev));
       if (d.state === 'qr') {
-        const q = await api('/parent/qr');
-        if (request !== overviewRequest.current) return;
-        setQr(q.qr);
+        // A QR read failure is not an overview failure: the overview succeeded. Drop any old code.
+        try {
+          const q = await api('/parent/qr');
+          if (request !== overviewRequest.current) return;
+          setQr(q.qr);
+        } catch (e) {
+          if (request !== overviewRequest.current) return;
+          setQr(null);
+          if (!(background && isTransientApiError(e))) onError((e as Error).message);
+        }
       } else setQr(null);
       setOverviewStale(false);
+      setOverviewFailed(false);
     } catch (e) {
       if (request !== overviewRequest.current) return;
       setOverviewStale(true);
+      setOverviewFailed(true);
       if (background && isTransientApiError(e)) return;
       else onError((e as Error).message);
     }
@@ -1878,6 +1889,7 @@ function Parent({
     }
   };
   const selectedChild = data ? familyProgress(data).children.find(item => item.id === child) : undefined;
+  const connectionReadUnavailable = overviewFailed || !browserOnline;
   const stateLabels: Record<string, string> = {
     connected: 'מחובר',
     connecting: 'מתחברים…',
@@ -1932,17 +1944,18 @@ function Parent({
               if (!saved) throw new Error('לא התקבל אישור לשמירת החתימה. בדקו את המצב לאחר הרענון.');
             }} onError={onError}/>
         </ChildManagement>
-        <details className="parent-connection-details" open={data?.state !== 'connected' || !!data?.disconnect}>
-          <summary>חיבור החשבון <span>{data?.state === 'connected' && !data?.disconnect ? 'מחובר' : 'נדרשת בדיקה'}</span></summary>
+        <details className="parent-connection-details" open={connectionReadUnavailable || data?.state !== 'connected' || !!data?.disconnect}>
+          <summary>חיבור החשבון <span>{!connectionReadUnavailable && data?.state === 'connected' && !data?.disconnect ? 'מחובר' : 'נדרשת בדיקה'}</span></summary>
           <section className="parent-card" id="family-connection" tabIndex={-1}>
             <div className="step-title">
               <span>01</span>
               <h2>מחברים את WhatsApp</h2>
-              <span className={'state-pill ' + (data?.state === 'connected' ? 'connected' : '')}>
-                {(data?.disconnect ? 'מנותק' : stateLabels[data?.state || '']) || 'טוענים…'}
+              <span className={'state-pill ' + (!connectionReadUnavailable && data?.state === 'connected' && !data?.disconnect ? 'connected' : '')}>
+                {!browserOnline ? 'אין חיבור לרשת' : overviewFailed ? 'ממתינים לאימות' : (data?.disconnect ? 'מנותק' : stateLabels[data?.state || '']) || 'טוענים…'}
               </span>
             </div>
             <p>חשבון ההורה משמש לשליחה ולקבלה. פרטי הקישור נשארים בשרת.</p>
+            <ConnectionGuidance loaded={!!data} input={{ overviewFailed, browserOnline, state: data?.state, qrVisible: !!qr, disconnected: !!data?.disconnect }} />
             {qr ? (
               <div className="qr">
                 <img src={qr} alt="קוד QR לקישור WhatsApp — להורה בלבד" />
@@ -1962,7 +1975,7 @@ function Parent({
               </div>
             )}
             {data?.state === 'connected' ? (
-              <div className="connected-note">
+              !connectionReadUnavailable && <div className="connected-note">
                 <CheckCheck size={20} />{' '}
                 {me.connector === 'mock' ? 'המתאם המדומה פעיל' : 'החשבון מחובר'}
               </div>
