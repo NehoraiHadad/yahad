@@ -164,6 +164,8 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
     }
     return;
   }
+  if(content.ptvMessage && [content.imageMessage,content.videoMessage,content.documentMessage,content.audioMessage,content.stickerMessage].some(Boolean))
+    return {...base,raw:undefined,text:'הודעת מדיה עם שדות סותרים אינה מוצגת כאן. אפשר לפתוח אותה ב־WhatsApp.'};
   let body: any;
   if (content.lottieStickerMessage || content.stickerMessage?.isLottie)
     return {...base, text:'מדבקה בפורמט שאינו נתמך כאן — אפשר לפתוח אותה ב־WhatsApp.',raw:undefined};
@@ -178,6 +180,7 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
     const pairs = [
       ['imageMessage', 'image'],
       ['videoMessage', 'video'],
+      ['ptvMessage', 'video'],
       ['documentMessage', 'document'],
       ['audioMessage', 'audio'],
       ['stickerMessage', 'sticker'],
@@ -186,7 +189,7 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
       if (content[field]) {
         body = content[field];
         base.kind = kind;
-        base.text = body.caption || '';
+        base.text = body.caption || (field==='ptvMessage'?'הודעת וידאו עגולה':'');
         base.mime = body.mimetype;
         base.filename = body.fileName;
         break;
@@ -200,9 +203,12 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
 export function validateMediaSource(raw: WAMessage) {
   if (restrictedMessage(raw)) throw new Error('Temporary media unavailable');
   const content = normalizeMessageContent(raw.message);
+  if(content?.ptvMessage && [content.imageMessage,content.videoMessage,content.documentMessage,content.audioMessage,content.stickerMessage].some(Boolean))
+    throw new Error('Ambiguous media');
   const body: any =
     content?.imageMessage ||
     content?.videoMessage ||
+    content?.ptvMessage ||
     content?.audioMessage ||
     content?.documentMessage ||
     content?.stickerMessage;
@@ -230,7 +236,12 @@ export function validateMediaSource(raw: WAMessage) {
 export async function incomingMediaStream(raw:WAMessage,reuploadRequest:WASocket['updateMediaMessage'],
   transport={message:downloadMediaMessage,direct:downloadContentFromMessage}) {
   validateMediaSource(raw);
-  const sticker=normalizeMessageContent(raw.message)?.stickerMessage;
+  const content=normalizeMessageContent(raw.message);
+  // PTV uses the official Video media-key domain. The high-level helper's
+  // url-property check rejects sanitized directPath-only plain objects.
+  if(content?.ptvMessage && !content.videoMessage)
+    return transport.direct(content.ptvMessage,'ptv',{});
+  const sticker=content?.stickerMessage;
   // Sanitized plain objects omit protobuf's inherited url property. The pinned
   // high-level helper rejects those even though the supported directPath exists.
   if(sticker?.directPath&&!sticker.url)

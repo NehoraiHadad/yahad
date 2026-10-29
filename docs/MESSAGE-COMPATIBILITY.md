@@ -15,7 +15,8 @@ Scope: local fixes based on Yahad 0.5.3, integrated commit `0bf1e9d4d71221fcb77c
 | Regular text poll V1/V2/V3 | Question and options shown in a read-only card; explicit notice that voting/results are unavailable | No creation, voting or per-message action UI/API |
 | Poll V4/V5, quiz/image variants and image options | Specific unsupported-variant explanation; no question, answer or media projection | Not enabled |
 | Poll vote / result snapshot | Recognized with an explicit unavailable-details explanation | No inferred vote counts, results, or “zero votes” |
-| Contact cards, location/live location, round video, Lottie, business interactive types | Remain unsupported | Not added in this change |
+| Round video (PTV) | Received through existing video player, subject to media availability, MIME, size and codec limits; conflicting PTV/media fields rejected | Recording/sending as a round video not added |
+| Contact cards, location/live location, Lottie, business interactive types | Remain unsupported | Not added in this change |
 
 The public DTO includes optional per-message `actions` so the UI does not offer an action that the API cannot perform. The API is authoritative, including for old clients. Raw payloads, reaction timestamps, edit timestamps and original-time bookkeeping are not exposed in the public DTO. `mine` for reactions still means the linked family WhatsApp account, not an individual child.
 
