@@ -1,5 +1,9 @@
 # Native Windows authority adapter plan
 
+Planning snapshot. The [code-only adapter follow-up](NATIVE-WINDOWS-ADAPTERS.md)
+implements bounded automatic delegation and supersedes the initial manual-only
+scope below. All real-machine execution gates remain closed.
+
 Status: design only, based on reviewed source `b1ea1bd5be33693fa7d3e2f7e375d3d1a1d0444d`.
 No adapter, service, credential, listener or machine permission is installed by
 this document. Production admission stays denied. The accompanying single VM

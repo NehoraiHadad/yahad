@@ -47,6 +47,10 @@ public static class WindowsFileBoundary
 
     // Recovery reads use the same pinned path, no-follow, link-count and ACL
     // checks as secrets, with bounded streaming rather than loading media in RAM.
+    internal static PrivateReadLease OpenInstalledRoleRead(string path,InstalledFileRoles roles,InstalledFileRole role)
+    {
+        var pinned=Pin(path,false,true);try{roles.Validate(Security(pinned.Leaf),role);return new(pinned);}catch{pinned.Dispose();throw;}
+    }
     internal static PrivateReadLease OpenPrivateRead(string path)
     {
         var pinned = Pin(path, false, true);
@@ -77,6 +81,32 @@ public static class WindowsFileBoundary
             return bytes;
         }
         public void Dispose()=>pinned.Dispose();
+    }
+
+    internal static DataLease AcquireInstalledDataLease(string directory,InstalledFileRoles roles)
+    {
+        var pinned=Pin(directory,true,false);SafeFileHandle? gate=null;
+        try
+        {
+            roles.Validate(Security(pinned.Leaf),InstalledFileRole.Data);
+            var count=0;
+            void Walk(string parent,int depth)
+            {
+                if(depth>128)throw new IOException("NATIVE_TREE_DEPTH");
+                foreach(var name in System.IO.Directory.EnumerateFileSystemEntries(parent))
+                {
+                    if(++count>100000)throw new IOException("NATIVE_TREE_COUNT");
+                    var directoryEntry=(File.GetAttributes(name)&FileAttributes.Directory)!=0;
+                    using var entry=Pin(name,directoryEntry,false);
+                    roles.Validate(Security(entry.Leaf),directoryEntry||Path.GetFileName(name)!="process.lock"?InstalledFileRole.Data:InstalledFileRole.Lease);
+                    if(directoryEntry)Walk(name,depth+1);
+                }
+            }
+            Walk(directory,0);
+            gate=Native.CreateFileW(Extended(Path.Combine(directory,"process.lock")),GenericRead|0x40000000|ReadControl,0,IntPtr.Zero,4,0x00200000,IntPtr.Zero);
+            if(gate.IsInvalid)throw new Win32Exception();CheckKind(gate,false);roles.Validate(Security(gate),InstalledFileRole.Lease);return new(pinned,gate,null);
+        }
+        catch{gate?.Dispose();pinned.Dispose();throw;}
     }
 
     public static DataLease AcquireDataLease(string directory, int? ownerProcessId = null)

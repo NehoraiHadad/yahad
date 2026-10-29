@@ -1,3 +1,4 @@
+import { submitWindowsUpdate, type WindowsUpdateTransport } from './windows-update-client.js';
 import { readFile, open, lstat, link, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -22,24 +23,30 @@ const statusSchema = z.object({
   lastRequest: z.object({id:z.uuid(),action:z.enum(['check','install']),state:z.enum(['running','succeeded','failed']),
     startedAt:z.number(),finishedAt:z.number().nullable(),error:updateError.or(z.literal('expired')).nullable(),target:visibleTargetSchema}).nullable().optional(),
   operator: z.object({ familyId: z.string().max(100), userId: z.string().max(100) }),
-  phase: z.enum(['idle','available','checking','preparing','downloading','verifying','building','stopping','backing_up','activating','checking_health','healthy','rolled_back','failed','incompatible','rolling_back','recovery_required','rollback_pending_health']),
+  phase: z.enum(['awaiting_local_approval','idle','available','checking','preparing','downloading','verifying','building','stopping','backing_up','activating','checking_health','healthy','rolled_back','failed','incompatible','rolling_back','recovery_required','rollback_pending_health']),
   currentVersion: z.string().max(40).nullable(), latestVersion: z.string().max(40).nullable(),
   installTarget: visibleTargetSchema,
   checkedAt: z.number().nullable(), updatedAt: z.number(),
   error: updateError.nullable(),
 });
-export async function updateStatus(config: Config, user: User) {
+export async function updateStatus(config: Config, user: User, native?: WindowsUpdateTransport) {
   try {
-    const path = config.updateStatusFile || '/var/lib/yachad-updates/status.json';
-    const st = await lstat(path);
-    if (!st.isFile() || st.isSymbolicLink() || st.size > 8192) throw new Error('Invalid status');
-    const status = statusSchema.parse(JSON.parse(await readFile(path, 'utf8')));
+    let raw: unknown;
+    if (native) raw = await native.status();
+    else {
+      const path = config.updateStatusFile || '/var/lib/yachad-updates/status.json';
+      const st = await lstat(path);
+      if (!st.isFile() || st.isSymbolicLink() || st.size > 8192) throw new Error('Invalid status');
+      raw = JSON.parse(await readFile(path, 'utf8'));
+    }
+    const status = statusSchema.parse(raw);
     const operator = user.role === 'parent' && status.operator.familyId === user.familyId && status.operator.userId === user.id;
     if (!operator) return { configured: false as const };
     const { operator: _operator, ...visible } = status;
     let queuedMode: {id:string;mode:'notify'|'auto'} | null = null;
     let queuedRequest: {id:string;action:'check'|'install'|'set_mode';mode?:'notify'|'auto';target?:UpdateTarget;createdAt:number} | null = null;
     try {
+      if(native)throw new Error('Native queue is owned by authority');
       const requestPath=join(config.dataDir,'update-request.json'), queuedStat=await lstat(requestPath);
       if(queuedStat.isFile()&&!queuedStat.isSymbolicLink()&&queuedStat.size<=512){
         const request=JSON.parse(await readFile(requestPath,'utf8'));
@@ -53,17 +60,18 @@ export async function updateStatus(config: Config, user: User) {
         }
       }
     } catch {}
-    return { configured: true as const, ...visible, queuedMode, queuedRequest, stale: Date.now() - status.updatedAt > 86400000 };
+    return { configured: true as const, ...visible, ...(native ? { confirmation: 'native' as const } : {}), queuedMode, queuedRequest, stale: Date.now() - status.updatedAt > 86400000 };
   } catch { return { configured: false as const }; }
 }
-export async function requestUpdate(config: Config, user: User, action: 'check' | 'install' | 'set_mode', mode?: 'notify'|'auto', target?: UpdateTarget) {
-  const status = await updateStatus(config, user);
+export async function requestUpdate(config: Config, user: User, action: 'check' | 'install' | 'set_mode', mode?: 'notify'|'auto', target?: UpdateTarget, native?: WindowsUpdateTransport) {
+  const status = await updateStatus(config, user, native);
   if (!status.configured || !status.enabled || status.stale) return 'unavailable';
   // Neither a queued install nor a mode/check request can repair these states.
   // In automatic mode even "check" may install, so reject every POST here;
   // GET status remains readable; only the root worker's recovery path clears it.
   if (status.phase === 'recovery_required' || status.phase === 'rollback_pending_health') return 'unavailable';
   if(action==='set_mode'&&(!status.modeControlAllowed||!mode))return 'mode_locked';
+  if(status.phase==='awaiting_local_approval')return 'pending';
   if(status.lastModeRequest?.state==='pending')return 'pending';
   if(status.lastRequest?.state==='running')return 'pending';
   if(action==='install') {
@@ -75,6 +83,7 @@ export async function requestUpdate(config: Config, user: User, action: 'check' 
     target=supplied.data;
   }
   const id = randomUUID();
+  if(native)return submitWindowsUpdate(native,{id,action,...(action==='install'?{target}:{}),...(action==='set_mode'?{mode}:{}),familyId:user.familyId,userId:user.id});
   const temporary=join(config.dataDir, '.update-request-'+id+'.tmp');
   let created=false;
   try {

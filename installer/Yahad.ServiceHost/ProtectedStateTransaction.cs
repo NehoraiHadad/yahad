@@ -10,7 +10,8 @@ internal sealed record ProtectedOperation(int Format,string Kind,string Installa
 // Returned by an authenticated boundary, never deserialized from request fields.
 internal sealed record VerifiedOperationOwner(string Subject,string InstallationId,string OperationDigest,string Scope,long ApprovedUnix,long ValidUntilUnix);
 internal interface IOwnerOperationAuthentication
-{Task<VerifiedOperationOwner> AuthenticateAsync(string operationDigest,string requiredScope,CancellationToken cancellation);}
+{Task<VerifiedOperationOwner> AuthenticateAsync(string operationDigest,string requiredScope,CancellationToken cancellation);
+ void RequireCurrent(VerifiedOperationOwner owner){} }
 internal sealed class UnconfiguredOwnerOperationAuthentication:IOwnerOperationAuthentication
 {public Task<VerifiedOperationOwner> AuthenticateAsync(string digest,string scope,CancellationToken cancellation)=>throw new UnauthorizedAccessException("OWNER_CHANNEL_UNCONFIGURED");}
 internal sealed record ProtectedPending(int Format,ProtectedOperation Operation,VerifiedOperationOwner Owner,Dictionary<string,string> Before,Dictionary<string,string> After);
@@ -92,6 +93,7 @@ internal sealed class ProtectedStateTransactionWriter
             cancellation.ThrowIfCancellationRequested();await appJob.WaitForTreeEmptyAsync(cancellation);ValidateVisible(pending);CheckWindow(op,reauthenticated??pending.Owner,resume);
             Atomic(name,Convert.FromBase64String(pending.After[name]),op.Nonce,true,fault);fault?.Invoke("record-"+name);
         }
+        CheckWindow(op,reauthenticated??pending.Owner,resume);
         var proof=JsonSerializer.SerializeToUtf8Bytes(new ProtectedCommit(1,pendingDigest,Binding(pending.After).ActivationReceiptDigest,op.ExpectedEpoch+1));
         if(Path.Exists(receipt)){if(!Read(receipt,4096).SequenceEqual(proof))throw new IOException("STATE_COMMIT_RECEIPT");}else WriteNew(receipt,proof);
         fault?.Invoke("commit-receipt");ValidateVisible(pending,true);File.Delete(Path.Combine(root,"pending.json"));fault?.Invoke("pending-cleared");authority.Dispose();
@@ -99,7 +101,7 @@ internal sealed class ProtectedStateTransactionWriter
     private async Task<VerifiedOperationOwner> Authorize(ProtectedOperation op,bool resume,CancellationToken cancellation)
     {
         if(op.Format!=1||op.InstallationId!=installation||op.ExpectedEpoch<0||op.ExpectedEpoch==long.MaxValue||op.Kind is not("install" or "activate" or "recover")||
-            (op.Kind=="install")!=(op.ExpectedEpoch==0)||(op.Kind=="recover")!=(op.Recovery is not null)||op.Web.InstallationId!=installation)throw new IOException("STATE_OPERATION_BINDING");
+            (op.Kind=="install")!=(op.ExpectedEpoch==0)||(op.Kind=="recover"&&op.Recovery is null)||(op.Kind=="install"&&op.Recovery is not null)||op.Web.InstallationId!=installation)throw new IOException("STATE_OPERATION_BINDING");
         InstalledActivationResolver.Id(op.Nonce);InstalledActivationResolver.Id(op.DataId);
         foreach(var digest in new[]{op.ReleaseDigest,op.MasterKeyDigest,op.PolicyDigest,op.PinDigest})InstalledActivationResolver.Digest(digest);
         if(op.ExpectedEpoch==0){if(op.ExpectedActivationDigest!="")throw new IOException("STATE_INSTALL_ANCHOR");}else InstalledActivationResolver.Digest(op.ExpectedActivationDigest);
@@ -109,14 +111,14 @@ internal sealed class ProtectedStateTransactionWriter
         CheckWindow(op,owner,resume);return owner;
     }
     private void CheckWindow(ProtectedOperation op,VerifiedOperationOwner owner,bool resume)
-    {var now=clock().ToUnixTimeSeconds();if(owner.ApprovedUnix<=0||owner.ApprovedUnix>now||owner.ValidUntilUnix<=now||(!resume&&(op.ExpiresUnix<=now||op.ExpiresUnix>now+600||owner.ValidUntilUnix<op.ExpiresUnix)))throw new UnauthorizedAccessException("STATE_AUTHORIZATION_EXPIRED");}
+    {authentication.RequireCurrent(owner);var now=clock().ToUnixTimeSeconds();if(owner.ApprovedUnix<=0||owner.ApprovedUnix>now||owner.ValidUntilUnix<=now||(!resume&&(op.ExpiresUnix<=now||op.ExpiresUnix>now+600||owner.ValidUntilUnix<op.ExpiresUnix)))throw new UnauthorizedAccessException("STATE_AUTHORIZATION_EXPIRED");}
     private Dictionary<string,string> Build(ProtectedOperation op,VerifiedOperationOwner owner,bool inspection=false)
     {
         var result=new Dictionary<string,string>(StringComparer.Ordinal);string Put<T>(string name,T value){var b=JsonSerializer.SerializeToUtf8Bytes(value);result.Add(name,Convert.ToBase64String(b));return Hash(b);}
         var epoch=op.ExpectedEpoch+1;
         var ownerDigest=Put("owner-intent.json",new InstalledOwnerIntent(1,installation,epoch,op.Nonce,op.ReleaseDigest,op.DataId,op.Recovery is null?"activate":"recover",owner.Subject,owner.ApprovedUnix,null));
         var web=Put("web.json",op.Web);
-        var head=Put("activation.json",new InstalledActivation(1,installation,epoch,op.ReleaseDigest,op.DataId,op.MinimumSchema,op.MaximumSchema,op.MasterKeyDigest,op.PolicyDigest,op.PinDigest,ownerDigest,web,inspection&&op.Recovery is not null?"recovered":"committed",op.Recovery));
+        var head=Put("activation.json",new InstalledActivation(1,installation,epoch,op.ReleaseDigest,op.DataId,op.MinimumSchema,op.MaximumSchema,op.MasterKeyDigest,op.PolicyDigest,op.PinDigest,ownerDigest,web,inspection&&op.Kind=="recover"?"recovered":"committed",op.Recovery));
         Put("epoch.json",new InstalledEpoch(1,installation,epoch,head));
         Put("bootstrap.json",new{schema=1,service=ServiceDefinition.Name,installationId=installation,activationReceiptDigest=head});return result;
     }
@@ -125,7 +127,7 @@ internal sealed class ProtectedStateTransactionWriter
         if(op.ExpectedEpoch==0){if(before.Count!=0||Directory.EnumerateFiles(Path.Combine(root,".authority"),"commit-*.json").Any())throw new IOException("STATE_CAS");return;}
         if(before.Count!=5||!Records.All(before.ContainsKey))throw new IOException("STATE_BEFORE_MEMBERS");
         byte[] Get(string name)=>Convert.FromBase64String(before[name]);
-        var head=NativeJson.Read<InstalledActivation>(Get("activation.json"));var epoch=NativeJson.Read<InstalledEpoch>(Get("epoch.json"));var bootstrap=WindowsInstallationReader.Parse(Get("bootstrap.json"));
+        var head=NativeJson.Read<InstalledActivation>(Get("activation.json"));if(op.Kind=="activate"&&op.Recovery!=head.Recovery)throw new IOException("STATE_RECOVERY_SELECTION_CHANGE");var epoch=NativeJson.Read<InstalledEpoch>(Get("epoch.json"));var bootstrap=WindowsInstallationReader.Parse(Get("bootstrap.json"));
         if(Hash(Get("activation.json"))!=op.ExpectedActivationDigest||head.InstallationId!=installation||head.Epoch!=op.ExpectedEpoch||epoch!=new InstalledEpoch(1,installation,op.ExpectedEpoch,op.ExpectedActivationDigest)||
             bootstrap!=new InstallationBinding(installation,op.ExpectedActivationDigest)||Hash(Get("owner-intent.json"))!=head.OwnerIntentDigest||Hash(Get("web.json"))!=head.WebDigest)throw new IOException("STATE_CAS");
     }

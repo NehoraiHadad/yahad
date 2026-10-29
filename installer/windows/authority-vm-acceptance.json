@@ -225,6 +225,7 @@
     "Start authority manually. Verify local pipe ACLs, mutual kernel peer authentication, and refusal before trust/owner state exists. Start runtime only via authority; verify startup gate and outer-job membership before hash-pinned non-listening test worker.",
     "Attempt ordinary child/adversary SID, runtime request with forged owner fields, wrong digest, expired/replayed challenge, pipe collision/spoofed server and service configuration drift. Require denial and byte-identical protected records.",
     "Submit bounded synthetic exact-target request, open installed companion as registered existing owner, display authoritative summary and approve. Verify token-derived principal, durable approval/CAS/nonce and actual consumer admission, with data leases held throughout.",
+    "Using synthetic data only, approve one exact bounded delegation in the native owner window, perform two routine automatic updates without repeated confirmation/UAC, then verify expiry/revocation/budget/key-policy-pin/schema/origin/recovery-selection bounds and interrupted reconciliation. Preserve original policy/pins; never register a production delegation.",
     "Verify graceful stop and full real process-tree exit; exercise stuck child, failed observation and denied process-assignment access. Unknown state must retain recovery-required and must not publish success/STOPPED as confirmed cleanup.",
     "Kill authority during an owned synthetic update, nonce reservation and selected record publications. Verify managed-tree termination and fail-closed reconciliation; owner may explicitly reconcile only when actual required observations exist. A missing old job handle alone never proves quiescence.",
     "Use actual synthetic encrypted backup receipt and restore to a new directory; corrupt receipt/SQLite and stale epoch must refuse. Verify active synthetic DB never overwritten on failure.",
@@ -233,7 +234,6 @@
   "outOfScope": [
     "real family or WhatsApp data",
     "app HTTP/TLS/LAN handoff",
-    "automatic mode delegation",
     "autostart/boot/reboot/power-loss acceptance",
     "VM creation/configuration",
     "Windows user/account creation",
@@ -261,8 +261,8 @@
     "family-ready installer",
     "trusted public release intake",
     "successful real browser onboarding",
-    "automatic Windows updates",
     "clean power-loss recovery",
-    "Linux or ARM acceptance"
+    "Linux or ARM acceptance",
+    "unbounded or production-approved automatic delegation"
   ]
 }

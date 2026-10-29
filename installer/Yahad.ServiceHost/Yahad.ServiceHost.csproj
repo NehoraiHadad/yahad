@@ -4,5 +4,5 @@
     <ProjectReference Include="../Yahad.Install.Core/Yahad.Install.Core.csproj" />
     <InternalsVisibleTo Include="Yahad.ServiceHost.Tests" />
     <InternalsVisibleTo Include="Yahad.Admission.Tests" />
-  <InternalsVisibleTo Include="Yahad.Production.Tests" /></ItemGroup>
+  <InternalsVisibleTo Include="Yahad.Production.Tests" /><InternalsVisibleTo Include="Yahad.Authority"/></ItemGroup>
 </Project>

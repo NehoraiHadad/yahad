@@ -1,3 +1,4 @@
+import type { WindowsUpdateTransport } from './windows-update-client.js';
 import Fastify from 'fastify';
 import { CredentialThrottle } from './credential-throttle.js';
 import { performance } from 'node:perf_hooks';
@@ -37,7 +38,7 @@ declare module 'fastify' {
 }
 export async function createApp(
   config: Config,
-  options: { store?: Store; factory?: (h: ConnectorHooks) => Connector; boot?: boolean;
+  options: { windowsUpdates?: WindowsUpdateTransport; store?: Store; factory?: (h: ConnectorHooks) => Connector; boot?: boolean;
     bootstrap?: { token: string; expiresAt: number } } = {},
 ) {
   const app = Fastify({
@@ -743,7 +744,7 @@ export async function createApp(
   });
   app.get('/api/parent/updates', async req => {
     parent(req.session);
-    return updateStatus(config, req.session.user);
+    return updateStatus(config, req.session.user, options.windowsUpdates);
   });
   app.post('/api/parent/updates', async req => {
     parent(req.session);
@@ -753,7 +754,7 @@ export async function createApp(
       z.object({action:z.literal('set_mode'),mode:z.enum(['notify','auto'])}).strict(),
     ]).parse(req.body);
     const state = await requestUpdate(config, req.session.user, request.action, 'mode' in request?request.mode:undefined,
-      request.action==='install'?request.target:undefined);
+      'target' in request?request.target:undefined, options.windowsUpdates);
     if (state === 'unavailable') throw new AppError(409, 'UPDATES_UNAVAILABLE');
     if (state === 'target_changed') throw new AppError(409, 'UPDATES_TARGET_CHANGED');
     if (state === 'mode_locked') throw new AppError(409, 'UPDATES_MODE_LOCKED');
