@@ -1,5 +1,6 @@
 import { conversationKind } from './conversation-id.js';
 import { applyReactions, queueReaction, pendingReactions, clearPendingReactions } from './message-reactions.js';
+import { messageActions } from './message-actions.js';
 import { GroupPhotoCache } from './group-photos.js';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { Store, type User } from './store.js';
@@ -26,6 +27,7 @@ export const deny = () => new AppError(404, 'NOT_FOUND');
 export interface PublicMessage extends Omit<StoredMessage, 'raw' | 'replyId' | 'reactions' | 'reactionTimes'> {
   reply?: { id: string; text: string; sender: string; available?: boolean };
   reactions: { emoji: string; count: number; mine: boolean }[];
+  actions?: {reply:boolean;reactions:boolean;edit:boolean;delete:boolean};
 }
 export class ChatService {
   readonly histories: HistoryTracker;
@@ -304,6 +306,7 @@ export class ChatService {
     const repairMissingMedia=existing&&!existing.mediaId&&['sticker','image','video','audio','document'].includes(input.kind)&&
       (existing.kind===input.kind||(existing.kind==='text'&&!existing.text))&&!!(input.bytes||input.download);
     const explainLegacyBlank=existing?.kind==='text'&&!existing.text&&input.kind==='unsupported'&&!!input.text;
+    const explainUnsupported=existing?.kind==='unsupported'&&input.kind==='unsupported'&&!!input.unsupportedReason&&existing.unsupportedReason!==input.unsupportedReason;
     if (existing && input.historicalReactions?.length) {
       applyReactions(existing,input.historicalReactions);
       this.store.putMessage(f,existing,false);
@@ -311,7 +314,7 @@ export class ChatService {
     }
     if (
       existing &&
-      !repairMissingMedia && !explainLegacyBlank &&
+      !repairMissingMedia && !explainLegacyBlank && !explainUnsupported &&
       existing.status !== 'pending' &&
       existing.status !== 'failed' &&
       (!input.fromMe || !!existing.raw)
@@ -338,6 +341,7 @@ export class ChatService {
         ? Math.max(0, Math.min(input.time, Date.now() + 300000))
         : Date.now(),
       kind: input.kind,
+      unsupportedReason: input.unsupportedReason,
       text:
         input.text.length > 65536
           ? input.text.slice(0, 65536) + '\n[ההודעה קוצרה בגלל מגבלת גודל]'
@@ -452,6 +456,7 @@ export class ChatService {
     }
     return {
       ...safe,
+      actions:messageActions(m,this.connectors.get(f)),
       reactions: [...aggregated.values()],
       ...(replyId
         ? {

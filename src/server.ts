@@ -19,6 +19,7 @@ import { ChildAccessError } from './child-access.js';
 import { unreadCount, markLocallyViewed } from './chat-read-state.js';
 import { ChatService, AppError, deny } from './service.js';
 import { voiceToOpus } from './media.js';
+import { validReaction } from './message-actions.js';
 import { updateStatus, requestUpdate, updateTargetSchema } from './updates.js';
 import type { ConnectorHooks, Connector, StoredMessage, Kind } from './connectors/types.js';
 const textSchema = z.string().trim().max(12000);
@@ -162,6 +163,11 @@ export async function createApp(
     )
       throw new AppError(403, 'OWN_MESSAGE_ONLY');
     return m;
+  };
+  const requireOriginal = (s: Session,m: StoredMessage) => {
+    const c=service.connector(s.user.familyId);
+    if (m.restricted || m.kind==='unsupported' || c.originalAvailable && !c.originalAvailable(m))
+      throw new AppError(409,'ORIGINAL_UNAVAILABLE');
   };
   let settingUp = false;
   app.get('/api/setup/status', async () => ({
@@ -429,7 +435,7 @@ export async function createApp(
     if (pending.has(requestKey)) throw new AppError(409, 'SEND_PENDING');
     rateSend(s);
     const reply = data.replyId ? getMessage(s, g, data.replyId) : undefined;
-    if (reply) capable(s, 'reply');
+    if (reply) { capable(s, 'reply'); requireOriginal(s,reply); }
     const label = s.user.role === 'child' ? store.identityLabel(f, s.user.id) : '';
     const needsMarker = !!label && (attachment?.kind === 'audio' || attachment?.kind === 'sticker');
     const wireText = label && !needsMarker ? `${label}: ${data.text}` : data.text;
@@ -655,8 +661,9 @@ export async function createApp(
         g = req.params.g;
       capable(s, 'reactions');
       const m = getMessage(s, g, req.params.id);
+      requireOriginal(s,m);
       const { emoji } = z
-        .object({ emoji: z.enum(['', '💚', '❤️', '👍', '😂', '✨', '🌸', '🎉', '🙏']) })
+        .object({ emoji: z.string().max(64).refine(validReaction) })
         .parse(req.body);
       rateSend(s);
       await service.connector(s.user.familyId).react(g, m, emoji);
@@ -669,6 +676,7 @@ export async function createApp(
     capable(s, 'edit');
     const m = own(s, g, req.params.id),
       c = service.connector(s.user.familyId);
+      requireOriginal(s,m);
     if (m.kind !== 'text' || Date.now() - m.time > c.capabilities.editWindowMs)
       throw new AppError(409, 'EDIT_WINDOW_CLOSED');
     const { text } = z.object({ text: textSchema.min(1) }).parse(req.body);
@@ -684,6 +692,7 @@ export async function createApp(
       g = req.params.g;
     capable(s, 'delete');
     const m = own(s, g, req.params.id);
+      requireOriginal(s,m);
     rateSend(s);
     await service.connector(s.user.familyId).delete(g, m);
     return { ok: true };

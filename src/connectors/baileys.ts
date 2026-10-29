@@ -130,6 +130,12 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
       id: p?.type === proto.Message.ProtocolMessage.Type.MESSAGE_EDIT ? p.key?.id || id : id,
       text: 'הודעה זמנית או לצפייה חד־פעמית — לפתיחה ב־WhatsApp בלבד' };
   }
+  if (content.pollCreationMessage || content.pollCreationMessageV2 || content.pollCreationMessageV3)
+    return {...base,raw:undefined,unsupportedReason:'poll',text:'סקר ב־WhatsApp — פרטי הסקר, ההצבעה והתוצאות זמינים כרגע ב־WhatsApp בלבד'};
+  if (content.pollUpdateMessage)
+    return {...base,raw:undefined,unsupportedReason:'poll-vote',text:'עדכון הצבעה בסקר — פרטי ההצבעה זמינים כרגע ב־WhatsApp בלבד'};
+  if (content.pollResultSnapshotMessage)
+    return {...base,raw:undefined,unsupportedReason:'poll-results',text:'תוצאות סקר — זמינות כרגע ב־WhatsApp בלבד'};
   if (content.reactionMessage) {
     const r = content.reactionMessage;
     if (r.key?.remoteJid && r.key.remoteJid !== groupId) return;
@@ -235,6 +241,7 @@ export async function incomingMediaStream(raw:WAMessage,reuploadRequest:WASocket
 }
 export class BaileysConnector implements Connector {
   readonly capabilities: Capabilities = {
+    polls: {identify:true,create:false,vote:false,results:false},
     reply: true,
     reactions: true,
     image: true,
@@ -489,8 +496,15 @@ export class BaileysConnector implements Connector {
     return this.sock;
   }
   key(m: StoredMessage) {
-    if (!m.raw) throw new Error('Original message unavailable');
-    return parse(m.raw).key;
+    if (!this.originalAvailable(m)) throw new Error('Original message unavailable');
+    return parse(m.raw!).key;
+  }
+  originalAvailable(m: StoredMessage) {
+    if (!m.raw || m.deleted || m.restricted || m.kind==='unsupported') return false;
+    try {
+      const original=parse(m.raw);
+      return !!original.message && original.key?.id===m.id && original.key?.remoteJid===m.groupId;
+    } catch { return false; }
   }
   async groups() {
     const sock = this.require(), generation = this.generation;
@@ -511,6 +525,7 @@ export class BaileysConnector implements Connector {
     } catch { return; }
   }
   async send(m: Outgoing) {
+    if (m.reply && !this.originalAvailable(m.reply)) throw new Error('Original message unavailable');
     const sock = this.require();
     const content: any =
       m.kind === 'text'

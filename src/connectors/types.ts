@@ -2,6 +2,7 @@ export type Kind = 'text' | 'image' | 'video' | 'document' | 'sticker' | 'audio'
 export type Receipt = 'pending' | 'sent' | 'delivered' | 'read' | 'unknown' | 'failed';
 export interface ReactionUpdate { target: string; actor: string; emoji: string; time?: number }
 export interface Capabilities {
+  polls?: { identify: boolean; create: boolean; vote: boolean; results: boolean };
   reply: boolean;
   reactions: boolean;
   image: boolean;
@@ -34,6 +35,7 @@ export interface Incoming {
   time: number;
   kind: Kind;
   text: string;
+  unsupportedReason?: 'poll' | 'poll-vote' | 'poll-results';
   replyId?: string;
   mime?: string;
   filename?: string;
@@ -55,6 +57,7 @@ export interface StoredMessage {
   time: number;
   kind: Kind;
   text: string;
+  unsupportedReason?: 'poll' | 'poll-vote' | 'poll-results';
   replyId?: string;
   mediaId?: string;
   mime?: string;
@@ -108,6 +111,7 @@ export interface ConnectorHooks {
   maxMedia: number;
 }
 export interface Connector {
+  originalAvailable?(message: StoredMessage): boolean;
   readonly capabilities: Capabilities;
   start(): Promise<void>;
   stop(logout?: boolean): Promise<void | { remoteRevoked: boolean; unlinkRequested?: boolean }>;

@@ -1279,7 +1279,7 @@ function Message({
             {m.reactions.map((r) => (
               <button
                 key={r.emoji}
-                disabled={!caps.reactions}
+                disabled={!caps.reactions || m.actions?.reactions===false}
                 className={r.mine ? 'mine' : ''}
                 aria-label={`תגובה ${r.emoji}, ${r.count}`}
                 onClick={() => onReaction(r.mine ? '' : r.emoji)}
@@ -1293,14 +1293,14 @@ function Message({
         {menu && (
           <div className="message-actions">
             <div className="reaction-picker">
-              {caps.reactions &&
+              {caps.reactions && m.actions?.reactions!==false &&
                 emojiChoices.map((e) => (
                   <button aria-label={'תגובה ' + e} key={e} onClick={() => onReaction(e)}>
                     {e}
                   </button>
                 ))}
             </div>
-            {caps.reply && (
+            {caps.reply && m.actions?.reply!==false && (
               <button onClick={onReply}>
                 <Reply size={16} />
                 מענה
@@ -1310,13 +1310,14 @@ function Message({
               (isParent || m.authorUserId === userId) &&
               m.kind === 'text' &&
               caps.edit &&
+              m.actions?.edit!==false &&
               Date.now() - m.time < (caps.editWindowMs || 0) && (
                 <button onClick={onEdit}>
                   <Pencil size={16} />
                   עריכה
                 </button>
               )}
-            {m.fromMe && (isParent || m.authorUserId === userId) && caps.delete && (
+            {m.fromMe && (isParent || m.authorUserId === userId) && caps.delete && m.actions?.delete!==false && (
               <button className="danger-text" onClick={onDelete}>
                 <Trash2 size={16} />
                 מחיקה לכולם
