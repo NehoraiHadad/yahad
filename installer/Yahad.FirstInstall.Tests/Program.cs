@@ -12,6 +12,16 @@ using Yahad.Install;
 using Yahad.Service;
 using Yahad.Setup;
 
+if(args is ["--version-only",var versionRepo])
+{
+    var observations=new List<object>();var failed=0;
+    await VersionIdentityTests.RunAsync(async(name,run)=>
+    {
+        try{await run();observations.Add(new{name,status="PASS"});Console.WriteLine("PASS "+name);}
+        catch(Exception failure){failed++;observations.Add(new{name,status="FAIL",reason=failure.GetType().Name});Console.WriteLine("FAIL "+name+" "+failure);}
+    },Package,versionRepo);
+    Console.WriteLine(JsonSerializer.Serialize(new{suite="application-version-pure",ok=failed==0,version=ApplicationRelease.Version,failed,nativeOperations=false,cases=observations}));return failed==0?0:1;
+}
 if(args is ["--store-schema-only",var schemaRepo])
 {
     foreach(var expected in new[]{5,6,17})
@@ -110,11 +120,13 @@ await Check("preserved reinstall binds exact owner package activation and keys w
  var web=Put("web.json",new InstalledWeb(1,id,"http://127.0.0.1:47123",47123));
  var anchor=Put("activation.json",new InstalledActivation(1,id,1,manifest.PayloadDigest,dataId,5,5,key,policy,pin,intent,web,"committed",null));
  Put("epoch.json",new InstalledEpoch(1,id,1,anchor));Put("bootstrap.json",new{installationId=id,activationReceiptDigest=anchor});
- Put("installation.json",new FirstInstallReceipt(2,id,dataId,manifest.PayloadDigest,"0.5.3",new string('a',64),47123,manifest.ZipSha256,"committed",new string('b',64)));
+ Put("installation.json",new FirstInstallReceipt(2,id,dataId,manifest.PayloadDigest,ApplicationRelease.Version,new string('a',64),47123,manifest.ZipSha256,"committed",new string('b',64)));
  var state=new InstallerState(1,id,dataId,manifest.ZipSha256,manifest.PayloadDigest,manifest.SourceCommit,owner.Sid,47123,"uninstalled",manifest.Files,"S-1-5-80-1-2-3-4-5",owner.ImageSha256);
  var before=records.ToDictionary(x=>x.Key,x=>Convert.ToHexStringLower(SHA256.HashData(x.Value)));
  void Verify(InstallerState value,OwnerProcess principal)=>PreservedInstallation.Require(value,manifest,principal,name=>records[name]);
  Verify(state,owner);Verify(state with{Phase="reinstalling"},owner);
+ var originalReceipt=records["installation.json"];var typedReceipt=NativeJson.Read<FirstInstallReceipt>(originalReceipt);
+ Put("installation.json",typedReceipt with{Version="0.5.3"});await Refuse(()=>{Verify(state,owner);return Task.CompletedTask;});records["installation.json"]=originalReceipt;
  Assert(before.All(x=>x.Value==Convert.ToHexStringLower(SHA256.HashData(records[x.Key]))));
  foreach(var bad in new[]{state with{Phase="preparing"},state with{PackageDigest=new string('0',64)},state with{SourceCommit=new string('0',40)},state with{SetupSha256=new string('0',64)},state with{DataId=Guid.NewGuid().ToString("N")}})await Refuse(()=>{Verify(bad,owner);return Task.CompletedTask;});
  await Refuse(()=>{Verify(state,owner with{Sid="S-1-5-21-9-8-7-1001"});return Task.CompletedTask;});
@@ -189,7 +201,7 @@ FirstInstallReceipt CreateInitialGrants()
  var head=NativeJson.Read<InstalledActivation>(File.ReadAllBytes(f.PathOf("activation.json")));
  byte[] Grant()=>JsonSerializer.SerializeToUtf8Bytes(new FirstInstallSeed(1,f.InstallationId,f.OriginalDataId,head.ReleaseDigest,Guid.NewGuid().ToString("N")));
  var seed=Grant();var retry=Grant();File.WriteAllBytes(f.PathOf("initial-seed.json"),seed);File.WriteAllBytes(f.PathOf("initial-retry.json"),retry);
- return new(2,f.InstallationId,f.OriginalDataId,head.ReleaseDigest,"0.5.3",ProductionFixture.Hash(seed),32000,new string('b',64),"committed",ProductionFixture.Hash(retry));
+ return new(2,f.InstallationId,f.OriginalDataId,head.ReleaseDigest,ApplicationRelease.Version,ProductionFixture.Hash(seed),32000,new string('b',64),"committed",ProductionFixture.Hash(retry));
 }
 FreshDataAuthorization? ReadInitialGrants(FirstInstallReceipt receipt)
 {
@@ -278,8 +290,8 @@ Console.WriteLine($"{cases.Count-failures} passed; {failures} failed. No native 
  var names=new[]{"host/Yahad.ServiceHost.exe","host/Yahad.ServiceHost.runtimeconfig.json","payload/bundle.json","payload/runtime/node/node.exe","payload/runtime/ffmpeg/ffmpeg.exe","payload/runtime/caddy/caddy.exe","payload/app/src/main.ts","payload/app/dist/index.html","payload/app/native/Yahad.Platform.exe","payload/legal/build-inputs.json"};
  var records=new List<InstallMember>();using var data=new MemoryStream();string digest="";
  using(var zip=new ZipArchive(data,ZipArchiveMode.Create,true))foreach(var name in names)
- {var bytes=Encoding.UTF8.GetBytes(name=="payload/bundle.json"?"{\"version\":\"0.5.3\"}":name=="payload/app/src/main.ts"?"synthetic-app-not-executed":"synthetic");if(name=="payload/bundle.json")digest=Convert.ToHexStringLower(SHA256.HashData(bytes));var entry=zip.CreateEntry(name);using(var stream=entry.Open())stream.Write(bytes);records.Add(new(name,bytes.Length,Convert.ToHexStringLower(SHA256.HashData(bytes))));if(duplicate&&name==names[0]){using var stream=zip.CreateEntry(name).Open();stream.Write(bytes);}}
- var archive=data.ToArray();return(archive,JsonSerializer.SerializeToUtf8Bytes(new InstallPackageManifest(1,"0.5.3",new string('a',40),Convert.ToHexStringLower(SHA256.HashData(archive)),digest,records.ToArray())));
+ {var bytes=Encoding.UTF8.GetBytes(name=="payload/bundle.json"?JsonSerializer.Serialize(new{version=ApplicationRelease.Version}):name=="payload/app/src/main.ts"?"synthetic-app-not-executed":"synthetic");if(name=="payload/bundle.json")digest=Convert.ToHexStringLower(SHA256.HashData(bytes));var entry=zip.CreateEntry(name);using(var stream=entry.Open())stream.Write(bytes);records.Add(new(name,bytes.Length,Convert.ToHexStringLower(SHA256.HashData(bytes))));if(duplicate&&name==names[0]){using var stream=zip.CreateEntry(name).Open();stream.Write(bytes);}}
+ var archive=data.ToArray();return(archive,JsonSerializer.SerializeToUtf8Bytes(new InstallPackageManifest(1,ApplicationRelease.Version,new string('a',40),Convert.ToHexStringLower(SHA256.HashData(archive)),digest,records.ToArray())));
 }
 internal sealed class FakeHost:ISetupHostOperations
 {

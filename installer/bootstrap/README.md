@@ -27,6 +27,20 @@ a release URL or downloads a different/latest version. An authorized publisher
 must supply the immutable HTTPS URL to `build.py --payload-url` and verify the
 actual hosted bytes before linking the launcher from the landing page.
 
+The checked-in pin above remains historical; it is not a 0.6.0 payload and must
+not be relabeled. Builds now refuse a pin whose version differs from the root
+package/lock identity or whose Setup and payload source commits differ from the
+clean current source. Build the full installer from that source first, retain
+its actual bytes, and provide its separately recorded pin with `--payload-pin`.
+Configuring `--payload-url` also requires `--payload <retained-full-installer>`;
+the builder checks the local file's size and SHA256 before compiling a launcher.
+It then uses that full installer's non-installing `--verify-package` audit to
+require matching embedded manifest, Setup assembly and shared Core source
+identities. A custom pin cannot merely relabel the old installer. No UI, UAC,
+service or machine operation is requested by this audit mode.
+These checks preserve byte/source consistency, not signing, hosted-byte or
+machine-acceptance proof. All distribution gates above remain in force.
+
 The URL is compiled into an internal PE resource; no user-supplied URL, sidecar manifest, environment
 override, CLI payload override or unsigned remote version selection is accepted.
 Redirects are at most three, HTTPS only, same host; GitHub release downloads may

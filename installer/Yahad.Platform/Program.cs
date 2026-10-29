@@ -7,6 +7,12 @@ using Yahad.Install;
 void Reply(object value) => Console.WriteLine(JsonSerializer.Serialize(value));
 try
 {
+    if (args is ["--describe"])
+    {
+        Reply(new { artifact="Yahad.Platform", applicationVersion=ApplicationRelease.Version, sourceCommit=ApplicationRelease.SourceCommit,
+            version=System.Reflection.Assembly.GetExecutingAssembly().GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute),false).Cast<System.Reflection.AssemblyInformationalVersionAttribute>().Single().InformationalVersion });
+        return 0;
+    }
     if (args is ["read-secret", var role, var path] && role is "master-key" or "setup-capability")
     {
         try

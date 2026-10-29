@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 import shutil
 import subprocess
+from .application_version import source_release_version, require_native_build_identity, describe_build_artifact
 
 
 def stage_public_lan_help(repo, app):
@@ -39,6 +40,9 @@ def prepare(repo, output, node, dotnet, cache):
     if subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=no'], cwd=repo, text=True).strip():
         raise ValueError('Commit tracked source before preparing a reproducible fixture')
     source_commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip()
+    version=source_release_version(repo)
+    require_native_build_identity(describe_build_artifact(repo/'installer/artifacts/Yahad.Platform.Bundle/Yahad.Platform.exe','--describe',repo),
+        'Yahad.Platform',version,source_commit)
     if output.exists() or output == repo or not cache.is_dir(): raise ValueError('New output and an existing offline cache required')
     output.mkdir(parents=True, exist_ok=False)
     app = output/'app'; app.mkdir()

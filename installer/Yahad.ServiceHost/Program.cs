@@ -1,11 +1,13 @@
 using System.Reflection;
 using System.Text.Json;
 using Yahad.Service;
+using Yahad.Install;
 
 if(args is ["--describe"])
 {
     Console.WriteLine(JsonSerializer.Serialize(new{artifact="Yahad.ServiceHost",serviceName=ServiceDefinition.Name,
         version=Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion,
+        applicationVersion=ApplicationRelease.Version,sourceCommit=ApplicationRelease.SourceCommit,
         scmEntryImplemented=true,canInstallService=false,activationAdapterImplemented=true,activationAuthorityConfigured=true,firstInstallProfile=true,
         familyInstallationReady=false,releaseReady=false}));return 0;
 }

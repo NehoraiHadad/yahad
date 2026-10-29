@@ -2,8 +2,19 @@
 
 This focused branch implements one installer file, one Windows application
 service, and the existing browser onboarding. It does not depend on the frozen
-two-role update authority. The app payload uses the published 0.5.3 metadata,
-schema 5 and protocol 2, plus the existing native Windows portability changes.
+two-role update authority. The application release version comes from the root
+`package.json`, checked against both lockfile version fields at packaging time.
+The shared native Core embeds that same package file at build time; Setup intake,
+payload checks, initial receipts, preserved-data reinstall, the service receipt
+reader and uninstall DisplayVersion use this compiled identity. This source is
+version 0.6.0, schema 6 and protocol 2. Historical binaries and download pins
+listed below retain their actual original identities.
+
+A new installer cannot silently reinstall an old-version package or rewrite its
+receipt. The existing exact package/source/owner/data identity checks still
+require the supported upgrade or repair path for a different package. Ordinary
+application payload updates do not replace the installer-owned service host;
+its original compiled installation identity and receipt remain paired.
 
 `Yahad.Setup` embeds the app, private Node/ffmpeg/Caddy, production node_modules,
 native file helper, service executable and private .NET runtime closure. There

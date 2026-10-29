@@ -11,7 +11,7 @@ public partial class App:Application
             if(e.Args is ["--verify-package"])
             {
                 using var package=InstallPackage.Embedded();var m=package.Manifest;
-                Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new{artifact="Yahad.Setup",version=m.Version,sourceCommit=m.SourceCommit,payload=m.PayloadDigest,files=m.Files.Length,embeddedZip=m.ZipSha256,service=InstallLocations.ServiceName,serviceInstallerImplemented=true,systemOperationsInvoked=false,machineAcceptance=false}));Shutdown(0);return;
+                Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new{artifact="Yahad.Setup",version=m.Version,sourceCommit=m.SourceCommit,setupSourceCommit=Yahad.Install.ApplicationRelease.CompiledSourceCommit(typeof(App).Assembly),coreSourceCommit=Yahad.Install.ApplicationRelease.SourceCommit,payload=m.PayloadDigest,files=m.Files.Length,embeddedZip=m.ZipSha256,service=InstallLocations.ServiceName,serviceInstallerImplemented=true,systemOperationsInvoked=false,machineAcceptance=false}));Shutdown(0);return;
             }
             if(e.Args is [var action,var nonce,var parent]&&action is "--elevated-install" or "--elevated-uninstall"&&int.TryParse(parent,out var pid))
             {var result=await SetupElevation.ElevatedAsync(action=="--elevated-uninstall",nonce,pid);Shutdown(result);return;}

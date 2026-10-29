@@ -68,7 +68,7 @@ internal sealed class NativeSetupHost(InstallPackage package):ISetupHostOperatio
         staging=Path.Combine(InstallLocations.State,"stage-"+Guid.NewGuid().ToString("N"));NativeInstallFiles.NewDirectory(staging,NativeInstallFiles.Descriptor(state!.ServiceSid));
         package.Extract(staging,p=>progress(new("extracting",10+p*55/100)),cancellation,dir=>NativeInstallFiles.EnsureStageDirectory(staging,dir,NativeInstallFiles.Descriptor(state.ServiceSid)),NativeInstallFiles.CreateNewFile);
         var manifest=NativeJson.Read<JsonElement>(File.ReadAllBytes(Path.Combine(staging,"payload/bundle.json")));
-        if(manifest.GetProperty("version").GetString()!="0.5.3"||manifest.GetProperty("target").GetString()!="win-x64"||manifest.GetProperty("profile").GetString()!="full")throw new IOException("PAYLOAD_VERSION");
+        if(manifest.GetProperty("version").GetString()!=ApplicationRelease.Version||manifest.GetProperty("target").GetString()!="win-x64"||manifest.GetProperty("profile").GetString()!="full")throw new IOException("PAYLOAD_VERSION");
         var build=NativeJson.Read<JsonElement>(File.ReadAllBytes(Path.Combine(staging,"payload/legal/build-inputs.json")));var payloadSchema=PayloadSchema.Read(build);
         if(reinstalling&&state.PayloadSchema!=payloadSchema)throw new IOException("PAYLOAD_SCHEMA");
         if(state.PayloadSchema!=payloadSchema){state=state with{PayloadSchema=payloadSchema};SaveState(state.Phase);}
@@ -129,7 +129,7 @@ internal sealed class NativeSetupHost(InstallPackage package):ISetupHostOperatio
         void Record(string name,byte[] bytes){var path=Path.Combine(InstallLocations.State,name);if(File.Exists(path))NativeInstallFiles.ReplaceOwned(path,bytes);else NativeInstallFiles.WriteNew(path,bytes);}
         Record("owner-intent.json",intent);Record("web.json",web);Record("activation.json",activation);Record("epoch.json",Json(new InstalledEpoch(1,s.InstallationId,1,Hash(activation))));
         Record("bootstrap.json",Json(new{schema=1,service=InstallLocations.ServiceName,installationId=s.InstallationId,activationReceiptDigest=Hash(activation)}));
-        Record("installation.json",Json(new FirstInstallReceipt(2,s.InstallationId,s.DataId,s.PayloadDigest,"0.5.3",Hash(seedBytes),s.Port,s.PackageDigest,"committed",Hash(retryBytes))));
+        Record("installation.json",Json(new FirstInstallReceipt(2,s.InstallationId,s.DataId,s.PayloadDigest,ApplicationRelease.Version,Hash(seedBytes),s.Port,s.PackageDigest,"committed",Hash(retryBytes))));
         RegisterUninstall();SaveState("committed");progress(new("installing_service",80));
     },cancellation);
     public async Task<SetupResult> StartAndObserveAsync(Action<SetupProgress> progress,CancellationToken cancellation)
@@ -246,7 +246,7 @@ internal sealed class NativeSetupHost(InstallPackage package):ISetupHostOperatio
     private static void RegisterUninstall()
     {
         using var key=Registry.LocalMachine.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\Yahad.FirstInstall",true);
-        key.SetValue("DisplayName","יחד");key.SetValue("DisplayVersion","0.5.3");key.SetValue("Publisher","Yahad");key.SetValue("InstallLocation",InstallLocations.Binaries);
+        key.SetValue("DisplayName","יחד");key.SetValue("DisplayVersion",ApplicationRelease.Version);key.SetValue("Publisher","Yahad");key.SetValue("InstallLocation",InstallLocations.Binaries);
         key.SetValue("UninstallString","\""+InstallLocations.InstallerImage+"\" --uninstall");key.SetValue("NoModify",1,RegistryValueKind.DWord);key.SetValue("NoRepair",1,RegistryValueKind.DWord);
     }
     public void Dispose()

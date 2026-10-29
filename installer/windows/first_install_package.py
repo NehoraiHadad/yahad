@@ -13,6 +13,7 @@ import zipfile
 from pathlib import Path
 from . import bundle,dependencies,pe
 from .prepare_core_fixture import prepare
+from .application_version import source_release_version, require_source_release_version, require_native_build_identity, describe_build_artifact
 
 
 def source_database_schema(repo):
@@ -31,6 +32,7 @@ def require_source_database_schema(build,repo):
 
 def payload(repo,core,vendors,full,node,dotnet,npm_cache,verified_vendor_source,archive):
     repo,core,vendors,full,node,dotnet,npm_cache,verified_vendor_source,archive=(Path(p).resolve() for p in (repo,core,vendors,full,node,dotnet,npm_cache,verified_vendor_source,archive))
+    source_release_version(repo)
     if any(p.exists() for p in (core,vendors,full,archive)):raise ValueError('New build outputs required')
     prepare(repo,core,node,dotnet,npm_cache)
     vendors.mkdir(parents=True)
@@ -46,15 +48,18 @@ def payload(repo,core,vendors,full,node,dotnet,npm_cache,verified_vendor_source,
     dependencies.validate_staged(bundle.inventory(vendors),spec)
     dependencies.augment(core,vendors,full)
     result=bundle.build(full,archive,'full')
-    if result['version']!='0.5.3':raise ValueError('Published 0.5.3 metadata required')
+    require_source_release_version(result['version'],repo)
     return dict(prepared=str(full),archive=str(archive),files=len(result['files']),version=result['version'],sha256=dependencies.digest(archive))
 
 
 def setup_inputs(repo,payload_zip,host,output):
     repo,payload_zip,host,output=(Path(p).resolve() for p in (repo,payload_zip,host,output))
+    version=source_release_version(repo)
     if output.exists():raise ValueError('New output required')
     if subprocess.check_output(['git','-C',str(repo),'status','--porcelain','--untracked-files=no']).strip():raise ValueError('Clean committed source required')
     source=subprocess.check_output(['git','-C',str(repo),'rev-parse','HEAD']).decode().strip()
+    require_native_build_identity(describe_build_artifact(host/'Yahad.ServiceHost.exe','--describe',repo),
+        'Yahad.ServiceHost',version,source)
     runtime=json.loads((host/'Yahad.ServiceHost.runtimeconfig.json').read_text())['runtimeOptions']
     if runtime.get('includedFrameworks')!=[dict(name='Microsoft.NETCore.App',version='10.0.14')]:raise ValueError('Private .NET runtime required')
     hostfiles={p.relative_to(host).as_posix():p for p in host.rglob('*') if p.is_file()}
@@ -67,7 +72,8 @@ def setup_inputs(repo,payload_zip,host,output):
     with zipfile.ZipFile(payload_zip) as payload_source:
         payload_manifest=payload_source.read('bundle.json')
         parsed=json.loads(payload_manifest)
-        if parsed['version']!='0.5.3' or parsed['profile']!='full' or parsed['target']!='win-x64':raise ValueError('Wrong app payload')
+        require_source_release_version(parsed['version'],repo)
+        if parsed['profile']!='full' or parsed['target']!='win-x64':raise ValueError('Wrong app payload')
         build=json.loads(payload_source.read('legal/build-inputs.json'))
         if build['appSourceCommit']!=source or build['helperSourceCommit']!=source:raise ValueError('Mixed source payload')
         require_source_database_schema(build,repo)
@@ -86,7 +92,7 @@ def setup_inputs(repo,payload_zip,host,output):
             for name,path in sorted(hostfiles.items()):
                 if path.is_symlink() or path.stat().st_nlink!=1 or path.suffix.lower() in ('.pdb','.key','.pem','.sqlite'):raise ValueError('Invalid host input')
                 put('host/'+name,path.read_bytes())
-    manifest=dict(Format=1,Version='0.5.3',SourceCommit=source,ZipSha256=dependencies.digest(archive),PayloadDigest=hashlib.sha256(payload_manifest).hexdigest(),Files=records)
+    manifest=dict(Format=1,Version=version,SourceCommit=source,ZipSha256=dependencies.digest(archive),PayloadDigest=hashlib.sha256(payload_manifest).hexdigest(),Files=records)
     (output/'install-manifest.json').write_text(json.dumps(manifest,separators=(',',':'))+'\n',encoding='utf-8')
     with zipfile.ZipFile(archive) as check:
         if check.testzip() is not None:raise ValueError('Installer ZIP corrupt')

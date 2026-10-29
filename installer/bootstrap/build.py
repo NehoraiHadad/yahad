@@ -1,13 +1,25 @@
 """Build a small native downloader. Never publishes or invokes installation."""
 from pathlib import Path
-import argparse,json,hashlib,subprocess,urllib.parse,os
+import argparse,json,hashlib,subprocess,urllib.parse,os,sys
 from verify_pe import inspect
-parser=argparse.ArgumentParser();parser.add_argument('--zig',type=Path,required=True);parser.add_argument('--output',type=Path,required=True);parser.add_argument('--payload-url');args=parser.parse_args()
-root=Path(__file__).resolve().parent;output=args.output.resolve();output.mkdir(parents=True,exist_ok=True)
-pin=json.loads((root/'payload-pin.json').read_text(encoding='utf-8'));url=args.payload_url or ''
+from payload_identity import validate_payload_pin, require_installer_description
+root=Path(__file__).resolve().parent;repo=root.parent.parent
+sys.path.insert(0,str(repo))
+from installer.windows.application_version import source_release_version, describe_build_artifact
+parser=argparse.ArgumentParser();parser.add_argument('--zig',type=Path,required=True);parser.add_argument('--output',type=Path,required=True);parser.add_argument('--payload-url');parser.add_argument('--payload-pin',type=Path);parser.add_argument('--payload',type=Path);args=parser.parse_args()
+output=args.output.resolve()
+version=source_release_version(repo)
+source=subprocess.check_output(['git','-C',str(repo),'rev-parse','HEAD'],text=True).strip()
+if subprocess.check_output(['git','-C',str(repo),'status','--porcelain','--untracked-files=no']).strip():raise ValueError('Clean committed source required')
+pin=json.loads((args.payload_pin or root/'payload-pin.json').read_text(encoding='utf-8'));url=args.payload_url or ''
+validate_payload_pin(pin,version,source,args.payload)
+if args.payload is not None:
+    require_installer_description(describe_build_artifact(args.payload,'--verify-package',repo),version,source)
 if url:
+    if args.payload is None:raise ValueError('A retained full installer is required before configuring distribution')
     p=urllib.parse.urlsplit(url)
     if len(url)>4095 or p.scheme!='https' or not p.hostname or p.port not in (None,443) or p.username is not None or p.password is not None or p.fragment or any(c in url for c in '\r\n\t\\'):raise ValueError('A fixed HTTPS distribution URL without credentials or fragment is required')
+output.mkdir(parents=True,exist_ok=True)
 header='#pragma once\nstatic constexpr unsigned long long PAYLOAD_BYTES='+str(pin['bytes'])+'ULL;\nstatic constexpr const char PAYLOAD_SHA[]='+json.dumps(pin['sha256'])+';\n'
 (output/'payload_pin.hpp').write_text(header,encoding='utf-8')
 env=os.environ.copy();env['ZIG_GLOBAL_CACHE_DIR']=str(output/'zig-cache');env['ZIG_LOCAL_CACHE_DIR']=str(output/'zig-cache-local')

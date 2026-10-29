@@ -16,9 +16,13 @@ internal static class FirstInstallProfile
     internal static FirstInstallReceipt ReadReceipt()
     {
         using var file=WindowsFileBoundary.OpenInstalledRead(ReceiptPath);var r=NativeJson.Read<FirstInstallReceipt>(file.Small(4096));
+        return ValidateReceipt(r);
+    }
+    internal static FirstInstallReceipt ValidateReceipt(FirstInstallReceipt r)
+    {
         if(r.Format!=2)throw new IOException("FIRST_INSTALL_FORMAT_REQUIRES_REPAIR");
         InstalledActivationResolver.Id(r.InstallationId);InstalledActivationResolver.Id(r.DataId);InstalledActivationResolver.Digest(r.ReleaseDigest);InstalledActivationResolver.Digest(r.SeedDigest);InstalledActivationResolver.Digest(r.PackageDigest);InstalledActivationResolver.Digest(r.RetryDigest);
-        if(r.Format!=2||r.Version!="0.5.3"||r.Port is <1024 or >65535||r.Phase!="committed")throw new IOException("FIRST_INSTALL_NOT_COMMITTED");return r;
+        if(r.Format!=2||r.Version!=ApplicationRelease.Version||r.Port is <1024 or >65535||r.Phase!="committed")throw new IOException("FIRST_INSTALL_NOT_COMMITTED");return r;
     }
 }
 internal sealed class FirstInstallInstallationReader:IInstallationReader

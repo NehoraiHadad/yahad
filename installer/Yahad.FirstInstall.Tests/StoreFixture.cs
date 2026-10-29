@@ -49,7 +49,7 @@ internal sealed class ProductionFixture:IDisposable
         Put("legal/build-inputs.json",JsonSerializer.Serialize(new{databaseSchema=f.Schema}));
         Put("app/src/main.ts",f.Worker());
         var records=Directory.GetFiles(f.Payload,"*",SearchOption.AllDirectories).Order(StringComparer.Ordinal).Select(p=>new{path=Path.GetRelativePath(f.Payload,p).Replace('\\','/'),size=new FileInfo(p).Length,sha256=Hash(File.ReadAllBytes(p))}).ToArray();
-        var manifest=JsonSerializer.SerializeToUtf8Bytes(new{version="0.5.3",schema=1,kind="windows-runtime-candidate",target="win-x64",profile="full",authority="application-updater",
+        var manifest=JsonSerializer.SerializeToUtf8Bytes(new{version=ApplicationRelease.Version,schema=1,kind="windows-runtime-candidate",target="win-x64",profile="full",authority="application-updater",
             launch=new{node="runtime/node/node.exe",entry="app/src/main.ts",helper="app/native/Yahad.Platform.exe",ffmpeg="runtime/ffmpeg/ffmpeg.exe",caddy="runtime/caddy/caddy.exe"},files=records});
         f.release=Hash(manifest);File.WriteAllBytes(Path.Combine(f.Payload,"bundle.json"),manifest);Directory.CreateDirectory(Path.Combine(f.Root,"payloads"));var target=Path.Combine(f.Root,"payloads",f.release);Directory.Move(f.Payload,target);
         f.actualPayload=target;

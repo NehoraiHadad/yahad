@@ -15,7 +15,7 @@ internal sealed class InstallPackage:IDisposable
     internal InstallPackage(Stream zip,byte[] manifest)
     {
         stream=zip;Manifest=NativeJson.Read<InstallPackageManifest>(manifest);
-        if(Manifest.Format!=1||Manifest.Version!="0.5.3"||!System.Text.RegularExpressions.Regex.IsMatch(Manifest.SourceCommit,"^[a-f0-9]{40}$")||Manifest.Files.Length is <10 or >50000)throw new IOException("PACKAGE_FORMAT");
+        if(Manifest.Format!=1||Manifest.Version!=ApplicationRelease.Version||!System.Text.RegularExpressions.Regex.IsMatch(Manifest.SourceCommit,"^[a-f0-9]{40}$")||Manifest.Files.Length is <10 or >50000)throw new IOException("PACKAGE_FORMAT");
         Digest(Manifest.ZipSha256);Digest(Manifest.PayloadDigest);
         if(!zip.CanSeek||zip.Length>2147483648||Convert.ToHexStringLower(SHA256.HashData(zip))!=Manifest.ZipSha256)throw new IOException("PACKAGE_HASH");zip.Position=0;
         archive=new(zip,ZipArchiveMode.Read,true);
