@@ -1,10 +1,16 @@
-export type Kind = 'text' | 'image' | 'video' | 'document' | 'sticker' | 'audio' | 'poll' | 'unsupported';
-export type SendKind=Exclude<Kind,'poll'>;
+import type {PollVoteSending} from '../polls/sending.js';
+import type {PollContext,EncryptedPollVote,PollState} from '../polls/types.js';
+export type Kind = 'text' | 'image' | 'video' | 'document' | 'sticker' | 'audio' | 'poll' | 'contact' | 'location' | 'interactive' | 'unsupported';
+export type SendKind=Exclude<Kind,'poll'|'contact'|'location'|'interactive'>;
 export interface PollOptions {options:string[]}
 export type Receipt = 'pending' | 'sent' | 'delivered' | 'read' | 'unknown' | 'failed';
 export interface ReactionUpdate { target: string; actor: string; emoji: string; time?: number }
 export interface Capabilities {
-  polls?: { identify: boolean; display?: boolean; create: boolean; vote: boolean; results: boolean };
+  interactive?: {textDisplay:boolean;actions:boolean};
+  contacts?: {display:boolean;send:boolean};
+  location?: {display:boolean;live:boolean;send:boolean};
+  roundVideo?: {receive:boolean;send:boolean};
+  polls?: { identify: boolean; display?: boolean; observedResults?: boolean; create: boolean; vote: boolean; results: boolean };
   reply: boolean;
   reactions: boolean;
   image: boolean;
@@ -27,6 +33,8 @@ export interface ChatGroup {
   title: string;
 }
 export interface Incoming {
+  pollContext?: PollContext;
+  pollVote?: EncryptedPollVote;
   restricted?: boolean;
   guard?: () => boolean;
   history?: { requestId?: string };
@@ -37,7 +45,7 @@ export interface Incoming {
   time: number;
   kind: Kind;
   text: string;
-  unsupportedReason?: 'poll' | 'poll-vote' | 'poll-results' | 'poll-variant' | 'poll-invalid';
+  unsupportedReason?: 'poll' | 'poll-vote' | 'poll-results' | 'poll-variant' | 'poll-invalid' | 'contact-variant' | 'location-invalid' | 'live-location' | 'content-variant' | 'interactive-variant';
   poll?: PollOptions;
   replyId?: string;
   mime?: string;
@@ -53,6 +61,7 @@ export interface Incoming {
   historicalReactions?: ReactionUpdate[];
 }
 export interface StoredMessage {
+  pollState?: PollState;
   restricted?: boolean;
   id: string;
   groupId: string;
@@ -61,7 +70,7 @@ export interface StoredMessage {
   time: number;
   kind: Kind;
   text: string;
-  unsupportedReason?: 'poll' | 'poll-vote' | 'poll-results' | 'poll-variant' | 'poll-invalid';
+  unsupportedReason?: 'poll' | 'poll-vote' | 'poll-results' | 'poll-variant' | 'poll-invalid' | 'contact-variant' | 'location-invalid' | 'live-location' | 'content-variant' | 'interactive-variant';
   poll?: PollOptions;
   replyId?: string;
   mediaId?: string;
@@ -118,6 +127,7 @@ export interface ConnectorHooks {
   maxMedia: number;
 }
 export interface Connector {
+  readonly pollVoting?: PollVoteSending;
   originalAvailable?(message: StoredMessage): boolean;
   readonly capabilities: Capabilities;
   start(): Promise<void>;

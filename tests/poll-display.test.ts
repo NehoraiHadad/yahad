@@ -152,6 +152,6 @@ test('poll display introduces no create, vote, results, media or provider-side a
   assert.equal((await f.request('/polls','POST',body())).statusCode,404);
   assert.equal((await f.request('/messages/readonly/reaction','POST',{emoji:'👍'})).statusCode,409);
   await assert.rejects(f.connector.send({id:'no-send',groupId:group,kind:'poll',text:'Question'} as any),/Poll sending unavailable/);
-  assert.equal(f.sent.length,0);assert.deepEqual(f.connector.capabilities.polls,{identify:true,display:true,create:false,vote:false,results:false});
+  assert.equal(f.sent.length,0);assert.deepEqual(f.connector.capabilities.polls,{identify:true,display:true,observedResults:true,create:false,vote:false,results:false});
  }finally{await f.close();}
 });

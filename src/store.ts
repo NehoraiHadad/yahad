@@ -1,3 +1,5 @@
+import {initializePollContexts,savePollState,loadPollState} from './polls/storage.js';
+import {initializePollVotes} from './polls/pending.js';
 import { conversationKind } from './conversation-id.js';
 import { DatabaseSync, backup } from 'node:sqlite';
 import { initializeChatReadState, recordUnread } from './chat-read-state.js';
@@ -89,6 +91,8 @@ export class Store {
       });
       initializeChatReadState(this);
       initializePendingReactions(this);
+      initializePollVotes(this);
+      initializePollContexts(this);
       this.cleanOrphans();
     } catch (error) { this.db.close(); throw error; }
   }
@@ -286,14 +290,19 @@ export class Store {
       const safe=restrictedPlaceholder(message);
       this.putMessage(f,safe,false);
       this.run('DELETE FROM pending_message_reactions WHERE family_id=? AND group_id=? AND target=?',f,g,id);
+      this.run('DELETE FROM pending_poll_votes WHERE family_id=? AND group_id=? AND target=?',f,g,id);
       return safe;
     }
+    delete message.pollState;
+    message.pollState=loadPollState(this,f,message);
     return message;
   }
   putMessage(f: string, m: StoredMessage, live = true) {
     if (!this.retained(f, m.groupId)) return false;
     this.db.exec('SAVEPOINT message_with_unread');
     try {
+      const pollWork=m.kind==='poll'&&!m.deleted&&!m.restricted?this.all(
+        'SELECT * FROM pending_poll_votes WHERE family_id=? AND group_id=? AND target=?',f,m.groupId,m.id):[];
       const isNew = !this.one('SELECT 1 FROM messages WHERE family_id=? AND group_id=? AND id=?', f, m.groupId, m.id);
       this.diagnostics.measure(f, 'db_write', () => this.run(
         'INSERT INTO messages VALUES(?,?,?,?,?) ON CONFLICT(family_id,group_id,id) DO UPDATE SET body=excluded.body,time=excluded.time',
@@ -301,8 +310,11 @@ export class Store {
         m.groupId,
         m.id,
         m.time,
-        seal(this.groupKey(f, m.groupId), JSON.stringify(m), `${f}:${m.groupId}:${m.id}`),
+        seal(this.groupKey(f, m.groupId), JSON.stringify({...m,pollState:undefined}), `${f}:${m.groupId}:${m.id}`),
       ));
+      savePollState(this,f,m);
+      for(const row of pollWork)this.run('INSERT OR IGNORE INTO pending_poll_votes VALUES(?,?,?,?,?,?)',
+        row.family_id,row.group_id,row.target,row.slot,row.received,row.body);
       recordUnread(this, f, m, isNew, live);
       this.db.exec('RELEASE message_with_unread');
     } catch (error) {
@@ -379,6 +391,7 @@ export class Store {
     const media = this.all('SELECT id FROM media WHERE family_id=? AND group_id=?', f, g);
     this.tx(() => {
       this.run('DELETE FROM pending_message_reactions WHERE family_id=? AND group_id=?', f, g);
+      this.run('DELETE FROM pending_poll_votes WHERE family_id=? AND group_id=?',f,g);
       this.run('DELETE FROM media WHERE family_id=? AND group_id=?', f, g);
       this.run('DELETE FROM messages WHERE family_id=? AND group_id=?', f, g);
       this.run('DELETE FROM group_keys WHERE family_id=? AND group_id=?', f, g);

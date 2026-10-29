@@ -18,3 +18,13 @@ export function pollDisplay(question: unknown,options: unknown): {text:string;po
   }
   return {text:question,poll:{options:plain}};
 }
+
+export const observedResultsNotice='הצבעה אינה זמינה כאן. הספירה כוללת רק הצבעות שהתקבלו ופוענחו; ייתכן שחסרות הצבעות.';
+export function pollResultDisplay(value:unknown,options:number):{counts:number[];partial:true}|undefined{
+  if(!value || typeof value!=='object')return;
+  const v=value as {counts?:unknown;partial?:unknown};
+  if(v.partial!==true || !Array.isArray(v.counts) || v.counts.length!==options)return;
+  const counts:number[]=[];
+  for(const n of v.counts){if(!Number.isSafeInteger(n)||n<0||n>512)return;counts.push(n);}
+  return {counts,partial:true};
+}

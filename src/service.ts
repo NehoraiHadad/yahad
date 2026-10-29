@@ -1,3 +1,7 @@
+import {newPollState,recoverPollState,observedPollResults} from './polls/receive.js';
+import {acceptPollVote,drainPollVotes,clearPollVotes} from './polls/pending.js';
+import type {ObservedPollResults} from './polls/types.js';
+import {readOnlyKind,sharedText} from './rich-content.js';
 import { conversationKind } from './conversation-id.js';
 import { applyReactions, queueReaction, pendingReactions, clearPendingReactions } from './message-reactions.js';
 import { messageActions } from './message-actions.js';
@@ -27,7 +31,8 @@ export class AppError extends Error {
   }
 }
 export const deny = () => new AppError(404, 'NOT_FOUND');
-export interface PublicMessage extends Omit<StoredMessage, 'raw' | 'replyId' | 'reactions' | 'reactionTimes' | 'editTime' | 'originalTimeKnown'> {
+export interface PublicMessage extends Omit<StoredMessage, 'raw' | 'replyId' | 'reactions' | 'reactionTimes' | 'editTime' | 'originalTimeKnown' | 'pollState'> {
+  pollResults?: ObservedPollResults;
   reply?: { id: string; text: string; sender: string; available?: boolean };
   reactions: { emoji: string; count: number; mine: boolean }[];
   actions?: {reply:boolean;reactions:boolean;edit:boolean;delete:boolean};
@@ -266,11 +271,21 @@ export class ChatService {
   async ingest(f: string, input: Incoming, active: () => boolean = () => true) {
     const g = input.groupId;
     if (!active() || !this.store.retained(f, g)) return;
+    if(readOnlyKind(input.kind) && input.kind!=='poll' && !input.restricted){
+      const text=sharedText(input.text);
+      input={...input,kind:text?input.kind:'unsupported',text:text||'פרטי ההודעה אינם זמינים לתצוגה.',
+        unsupportedReason:text?undefined:'content-variant',raw:undefined,bytes:undefined,download:undefined,
+        mime:undefined,filename:undefined,replyId:undefined,poll:undefined};
+    }
     if(input.kind==='poll' && !input.restricted){
       const display=pollDisplay(input.text,input.poll?.options);
       input={...input,kind:display?'poll':'unsupported',text:display?.text||invalidPollText,poll:display?.poll,
         unsupportedReason:display?undefined:'poll-invalid',raw:undefined,bytes:undefined,download:undefined,
         mime:undefined,filename:undefined,replyId:undefined};
+    }
+    if(input.pollVote && !input.restricted){
+      if(acceptPollVote(this.store,f,g,input.pollVote))this.notify(f,g);
+      return;
     }
     if (input.reaction && !input.restricted) {
       const target = this.store.getMessage(f, g, input.reaction.target);
@@ -285,6 +300,7 @@ export class ChatService {
     if (existing?.deleted) return;
     if (input.restricted) {
       clearPendingReactions(this.store,f,g,input.id);
+      clearPollVotes(this.store,f,g,input.id);
       if (existing?.mediaId) this.store.deleteMedia(f, g, existing.mediaId);
       this.store.putMessage(f, { id: input.id, groupId: g, sender: existing?.sender || input.sender.slice(0,80),
         fromMe: existing?.fromMe ?? input.fromMe, time: existing?.time ?? Date.now(),
@@ -299,16 +315,27 @@ export class ChatService {
     }
     // Never recover content that a prior provider envelope marked temporary.
     if (existing?.restricted) return;
+    if(existing?.kind==='poll' && input.kind==='poll' && !input.edited && !existing.edited && existing.text===input.text &&
+      JSON.stringify(existing.poll?.options)===JSON.stringify(input.poll?.options)){
+      let changed=false;
+      if(existing.fromMe===input.fromMe){
+        const recovered=recoverPollState(existing.pollState,input.pollContext,input.text,input.poll?.options);
+        if(recovered && (recovered.secret!==existing.pollState?.secret ||
+          JSON.stringify(recovered.creators)!==JSON.stringify(existing.pollState?.creators))){existing.pollState=recovered;changed=true;}
+      }
+      if(changed){this.store.tx(()=>{drainPollVotes(this.store,f,g,existing);this.store.putMessage(f,existing,false);});this.notify(f,g);}
+    }
     if (input.edited && existing) {
       const editTime=boundedEditTime(input.editTime??input.time);
       if(editTime<(existing.editTime??0))return;
-      if(input.kind==='unsupported' || input.kind==='poll' || existing.kind==='poll'){
+      if(input.kind==='unsupported' || readOnlyKind(input.kind) || readOnlyKind(existing.kind)){
+        clearPollVotes(this.store,f,g,input.id);
         if(existing.mediaId)this.store.deleteMedia(f,g,existing.mediaId);
-        const mismatched=existing.kind==='poll' && input.kind!=='poll' && input.kind!=='unsupported';
-        this.store.putMessage(f,{...existing,kind:input.kind==='poll'?'poll':'unsupported',
-          text:mismatched?'עדכון לסקר בפורמט שלא אומת אינו מוצג כאן. אפשר לפתוח אותו ב־WhatsApp.':input.text.slice(0,65536),
-          poll:input.kind==='poll'?input.poll:undefined,raw:undefined,mediaId:undefined,
-          replyId:undefined,mime:undefined,filename:undefined,unsupportedReason:mismatched?'poll-variant':input.unsupportedReason,edited:true,editTime},false);
+        const mismatched=readOnlyKind(existing.kind) && input.kind!==existing.kind && input.kind!=='unsupported';
+        this.store.putMessage(f,{...existing,kind:!mismatched&&readOnlyKind(input.kind)?input.kind:'unsupported',
+          text:mismatched?'עדכון לפורמט הודעה שונה אינו מוצג כאן. אפשר לפתוח ב־WhatsApp.':input.text.slice(0,65536),
+          pollState:undefined,poll:!mismatched&&input.kind==='poll'?input.poll:undefined,raw:undefined,mediaId:undefined,
+          replyId:undefined,mime:undefined,filename:undefined,unsupportedReason:mismatched?'content-variant':input.unsupportedReason,edited:true,editTime},false);
         this.notify(f,g);return;
       }
       this.update(f, g, input.id, { text: input.text.slice(0,65536), edited: true, editTime,
@@ -319,7 +346,7 @@ export class ChatService {
       if(input.historicalReactions?.length)applyReactions(existing,input.historicalReactions);
       // An edit can arrive before its original. Recover original ordering and
       // sender metadata without replacing the edited content with old history.
-      if ((input.raw || input.kind==='poll') && Number.isFinite(input.time) && input.time <= existing.time) {
+      if ((input.raw || readOnlyKind(input.kind)) && Number.isFinite(input.time) && input.time <= existing.time) {
         this.store.putMessage(f,{...existing,time:Math.max(0,input.time),sender:input.sender.slice(0,80),
           raw:rawAtOriginalTime(existing.raw,input.time,input.raw),originalTimeKnown:true},false);
         this.notify(f,g);
@@ -330,7 +357,7 @@ export class ChatService {
       (existing.kind===input.kind||(existing.kind==='text'&&!existing.text))&&!!(input.bytes||input.download);
     const explainLegacyBlank=existing?.kind==='text'&&!existing.text&&input.kind==='unsupported'&&!!input.text;
     const explainUnsupported=existing?.kind==='unsupported'&&input.kind==='unsupported'&&!!input.unsupportedReason&&existing.unsupportedReason!==input.unsupportedReason;
-    const upgradePoll=existing?.kind==='unsupported'&&input.kind==='poll'&&(!existing.unsupportedReason||existing.unsupportedReason==='poll');
+    const upgradeDisplay=existing?.kind==='unsupported'&&readOnlyKind(input.kind);
     if (existing && input.historicalReactions?.length) {
       applyReactions(existing,input.historicalReactions);
       this.store.putMessage(f,existing,false);
@@ -338,10 +365,10 @@ export class ChatService {
     }
     if (
       existing &&
-      !repairMissingMedia && !explainLegacyBlank && !explainUnsupported && !upgradePoll &&
+      !repairMissingMedia && !explainLegacyBlank && !explainUnsupported && !upgradeDisplay &&
       existing.status !== 'pending' &&
       existing.status !== 'failed' &&
-      (!input.fromMe || !!existing.raw || existing.kind==='poll')
+      (!input.fromMe || !!existing.raw || readOnlyKind(existing.kind))
     )
       return;
     const key = this.store.groupKey(f, g).toString('hex');
@@ -367,6 +394,9 @@ export class ChatService {
         : Date.now()),
       kind: previous?.mediaId ? previous.kind : input.kind,
       poll:input.kind==='poll'?input.poll:undefined,
+      pollState:input.kind==='poll'&&!input.edited?
+        previous?.kind==='poll'&&previous.text===input.text&&JSON.stringify(previous.poll?.options)===JSON.stringify(input.poll?.options)?previous.pollState:
+        !previous?newPollState(input.pollContext,input.text,input.poll?.options):undefined:undefined,
       unsupportedReason: input.unsupportedReason,
       text:
         input.text.length > 65536
@@ -380,7 +410,7 @@ export class ChatService {
           : input.status || 'unknown',
       reactions: previous?.reactions || {},
       reactionTimes: previous?.reactionTimes,
-      raw: input.kind === 'unsupported' || input.kind==='poll' ? undefined : input.raw || previous?.raw,
+      raw: input.kind === 'unsupported' || readOnlyKind(input.kind) ? undefined : input.raw || previous?.raw,
       clientId: previous?.clientId,
       authorUserId: previous?.authorUserId,
       authorLabel: previous?.authorLabel,
@@ -392,9 +422,14 @@ export class ChatService {
       mime: previous?.mediaId ? previous.mime : input.mime,
       filename: input.filename?.replace(/[\r\n\\/]/g, '_').slice(0, 160) || previous?.filename,
     };
-    applyReactions(m,[...pendingReactions(this.store,f,g,m.id),...(input.historicalReactions||[])]);
-    this.store.putMessage(f, m, !input.history);
-    clearPendingReactions(this.store,f,g,m.id);
+    const persist=()=>{
+      if(input.edited)clearPollVotes(this.store,f,g,m.id);
+      if(m.kind==='poll')drainPollVotes(this.store,f,g,m);
+      applyReactions(m,[...pendingReactions(this.store,f,g,m.id),...(input.historicalReactions||[])]);
+      this.store.putMessage(f,m,!input.history);
+      clearPendingReactions(this.store,f,g,m.id);
+    };
+    if(m.kind==='poll')this.store.tx(persist);else persist();
     if (!m.mediaId && bytes && bytes.length <= this.store.config.maxMedia) {
       const mediaId = randomUUID();
       try {
@@ -464,6 +499,8 @@ export class ChatService {
       if (m.mediaId) this.store.deleteMedia(f, g, m.mediaId);
       m.text = '';
       m.poll = undefined;
+      m.pollState=undefined;
+      clearPollVotes(this.store,f,g,id);
       m.raw = undefined;
       m.mediaId = undefined;
       m.reactions = {};
@@ -476,7 +513,7 @@ export class ChatService {
   }
   public(f: string, m: StoredMessage): PublicMessage {
     if(!m.deleted && restrictedStoredMessage(m))m=restrictedPlaceholder(m);
-    const { raw, replyId, reactions, reactionTimes, editTime, originalTimeKnown, poll, ...safe } = m;
+    const { raw, replyId, reactions, reactionTimes, editTime, originalTimeKnown, poll, pollState, ...safe } = m;
     const display=!m.deleted && !m.restricted && m.kind==='poll'?pollDisplay(m.text,poll?.options):undefined;
     const target = replyId ? this.store.getMessage(f, m.groupId, replyId) : undefined;
     const aggregated = new Map<string, { emoji: string; count: number; mine: boolean }>();
@@ -488,7 +525,10 @@ export class ChatService {
     }
     return {
       ...safe,
+      ...((m.kind==='contact'||m.kind==='location'||m.kind==='interactive')&&!m.deleted&&!m.restricted&&!sharedText(m.text)?
+        {kind:'unsupported' as const,text:'פרטי ההודעה אינם זמינים לתצוגה.',unsupportedReason:'content-variant' as const}:{}),
       ...(m.kind==='poll'&&!m.deleted&&!m.restricted ? display ? {poll:display.poll} : {kind:'unsupported' as const,text:invalidPollText,unsupportedReason:'poll-invalid' as const} : {}),
+      pollResults:observedPollResults(m),
       actions:messageActions(m,this.connectors.get(f)),
       reactions: [...aggregated.values()],
       ...(replyId

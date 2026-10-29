@@ -3,3 +3,5 @@
 .poll-options { margin: 0; padding-inline-start: 26px; }
 .poll-options li { margin: 0 0 8px; padding: 8px 10px; border: 1px solid #9bb3a8; border-radius: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .poll-limitation { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid #9bb3a8; font-size: .9rem; line-height: 1.5; overflow-wrap: anywhere; }
+
+.poll-count{display:inline-block;margin-inline-start:1rem;font-variant-numeric:tabular-nums;opacity:.8}
