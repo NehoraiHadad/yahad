@@ -13,10 +13,13 @@ Closing that installer is not reported as observed installation success.
 
 ## Distribution gate
 
-`payload-pin.json` identifies exactly the production offline installer from
-`2d1b547cb7cadd0ed08c6cdb3584c78ae9060f51`: version 0.5.3,
-290342596 bytes and SHA256
-`540906a07c4b5c25f5a92250c5bb54eed2a31b9a144c9458ed9da318c41966fe`.
+`payload-pin.json` identifies the repaired full installer built from
+`9fc810d7e8fcb63ed9eb2c1225c5cd95880366a8`: version 0.5.3,
+290343109 bytes and SHA256
+`c62907fa5a4ae16ded29a398855a177d952fdf902d57aed3ea14f763d77f027c`.
+The outer Setup contains the elevation-framing repair. Its unchanged verified
+application/service payload remains from `2d1b547cb7cadd0ed08c6cdb3584c78ae9060f51`;
+the pin records those two source identities separately.
 No public upload or URL has been authorized. The default native artifact clearly
 shows that distribution is unconfigured and disables download. It never guesses
 a release URL or downloads a different/latest version. An authorized publisher
@@ -78,4 +81,4 @@ as an embedded resource, also available with the non-installing `--notices` mode
 
 Keyboard tab stops and native tab order are checked. Hidden layout fixtures exercise 96/144/192 DPI, bounded scrolling and footer visibility without changing desktop settings. Interactive Computer Use launch approval timed out; these renders are not a claim of interactive keyboard or multiple-monitor acceptance.
 
-The committed payload pin now names the exact rebuilt full installer from 2d1b547cb7cadd0ed08c6cdb3584c78ae9060f51. It uses the real existing connector, with account linking initiated only from existing web onboarding. The distribution URL remains unconfigured and download remains disabled until an authorized publisher supplies the exact retained HTTPS asset. The full offline installer is independently usable for the approved local host test.
+The committed payload pin names the framing-repaired full installer from 9fc810d7e8fcb63ed9eb2c1225c5cd95880366a8, with its unchanged application/service payload from 2d1b547cb7cadd0ed08c6cdb3584c78ae9060f51. It uses the real existing connector, with account linking initiated only from existing web onboarding. The distribution URL remains unconfigured and download remains disabled until an authorized publisher supplies the exact retained HTTPS asset. The full offline installer is independently usable for the approved local host test.

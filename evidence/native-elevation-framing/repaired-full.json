@@ -1,0 +1,14 @@
+{
+  "version": "0.5.3",
+  "sourceCommit": "9fc810d7e8fcb63ed9eb2c1225c5cd95880366a8",
+  "payloadSourceCommit": "2d1b547cb7cadd0ed08c6cdb3584c78ae9060f51",
+  "bytes": 290343109,
+  "sha256": "c62907fa5a4ae16ded29a398855a177d952fdf902d57aed3ea14f763d77f027c",
+  "url": null,
+  "distributionConfigured": false,
+  "profile": "loopback-real-baileys",
+  "offlineArtifactPreserved": true,
+  "headlessEmptyPathVerificationExit": 0,
+  "unchangedEmbeddedZipSha256": "2c4f948de14ca9f21b1325c2c6bcac7065eb3236c3e789183fd1b2ee2a80e929",
+  "actualInstallAccepted": false
+}
