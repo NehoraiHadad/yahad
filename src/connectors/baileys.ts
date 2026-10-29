@@ -535,6 +535,7 @@ export class BaileysConnector implements Connector {
     if ((m.kind === 'image' || m.kind === 'video') && m.bytes)
       content.jpegThumbnail = await thumbnail(m.bytes);
     const quoted = m.reply?.raw ? parse(m.reply.raw) : undefined;
+    m.beforeSend?.();
     const sent = await sock.sendMessage(m.groupId, content, { messageId: m.id, quoted });
     if (!sent) throw new Error('No acknowledgement');
     return normalizeIncoming(sent)!;

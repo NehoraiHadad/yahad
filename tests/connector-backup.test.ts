@@ -373,6 +373,19 @@ test('real adapter maps actual media bytes, captions, Opus duration and thumbnai
   assert.equal(calls[3].content.caption, 'Signature: document');
 });
 
+test('real adapter rechecks outgoing authorization after asynchronous media preparation before provider submission', async () => {
+  const { h } = hooks(), c = new BaileysConnector(h);
+  let paused = false, submitted = 0, checks = 0;
+  c.sock = { sendMessage: async () => { submitted++; throw new Error('must not submit after pause'); } } as any;
+  const preparation = c.send({ id: 'synthetic-revoked-image', groupId: '1@g.us', kind: 'image', text: '',
+    bytes: readFileSync('fixtures/garden.jpg'), mime: 'image/jpeg',
+    beforeSend: () => { checks++; if (paused) throw new Error('synthetic session revoked'); } });
+  // thumbnail() has yielded to asynchronous processing; no provider call has started.
+  assert.equal(submitted, 0); paused = true;
+  await assert.rejects(preparation, /synthetic session revoked/);
+  assert.equal(checks, 1); assert.equal(submitted, 0);
+});
+
 test('documented setup CLI creates real separate accounts and a protected random key without printing passwords', { skip: process.platform === 'win32' ? 'Requires Linux private file modes; run on Linux before activation' : false }, async () => {
   const { spawn } = await import('node:child_process');
   const directory = mkdtempSync(join(tmpdir(), 'yachad-setup-'));

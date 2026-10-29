@@ -1,0 +1,404 @@
+{
+  "base_commit": "586c8d489904be0cb7819bb2a7fa6d22d63d07de",
+  "reviewed_commit": "a0c1e3b144de7476f923ff345ef1cfd506f1e2f7",
+  "baseline_archive_commit_comment": "586c8d489904be0cb7819bb2a7fa6d22d63d07de",
+  "verified_unchanged_sources": [
+    {
+      "path": "src/diagnostics.ts",
+      "sha256": "9abf097111e95d265e9cb266f1121e7c7955c2ab100ebdfdc7b92414b1b68058",
+      "matches_git_base_and_current": true
+    },
+    {
+      "path": "src/updates.ts",
+      "sha256": "632ad44b670cdbb4cfdb359317d9ce03da964c1284d8c4d994648977bed59da7",
+      "matches_git_base_and_current": true
+    },
+    {
+      "path": "tests/diagnostics-updates.test.ts",
+      "sha256": "05a5269592c3cccbdd59353b026d55e9640f58cb934039bbd20624595f0829a8",
+      "matches_git_base_and_current": true
+    },
+    {
+      "path": "tests/shutdown-sse.test.ts",
+      "sha256": "0940b2eefe41a0434d6b03f0a1f8d66cde493a861e3db2932dbbf13f67b7ed34",
+      "matches_git_base_and_current": true
+    },
+    {
+      "path": "tests/update-mode.test.ts",
+      "sha256": "ff845018f304da07159560b0604a75d628ab8ec4a8d764ff5cf821eaf3221aef",
+      "matches_git_base_and_current": true
+    },
+    {
+      "path": "tests/update-recovery-gate.test.ts",
+      "sha256": "fd8686f320017b0e7baa94aefcd1bb5100edb6629dbcdfee62bafc0296cb68f3",
+      "matches_git_base_and_current": true
+    },
+    {
+      "path": "tests/update-target-binding.test.ts",
+      "sha256": "6d8fb97ca88d1d80b529eda21034c9ab2108611eb651b853001cb5da62920782",
+      "matches_git_base_and_current": true
+    }
+  ],
+  "raw_log_sha256": {
+    "all-node-tests.log": "90d8cbb3b8ac8d87ebcbb76c78566d4c59d6b5cef838b82d54b020e17bd55900",
+    "baseline-environment-tests.log": "571ba18a2aa75f9bb88e977ec098883c2e7c8fb495dbf8d31c3bc2c059f012cb",
+    "review-environment-probe.log": "69153d1fa2e28590fbc3ca14f54f34507809830872e56a9541ab8edbdb08c5db"
+  },
+  "baseline_result": {
+    "tests": 24,
+    "passed": 6,
+    "failed": 18
+  },
+  "environment_probe": {
+    "platform": "win32",
+    "node": "24.21.0",
+    "rename": "EPERM",
+    "link": "EPERM",
+    "symlink": "EPERM",
+    "diagnosticsPersistenceError": "permission"
+  },
+  "failures": [
+    {
+      "id": 1,
+      "file": "tests/diagnostics-updates.test.ts",
+      "title": "diagnostics isolate families, sanitize failures, retain bounded encrypted history across restart",
+      "symptom": "persisted snapshot count 0 instead of 2",
+      "environment_evidence": "diagnostics persistence permission error; independent probe reports rename EPERM",
+      "baseline": {
+        "file": "tests/diagnostics-updates.test.ts",
+        "title": "diagnostics isolate families, sanitize failures, retain bounded encrypted history across restart",
+        "location": "tests\\diagnostics-updates.test.ts:1:927",
+        "failure_excerpt": "  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  0 !== 2\n  \n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\.local\\baseline\\tests\\diagnostics-updates.test.ts:34:12)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 0,\n    expected: 2,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n"
+      },
+      "feature_initial_run": {
+        "file": "tests/diagnostics-updates.test.ts",
+        "title": "diagnostics isolate families, sanitize failures, retain bounded encrypted history across restart",
+        "location": "tests\\diagnostics-updates.test.ts:1:927",
+        "failure_excerpt": "  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  0 !== 2\n  \n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\tests\\diagnostics-updates.test.ts:34:12)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 0,\n    expected: 2,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n"
+      }
+    },
+    {
+      "id": 2,
+      "file": "tests/diagnostics-updates.test.ts",
+      "title": "parent-only diagnostics/export/reset and operator-only update queue enforce sessions, family isolation and CSRF",
+      "symptom": "update request was not published: queued/pending state absent or HTTP 500",
+      "environment_evidence": "queue publication uses hard link; independent probe reports link EPERM",
+      "baseline": {
+        "file": "tests/diagnostics-updates.test.ts",
+        "title": "parent-only diagnostics/export/reset and operator-only update queue enforce sessions, family isolation and CSRF",
+        "location": "tests\\diagnostics-updates.test.ts:1:3643",
+        "failure_excerpt": "  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  + actual - expected\n  \n  + undefined\n  - 'queued'\n  \n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\.local\\baseline\\tests\\diagnostics-updates.test.ts:99:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: undefined,\n    expected: 'queued',\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n"
+      },
+      "feature_initial_run": {
+        "file": "tests/diagnostics-updates.test.ts",
+        "title": "parent-only diagnostics/export/reset and operator-only update queue enforce sessions, family isolation and CSRF",
+        "location": "tests\\diagnostics-updates.test.ts:1:3643",
+        "failure_excerpt": "  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  + actual - expected\n  \n  + undefined\n  - 'queued'\n  \n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\tests\\diagnostics-updates.test.ts:99:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: undefined,\n    expected: 'queued',\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n"
+      }
+    },
+    {
+      "id": 3,
+      "file": "tests/shutdown-sse.test.ts",
+      "title": "open authenticated SSE drains before HTTP shutdown and immediately permits a backup",
+      "symptom": "EACCES on loopback connect",
+      "environment_evidence": "sandbox loopback access; third failure is secondary cleanup masking the connection failure (inference from fixture source)",
+      "baseline": {
+        "file": "tests/shutdown-sse.test.ts",
+        "title": "open authenticated SSE drains before HTTP shutdown and immediately permits a backup",
+        "location": "tests\\shutdown-sse.test.ts:1:2736",
+        "failure_excerpt": "  Error: connect EACCES 127.0.0.1:51321\n      at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2021:16) {\n    errno: -4092,\n    code: 'EACCES',\n    syscall: 'connect',\n    address: '127.0.0.1',\n    port: 51321\n  }\n"
+      },
+      "feature_initial_run": {
+        "file": "tests/shutdown-sse.test.ts",
+        "title": "open authenticated SSE drains before HTTP shutdown and immediately permits a backup",
+        "location": "tests\\shutdown-sse.test.ts:1:2736",
+        "failure_excerpt": "  Error: connect EACCES 127.0.0.1:52018\n      at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2021:16) {\n    errno: -4092,\n    code: 'EACCES',\n    syscall: 'connect',\n    address: '127.0.0.1',\n    port: 52018\n  }\n"
+      }
+    },
+    {
+      "id": 4,
+      "file": "tests/shutdown-sse.test.ts",
+      "title": "shutdown rejects SSE reconnects while preClose is running",
+      "symptom": "EACCES on loopback connect",
+      "environment_evidence": "sandbox loopback access; third failure is secondary cleanup masking the connection failure (inference from fixture source)",
+      "baseline": {
+        "file": "tests/shutdown-sse.test.ts",
+        "title": "shutdown rejects SSE reconnects while preClose is running",
+        "location": "tests\\shutdown-sse.test.ts:1:3590",
+        "failure_excerpt": "  Error: connect EACCES 127.0.0.1:51323\n      at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2021:16) {\n    errno: -4092,\n    code: 'EACCES',\n    syscall: 'connect',\n    address: '127.0.0.1',\n    port: 51323\n  }\n"
+      },
+      "feature_initial_run": {
+        "file": "tests/shutdown-sse.test.ts",
+        "title": "shutdown rejects SSE reconnects while preClose is running",
+        "location": "tests\\shutdown-sse.test.ts:1:3590",
+        "failure_excerpt": "  Error: connect EACCES 127.0.0.1:52020\n      at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2021:16) {\n    errno: -4092,\n    code: 'EACCES',\n    syscall: 'connect',\n    address: '127.0.0.1',\n    port: 52020\n  }\n"
+      }
+    },
+    {
+      "id": 5,
+      "file": "tests/shutdown-sse.test.ts",
+      "title": "already-ended backpressured SSE transport remains reachable during shutdown",
+      "symptom": "cleanup reads outgoing.destroyed before outgoing was initialized",
+      "environment_evidence": "sandbox loopback access; third failure is secondary cleanup masking the connection failure (inference from fixture source)",
+      "baseline": {
+        "file": "tests/shutdown-sse.test.ts",
+        "title": "already-ended backpressured SSE transport remains reachable during shutdown",
+        "location": "tests\\shutdown-sse.test.ts:1:4218",
+        "failure_excerpt": "  TypeError: Cannot read properties of undefined (reading 'destroyed')\n      at Object.outgoing (C:\\projects\\yahad-child-pause\\.local\\baseline\\tests\\shutdown-sse.test.ts:119:27)\n      at C:\\projects\\yahad-child-pause\\node_modules\\fastify\\lib\\hooks.js:169:24\n      at _encapsulateThreeParam (C:\\projects\\yahad-child-pause\\node_modules\\avvio\\index.js:623:7)\n      at Boot.timeoutCall (C:\\projects\\yahad-child-pause\\node_modules\\avvio\\index.js:514:5)\n      at Boot.callWithCbOrNextTick (C:\\projects\\yahad-child-pause\\node_modules\\avvio\\index.js:496:19)\n      at Task.release (C:\\projects\\yahad-child-pause\\node_modules\\fastq\\queue.js:172:16)\n      at worked (C:\\projects\\yahad-child-pause\\node_modules\\fastq\\queue.js:260:10)\n      at process.processTicksAndRejections (node:internal/process/task_queues:89:21)\n"
+      },
+      "feature_initial_run": {
+        "file": "tests/shutdown-sse.test.ts",
+        "title": "already-ended backpressured SSE transport remains reachable during shutdown",
+        "location": "tests\\shutdown-sse.test.ts:1:4218",
+        "failure_excerpt": "  TypeError: Cannot read properties of undefined (reading 'destroyed')\n      at Object.outgoing (C:\\projects\\yahad-child-pause\\tests\\shutdown-sse.test.ts:119:27)\n      at C:\\projects\\yahad-child-pause\\node_modules\\fastify\\lib\\hooks.js:169:24\n      at _encapsulateThreeParam (C:\\projects\\yahad-child-pause\\node_modules\\avvio\\index.js:623:7)\n      at Boot.timeoutCall (C:\\projects\\yahad-child-pause\\node_modules\\avvio\\index.js:514:5)\n      at Boot.callWithCbOrNextTick (C:\\projects\\yahad-child-pause\\node_modules\\avvio\\index.js:496:19)\n      at Task.release (C:\\projects\\yahad-child-pause\\node_modules\\fastq\\queue.js:172:16)\n      at worked (C:\\projects\\yahad-child-pause\\node_modules\\fastq\\queue.js:260:10)\n      at process.processTicksAndRejections (node:internal/process/task_queues:89:21)\n"
+      }
+    },
+    {
+      "id": 6,
+      "file": "tests/update-mode.test.ts",
+      "title": "mode control requires designated parent, session, CSRF and strict mode-only input",
+      "symptom": "update request was not published: queued/pending state absent or HTTP 500",
+      "environment_evidence": "queue publication uses hard link; independent probe reports link EPERM",
+      "baseline": {
+        "file": "tests/update-mode.test.ts",
+        "title": "mode control requires designated parent, session, CSRF and strict mode-only input",
+        "location": "tests\\update-mode.test.ts:1:2302",
+        "failure_excerpt": "  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  + actual - expected\n  \n  + undefined\n  - 'queued'\n  \n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\.local\\baseline\\tests\\update-mode.test.ts:33:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: undefined,\n    expected: 'queued',\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n"
+      },
+      "feature_initial_run": {
+        "file": "tests/update-mode.test.ts",
+        "title": "mode control requires designated parent, session, CSRF and strict mode-only input",
+        "location": "tests\\update-mode.test.ts:1:2302",
+        "failure_excerpt": "  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  + actual - expected\n  \n  + undefined\n  - 'queued'\n  \n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\tests\\update-mode.test.ts:33:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: undefined,\n    expected: 'queued',\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n"
+      }
+    },
+    {
+      "id": 7,
+      "file": "tests/update-mode.test.ts",
+      "title": "queued and root-journal pending requests never optimistically change applied mode or overwrite requests",
+      "symptom": "ENOENT reading update-request.json after queue publication failed",
+      "environment_evidence": "queue publication uses hard link; independent probe reports link EPERM",
+      "baseline": {
+        "file": "tests/update-mode.test.ts",
+        "title": "queued and root-journal pending requests never optimistically change applied mode or overwrite requests",
+        "location": "tests\\update-mode.test.ts:1:3997",
+        "failure_excerpt": "  Error: ENOENT: no such file or directory, open 'C:\\Users\\nehor\\AppData\\Local\\Packages\\sandbox.{e38216e8-1995-4040-bd38-b11059dffc25}\\AC\\Temp\\yachad-mode-vw7DuE\\update-request.json'\n      at readFileSync (node:fs:483:20)\n      at Object.queue (C:\\projects\\yahad-child-pause\\.local\\baseline\\tests\\update-mode.test.ts:22:66)\n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\.local\\baseline\\tests\\update-mode.test.ts:48:84)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    errno: -4058,\n    code: 'ENOENT',\n    syscall: 'open',\n    path: 'C:\\\\Users\\\\nehor\\\\AppData\\\\Local\\\\Packages\\\\sandbox.{e38216e8-1995-4040-bd38-b11059dffc25}\\\\AC\\\\Temp\\\\yachad-mode-vw7DuE\\\\update-request.json'\n  }\n"
+      },
+      "feature_initial_run": {
+        "file": "tests/update-mode.test.ts",
+        "title": "queued and root-journal pending requests never optimistically change applied mode or overwrite requests",
+        "location": "tests\\update-mode.test.ts:1:3997",
+        "failure_excerpt": "  Error: ENOENT: no such file or directory, open 'C:\\Users\\nehor\\AppData\\Local\\Packages\\sandbox.{245fbd83-6fdf-4fb7-b906-d250071d4bfb}\\AC\\Temp\\yachad-mode-Xg8gTJ\\update-request.json'\n      at readFileSync (node:fs:483:20)\n      at Object.queue (C:\\projects\\yahad-child-pause\\tests\\update-mode.test.ts:22:66)\n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\tests\\update-mode.test.ts:48:84)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    errno: -4058,\n    code: 'ENOENT',\n    syscall: 'open',\n    path: 'C:\\\\Users\\\\nehor\\\\AppData\\\\Local\\\\Packages\\\\sandbox.{245fbd83-6fdf-4fb7-b906-d250071d4bfb}\\\\AC\\\\Temp\\\\yachad-mode-Xg8gTJ\\\\update-request.json'\n  }\n"
+      }
+    },
+    {
+      "id": 8,
+      "file": "tests/update-mode.test.ts",
+      "title": "root rejection is visible and a fresh request can be queued without changing effective mode",
+      "symptom": "update request was not published: queued/pending state absent or HTTP 500",
+      "environment_evidence": "queue publication uses hard link; independent probe reports link EPERM",
+      "baseline": {
+        "file": "tests/update-mode.test.ts",
+        "title": "root rejection is visible and a fresh request can be queued without changing effective mode",
+        "location": "tests\\update-mode.test.ts:1:5029",
+        "failure_excerpt": "  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  + actual - expected\n  \n  + undefined\n  - 'queued'\n  \n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\.local\\baseline\\tests\\update-mode.test.ts:62:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: undefined,\n    expected: 'queued',\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n"
+      },
+      "feature_initial_run": {
+        "file": "tests/update-mode.test.ts",
+        "title": "root rejection is visible and a fresh request can be queued without changing effective mode",
+        "location": "tests\\update-mode.test.ts:1:5029",
+        "failure_excerpt": "  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  + actual - expected\n  \n  + undefined\n  - 'queued'\n  \n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\tests\\update-mode.test.ts:62:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: undefined,\n    expected: 'queued',\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n"
+      }
+    },
+    {
+      "id": 9,
+      "file": "tests/update-mode.test.ts",
+      "title": "request publication is complete/private and wakes without overwriting a competing request",
+      "symptom": "update request was not published: queued/pending state absent or HTTP 500",
+      "environment_evidence": "queue publication uses hard link; independent probe reports link EPERM",
+      "baseline": {
+        "file": "tests/update-mode.test.ts",
+        "title": "request publication is complete/private and wakes without overwriting a competing request",
+        "location": "tests\\update-mode.test.ts:1:5514",
+        "failure_excerpt": "  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:\n  + actual - expected\n  \n    [\n  +   undefined,\n  +   undefined\n  -   'pending',\n  -   'queued'\n    ]\n  \n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\.local\\baseline\\tests\\update-mode.test.ts:80:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: [ undefined, undefined ],\n    expected: [ 'pending', 'queued' ],\n    operator: 'deepStrictEqual',"
+      },
+      "feature_initial_run": {
+        "file": "tests/update-mode.test.ts",
+        "title": "request publication is complete/private and wakes without overwriting a competing request",
+        "location": "tests\\update-mode.test.ts:1:5514",
+        "failure_excerpt": "  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:\n  + actual - expected\n  \n    [\n  +   undefined,\n  +   undefined\n  -   'pending',\n  -   'queued'\n    ]\n  \n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\tests\\update-mode.test.ts:80:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: [ undefined, undefined ],\n    expected: [ 'pending', 'queued' ],\n    operator: 'deepStrictEqual',"
+      }
+    },
+    {
+      "id": 10,
+      "file": "tests/update-mode.test.ts",
+      "title": "queue collision preserves a symlink target and cleans temporary files",
+      "symptom": "EPERM creating symlink",
+      "environment_evidence": "Windows/sandbox symlink creation restriction",
+      "baseline": {
+        "file": "tests/update-mode.test.ts",
+        "title": "queue collision preserves a symlink target and cleans temporary files",
+        "location": "tests\\update-mode.test.ts:1:6876",
+        "failure_excerpt": "  Error: EPERM: operation not permitted, symlink 'C:\\Users\\nehor\\AppData\\Local\\Packages\\sandbox.{e38216e8-1995-4040-bd38-b11059dffc25}\\AC\\Temp\\yachad-mode-c8pHKx\\preserve-fixture' -> 'C:\\Users\\nehor\\AppData\\Local\\Packages\\sandbox.{e38216e8-1995-4040-bd38-b11059dffc25}\\AC\\Temp\\yachad-mode-c8pHKx\\update-request.json'\n      at symlinkSync (node:fs:1937:11)\n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\.local\\baseline\\tests\\update-mode.test.ts:95:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    errno: -4048,\n    code: 'EPERM',\n    syscall: 'symlink',\n    path: 'C:\\\\Users\\\\nehor\\\\AppData\\\\Local\\\\Packages\\\\sandbox.{e38216e8-1995-4040-bd38-b11059dffc25}\\\\AC\\\\Temp\\\\yachad-mode-c8pHKx\\\\preserve-fixture',\n    dest: 'C:\\\\Users\\\\nehor\\\\AppData\\\\Local\\\\Packages\\\\sandbox.{e38216e8-1995-4040-bd38-b11059dffc25}\\\\AC\\\\Temp\\\\yachad-mode-c8pHKx\\\\update-request.json'\n  }\n"
+      },
+      "feature_initial_run": {
+        "file": "tests/update-mode.test.ts",
+        "title": "queue collision preserves a symlink target and cleans temporary files",
+        "location": "tests\\update-mode.test.ts:1:6876",
+        "failure_excerpt": "  Error: EPERM: operation not permitted, symlink 'C:\\Users\\nehor\\AppData\\Local\\Packages\\sandbox.{245fbd83-6fdf-4fb7-b906-d250071d4bfb}\\AC\\Temp\\yachad-mode-etSb9Q\\preserve-fixture' -> 'C:\\Users\\nehor\\AppData\\Local\\Packages\\sandbox.{245fbd83-6fdf-4fb7-b906-d250071d4bfb}\\AC\\Temp\\yachad-mode-etSb9Q\\update-request.json'\n      at symlinkSync (node:fs:1937:11)\n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\tests\\update-mode.test.ts:95:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    errno: -4048,\n    code: 'EPERM',\n    syscall: 'symlink',\n    path: 'C:\\\\Users\\\\nehor\\\\AppData\\\\Local\\\\Packages\\\\sandbox.{245fbd83-6fdf-4fb7-b906-d250071d4bfb}\\\\AC\\\\Temp\\\\yachad-mode-etSb9Q\\\\preserve-fixture',\n    dest: 'C:\\\\Users\\\\nehor\\\\AppData\\\\Local\\\\Packages\\\\sandbox.{245fbd83-6fdf-4fb7-b906-d250071d4bfb}\\\\AC\\\\Temp\\\\yachad-mode-etSb9Q\\\\update-request.json'\n  }\n"
+      }
+    },
+    {
+      "id": 11,
+      "file": "tests/update-mode.test.ts",
+      "title": "root request journal exposes only actual stages and prevents concurrent submissions while running",
+      "symptom": "update request was not published: queued/pending state absent or HTTP 500",
+      "environment_evidence": "queue publication uses hard link; independent probe reports link EPERM",
+      "baseline": {
+        "file": "tests/update-mode.test.ts",
+        "title": "root request journal exposes only actual stages and prevents concurrent submissions while running",
+        "location": "tests\\update-mode.test.ts:1:7565",
+        "failure_excerpt": "  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  + actual - expected\n  \n  + undefined\n  - 'queued'\n  \n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\.local\\baseline\\tests\\update-mode.test.ts:111:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: undefined,\n    expected: 'queued',\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n"
+      },
+      "feature_initial_run": {
+        "file": "tests/update-mode.test.ts",
+        "title": "root request journal exposes only actual stages and prevents concurrent submissions while running",
+        "location": "tests\\update-mode.test.ts:1:7565",
+        "failure_excerpt": "  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  + actual - expected\n  \n  + undefined\n  - 'queued'\n  \n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\tests\\update-mode.test.ts:111:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: undefined,\n    expected: 'queued',\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n"
+      }
+    },
+    {
+      "id": 12,
+      "file": "tests/update-mode.test.ts",
+      "title": "wake-link ENOSPC cannot report failure after an install request was published",
+      "symptom": "update request was not published: queued/pending state absent or HTTP 500",
+      "environment_evidence": "queue publication uses hard link; independent probe reports link EPERM",
+      "baseline": {
+        "file": "tests/update-mode.test.ts",
+        "title": "wake-link ENOSPC cannot report failure after an install request was published",
+        "location": "tests\\update-mode.test.ts:1:8493",
+        "failure_excerpt": "  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  500 !== 200\n  \n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\.local\\baseline\\tests\\update-mode.test.ts:125:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 500,\n    expected: 200,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n"
+      },
+      "feature_initial_run": {
+        "file": "tests/update-mode.test.ts",
+        "title": "wake-link ENOSPC cannot report failure after an install request was published",
+        "location": "tests\\update-mode.test.ts:1:8493",
+        "failure_excerpt": "  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  500 !== 200\n  \n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\tests\\update-mode.test.ts:125:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 500,\n    expected: 200,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n"
+      }
+    },
+    {
+      "id": 13,
+      "file": "tests/update-mode.test.ts",
+      "title": "expired authenticated work is visible as a matching terminal failure, not success or continuing work",
+      "symptom": "update request was not published: queued/pending state absent or HTTP 500",
+      "environment_evidence": "queue publication uses hard link; independent probe reports link EPERM",
+      "baseline": {
+        "file": "tests/update-mode.test.ts",
+        "title": "expired authenticated work is visible as a matching terminal failure, not success or continuing work",
+        "location": "tests\\update-mode.test.ts:1:9474",
+        "failure_excerpt": "  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  + actual - expected\n  \n  + undefined\n  - 'queued'\n  \n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\.local\\baseline\\tests\\update-mode.test.ts:137:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: undefined,\n    expected: 'queued',\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n"
+      },
+      "feature_initial_run": {
+        "file": "tests/update-mode.test.ts",
+        "title": "expired authenticated work is visible as a matching terminal failure, not success or continuing work",
+        "location": "tests\\update-mode.test.ts:1:9474",
+        "failure_excerpt": "  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  + actual - expected\n  \n  + undefined\n  - 'queued'\n  \n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\tests\\update-mode.test.ts:137:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: undefined,\n    expected: 'queued',\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n"
+      }
+    },
+    {
+      "id": 14,
+      "file": "tests/update-recovery-gate.test.ts",
+      "title": "HTTP recovery POSTs are conflict responses, GET is available, and normal terminal work remains queueable",
+      "symptom": "update request was not published: queued/pending state absent or HTTP 500",
+      "environment_evidence": "queue publication uses hard link; independent probe reports link EPERM",
+      "baseline": {
+        "file": "tests/update-recovery-gate.test.ts",
+        "title": "HTTP recovery POSTs are conflict responses, GET is available, and normal terminal work remains queueable",
+        "location": "tests\\update-recovery-gate.test.ts:1:3497",
+        "failure_excerpt": "  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  500 !== 200\n  \n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\.local\\baseline\\tests\\update-recovery-gate.test.ts:101:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 500,\n    expected: 200,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n"
+      },
+      "feature_initial_run": {
+        "file": "tests/update-recovery-gate.test.ts",
+        "title": "HTTP recovery POSTs are conflict responses, GET is available, and normal terminal work remains queueable",
+        "location": "tests\\update-recovery-gate.test.ts:1:3497",
+        "failure_excerpt": "  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  500 !== 200\n  \n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\tests\\update-recovery-gate.test.ts:101:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 500,\n    expected: 200,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n"
+      }
+    },
+    {
+      "id": 15,
+      "file": "tests/update-target-binding.test.ts",
+      "title": "HTTP install echoes the displayed root identity in a private atomic queue and repeated clicks preserve it",
+      "symptom": "update request was not published: queued/pending state absent or HTTP 500",
+      "environment_evidence": "queue publication uses hard link; independent probe reports link EPERM",
+      "baseline": {
+        "file": "tests/update-target-binding.test.ts",
+        "title": "HTTP install echoes the displayed root identity in a private atomic queue and repeated clicks preserve it",
+        "location": "tests\\update-target-binding.test.ts:1:2160",
+        "failure_excerpt": "  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:\n  + actual - expected\n  \n    [\n  +   undefined,\n  +   undefined\n  -   'pending',\n  -   'queued'\n    ]\n  \n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\.local\\baseline\\tests\\update-target-binding.test.ts:43:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: [ undefined, undefined ],\n    expected: [ 'pending', 'queued' ],\n    operator: 'deepStrictEqual',"
+      },
+      "feature_initial_run": {
+        "file": "tests/update-target-binding.test.ts",
+        "title": "HTTP install echoes the displayed root identity in a private atomic queue and repeated clicks preserve it",
+        "location": "tests\\update-target-binding.test.ts:1:2160",
+        "failure_excerpt": "  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:\n  + actual - expected\n  \n    [\n  +   undefined,\n  +   undefined\n  -   'pending',\n  -   'queued'\n    ]\n  \n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\tests\\update-target-binding.test.ts:43:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: [ undefined, undefined ],\n    expected: [ 'pending', 'queued' ],\n    operator: 'deepStrictEqual',"
+      }
+    },
+    {
+      "id": 16,
+      "file": "tests/update-target-binding.test.ts",
+      "title": "lost install response followed by reload and duplicate request retains the one durable target and request ID",
+      "symptom": "ENOENT reading update-request.json after queue publication failed",
+      "environment_evidence": "queue publication uses hard link; independent probe reports link EPERM",
+      "baseline": {
+        "file": "tests/update-target-binding.test.ts",
+        "title": "lost install response followed by reload and duplicate request retains the one durable target and request ID",
+        "location": "tests\\update-target-binding.test.ts:1:3796",
+        "failure_excerpt": "  Error: ENOENT: no such file or directory, open 'C:\\Users\\nehor\\AppData\\Local\\Packages\\sandbox.{e38216e8-1995-4040-bd38-b11059dffc25}\\AC\\Temp\\yachad-target-Mne0t6\\update-request.json'\n      at readFileSync (node:fs:483:20)\n      at Object.queue (C:\\projects\\yahad-child-pause\\.local\\baseline\\tests\\update-target-binding.test.ts:31:29)\n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\.local\\baseline\\tests\\update-target-binding.test.ts:78:24)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    errno: -4058,\n    code: 'ENOENT',\n    syscall: 'open',\n    path: 'C:\\\\Users\\\\nehor\\\\AppData\\\\Local\\\\Packages\\\\sandbox.{e38216e8-1995-4040-bd38-b11059dffc25}\\\\AC\\\\Temp\\\\yachad-target-Mne0t6\\\\update-request.json'\n  }\n"
+      },
+      "feature_initial_run": {
+        "file": "tests/update-target-binding.test.ts",
+        "title": "lost install response followed by reload and duplicate request retains the one durable target and request ID",
+        "location": "tests\\update-target-binding.test.ts:1:3796",
+        "failure_excerpt": "  Error: ENOENT: no such file or directory, open 'C:\\Users\\nehor\\AppData\\Local\\Packages\\sandbox.{245fbd83-6fdf-4fb7-b906-d250071d4bfb}\\AC\\Temp\\yachad-target-h5AMiM\\update-request.json'\n      at readFileSync (node:fs:483:20)\n      at Object.queue (C:\\projects\\yahad-child-pause\\tests\\update-target-binding.test.ts:31:29)\n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\tests\\update-target-binding.test.ts:78:24)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    errno: -4058,\n    code: 'ENOENT',\n    syscall: 'open',\n    path: 'C:\\\\Users\\\\nehor\\\\AppData\\\\Local\\\\Packages\\\\sandbox.{245fbd83-6fdf-4fb7-b906-d250071d4bfb}\\\\AC\\\\Temp\\\\yachad-target-h5AMiM\\\\update-request.json'\n  }\n"
+      }
+    },
+    {
+      "id": 17,
+      "file": "tests/update-target-binding.test.ts",
+      "title": "older status and invalid root target remain readable but cannot silently queue an unbound install",
+      "symptom": "update request was not published: queued/pending state absent or HTTP 500",
+      "environment_evidence": "queue publication uses hard link; independent probe reports link EPERM",
+      "baseline": {
+        "file": "tests/update-target-binding.test.ts",
+        "title": "older status and invalid root target remain readable but cannot silently queue an unbound install",
+        "location": "tests\\update-target-binding.test.ts:1:4556",
+        "failure_excerpt": "  AssertionError [ERR_ASSERTION]: legacy status may request a new check, never unbound install\n  + actual - expected\n  \n  + undefined\n  - 'queued'\n  \n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\.local\\baseline\\tests\\update-target-binding.test.ts:104:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    generatedMessage: false,\n    code: 'ERR_ASSERTION',\n    actual: undefined,\n    expected: 'queued',\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n"
+      },
+      "feature_initial_run": {
+        "file": "tests/update-target-binding.test.ts",
+        "title": "older status and invalid root target remain readable but cannot silently queue an unbound install",
+        "location": "tests\\update-target-binding.test.ts:1:4556",
+        "failure_excerpt": "  AssertionError [ERR_ASSERTION]: legacy status may request a new check, never unbound install\n  + actual - expected\n  \n  + undefined\n  - 'queued'\n  \n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\tests\\update-target-binding.test.ts:104:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    generatedMessage: false,\n    code: 'ERR_ASSERTION',\n    actual: undefined,\n    expected: 'queued',\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n"
+      }
+    },
+    {
+      "id": 18,
+      "file": "tests/update-target-binding.test.ts",
+      "title": "failed target capability needs a fresh check and recovery barriers dominate even a matching target",
+      "symptom": "update request was not published: queued/pending state absent or HTTP 500",
+      "environment_evidence": "queue publication uses hard link; independent probe reports link EPERM",
+      "baseline": {
+        "file": "tests/update-target-binding.test.ts",
+        "title": "failed target capability needs a fresh check and recovery barriers dominate even a matching target",
+        "location": "tests\\update-target-binding.test.ts:1:6288",
+        "failure_excerpt": "  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  + actual - expected\n  \n  + undefined\n  - 'queued'\n  \n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\.local\\baseline\\tests\\update-target-binding.test.ts:150:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: undefined,\n    expected: 'queued',\n    operator: 'strictEqual',\n    diff: 'simple'\n  }"
+      },
+      "feature_initial_run": {
+        "file": "tests/update-target-binding.test.ts",
+        "title": "failed target capability needs a fresh check and recovery barriers dominate even a matching target",
+        "location": "tests\\update-target-binding.test.ts:1:6288",
+        "failure_excerpt": "  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  + actual - expected\n  \n  + undefined\n  - 'queued'\n  \n      at TestContext.<anonymous> (C:\\projects\\yahad-child-pause\\tests\\update-target-binding.test.ts:150:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1409:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: undefined,\n    expected: 'queued',\n    operator: 'strictEqual',\n    diff: 'simple'\n  }"
+      }
+    }
+  ]
+}

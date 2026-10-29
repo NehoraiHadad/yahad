@@ -65,6 +65,8 @@ export interface StoredMessage {
   authorLabel?: string;
 }
 export interface Outgoing {
+  /** Recheck the originating session after preparation, immediately before provider submission. */
+  beforeSend?: () => void;
   groupId: string;
   id: string;
   text: string;

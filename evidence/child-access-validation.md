@@ -4,6 +4,12 @@ Date: 2026-10-29. Base: `586c8d489904be0cb7819bb2a7fa6d22d63d07de`
 (`origin/main`, application 0.5.3). Branch: `feat/child-access-pause`.
 Worktree: `C:\projects\yahad-child-pause`. Runtime: Node 24.21.0, Python 3.13.
 
+Follow-up: the [independent code review](child-access-code-review.md) found and
+fixed three P2 issues (delayed usage requests, local media preparation before
+provider submission, and the packaging test's schema expectation). Its final
+rerun passed 296 Node tests with 2 existing skips and 12 Python tests. The
+historical validation counts below describe the initial implementation round.
+
 ## Result
 
 Parents can pause or resume one child in the existing child-management workspace.

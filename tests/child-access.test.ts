@@ -161,6 +161,52 @@ test('pause rolls back usage, sessions and policy together on storage failure; r
   } finally { await f.close(); }
 });
 
+test('usage requests authenticated before pause cannot create or renew leases after pause or resume', async () => {
+  for (const operation of ['open', 'heartbeat']) for (const resume of [false, true]) {
+    const f = await fixture();
+    try {
+      const u = f.store.usage; u.setPolicy(f.family.familyId, f.family.childId, 37);
+      const tab = u.open(f.child).tab; u.heartbeat(f.child, tab, 1, true); f.advance(4000);
+      const path = '/api/usage/' + operation;
+      let began!: () => void, release!: () => void;
+      const started = new Promise<void>(resolve => { began = resolve; }), held = new Promise<void>(resolve => { release = resolve; });
+      f.app.addHook('preHandler', async req => { if (req.url === path) { began(); await held; } });
+      const request = f.req(f.child, path, 'POST', operation === 'open' ? {} : { tab, seq: 2, active: true }).then(response => response);
+      await started;
+      assert.equal((await f.access(true, 0)).statusCode, 200);
+      if (resume) assert.equal((await f.access(false, 1)).statusCode, 200);
+      release();
+      const response = await request;
+      assert.equal(response.statusCode, 401, `${operation}; resume=${resume}`);
+      assert.equal(response.json().error, 'SIGN_IN_REQUIRED');
+      assert.equal(f.store.one('SELECT count(*) AS n FROM usage_leases').n, 1, 'stale admission cannot allocate a new row');
+      assert.equal(f.store.one('SELECT MAX(until) AS n FROM usage_leases').n, 0);
+      f.advance(5000);
+      assert.equal(u.status(f.family.familyId, f.family.childId).usedMs, 4000, 'paused time is never billed by a delayed heartbeat');
+    } finally { await f.close(); }
+  }
+});
+
+test('a paused session cannot begin provider submission after delayed connector preparation, including after resume', async () => {
+  for (const resume of [false, true]) {
+    const f = await fixture();
+    try {
+      const c = f.service.connector(f.family.familyId), original = c.send.bind(c);
+      let began!: () => void, release!: () => void, submitted = 0;
+      const started = new Promise<void>(resolve => { began = resolve; }), held = new Promise<void>(resolve => { release = resolve; });
+      c.send = async message => { began(); await held; message.beforeSend?.(); submitted++; return original(message); };
+      const request = f.req(f.child, '/api/groups/' + f.group + '/messages', 'POST', { text: 'Synthetic delayed send', clientId: randomUUID() }).then(response => response);
+      await started;
+      assert.equal((await f.access(true, 0)).statusCode, 200);
+      if (resume) assert.equal((await f.access(false, 1)).statusCode, 200);
+      release();
+      assert.equal((await request).statusCode, 502, 'existing conservative send-uncertain response is preserved');
+      assert.equal(submitted, 0, 'no provider submission is allowed for the revoked originating session');
+      assert.equal(f.store.session(f.child.sid), undefined);
+    } finally { await f.close(); }
+  }
+});
+
 test('time exhaustion stays exhausted through pause/resume, and a parent bonus does not bypass a pause', async () => {
   const f = await fixture();
   try {

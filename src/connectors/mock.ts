@@ -118,6 +118,7 @@ export class MockConnector implements Connector {
   }
   async send(m: Outgoing): Promise<Incoming> {
     if (!this.running) throw new Error('Disconnected');
+    m.beforeSend?.();
     const id = m.id || randomUUID();
     this.later(() => this.hooks.update(m.groupId, id, { status: 'delivered' }), 700);
     this.later(() => this.hooks.update(m.groupId, id, { status: 'read' }), 1800);

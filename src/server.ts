@@ -475,14 +475,16 @@ export async function createApp(
           let sentMarker;
           try {
             sentMarker = await c.send({
+              beforeSend: currentSend,
               id: markerId,
               groupId: g,
               text: marker.text,
               kind: 'text',
               reply,
             });
-          } catch {
+          } catch (error) {
             if (sameRetention()) service.update(f, g, markerId, { status: 'failed' });
+            if (error instanceof UsageError) throw error;
             throw new Error('Marker send failed');
           }
           currentSend();
@@ -493,6 +495,7 @@ export async function createApp(
       }
       currentSend();
       const sent = await c.send({
+        beforeSend: currentSend,
         id,
         groupId: g,
         text: wireText,
