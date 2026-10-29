@@ -1,0 +1,12 @@
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  Yahad.Install.Core -> C:\projects\yahad-native-production\installer\Yahad.Install.Core\bin\Release\net10.0-windows\Yahad.Install.Core.dll
+  Yahad.ServiceHost -> C:\projects\yahad-native-production\installer\Yahad.ServiceHost\bin\Release\net10.0-windows\Yahad.ServiceHost.dll
+  Yahad.Authority -> C:\projects\yahad-native-production\installer\Yahad.Authority\bin\Release\net10.0-windows\Yahad.Authority.dll
+  Yahad.Owner -> C:\projects\yahad-native-production\installer\Yahad.Owner\bin\Release\net10.0-windows\Yahad.Owner.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:09.95

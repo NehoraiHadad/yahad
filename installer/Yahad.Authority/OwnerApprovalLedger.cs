@@ -9,14 +9,16 @@ internal sealed record RoutineDelegation(int Format,string Id,string Installatio
     string Origin,InstalledRecovery? Recovery,string MinimumVersion,string MaximumVersion,int Schema,long ExpiresUnix,int MaximumOperations,long MaximumPayloadBytes);
 internal sealed class OwnerApprovalLedger:IOwnerOperationAuthentication
 {
-    private readonly string root,stateRoot,installation,ownerSid;private readonly Func<DateTimeOffset> clock;
+    private readonly InstalledStateFiles files;private readonly string root,stateRoot,installation,ownerSid;private readonly Func<DateTimeOffset> clock;
     internal OwnerApprovalLedger(string privateRoot,string installationId,string ownerSid,Func<DateTimeOffset> clock)
+        :this(InstalledStateFiles.Private(privateRoot),installationId,ownerSid,clock){}
+    internal OwnerApprovalLedger(InstalledStateFiles files,string installationId,string ownerSid,Func<DateTimeOffset> clock)
     {
-        SafeDirectory.ValidateSession(privateRoot);InstalledActivationResolver.Id(installationId);_ =new System.Security.Principal.SecurityIdentifier(ownerSid);
-        stateRoot=privateRoot;root=Path.Combine(privateRoot,"owner-ledger");Directory.CreateDirectory(root);installation=installationId;this.ownerSid=ownerSid;this.clock=clock;
+        this.files=files;files.ValidateRoot();InstalledActivationResolver.Id(installationId);_=new System.Security.Principal.SecurityIdentifier(ownerSid);
+        stateRoot=files.Root;root=files.PathOf("owner-ledger");files.EnsureDirectory(root);installation=installationId;this.ownerSid=ownerSid;this.clock=clock;
     }
     private long Now=>clock().ToUnixTimeSeconds();
-    private IDisposable Lease()=>WindowsFileBoundary.AcquireDataLease(root);
+    private IDisposable Lease()=>files.Lease(root);
     internal ApprovalChallenge Challenge(ProtectedOperation operation,bool reconcile=false)
     {
         Operation(operation);var digest=AuthorityProtocol.Digest(operation);using var held=Lease();
@@ -111,7 +113,7 @@ internal sealed class OwnerApprovalLedger:IOwnerOperationAuthentication
     }
     private void RequireDelegationAnchor(RoutineDelegation d)
     {
-        byte[] ReadState(string name){using var file=WindowsFileBoundary.OpenPrivateRead(Path.Combine(stateRoot,name));return file.Small(16384);}
+        byte[] ReadState(string name){using var file=files.Open(Path.Combine(stateRoot,name));return file.Small(16384);}
         if(Directory.EnumerateFileSystemEntries(stateRoot).Select(Path.GetFileName).Any(n=>n=="pending.json"||n!.Contains(".partial-")))throw new IOException("OWNER_DELEGATION_PENDING_STATE");
         var bytes=ReadState("activation.json");var head=NativeJson.Read<InstalledActivation>(bytes);var anchor=WindowsInstallationReader.Parse(ReadState("bootstrap.json"));var epoch=NativeJson.Read<InstalledEpoch>(ReadState("epoch.json"));
         var digest=InstalledActivationResolver.Hash(bytes);var webBytes=ReadState("web.json");var web=NativeJson.Read<InstalledWeb>(webBytes);
@@ -130,12 +132,12 @@ internal sealed class OwnerApprovalLedger:IOwnerOperationAuthentication
     private void Operation(ProtectedOperation op){if(op.InstallationId!=installation||op.Kind is not("install" or "activate" or "recover"))throw new IOException("OWNER_OPERATION_BINDING");}
     private void RequireOwner(AuthorityPeer peer){if(peer.Sid!=ownerSid||peer.ProcessId<1||peer.Created<=0||peer.Session<=0||!peer.Interactive)throw new UnauthorizedAccessException("OWNER_PEER");}
     private string PathOf(string name)=>Path.Combine(root,name+".json");
-    private T Read<T>(string name){using var f=WindowsFileBoundary.OpenPrivateRead(PathOf(name));return NativeJson.Read<T>(f.Small(32768));}
+    private T Read<T>(string name){using var f=files.Open(PathOf(name));return NativeJson.Read<T>(f.Small(32768));}
     private void Write<T>(string name,T value)
     {
         if(Directory.EnumerateFileSystemEntries(root).Take(10001).Count()>10000)throw new IOException("OWNER_LEDGER_BOUND");
         var bytes=JsonSerializer.SerializeToUtf8Bytes(value);if(bytes.Length>32768)throw new IOException("OWNER_RECORD_BOUND");
         // FileShare.None + WriteThrough + Flush before readers can open; partial/corrupt files fail closed.
-        using var output=new FileStream(PathOf(name),FileMode.CreateNew,FileAccess.Write,FileShare.None,4096,FileOptions.WriteThrough);output.Write(bytes);output.Flush(true);
+        using var output=files.Create(PathOf(name));output.Write(bytes);output.Flush(true);
     }
 }

@@ -1,3 +1,6 @@
+> Current owner-selected target: **ASUSHADAD**, an ordinary working computer.
+> A VM is optional, not required. See [current endpoint checkpoint and normal-host proposal](NATIVE-ENDPOINT-COMPOSITION.md); it supersedes VM-only recommendations below. No installation/security change is yet approved.
+
 # Read-only Windows test options: ASUSHADAD
 
 Observed after the health repair tests, 2026-10-29 UTC. No feature was enabled,

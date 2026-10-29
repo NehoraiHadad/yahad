@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "kind": "proposed-windows-authority-adapter-acceptance",
-  "status": "design-only-blocked",
+  "status": "superseded-unapproved-proposal",
   "authorized": false,
   "executionEligible": false,
   "baselineSource": "b1ea1bd5be33693fa7d3e2f7e375d3d1a1d0444d",
@@ -264,5 +264,6 @@
     "clean power-loss recovery",
     "Linux or ARM acceptance",
     "unbounded or production-approved automatic delegation"
-  ]
+  ],
+  "supersededBy": "asus-host-acceptance.json"
 }

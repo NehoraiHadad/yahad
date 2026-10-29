@@ -1,0 +1,18 @@
+<Window x:Class="Yahad.Owner.ApprovalWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ Title="אישור עדכון | יחד" Width="560" Height="580" MinWidth="440" MinHeight="460" FlowDirection="RightToLeft" FontFamily="Segoe UI Variable, Segoe UI" FontSize="16" Background="#F5F7EF" Foreground="#173D34" WindowStartupLocation="CenterScreen">
+ <Grid Margin="32"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+  <StackPanel><TextBlock Text="יחד" Foreground="#157C69" FontSize="30" FontWeight="SemiBold"/><TextBlock x:Name="Heading" Text="עדכון של האפליקציה" FontSize="28" FontWeight="SemiBold" Margin="0,20,0,12"/></StackPanel>
+  <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"><StackPanel>
+   <Border Background="White" CornerRadius="16" Padding="22" Margin="0,8,0,18"><StackPanel>
+    <TextBlock x:Name="Versions" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap"/>
+    <TextBlock x:Name="Summary" Margin="0,14,0,0" TextWrapping="Wrap" LineHeight="25"/>
+   </StackPanel></Border>
+   <TextBlock Text="האישור חל על הפעולה המוצגת כאן בלבד. אפשר לסגור ולחזור לעבודה כרגיל." TextWrapping="Wrap" Foreground="#53645F" LineHeight="24"/>
+   <TextBlock x:Name="Status" Margin="0,16,0,0" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/>
+  </StackPanel></ScrollViewer>
+  <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Left" Margin="0,20,0,0">
+   <Button x:Name="Approve" Content="אישור העדכון" Click="Approve_Click" Padding="24,12" Background="#157C69" Foreground="White" BorderThickness="0"/>
+   <Button x:Name="Deny" Content="ביטול" Click="Deny_Click" Padding="22,12" Margin="12,0,0,0" Background="Transparent" BorderThickness="0"/>
+  </StackPanel>
+ </Grid>
+</Window>

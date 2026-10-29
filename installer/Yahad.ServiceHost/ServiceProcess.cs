@@ -10,7 +10,7 @@ namespace Yahad.Service;
 // Supplied only by installed activation admission after protected identity and
 // observed recovery checks. No executable/argument JSON or CLI factory.
 internal sealed record VerifiedProcessSpec(string Image,string ImageSha256,string[] Arguments,string WorkingDirectory,
-    string PrivateTemporaryDirectory,string PrivateFFmpeg,IReadOnlyDictionary<string,string> AppEnvironment,WindowsFileBoundary.DataLease? DataLease=null,Action? BeforeMutableStart=null);
+    string PrivateTemporaryDirectory,string PrivateFFmpeg,IReadOnlyDictionary<string,string> AppEnvironment,WindowsFileBoundary.DataLease? DataLease=null,Action? BeforeMutableStart=null,InstalledStateFiles? StateFiles=null);
 internal readonly record struct ChildReady(uint PeerPid,string Type);
 internal interface IChildControl:IDisposable
 {
@@ -76,7 +76,7 @@ internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildCont
             channel=channels.Create();environment.Add("YAHAD_NATIVE_PIPE",channel.Endpoint);
             if(spec.DataLease is not null)
             {
-                handoff=new LaunchLease(spec.PrivateTemporaryDirectory,environment);
+                handoff=new LaunchLease(spec.PrivateTemporaryDirectory,environment,spec.StateFiles);
             }
             else if(spec.BeforeMutableStart is not null)throw new IOException("SERVICE_HANDOFF_MISSING");
             void Handoff(Microsoft.Win32.SafeHandles.SafeProcessHandle process,int pid)
@@ -102,10 +102,10 @@ internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildCont
     }
     private sealed class LaunchLease:IDisposable
     {
-        private readonly string directory,path,nonce;private IDisposable? pin;
-        internal LaunchLease(string temporary,Dictionary<string,string> environment)
+        private readonly string directory,path,nonce;private IDisposable? pin;private readonly InstalledStateFiles? files;
+        internal LaunchLease(string temporary,Dictionary<string,string> environment,InstalledStateFiles? files)
         {
-            directory=Path.Combine(temporary,"launch-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
+            this.files=files;directory=Path.Combine(temporary,"launch-"+Guid.NewGuid().ToString("N"));if(files is null)Directory.CreateDirectory(directory);else files.CreateDirectory(directory);
             using var check=WindowsFileBoundary.PinPrivateDirectory(directory);
             path=Path.Combine(directory,"lease.json");nonce=Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
             environment.Add("YAHAD_NATIVE_LEASE_FILE",path);environment.Add("YAHAD_NATIVE_LEASE_NONCE",nonce);
@@ -114,7 +114,7 @@ internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildCont
         {
             var remote=lease.DuplicateTo(child);
             var bytes=JsonSerializer.SerializeToUtf8Bytes(new HostLeaseGrant(1,pid,remote,data,nonce));
-            using(var output=new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.None,4096,FileOptions.WriteThrough)){output.Write(bytes);output.Flush(true);}
+            using(var output=files?.Create(path)??new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.None,4096,FileOptions.WriteThrough)){output.Write(bytes);output.Flush(true);}
             pin=WindowsFileBoundary.OpenPrivateRead(path);
         }
         public void Dispose(){pin?.Dispose();if(File.Exists(path))File.Delete(path);Directory.Delete(directory,false);}

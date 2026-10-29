@@ -36,10 +36,11 @@ public static class WindowsFileBoundary
 
     public static SecretLease OpenSecret(string path, SecretRole role)
     {
+        var installed=InstalledProcessState.ForPath(path);
         var pinned = Pin(path, leafDirectory: false, readContents: true);
         try
         {
-            ValidateAcl(Security(pinned.Leaf), ApplicationSid(), role == SecretRole.SetupCapability);
+            if(installed is null)ValidateAcl(Security(pinned.Leaf), ApplicationSid(), role == SecretRole.SetupCapability);else installed.Roles!.Validate(Security(pinned.Leaf),installed.SecretClass(path,role),false);
             return new(pinned, role == SecretRole.MasterKey ? 4096 : 1024);
         }
         catch { pinned.Dispose(); throw; }
@@ -49,10 +50,32 @@ public static class WindowsFileBoundary
     // checks as secrets, with bounded streaming rather than loading media in RAM.
     internal static PrivateReadLease OpenInstalledRoleRead(string path,InstalledFileRoles roles,InstalledFileRole role)
     {
-        var pinned=Pin(path,false,true);try{roles.Validate(Security(pinned.Leaf),role);return new(pinned);}catch{pinned.Dispose();throw;}
+        var pinned=Pin(path,false,true);try{roles.Validate(Security(pinned.Leaf),role,false);return new(pinned);}catch{pinned.Dispose();throw;}
     }
+    internal static IDisposable PinInstalledRoleDirectory(string path,InstalledFileRoles roles,InstalledFileRole role)
+    {var pinned=Pin(path,true,false);try{roles.Validate(Security(pinned.Leaf),role);return pinned;}catch{pinned.Dispose();throw;}}
+    internal static FileStream CreateInstalledRoleFile(string path,InstalledFileRoles roles,InstalledFileRole role,InstalledFileRole parentRole)
+    {
+        // Applied at creation only; never repairs an existing file's ACL.
+        using var parent=PinInstalledRoleDirectory(Path.GetDirectoryName(path)!,roles,parentRole);
+        var current=ApplicationSid();if(current!=roles.Authority&&current!=roles.Runtime)throw new IOException("INSTALLED_CREATOR_ROLE");
+        var runtime=role==InstalledFileRole.Recovery?"":$"(A;;{(role is InstalledFileRole.Data or InstalledFileRole.Lease?"0x1301bf":"0x1200a9")};;;{roles.Runtime.Value})";
+        var authority=role is InstalledFileRole.Data or InstalledFileRole.MasterKey?"0x1200a9":"0x1301bf";
+        var sddl=$"O:{current.Value}D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;{authority};;;{roles.Authority.Value}){runtime}";
+        var acl=new RawSecurityDescriptor(sddl);roles.Validate(acl,role,false);var bytes=new byte[acl.BinaryLength];acl.GetBinaryForm(bytes,0);
+        var descriptor=GCHandle.Alloc(bytes,GCHandleType.Pinned);var attributes=new CreationSecurity{Length=Marshal.SizeOf<CreationSecurity>(),Descriptor=descriptor.AddrOfPinnedObject()};
+        var pointer=Marshal.AllocHGlobal(attributes.Length);
+        try
+        {
+            Marshal.StructureToPtr(attributes,pointer,false);var handle=Native.CreateFileW(Extended(path),0x40000000|ReadControl,0,pointer,1,0x80200080,IntPtr.Zero);
+            if(handle.IsInvalid){handle.Dispose();throw new Win32Exception();}try{CheckKind(handle,false);roles.Validate(Security(handle),role,false);return new FileStream(handle,FileAccess.Write,4096,false);}catch{handle.Dispose();throw;}
+        }
+        finally{Marshal.FreeHGlobal(pointer);descriptor.Free();}
+    }
+    [StructLayout(LayoutKind.Sequential)]private struct CreationSecurity{public int Length;public IntPtr Descriptor;public int Inherit;}
     internal static PrivateReadLease OpenPrivateRead(string path)
     {
+        var installed=InstalledProcessState.ForPath(path);if(installed is not null)return installed.Open(path);
         var pinned = Pin(path, false, true);
         try { ValidateAcl(Security(pinned.Leaf), ApplicationSid(), false); return new(pinned); }
         catch { pinned.Dispose(); throw; }
@@ -65,6 +88,7 @@ public static class WindowsFileBoundary
     }
     internal static IDisposable PinPrivateDirectory(string path)
     {
+        var installed=InstalledProcessState.ForPath(path);if(installed is not null)return installed.PinDirectory(path);
         var pinned = Pin(path, true, false);
         try { ValidateAcl(Security(pinned.Leaf), ApplicationSid(), false); return pinned; }
         catch { pinned.Dispose(); throw; }
@@ -83,12 +107,12 @@ public static class WindowsFileBoundary
         public void Dispose()=>pinned.Dispose();
     }
 
-    internal static DataLease AcquireInstalledDataLease(string directory,InstalledFileRoles roles)
+    internal static DataLease AcquireInstalledDataLease(string directory,InstalledFileRoles roles,InstalledFileRole directoryRole=InstalledFileRole.Data)
     {
         var pinned=Pin(directory,true,false);SafeFileHandle? gate=null;
         try
         {
-            roles.Validate(Security(pinned.Leaf),InstalledFileRole.Data);
+            roles.Validate(Security(pinned.Leaf),directoryRole);
             var count=0;
             void Walk(string parent,int depth)
             {
@@ -98,19 +122,20 @@ public static class WindowsFileBoundary
                     if(++count>100000)throw new IOException("NATIVE_TREE_COUNT");
                     var directoryEntry=(File.GetAttributes(name)&FileAttributes.Directory)!=0;
                     using var entry=Pin(name,directoryEntry,false);
-                    roles.Validate(Security(entry.Leaf),directoryEntry||Path.GetFileName(name)!="process.lock"?InstalledFileRole.Data:InstalledFileRole.Lease);
+                    roles.Validate(Security(entry.Leaf),directoryRole==InstalledFileRole.Data?(directoryEntry||Path.GetFileName(name)!="process.lock"?InstalledFileRole.Data:InstalledFileRole.Lease):directoryRole,directoryEntry);
                     if(directoryEntry)Walk(name,depth+1);
                 }
             }
             Walk(directory,0);
             gate=Native.CreateFileW(Extended(Path.Combine(directory,"process.lock")),GenericRead|0x40000000|ReadControl,0,IntPtr.Zero,4,0x00200000,IntPtr.Zero);
-            if(gate.IsInvalid)throw new Win32Exception();CheckKind(gate,false);roles.Validate(Security(gate),InstalledFileRole.Lease);return new(pinned,gate,null);
+            if(gate.IsInvalid)throw new Win32Exception();CheckKind(gate,false);roles.Validate(Security(gate),directoryRole==InstalledFileRole.Data?InstalledFileRole.Lease:directoryRole,false);return new(pinned,gate,null);
         }
         catch{gate?.Dispose();pinned.Dispose();throw;}
     }
 
     public static DataLease AcquireDataLease(string directory, int? ownerProcessId = null)
     {
+        var installed=InstalledProcessState.ForPath(directory);if(installed is not null){if(ownerProcessId is not null)throw new IOException("INSTALLED_LEASE_REQUIRES_HOST_HANDOFF");return installed.Lease(directory);}
         var pinned = Pin(directory, leafDirectory: true, readContents: false);
         SafeFileHandle? gate = null;
         try
@@ -286,7 +311,7 @@ public static class WindowsFileBoundary
             !string.Equals(grant.DataDirectory,directory,StringComparison.OrdinalIgnoreCase)||grant.Handle==0||grant.Handle>long.MaxValue)throw new IOException("NATIVE_HANDOFF_IDENTITY");
         using var owner=Native.OpenProcess(0x1000|0x40,false,ownerPid);if(owner.IsInvalid)throw new Win32Exception();RequireSameIdentity(owner);
         if(!Native.DuplicateHandle(owner.DangerousGetHandle(),(IntPtr)(long)grant.Handle,Native.GetCurrentProcess(),out var local,0,false,2))throw new Win32Exception();
-        using var duplicate=new SafeFileHandle(local,true);CheckKind(duplicate,false);ValidateAcl(Security(duplicate),ApplicationSid(),false);
+        using var duplicate=new SafeFileHandle(local,true);CheckKind(duplicate,false);var installed=InstalledProcessState.ForPath(directory);if(installed is null)ValidateAcl(Security(duplicate),ApplicationSid(),false);else installed.Roles!.Validate(Security(duplicate),InstalledFileRole.Lease,false);
         using var expected=Pin(Path.Combine(directory,"process.lock"),false,false);
         if(!Native.GetFileInformationByHandle(duplicate,out var actual)||!Native.GetFileInformationByHandle(expected.Leaf,out var other))throw new Win32Exception();
         if(actual.Volume!=other.Volume||actual.IndexHigh!=other.IndexHigh||actual.IndexLow!=other.IndexLow)throw new IOException("NATIVE_HANDOFF_FILE");

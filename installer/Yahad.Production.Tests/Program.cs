@@ -7,12 +7,13 @@ using System.Text.Json;
 using Yahad.Install;
 using Yahad.Service;
 
+var endpointOnly=args is ["--endpoint-only",..];if(endpointOnly)args=args[1..];bool endpointChecks=false;
 string? preparedPayload=null;
 if(args.Length==10&&args[^2]=="--prepared"){preparedPayload=args[^1];args=args[..^2];}
 if(args is not ["--node",var node,"--repo",var repo,"--helper",var helper,"--report",var report])throw new IOException("PRIVATE_INPUTS_REQUIRED");
 var results=new List<object>();var failures=0;
 void Assert(bool b,string reason="assertion failed"){if(!b)throw new Exception(reason);}
-async Task Check(string name,Func<Task> run){try{await run();results.Add(new{name,status="PASS"});Console.WriteLine("PASS "+name);}catch(Exception e){failures++;results.Add(new{name,status="FAIL",reason=e.GetType().Name});Console.WriteLine("FAIL "+name+" "+e);}}
+async Task Check(string name,Func<Task> run){if(endpointOnly&&!endpointChecks)return;try{await run();results.Add(new{name,status="PASS"});Console.WriteLine("PASS "+name);}catch(Exception e){failures++;results.Add(new{name,status="FAIL",reason=e.GetType().Name});Console.WriteLine("FAIL "+name+" "+e);}}
 async Task Reject(Func<Task> run,string? code=null)
 {try{await run();}catch(Exception e)when(e is IOException or Win32Exception or JsonException or CryptographicException or FormatException){if(code is not null&&e.Message!=code)throw new Exception("wrong refusal: "+e.Message);return;}throw new Exception("unexpected admission");}
 using var f=await ProductionFixture.Create(node,repo,helper);
@@ -404,7 +405,7 @@ await Check("routine delegated update retains actual committed recovery selectio
  using(var inspector=new NativeSqliteInspector(node,ProductionFixture.Hash(File.ReadAllBytes(node))))using(var recovery=await NativeRecoveryFixture.OpenAsync(f.Dataset,writerJob,inspector))
  {saved=await recovery.BackupAsync();recovered=await recovery.RestoreToNewDirectoryAsync(saved.BackupId,5,5);}
  f.ResetRecovery(saved,recovered);f.Phase="committed";f.Publish();File.WriteAllBytes(f.PathOf("bootstrap.json"),JsonSerializer.SerializeToUtf8Bytes(new{schema=1,service=ServiceDefinition.Name,installationId=f.InstallationId,activationReceiptDigest=f.Binding.ActivationReceiptDigest}));
- f.ClearSignals();var controller=new ServiceController(new DirectAuthorization(f));var result=await controller.RunAsync(r=>{if(r.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);});Assert(result.Failure==ServiceFailure.None);
+ f.ClearSignals();var controller=new ServiceController(new DirectAuthorization(f));var result=await controller.RunAsync(r=>{if(r.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);});Assert(result.Failure==ServiceFailure.None,"recovered routine startup failure="+result.Failure+" stop="+f.Control.StopError);
  var op=Operation() with{Recovery=f.Recovery};var d=Policy() with{Recovery=f.Recovery};var l=Ledger();Delegate(l,d);l.AuthorizeRoutine(op,Facts(),d.Id);
  var before=File.ReadAllBytes(Path.Combine(f.Data,"app.sqlite"));await Writer(l).CommitAsync(op);using(var grant=await f.Resolve()){}
  Assert(before.SequenceEqual(File.ReadAllBytes(Path.Combine(f.Data,"app.sqlite"))));
@@ -526,6 +527,157 @@ await Check("interrupted commit reconciliation still awaits real new-runtime hea
  Approve(Ledger(),selected,true);await c.ReconcileAsync();Assert(c.Phase=="awaiting_runtime");f.ClearSignals();await c.StartRuntimeAsync();Assert(c.Phase=="healthy");await c.StopRuntimeAsync();
 });
 
+endpointChecks=true;
+int projectedRoles=0;
+string StageCandidate(string version)
+{
+ var manifest=System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllBytes(Path.Combine(f.Package,"bundle.json")))!.AsObject();manifest["version"]=version;
+ var bytes=JsonSerializer.SerializeToUtf8Bytes(manifest);var digest=ProductionFixture.Hash(bytes);var destination=f.PathOf("payloads/"+digest);
+ if(!Directory.Exists(destination))
+ {
+  Directory.CreateDirectory(destination);
+  foreach(var path in Directory.EnumerateFiles(f.Package,"*",SearchOption.AllDirectories))
+  {var name=Path.GetRelativePath(f.Package,path);if(name=="bundle.json")continue;var target=Path.Combine(destination,name);Directory.CreateDirectory(Path.GetDirectoryName(target)!);File.Copy(path,target);}
+  File.WriteAllBytes(Path.Combine(destination,"bundle.json"),bytes);
+ }
+ var head=NativeJson.Read<InstalledActivation>(File.ReadAllBytes(f.PathOf("activation.json")));
+ var total=manifest["files"]!.AsArray().Sum(v=>v!["size"]!.GetValue<long>());
+ var receipt=JsonSerializer.SerializeToUtf8Bytes(new IntakeReceipt(1,f.InstallationId,digest,version,"stable",total,5,head.PolicyDigest,head.PinDigest));
+ var receiptDigest=ProductionFixture.Hash(receipt);File.WriteAllBytes(f.PathOf("intake/receipt-"+receiptDigest+".json"),receipt);
+ File.WriteAllBytes(f.PathOf("intake/available.json"),JsonSerializer.SerializeToUtf8Bytes(new IntakePointer(1,f.InstallationId,receiptDigest)));return receiptDigest;
+}
+InstalledAuthorityComposition Composition(bool reset=true,Func<CancellationToken,Task>? quiesce=null)
+{
+ if(reset)
+ {
+  PrepareState();Directory.CreateDirectory(f.PathOf("intake"));Directory.CreateDirectory(f.PathOf(".authority"));
+  foreach(var pattern in new[]{"rpc-*.json","done-*.json","cancel-*.json"})foreach(var path in Directory.GetFiles(f.PathOf(".authority"),pattern))File.Delete(path);
+  foreach(var path in Directory.GetFiles(f.PathOf("intake"),"mode.json.partial-*"))File.Delete(path);
+  File.WriteAllBytes(f.PathOf("intake/mode.json"),JsonSerializer.SerializeToUtf8Bytes(new NativeUpdateMode(1,f.InstallationId,"notify",null,true)));
+  StageCandidate("0.5.3");
+ }
+ var op=Operation();var anchor=new InstalledAuthorityAnchor(1,f.InstallationId,ServiceDefinition.Name,InstalledAuthorityReader.AuthorityService,OwnerSid,op.PolicyDigest,op.PinDigest,ProductionFixture.Hash(File.ReadAllBytes(node)));
+ var bytes=JsonSerializer.SerializeToUtf8Bytes(anchor);File.WriteAllBytes(f.PathOf("installation.json"),bytes);
+ InstalledAuthorityComposition? composition=null;
+ RuntimeAuthorityGate EmptyGate(){var kernel=new FakeRuntimeKernel{Empty=true};var gate=new RuntimeAuthorityGate(kernel);gate.Admit(kernel.Generation);kernel.Exit=true;return gate;}
+ composition=InstalledAuthorityComposition.PrivateFixture(f.Root,ProductionFixture.Hash(bytes),RuntimeSid,node,anchor.ProbeSha256!,(_,_)=>projectedRoles++,EmptyGate,quiesce??(_=>Task.CompletedTask),f.Control,
+  b=>{f.ClearSignals();return new InstalledBindingStartAuthorizer(new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,stateFiles:composition!.Files),b);},()=>f.Now);
+ return composition;
+}
+byte[] Frame(string id,string method,object body)=>JsonSerializer.SerializeToUtf8Bytes(new AuthorityFrame(1,id,method,JsonSerializer.SerializeToElement(body)));
+Task<EndpointReply> Request(AuthorityEndpointRouter router,string action,string? target=null,string? mode=null,string? id=null)
+{id??=Guid.NewGuid().ToString("N");return router.DispatchAsync(AuthorityEndpointRole.Runtime,runtimePeer,Frame(id,"request",new AuthorityRequest(1,id,action,target,mode)));}
+Task<EndpointReply> Observe(AuthorityEndpointRouter router,bool owner=false)=>router.DispatchAsync(owner?AuthorityEndpointRole.Owner:AuthorityEndpointRole.Runtime,owner?ownerPeer:runtimePeer,Frame(Guid.NewGuid().ToString("N"),owner?"confirmation":"status",new{}));
+Task<EndpointReply> AnswerView(AuthorityEndpointRouter router,OwnerConfirmationState view,bool approve)=>view.AnswerAsync(approve,(frame,c)=>router.DispatchAsync(AuthorityEndpointRole.Owner,ownerPeer,JsonSerializer.SerializeToUtf8Bytes(frame),c));
+await Check("complete composition routes exact intake through one owner view to actual Store health",async()=>
+{
+ var c=Composition();var available=await Request(c.Router,"check");Assert(available.Phase=="available"&&available.Target!.Version=="0.5.3");
+ await Request(c.Router,"install",available.Target!.Fingerprint);var pending=await Observe(c.Router,true);Assert(pending.Phase=="awaiting_local_approval"&&pending.Confirmation is not null);
+ var view=new OwnerConfirmationState(pending.Confirmation!,f.InstallationId,()=>f.Now);var count=Directory.GetFiles(f.PathOf("owner-ledger"),"challenge-*.json").Length;
+ await AnswerView(c.Router,view,true);try{await c.Router.Execution!.WaitAsync(TimeSpan.FromSeconds(20));Assert(c.Router.Phase=="healthy");Assert(Directory.GetFiles(f.PathOf("owner-ledger"),"challenge-*.json").Length==count);Assert(projectedRoles>20);await Denied(()=>{using var blocked=WindowsFileBoundary.AcquireDataLease(f.Data);return Task.CompletedTask;});}
+ finally{await c.Router.StopAsync();}Assert(c.Router.Phase=="stopped");
+});
+await Check("router rejects wrong endpoint role wrong owner and client authority fields",async()=>
+{
+ var c=Composition();var frame=Frame(Guid.NewGuid().ToString("N"),"confirmation",new{});
+ await Denied(()=>c.Router.DispatchAsync(AuthorityEndpointRole.Owner,runtimePeer,frame));await Denied(()=>c.Router.DispatchAsync(AuthorityEndpointRole.Owner,ownerPeer with{Sid=RuntimeSid},frame));
+ await Denied(()=>c.Router.DispatchAsync(AuthorityEndpointRole.Runtime,runtimePeer,frame));
+ var id=Guid.NewGuid().ToString("N");await Denied(()=>c.Router.DispatchAsync(AuthorityEndpointRole.Runtime,runtimePeer,Frame(id,"request",new{Format=1,Id=id,Action="check",TargetDigest=(string?)null,Mode=(string?)null,Subject=OwnerSid})));
+});
+await Check("confirmation view is bound expires and never resends an uncertain answer",async()=>
+{
+ var c=Composition();await Request(c.Router,"install",(await Observe(c.Router)).Target!.Fingerprint);var snapshot=(await Observe(c.Router,true)).Confirmation!;
+ await Denied(()=>{new OwnerConfirmationState(snapshot,Guid.NewGuid().ToString("N"),()=>f.Now);return Task.CompletedTask;});
+ await Denied(()=>{new OwnerConfirmationState(snapshot,f.InstallationId,()=>f.Now.AddHours(1));return Task.CompletedTask;});
+ var calls=0;var view=new OwnerConfirmationState(snapshot,f.InstallationId,()=>f.Now);
+ await Denied(()=>view.AnswerAsync(true,(_,_)=>{calls++;throw new IOException("uncertain");}));
+ await Denied(()=>view.AnswerAsync(true,(_,_)=>{calls++;throw new Exception("resent");}));Assert(calls==1&&view.State=="outcome_unknown");
+ var closed=new OwnerConfirmationState(snapshot,f.InstallationId,()=>f.Now);closed.Close();await Denied(()=>AnswerView(c.Router,closed,true));
+});
+await Check("changed intake between summary and approval cannot mint approval or mutate head",async()=>
+{
+ var c=Composition();await Request(c.Router,"install",(await Observe(c.Router)).Target!.Fingerprint);var snapshot=(await Observe(c.Router,true)).Confirmation!;var head=f.Binding;
+ StageCandidate("0.5.4");await Denied(()=>AnswerView(c.Router,new(snapshot,f.InstallationId,()=>f.Now),true));Assert(head==f.Binding&&!File.Exists(f.PathOf("owner-ledger/approval-"+snapshot.Digest+".json")));
+});
+await Check("request replay cannot substitute a mode or selected release",async()=>
+{
+ var c=Composition();var id=Guid.NewGuid().ToString("N");await Request(c.Router,"set_mode",mode:"notify",id:id);await Denied(()=>Request(c.Router,"set_mode",mode:"auto",id:id));
+ id=Guid.NewGuid().ToString("N");await Request(c.Router,"install",(await Observe(c.Router)).Target!.Fingerprint,id:id);await Denied(()=>Request(c.Router,"install",new string('0',64),id:id));
+});
+await Check("cancelled confirmation is durable and restart does not infer unfinished approval",async()=>
+{
+ var c=Composition();var id=Guid.NewGuid().ToString("N");await Request(c.Router,"install",(await Observe(c.Router)).Target!.Fingerprint,id:id);var snapshot=(await Observe(c.Router,true)).Confirmation!;
+ await c.Router.DispatchAsync(AuthorityEndpointRole.Runtime,runtimePeer,Frame(Guid.NewGuid().ToString("N"),"cancel",new{RequestId=id}));
+ await Denied(()=>AnswerView(c.Router,new(snapshot,f.InstallationId,()=>f.Now),true));Assert(Composition(false).Router.Phase=="idle");
+ c=Composition();await Request(c.Router,"install",(await Observe(c.Router)).Target!.Fingerprint);Assert(Composition(false).Router.Phase=="recovery_required");
+});
+await Check("automatic mode uses one bounded owner approval for two actual routine launches",async()=>
+{
+ var c=Composition();var d=Policy() with{MaximumPayloadBytes=2147483648};File.WriteAllBytes(f.PathOf("intake/delegation-template.json"),JsonSerializer.SerializeToUtf8Bytes(d));
+ await Request(c.Router,"set_mode",mode:"auto");var snapshot=(await Observe(c.Router,true)).Confirmation!;Assert(snapshot.Scope=="delegate");await AnswerView(c.Router,new(snapshot,f.InstallationId,()=>f.Now),true);
+ var challenges=Directory.GetFiles(f.PathOf("owner-ledger"),"challenge-*.json").Length;
+ try
+ {
+  await Request(c.Router,"check");await c.Router.Execution!.WaitAsync(TimeSpan.FromSeconds(20));Assert(c.Router.Phase=="healthy");
+  StageCandidate("0.5.4");await Request(c.Router,"check");await c.Router.Execution!.WaitAsync(TimeSpan.FromSeconds(20));Assert(c.Router.Phase=="healthy");
+  Assert(challenges==Directory.GetFiles(f.PathOf("owner-ledger"),"challenge-*.json").Length);
+ }finally{await c.Router.StopAsync();}
+ StageCandidate("0.5.5");await Denied(()=>Request(c.Router,"check"));Assert(Directory.GetFiles(f.PathOf("owner-ledger"),"usage-"+d.Id+"-*.json").Length==2);
+});
+await Check("intake rejects corrupt receipt and inconsistent schema policy payload",async()=>
+{
+ var c=Composition();var target=(await Observe(c.Router)).Target!.Fingerprint;var path=f.PathOf("intake/receipt-"+target+".json");var bytes=File.ReadAllBytes(path);
+ File.AppendAllText(path," ");await Denied(()=>Request(c.Router,"install",target));File.WriteAllBytes(path,bytes);
+ foreach(var mutation in new[]{"schema","policy","payload"})
+ {
+  var r=NativeJson.Read<IntakeReceipt>(bytes);r=mutation=="schema"?r with{Schema=6}:mutation=="policy"?r with{PolicyDigest=new string('0',64)}:r with{PayloadBytes=r.PayloadBytes+1};
+  var encoded=JsonSerializer.SerializeToUtf8Bytes(r);var digest=ProductionFixture.Hash(encoded);File.WriteAllBytes(f.PathOf("intake/receipt-"+digest+".json"),encoded);File.WriteAllBytes(f.PathOf("intake/available.json"),JsonSerializer.SerializeToUtf8Bytes(new IntakePointer(1,f.InstallationId,digest)));await Denied(()=>Request(c.Router,"install",digest));
+ }
+ File.WriteAllBytes(f.PathOf("intake/mode.json.partial-test"),"{}"u8.ToArray());await Denied(()=>Observe(c.Router));
+});
+await Check("same bounded connection parser works in memory and refuses oversized frame",async()=>
+{
+ var c=Composition();var bytes=Frame(Guid.NewGuid().ToString("N"),"status",new{});var encoded=new byte[bytes.Length+4];System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(encoded,bytes.Length);bytes.CopyTo(encoded,4);
+ using var stream=new MemoryStream();stream.Write(encoded);stream.Position=0;await AuthorityEndpointConnection.ServeAsync(stream,c.Router,AuthorityEndpointRole.Runtime,runtimePeer,default);
+ stream.Position=encoded.Length;var header=new byte[4];stream.ReadExactly(header);var n=System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(header);var reply=new byte[n];stream.ReadExactly(reply);Assert(NativeJson.Read<EndpointReply>(reply).State=="observed");
+ using var bad=new MemoryStream(BitConverter.GetBytes(32769));await Denied(()=>AuthorityEndpointConnection.ServeAsync(bad,c.Router,AuthorityEndpointRole.Runtime,runtimePeer,default));
+});
+
+await Check("router keeps an unobserved concrete admission probe and exclusive lease for explicit cleanup",async()=>
+{
+ var fault=new JobProcessFaultInjection{FailAfterHandoff=true,TreeObservationUnavailable=true};ProbeOwnershipException? witness=null;
+ var c=Composition(quiesce:async cancellation=>{try{using var grant=await f.CreateResolver(fault).ResolveAsync(f.Binding,cancellation);}catch(ProbeOwnershipException owned){witness=owned;throw;}});
+ await Request(c.Router,"install",(await Observe(c.Router)).Target!.Fingerprint);var view=new OwnerConfirmationState((await Observe(c.Router,true)).Confirmation!,f.InstallationId,()=>f.Now);await AnswerView(c.Router,view,true);
+ try
+ {
+  await c.Router.Execution!.WaitAsync(TimeSpan.FromSeconds(20));Assert(c.Router.Phase=="recovery_required"&&witness is not null&&!witness.CleanupComplete);
+  await Denied(()=>{using var blocked=WindowsFileBoundary.AcquireDataLease(f.Data);return Task.CompletedTask;});
+  await Denied(()=>c.Router.RetryOwnedCleanupAsync());Assert(!witness!.CleanupComplete);
+ }
+ finally{fault.TreeObservationUnavailable=false;await c.Router.RetryOwnedCleanupAsync();}
+ Assert(witness!.CleanupComplete&&fault.RootExitObserved&&fault.TreeEmptyObserved&&c.Router.Phase=="recovery_required");using var released=WindowsFileBoundary.AcquireDataLease(f.Data);
+});
+await Check("synthetic installed-role projection is actually enforced at the composition boundary",async()=>
+{
+ var c=Composition();Assert(c.Files.SecretClass(f.PathOf("bootstrap.json"),SecretRole.SetupCapability)==InstalledFileRole.Control);Assert(c.Files.SecretClass(f.PathOf("installation.json"),SecretRole.SetupCapability)==InstalledFileRole.Anchor);Assert(c.Files.SecretClass(f.PathOf("datasets/anything/master-key"),SecretRole.MasterKey)==InstalledFileRole.MasterKey);var bytes=File.ReadAllBytes(f.PathOf("installation.json"));
+ await Denied(()=>{InstalledAuthorityComposition.PrivateFixture(f.Root,ProductionFixture.Hash(bytes),RuntimeSid,node,ProductionFixture.Hash(File.ReadAllBytes(node)),(_,_)=>throw new IOException("synthetic role denied"),()=>throw new Exception("not reached"),_=>Task.CompletedTask,f.Control,InstalledHealth,()=>f.Now);return Task.CompletedTask;});
+ await Denied(()=>{InstalledAuthorityComposition.PrivateFixture(f.Root,new string('0',64),RuntimeSid,node,ProductionFixture.Hash(File.ReadAllBytes(node)),(_,_)=>{},()=>throw new Exception("not reached"),_=>Task.CompletedTask,f.Control,InstalledHealth,()=>f.Now);return Task.CompletedTask;});
+});
+
+await Check("cancelled replacement keeps the actual running generation owned for the next update",async()=>
+{
+ var c=Composition();
+ async Task Install()
+ {await Request(c.Router,"install",(await Observe(c.Router)).Target!.Fingerprint);var snapshot=(await Observe(c.Router,true)).Confirmation!;await AnswerView(c.Router,new(snapshot,f.InstallationId,()=>f.Now),true);await c.Router.Execution!.WaitAsync(TimeSpan.FromSeconds(20));Assert(c.Router.Phase=="healthy");}
+ await Install();try
+ {
+  StageCandidate("0.5.4");var id=Guid.NewGuid().ToString("N");await Request(c.Router,"install",(await Observe(c.Router)).Target!.Fingerprint,id:id);
+  await c.Router.DispatchAsync(AuthorityEndpointRole.Runtime,runtimePeer,Frame(Guid.NewGuid().ToString("N"),"cancel",new{RequestId=id}));
+  await Denied(()=>{using var held=WindowsFileBoundary.AcquireDataLease(f.Data);return Task.CompletedTask;});
+  await Install();Assert(c.Router.Phase=="healthy");
+ }finally{await c.Router.StopAsync();}using var released=WindowsFileBoundary.AcquireDataLease(f.Data);
+});
+
 if(preparedPayload is not null)await Check("exact rebuilt full payload passes installed release and runtime admission without app launch",async()=>
 {
     f.Reset();f.SelectPreparedPayload(preparedPayload);var admission=new VerificationOnlyAuthorization(f);var reports=new List<ServiceReport>();
@@ -536,7 +688,7 @@ if(preparedPayload is not null)await Check("exact rebuilt full payload passes in
     Assert(reports.Count(r=>r.State==ServiceState.StartPending)>3);
 });
 File.WriteAllText(report,JsonSerializer.Serialize(new{kind="concrete-installed-adapters-synthetic-inputs",passed=results.Count-failures,failed=failures,
-    productionEntryWired=true,actualAdminProvisioningTested=false,actualStoreWrites=true,actualReceiptProducer=true,scmInvoked=false,networkListenersOpened=false,
+    productionEntryWired=true,productionAuthorityEntryEnabled=false,endpointOnly,actualAdminProvisioningTested=false,actualStoreWrites=true,actualReceiptProducer=true,scmInvoked=false,networkListenersOpened=false,
     productionTrustOrOwnerStateCreated=false,fullRebuiltPayloadInspected=preparedPayload is not null,fixtureRoot=f.Root,tests=results},new JsonSerializerOptions{WriteIndented=true}));
 Console.WriteLine($"{results.Count-failures} passed; {failures} failed. No SCM or network listeners.");return failures==0?0:1;
 
@@ -610,7 +762,7 @@ internal sealed class ProductionFixture:IDisposable
         Put("legal/build-inputs.json","{\"databaseSchema\":5}");
         Put("app/src/main.ts",f.Worker());
         var records=Directory.GetFiles(f.Payload,"*",SearchOption.AllDirectories).Order(StringComparer.Ordinal).Select(p=>new{path=Path.GetRelativePath(f.Payload,p).Replace('\\','/'),size=new FileInfo(p).Length,sha256=Hash(File.ReadAllBytes(p))}).ToArray();
-        var manifest=JsonSerializer.SerializeToUtf8Bytes(new{schema=1,kind="windows-runtime-candidate",target="win-x64",profile="full",authority="application-updater",
+        var manifest=JsonSerializer.SerializeToUtf8Bytes(new{version="0.5.2",schema=1,kind="windows-runtime-candidate",target="win-x64",profile="full",authority="application-updater",
             launch=new{node="runtime/node/node.exe",entry="app/src/main.ts",helper="app/native/Yahad.Platform.exe",ffmpeg="runtime/ffmpeg/ffmpeg.exe",caddy="runtime/caddy/caddy.exe"},files=records});
         f.release=Hash(manifest);File.WriteAllBytes(Path.Combine(f.Payload,"bundle.json"),manifest);Directory.CreateDirectory(Path.Combine(f.Root,"payloads"));var target=Path.Combine(f.Root,"payloads",f.release);Directory.Move(f.Payload,target);
         f.actualPayload=target;
@@ -638,7 +790,7 @@ internal sealed class ProductionFixture:IDisposable
         using var job=JobProcess.Start(node,["--import",new Uri(Path.Combine(Repo,"node_modules/tsx/dist/loader.mjs")).AbsoluteUri,"--input-type=module","-e",script],Repo,LaunchEnvironment.Clean(Root));using var bound=new CancellationTokenSource(TimeSpan.FromSeconds(30));if(await job.WaitAsync(bound.Token)!=0)throw new IOException("REAL_STORE_SEED_FAILED "+(File.Exists(Path.Combine(Root,"seed-error.json"))?File.ReadAllText(Path.Combine(Root,"seed-error.json")):"loader or import failure"));await job.WaitForTreeEmptyAsync(bound.Token);
     }
     private string ConfigScript()=>"const config={dataDir:"+JsonSerializer.Serialize(Path.Combine(Dataset,"data"))+",masterKey:Buffer.from(fs.readFileSync("+JsonSerializer.Serialize(Path.Combine(Dataset,"master-key"))+",'utf8').trim(),'base64'),connector:'mock',realAllowed:false,host:'127.0.0.1',port:32000,origin:'https://yahad.invalid',secureCookie:true,maxMedia:16777216,maxStorage:2147483648,childIdleMs:900000,sessionMs:43200000,diagnosticsEnabled:false};";
-    private string Worker()=>"import fs from 'node:fs';import path from 'node:path';import{Store}from "+JsonSerializer.Serialize(new Uri(Path.Combine(Repo,"src/store.ts")).AbsoluteUri)+";import{createPlatformFiles}from "+JsonSerializer.Serialize(new Uri(Path.Combine(Repo,"src/platform-files.ts")).AbsoluteUri)+";"+"const data=process.env.DATA_DIR;const release=await createPlatformFiles('win32',path.resolve('native/Yahad.Platform.exe')).acquireDataLock(data);const config={dataDir:data,masterKey:Buffer.from(fs.readFileSync(process.env.MASTER_KEY_FILE,'utf8').trim(),'base64'),connector:'mock',realAllowed:false,host:'127.0.0.1',port:32000,origin:'https://yahad.invalid',secureCookie:true,maxMedia:16777216,maxStorage:2147483648,childIdleMs:900000,sessionMs:43200000,diagnosticsEnabled:false};const store=new Store(config);store.db.exec('CREATE TABLE IF NOT EXISTS native_activation_probe(value INTEGER);INSERT INTO native_activation_probe VALUES(1)');fs.writeFileSync(path.join(data,'native-ready'),JSON.stringify({pid:process.pid,PATH:process.env.PATH,clean:!process.env.NODE_OPTIONS&&!process.env.DOTNET_STARTUP_HOOKS}));const wait=n=>new Promise(resolve=>{const timer=setInterval(()=>{if(fs.existsSync(path.join(data,n))){clearInterval(timer);resolve();}},10)});await wait('native-stop');store.close();await release();fs.writeFileSync(path.join(data,'native-closed'),'closed');await wait('native-exit');";
+    private string Worker()=>"import fs from 'node:fs';import path from 'node:path';import{Store}from "+JsonSerializer.Serialize(new Uri(Path.Combine(Repo,"src/store.ts")).AbsoluteUri)+";import{createPlatformFiles}from "+JsonSerializer.Serialize(new Uri(Path.Combine(Repo,"src/platform-files.ts")).AbsoluteUri)+";"+"const data=process.env.DATA_DIR;const release=await createPlatformFiles('win32',path.resolve('native/Yahad.Platform.exe')).acquireDataLock(data);const config={dataDir:data,masterKey:Buffer.from(fs.readFileSync(process.env.MASTER_KEY_FILE,'utf8').trim(),'base64'),connector:'mock',realAllowed:false,host:'127.0.0.1',port:32000,origin:'https://yahad.invalid',secureCookie:true,maxMedia:16777216,maxStorage:2147483648,childIdleMs:900000,sessionMs:43200000,diagnosticsEnabled:false};const store=new Store(config);store.db.exec('CREATE TABLE IF NOT EXISTS native_activation_probe(value INTEGER);INSERT INTO native_activation_probe VALUES(1)');fs.writeFileSync(path.join(data,'native-ready.partial'),JSON.stringify({pid:process.pid,PATH:process.env.PATH,clean:!process.env.NODE_OPTIONS&&!process.env.DOTNET_STARTUP_HOOKS}));fs.renameSync(path.join(data,'native-ready.partial'),path.join(data,'native-ready'));const wait=n=>new Promise(resolve=>{const timer=setInterval(()=>{if(fs.existsSync(path.join(data,n))){clearInterval(timer);resolve();}},10)});await wait('native-stop');store.close();await release();fs.writeFileSync(path.join(data,'native-closed'),'closed');await wait('native-exit');";
     internal void SelectPreparedPayload(string prepared)
     {
         var manifest=File.ReadAllBytes(Path.Combine(prepared,"bundle.json"));release=Hash(manifest);var target=Path.Combine(Root,"payloads",release);

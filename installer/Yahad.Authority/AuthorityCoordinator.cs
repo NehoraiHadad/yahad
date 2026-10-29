@@ -3,14 +3,15 @@ using Yahad.Service;
 namespace Yahad.Authority;
 
 internal sealed record CatalogOperation(int Format,ProtectedOperation Operation,OperationFacts Facts);
-internal sealed class PrivateOperationCatalog(string privateRoot)
+internal sealed class PrivateOperationCatalog
 {
-    // Synthetic-root integration of the real file boundary. A production intake
-    // publisher and immutable installed anchor are deliberately unconfigured.
+    private readonly string? root;private readonly CatalogOperation? frozen;
+    internal PrivateOperationCatalog(string privateRoot){root=privateRoot;}
+    internal PrivateOperationCatalog(CatalogOperation selected){frozen=selected;}
     internal CatalogOperation Read(string digest)
     {
-        SafeDirectory.ValidateSession(privateRoot);InstalledActivationResolver.Digest(digest);
-        using var file=WindowsFileBoundary.OpenPrivateRead(Path.Combine(privateRoot,digest+".json"));var entry=NativeJson.Read<CatalogOperation>(file.Small(32768));
+        InstalledActivationResolver.Digest(digest);if(frozen is not null){if(frozen.Operation.ReleaseDigest!=digest)throw new IOException("AUTHORITY_CATALOG_BINDING");return frozen;}
+        SafeDirectory.ValidateSession(root!);using var file=WindowsFileBoundary.OpenPrivateRead(Path.Combine(root!,digest+".json"));var entry=NativeJson.Read<CatalogOperation>(file.Small(32768));
         if(entry.Format!=1||entry.Operation.ReleaseDigest!=digest)throw new IOException("AUTHORITY_CATALOG_BINDING");return entry;
     }
 }
@@ -19,6 +20,7 @@ internal sealed class AuthorityCoordinator(string runtimeSid,PrivateOperationCat
 {
     private CatalogOperation? selected;private string? requestId;private bool committed;private string? delegated;
     private string phase="idle";private InstallationBinding? committedBinding;
+    internal bool RequiresRuntimeCleanup=>runtimeHealth?.CleanupReconciliationRequired==true;
     internal string Phase=>committed&&runtimeHealth is not null&&runtimeHealth.Phase!="awaiting_runtime"?runtimeHealth.Phase:phase;
     internal ApprovalChallenge? Submit(AuthorityPeer runtime,byte[] requestFrame,string? delegationId=null)
     {

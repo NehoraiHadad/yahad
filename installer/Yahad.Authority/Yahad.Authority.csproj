@@ -1,1 +1,1 @@
-<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType></PropertyGroup><ItemGroup><ProjectReference Include="../Yahad.ServiceHost/Yahad.ServiceHost.csproj"/><InternalsVisibleTo Include="Yahad.Production.Tests"/></ItemGroup></Project>
+<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType></PropertyGroup><ItemGroup><ProjectReference Include="../Yahad.ServiceHost/Yahad.ServiceHost.csproj"/><InternalsVisibleTo Include="Yahad.Production.Tests"/><InternalsVisibleTo Include="Yahad.Owner"/></ItemGroup></Project>

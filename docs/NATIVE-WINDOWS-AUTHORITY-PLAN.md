@@ -1,3 +1,6 @@
+> Current owner-selected target: **ASUSHADAD**, an ordinary working computer.
+> A VM is optional, not required. See [current endpoint checkpoint and normal-host proposal](NATIVE-ENDPOINT-COMPOSITION.md); it supersedes VM-only recommendations below. No installation/security change is yet approved.
+
 # Native Windows authority adapter plan
 
 Planning snapshot. The [code-only adapter follow-up](NATIVE-WINDOWS-ADAPTERS.md)

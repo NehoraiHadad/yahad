@@ -1,3 +1,6 @@
+> Current owner-selected target: **ASUSHADAD**, an ordinary working computer.
+> A VM is optional, not required. See [current endpoint checkpoint and normal-host proposal](NATIVE-ENDPOINT-COMPOSITION.md); it supersedes VM-only recommendations below. No installation/security change is yet approved.
+
 # Windows authority adapters: code-only checkpoint
 
 The concrete adapters compile, and the private-root test path connects the

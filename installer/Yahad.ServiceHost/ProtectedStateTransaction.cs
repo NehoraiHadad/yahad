@@ -24,14 +24,17 @@ internal sealed record ProtectedCommit(int Format,string PendingDigest,string Ac
 internal sealed class ProtectedStateTransactionWriter
 {
     private static readonly string[] Records=["owner-intent.json","web.json","activation.json","epoch.json","bootstrap.json"];
-    private readonly string root,installation;private readonly JobProcess appJob;private readonly IOwnerOperationAuthentication authentication;
+    private readonly string root,installation;private readonly Func<CancellationToken,Task> requireEmpty;private readonly InstalledStateFiles files;private readonly IOwnerOperationAuthentication authentication;
     private readonly Func<DateTimeOffset> clock;private readonly IChildControlFactory channels;
     internal ProtectedStateTransactionWriter(string syntheticRoot,string installationId,JobProcess retainedAppJob,
         IOwnerOperationAuthentication authentication,IChildControlFactory channels,Func<DateTimeOffset> clock)
-    {root=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(syntheticRoot));SafeDirectory.ValidateSession(root);InstalledActivationResolver.Id(installationId);installation=installationId;appJob=retainedAppJob;this.authentication=authentication;this.clock=clock;this.channels=channels;}
+            :this(InstalledStateFiles.Private(syntheticRoot),installationId,retainedAppJob.WaitForTreeEmptyAsync,authentication,channels,clock){}
+    internal ProtectedStateTransactionWriter(InstalledStateFiles files,string installationId,Func<CancellationToken,Task> requireEmpty,
+        IOwnerOperationAuthentication authentication,IChildControlFactory channels,Func<DateTimeOffset> clock)
+    {this.files=files;root=files.Root;files.ValidateRoot();InstalledActivationResolver.Id(installationId);installation=installationId;this.requireEmpty=requireEmpty;this.authentication=authentication;this.clock=clock;this.channels=channels;}
     internal async Task<InstallationBinding> CommitAsync(ProtectedOperation operation,Action<string>? fault=null,CancellationToken cancellation=default)
     {
-        SafeDirectory.ValidateSession(root);var authority=Authority();
+        files.ValidateRoot();var authority=Authority();
         try
         {
             if(PendingArtifacts())throw new IOException("STATE_RECONCILIATION_REQUIRED");
@@ -46,7 +49,7 @@ internal sealed class ProtectedStateTransactionWriter
     }
     internal async Task<InstallationBinding> ResumeAsync(ProtectedOperation operation,Action<string>? fault=null,CancellationToken cancellation=default)
     {
-        SafeDirectory.ValidateSession(root);var authority=Authority();
+        files.ValidateRoot();var authority=Authority();
         try
         {
             InstalledActivationResolver.Id(operation.Nonce);
@@ -58,7 +61,7 @@ internal sealed class ProtectedStateTransactionWriter
                 pending.Owner.OperationDigest!=Hash(JsonSerializer.SerializeToUtf8Bytes(operation))||pending.Owner.Scope!=operation.Kind)throw new IOException("STATE_PENDING_OWNER");
             ValidateBefore(operation,pending.Before);
             if(!Same(pending.After,Build(operation,pending.Owner)))throw new IOException("STATE_PENDING_CONTENT");
-            ValidateVisible(pending);await appJob.WaitForTreeEmptyAsync(cancellation);
+            ValidateVisible(pending);await requireEmpty(cancellation);
             if(promoted&&!MoveFileExW(@"\\?\"+partial,@"\\?\"+pendingPath,8))throw new IOException("STATE_PENDING_PROMOTION");
             await Publish(pending,true,authority,fault,cancellation,verified);authority=null;return Binding(pending.After);
         }
@@ -76,11 +79,11 @@ internal sealed class ProtectedStateTransactionWriter
             if(existing!=new ProtectedCommit(1,pendingDigest,Binding(pending.After).ActivationReceiptDigest,op.ExpectedEpoch+1))throw new IOException("STATE_COMMIT_RECEIPT");
             ValidateVisible(pending,true);
         }
-        await appJob.WaitForTreeEmptyAsync(cancellation);
+        await requireEmpty(cancellation);
         var candidate=Build(op,pending.Owner,true);var binding=Binding(candidate);
-        using var verified=await new InstalledActivationResolver(root,new CandidateFiles(root,candidate),channels,clock)
+        using var verified=await new InstalledActivationResolver(root,new CandidateFiles(root,candidate),channels,clock,stateFiles:files)
             .InspectCommitCandidateAsync(binding,resume?pendingDigest:null,cancellation);
-        await appJob.WaitForTreeEmptyAsync(cancellation);ValidateVisible(pending);CheckWindow(op,reauthenticated??pending.Owner,resume);
+        await requireEmpty(cancellation);ValidateVisible(pending);CheckWindow(op,reauthenticated??pending.Owner,resume);
         if(alreadyCommitted){ValidateVisible(pending,true);File.Delete(Path.Combine(root,"pending.json"));authority.Dispose();return;}
         if(!resume){Atomic("pending.json",bytes,op.Nonce,false,fault);fault?.Invoke("pending-published");}
         var nonce=NoncePath(op.Nonce);var claim=new ProtectedNonce(1,installation,op.Nonce,Hash(JsonSerializer.SerializeToUtf8Bytes(op)),op.ExpectedEpoch+1);
@@ -90,7 +93,7 @@ internal sealed class ProtectedStateTransactionWriter
         fault?.Invoke("nonce-reserved");
         foreach(var name in Records)
         {
-            cancellation.ThrowIfCancellationRequested();await appJob.WaitForTreeEmptyAsync(cancellation);ValidateVisible(pending);CheckWindow(op,reauthenticated??pending.Owner,resume);
+            cancellation.ThrowIfCancellationRequested();await requireEmpty(cancellation);ValidateVisible(pending);CheckWindow(op,reauthenticated??pending.Owner,resume);
             Atomic(name,Convert.FromBase64String(pending.After[name]),op.Nonce,true,fault);fault?.Invoke("record-"+name);
         }
         CheckWindow(op,reauthenticated??pending.Owner,resume);
@@ -143,24 +146,24 @@ internal sealed class ProtectedStateTransactionWriter
         }
     }
     private IDisposable Authority()
-    {Directory.CreateDirectory(Path.Combine(root,".authority"));return WindowsFileBoundary.AcquireDataLease(Path.Combine(root,".authority"));}
+    {files.EnsureDirectory(Path.Combine(root,".authority"));return files.Lease(Path.Combine(root,".authority"));}
     private bool PendingArtifacts()=>Directory.EnumerateFileSystemEntries(root).Select(Path.GetFileName).Any(n=>n!.Equals("pending.json",StringComparison.OrdinalIgnoreCase)||n.Contains(".partial-",StringComparison.OrdinalIgnoreCase));
     private string NoncePath(string nonce)=>Path.Combine(root,".authority","nonce-"+nonce+".json");
-    private static byte[] Read(string path,int limit){using var file=WindowsFileBoundary.OpenPrivateRead(path);return file.Small(limit);}
+    private byte[] Read(string path,int limit)=>files.Read(path,limit);
     private static string Hash(byte[] value)=>InstalledActivationResolver.Hash(value);
     private static bool Same(Dictionary<string,string> a,Dictionary<string,string> b)=>a.Count==b.Count&&a.All(p=>b.TryGetValue(p.Key,out var value)&&value==p.Value);
     private InstallationBinding Binding(Dictionary<string,string> records)=>new(installation,Hash(Convert.FromBase64String(records["activation.json"])));
-    private static void WriteNew(string path,byte[] bytes){using var file=new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.None,4096,FileOptions.WriteThrough);file.Write(bytes);file.Flush(true);}
+    private void WriteNew(string path,byte[] bytes){using var file=files.Create(path);file.Write(bytes);file.Flush(true);}
     private void Atomic(string name,byte[] bytes,string nonce,bool replace,Action<string>? fault)
     {
         var destination=Path.Combine(root,name);var partial=destination+".partial-"+nonce;
         if(Path.Exists(partial))
         {
-            using(var check=WindowsFileBoundary.OpenPrivateRead(partial)){_ =check.Length;}
+            using(var check=files.Open(partial)){_ =check.Length;}
             var quarantine=Path.Combine(root,".authority","quarantine-"+nonce+"-"+name+"-"+Guid.NewGuid().ToString("N"));
             if(!MoveFileExW(@"\\?\"+partial,@"\\?\"+quarantine,8))throw new IOException("STATE_PARTIAL_QUARANTINE");
         }
-        using(var output=new FileStream(partial,FileMode.CreateNew,FileAccess.Write,FileShare.None,4096,FileOptions.WriteThrough))
+        using(var output=files.Create(partial))
         {output.Write(bytes);fault?.Invoke("partial-"+name);output.Flush(true);}
         if(!MoveFileExW(@"\\?\"+partial,@"\\?\"+destination,replace?9u:8u))throw new IOException("STATE_PUBLICATION");
     }

@@ -10,19 +10,19 @@ namespace Yahad.Install;
 internal static class NativeRecoveryAdmission
 {
     internal static int VerifyCompleted(string catalog,string sourceData,string backupId,string operationId,
-        string expectedReceipt,string candidate,string masterKey,string policy,string updatePin,ICollection<IDisposable> retained)
-        => Verify(catalog,sourceData,backupId,operationId,expectedReceipt,candidate,masterKey,policy,updatePin,retained,true);
+        string expectedReceipt,string candidate,string masterKey,string policy,string updatePin,ICollection<IDisposable> retained,InstalledStateFiles? files=null)
+        => Verify(catalog,sourceData,backupId,operationId,expectedReceipt,candidate,masterKey,policy,updatePin,retained,true,files);
     // Only an independently protected committed selection may consume evidence
     // without requiring active mutable data to equal the original restore.
     internal static int VerifyCommittedEvidence(string catalog,string sourceData,string backupId,string operationId,
-        string expectedReceipt,string candidate,string masterKey,string policy,string updatePin,ICollection<IDisposable> retained)
-        => Verify(catalog,sourceData,backupId,operationId,expectedReceipt,candidate,masterKey,policy,updatePin,retained,false);
+        string expectedReceipt,string candidate,string masterKey,string policy,string updatePin,ICollection<IDisposable> retained,InstalledStateFiles? files=null)
+        => Verify(catalog,sourceData,backupId,operationId,expectedReceipt,candidate,masterKey,policy,updatePin,retained,false,files);
     private static int Verify(string catalog,string sourceData,string backupId,string operationId,string expectedReceipt,
-        string candidate,string masterKey,string policy,string updatePin,ICollection<IDisposable> retained,bool requireOriginalPlaintext)
+        string candidate,string masterKey,string policy,string updatePin,ICollection<IDisposable> retained,bool requireOriginalPlaintext,InstalledStateFiles? files)
     {
         void Id(string value){if(!Guid.TryParseExact(value,"N",out var id)||id.ToString("N")!=value)throw new IOException("RECOVERY_ADMISSION_ID");}
         Id(backupId);Id(operationId);
-        WindowsFileBoundary.PrivateReadLease Pin(string path){var p=WindowsFileBoundary.OpenPrivateRead(path);retained.Add(p);return p;}
+        WindowsFileBoundary.PrivateReadLease Pin(string path){var p=files?.Open(path)??WindowsFileBoundary.OpenPrivateRead(path);retained.Add(p);return p;}
         byte[] Read(string path,int bound)=>Pin(path).Small(bound);
         string Hash(byte[] value)=>Convert.ToHexStringLower(SHA256.HashData(value));
         string Digest(WindowsFileBoundary.PrivateReadLease file)
@@ -47,7 +47,7 @@ internal static class NativeRecoveryAdmission
                 if(!CryptographicOperations.FixedTimeEquals(expected,mac))throw new IOException("RECOVERY_ADMISSION_MAC");
                 return NativeJson.Read<T>(Convert.FromBase64String(envelope.Payload));
             }
-            var backup=Path.Combine(catalog,"backup-"+backupId);retained.Add(WindowsFileBoundary.PinPrivateDirectory(backup));
+            var backup=Path.Combine(catalog,"backup-"+backupId);retained.Add(files?.PinDirectory(backup)??WindowsFileBoundary.PinPrivateDirectory(backup));
             var receipt=Read(Path.Combine(backup,"receipt.json"),RecoveryReceiptEncoding.MaximumBytes);
             if(Hash(receipt)!=expectedReceipt)throw new IOException("RECOVERY_ADMISSION_RECEIPT_ID");
             var manifest=Auth<RecoveryManifest>(receipt,"backup");
@@ -69,7 +69,7 @@ internal static class NativeRecoveryAdmission
             if(!new[]{"data/app.sqlite","identity/master-key","policy/update-policy","policy/update-pin"}.All(names.Contains)||
                 requireOriginalPlaintext&&!names.SetEquals(Files(candidate).Where(n=>n!="data/process.lock"))||
                 !Enumerable.Range(0,manifest.Files.Length).Select(i=>$"{i:D5}.bin").Append("receipt.json").ToHashSet(StringComparer.Ordinal).SetEquals(Files(backup)))throw new IOException("RECOVERY_ADMISSION_CLOSURE");
-            var journal=Path.Combine(catalog,"restore-"+operationId);retained.Add(WindowsFileBoundary.PinPrivateDirectory(journal));
+            var journal=Path.Combine(catalog,"restore-"+operationId);retained.Add(files?.PinDirectory(journal)??WindowsFileBoundary.PinPrivateDirectory(journal));
             if(!string.Equals(candidate,Path.Combine(journal,"completed"),StringComparison.OrdinalIgnoreCase))throw new IOException("RECOVERY_ADMISSION_SELECTION");
             var paths=Directory.GetFiles(journal,"*.json").Order(StringComparer.Ordinal).ToArray();
             if(paths.Length is <4 or >128||Directory.EnumerateFiles(journal).Any(p=>Path.GetFileName(p).Contains(".partial",StringComparison.OrdinalIgnoreCase)))throw new IOException("RECOVERY_ADMISSION_PENDING");

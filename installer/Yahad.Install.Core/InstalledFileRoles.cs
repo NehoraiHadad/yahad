@@ -2,15 +2,15 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 namespace Yahad.Install;
 
-public enum InstalledFileRole { Anchor, Control, Payload, Data, Lease, Recovery, MasterKey }
+public enum InstalledFileRole { Anchor, Control, Payload, Data, Lease, Recovery, RecoveryEvidence, MasterKey }
 // Roles must come from the immutable installed anchor, never request fields.
 public sealed record InstalledFileRoles(SecurityIdentifier Authority,SecurityIdentifier Runtime)
 {
-    public void Validate(RawSecurityDescriptor acl,InstalledFileRole role)
+    public void Validate(RawSecurityDescriptor acl,InstalledFileRole role,bool directory=true)
     {
         var system=new SecurityIdentifier("S-1-5-18");var admins=new SecurityIdentifier("S-1-5-32-544");
         if(!Authority.Value.StartsWith("S-1-5-80-")||!Runtime.Value.StartsWith("S-1-5-80-")||Authority==Runtime||
-            acl.Owner is null||acl.DiscretionaryAcl is null||(acl.ControlFlags&ControlFlags.DiscretionaryAclPresent)==0||(acl.ControlFlags&ControlFlags.DiscretionaryAclProtected)==0)
+            acl.Owner is null||acl.DiscretionaryAcl is null||(acl.ControlFlags&ControlFlags.DiscretionaryAclPresent)==0||directory&&(acl.ControlFlags&ControlFlags.DiscretionaryAclProtected)==0)
             throw new IOException("INSTALLED_ROLE_BINDING");
         var administrative=acl.Owner==system||acl.Owner==admins;
         if(!administrative&&!(role!=InstalledFileRole.Anchor&&acl.Owner==Authority)&&!(role is InstalledFileRole.Data or InstalledFileRole.Lease&&acl.Owner==Runtime))throw new IOException("INSTALLED_ROLE_OWNER");
