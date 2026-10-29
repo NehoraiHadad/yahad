@@ -59,6 +59,7 @@ def prepare(repo, output, node, dotnet, cache):
     if completed.returncode: raise ValueError('Offline restore failed; no network fallback, partial fixture retained')
     runtime = output/'runtime/node'; runtime.mkdir(parents=True); shutil.copyfile(node/'node.exe', runtime/'node.exe')
     legal = output/'legal'; legal.mkdir()
+    shutil.copyfile(repo/'LICENSE', legal/'Yahad-LICENSE.txt')
     shutil.copyfile(node/'LICENSE', legal/'Node-LICENSE.txt')
     shutil.copyfile(dotnet/'LICENSE.txt', legal/'DotNet-LICENSE.txt')
     shutil.copyfile(dotnet/'ThirdPartyNotices.txt', legal/'DotNet-ThirdPartyNotices.txt')

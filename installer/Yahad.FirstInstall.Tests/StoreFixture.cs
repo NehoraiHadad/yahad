@@ -15,7 +15,13 @@ internal sealed class FileControl(ProductionFixture fixture):IChildControlFactor
     {
         public string Endpoint=>"synthetic-control-no-network-listener";
         private async Task Wait(string name,CancellationToken cancellation)
-        {while(!File.Exists(Path.Combine(fixture.Data,name)))await Task.Delay(10,cancellation);}
+        {
+            while(!File.Exists(Path.Combine(fixture.Data,name)))
+            {
+                if(File.Exists(fixture.PathOf("worker-error.json")))throw new IOException("SYNTHETIC_WORKER_FAILED "+File.ReadAllText(fixture.PathOf("worker-error.json")));
+                await Task.Delay(10,cancellation);
+            }
+        }
         public async Task<ChildReady> ReadyAsync(int root,CancellationToken cancellation)
         {await Wait("native-ready",cancellation);using var value=JsonDocument.Parse(File.ReadAllBytes(Path.Combine(fixture.Data,"native-ready")));if(value.RootElement.GetProperty("pid").GetInt32()!=root||value.RootElement.GetProperty("PATH").GetString()!=""||!value.RootElement.GetProperty("clean").GetBoolean())throw new IOException("STORE_CHILD_ENV_OR_PID");return new((uint)root,"ready");}
         public async Task StopAsync(CancellationToken cancellation)
@@ -41,13 +47,19 @@ internal sealed class ProductionFixture:IDisposable
     }
     internal static async Task<ProductionFixture> Create(string node,string repo,string helper)
     {
-        var f=new ProductionFixture(repo);File.Copy(node,f.Node);Copy(helper,Path.Combine(f.Payload,"app/native"));
+        var f=new ProductionFixture(repo);
+        // Node/CreateProcess cannot spawn this non-namespaced native image at
+        // MAX_PATH. Diagnose the fixture location before copying or starting it.
+        if(Path.Combine(f.Root,"payloads",new string('a',64),"app/native/Yahad.Platform.exe").Length>=260)
+            throw new IOException("STORE_FIXTURE_PATH_TOO_LONG: select a shorter private TEMP directory");
+        File.Copy(node,f.Node);Copy(helper,Path.Combine(f.Payload,"app/native"));
         void Put(string name,string text){var p=Path.Combine(f.Payload,name);Directory.CreateDirectory(Path.GetDirectoryName(p)!);File.WriteAllText(p,text);}
         Put("runtime/ffmpeg/ffmpeg.exe","synthetic-ffmpeg-not-executed");Put("runtime/caddy/caddy.exe","synthetic-caddy-not-executed");
         Put("app/package.json","{\"type\":\"module\"}");Put("app/node_modules/tsx/package.json","{\"type\":\"module\",\"exports\":\"./index.mjs\"}");
         Put("app/node_modules/tsx/index.mjs","export * from "+JsonSerializer.Serialize(new Uri(Path.Combine(repo,"node_modules/tsx/dist/loader.mjs")).AbsoluteUri)+";");
         Put("legal/build-inputs.json",JsonSerializer.Serialize(new{databaseSchema=f.Schema}));
-        Put("app/src/main.ts",f.Worker());
+        Put("app/src/worker.ts",f.Worker());
+        Put("app/src/main.ts","import fs from 'node:fs';try{await import('./worker.ts')}catch(error){fs.writeFileSync("+JsonSerializer.Serialize(f.PathOf("worker-error.json"))+",JSON.stringify({name:error.name,message:error.message,stack:error.stack}));process.exitCode=1}");
         var records=Directory.GetFiles(f.Payload,"*",SearchOption.AllDirectories).Order(StringComparer.Ordinal).Select(p=>new{path=Path.GetRelativePath(f.Payload,p).Replace('\\','/'),size=new FileInfo(p).Length,sha256=Hash(File.ReadAllBytes(p))}).ToArray();
         var manifest=JsonSerializer.SerializeToUtf8Bytes(new{version=ApplicationRelease.Version,schema=1,kind="windows-runtime-candidate",target="win-x64",profile="full",authority="application-updater",
             launch=new{node="runtime/node/node.exe",entry="app/src/main.ts",helper="app/native/Yahad.Platform.exe",ffmpeg="runtime/ffmpeg/ffmpeg.exe",caddy="runtime/caddy/caddy.exe"},files=records});
@@ -57,7 +69,12 @@ internal sealed class ProductionFixture:IDisposable
     }
     private string? actualPayload;internal string Package=>actualPayload??Payload;
     internal string PathOf(string name)=>Path.Combine(Root,name);
-    internal void ClearSignals(){foreach(var name in new[]{"native-ready","native-stop","native-closed","native-exit"})if(File.Exists(Path.Combine(Data,name)))File.Delete(Path.Combine(Data,name));}
+    internal void ClearSignals()
+    {
+        foreach(var name in new[]{"native-ready","native-stop","native-closed","native-exit"})if(File.Exists(Path.Combine(Data,name)))File.Delete(Path.Combine(Data,name));
+        // Callers clear only after the previous child is observed quiescent.
+        if(File.Exists(PathOf("worker-error.json")))File.Delete(PathOf("worker-error.json"));
+    }
     internal void Reset(){Recovery=null;DataId=OriginalDataId;Phase="committed";AnchorEpoch=1;AnchorDigest=null;OwnerRelease=null;Expiry=null;if(File.Exists(PathOf("PENDING.JSON")))File.Delete(PathOf("PENDING.JSON"));File.WriteAllText(Policy,"synthetic-policy");File.WriteAllText(Path.Combine(Dataset,"update-pin"),"synthetic-pin");ClearSignals();Publish();}
     internal void ResetRecovery(NativeBackupResult b,NativeRestoreResult restore){Reset();DataId=Guid.NewGuid().ToString("N");Recovery=new(OriginalDataId,b.BackupId,restore.OperationId,b.ReceiptDigest);Phase="recovered";Publish();}
     internal void Publish()
