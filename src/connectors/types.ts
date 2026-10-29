@@ -1,3 +1,5 @@
+import type {PollVoteSending} from '../polls/sending.js';
+import type {PollContext,EncryptedPollVote,PollState} from '../polls/types.js';
 export type Kind = 'text' | 'image' | 'video' | 'document' | 'sticker' | 'audio' | 'poll' | 'contact' | 'location' | 'unsupported';
 export type SendKind=Exclude<Kind,'poll'|'contact'|'location'>;
 export interface PollOptions {options:string[]}
@@ -7,7 +9,7 @@ export interface Capabilities {
   contacts?: {display:boolean;send:boolean};
   location?: {display:boolean;live:boolean;send:boolean};
   roundVideo?: {receive:boolean;send:boolean};
-  polls?: { identify: boolean; display?: boolean; create: boolean; vote: boolean; results: boolean };
+  polls?: { identify: boolean; display?: boolean; observedResults?: boolean; create: boolean; vote: boolean; results: boolean };
   reply: boolean;
   reactions: boolean;
   image: boolean;
@@ -30,6 +32,8 @@ export interface ChatGroup {
   title: string;
 }
 export interface Incoming {
+  pollContext?: PollContext;
+  pollVote?: EncryptedPollVote;
   restricted?: boolean;
   guard?: () => boolean;
   history?: { requestId?: string };
@@ -56,6 +60,7 @@ export interface Incoming {
   historicalReactions?: ReactionUpdate[];
 }
 export interface StoredMessage {
+  pollState?: PollState;
   restricted?: boolean;
   id: string;
   groupId: string;
@@ -121,6 +126,7 @@ export interface ConnectorHooks {
   maxMedia: number;
 }
 export interface Connector {
+  readonly pollVoting?: PollVoteSending;
   originalAvailable?(message: StoredMessage): boolean;
   readonly capabilities: Capabilities;
   start(): Promise<void>;

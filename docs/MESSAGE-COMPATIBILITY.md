@@ -12,7 +12,7 @@ Scope: local fixes based on Yahad 0.5.3, integrated commit `0bf1e9d4d71221fcb77c
 | Edits | Handles `editedMessage` and protocol edit envelopes; original position stays stable; stale edits do not replace newer ones | Existing own-text and local 15-minute window restrictions remain |
 | Deletions | Missing originals receive a persistent content-free tombstone; later replay cannot restore them; existing media/reactions/quotes are cleared | Existing ownership/access rules remain; an unavailable original is an explicit conflict |
 | Temporary / view-once | Intentionally unavailable in Yahad. Nested envelopes, content flags and provider ephemeral metadata are inspected before raw serialization/download | No quote/reaction/edit/delete action on retained placeholders |
-| Regular text poll V1/V2/V3 | Question and options shown in a read-only card; explicit notice that voting/results are unavailable | No creation, voting or per-message action UI/API |
+| Regular text poll V1/V2/V3 | Question/options shown in a read-only card; optional counts from received authenticated votes, explicitly incomplete | No creation, voting or per-message action UI/API |
 | Poll V4/V5, quiz/image variants and image options | Specific unsupported-variant explanation; no question, answer or media projection | Not enabled |
 | Poll vote / result snapshot | Recognized with an explicit unavailable-details explanation | No inferred vote counts, results, or “zero votes” |
 | Round video (PTV) | Received through existing video player, subject to media availability, MIME, size and codec limits; conflicting PTV/media fields rejected | Recording/sending as a round video not added |
@@ -36,30 +36,43 @@ The public DTO includes optional per-message `actions` so the UI does not offer 
 
 ### Read-only poll display
 
-Normal V1/V2/V3 text polls retain only the question in `text` and a new `poll.options` array of plain strings. Provider raw, encryption keys, correct answers, context and vote/results data are not retained. The public API and UI validate the same allowlist again. The question also supplies existing previews, search and incoming quote snippets; options have no vote controls or counts.
+Normal V1/V2/V3 text polls retain only the question in `text` and a new `poll.options` array of plain strings. Provider raw, correct answers and generic context are not retained. Minimal private vote-decryption context and observed ballots are isolated in the encrypted `poll_contexts` table described below. The public API and UI validate the same allowlist again. The question also supplies existing previews, search and incoming quote snippets; options have no vote controls. Optional observed counts do not claim complete results.
 
 Product display bounds are 2,048 UTF-16 code units for the question, 2–32 options and 512 code units per option. These are application safety bounds, not a claim about every WhatsApp version. Missing, invalid, sparse or oversized values get an explanation rather than a truncated poll. The queue byte budget includes all option text, including UTF-8 multibyte characters.
 
-Newer V4/V5 envelopes, non-text/image polls, quizzes/correct-answer payloads, vote updates and result snapshots keep explicit fallbacks. Temporary/view-once checks run first, including inside V4/image-option wrappers. Deletion/restriction clears question/options; replay cannot resurrect them. A legacy generic placeholder can become a visible poll only when fresh permitted provider content supplies the question/options. Merely opening an old placeholder never recovers content.
+Newer V4/V5 envelopes, non-text/image polls, quizzes/correct-answer payloads, unverifiable vote updates and result snapshots keep explicit fallbacks. Temporary/view-once checks run first, including inside V4/image-option wrappers. Deletion/restriction clears question/options; replay cannot resurrect them. A legacy generic placeholder can become a visible poll only when fresh permitted provider content supplies the question/options. Merely opening an old placeholder never recovers content.
 
-The poll kind is receive-only: it is excluded from outgoing types and blocked at the real adapter even for runtime-invalid input. Poll actions are disabled because the original raw is intentionally not retained. Creation, voting and results require separate work.
+The poll kind is receive-only: it is excluded from outgoing types and blocked at the real adapter even for runtime-invalid input. Poll actions are disabled because the original raw is intentionally not retained. Creation, casting votes and complete results remain unavailable; observed receive-only counts are detailed below.
 
 This is an additive runtime table and optional encrypted-body metadata. Database schema version, dependency lockfile, installer, network access mechanism, permissions and deployment configuration are unchanged. Ordinary SQLite backups include the added table.
 
 ## Poll capability map and separate path forward
 
-The real connector reports `polls: { identify: true, display: true, create: false, vote: false, results: false }` for the product. The pinned library's [tagged README](https://github.com/WhiskeySockets/Baileys/blob/v7.0.0-rc14/README.md#poll-message) documents creating polls upstream, but Yahad does not expose it. The bounded read-only display above does not imply working voting/results.
+The real connector reports `polls: { identify: true, display: true, observedResults: true, create: false, vote: false, results: false }` for the product. The pinned library's [tagged README](https://github.com/WhiskeySockets/Baileys/blob/v7.0.0-rc14/README.md#poll-message) documents creating polls upstream, but Yahad does not expose it. The bounded read-only display above does not imply working voting/results.
 
 The pinned [event processor](https://github.com/WhiskeySockets/Baileys/blob/v7.0.0-rc14/src/Utils/process-message.ts#L689) comments out the poll-vote decryption/dispatch path. The [send-content types](https://github.com/WhiskeySockets/Baileys/blob/v7.0.0-rc14/src/Types/Message.ts) expose poll creation but no high-level vote send branch. The presence of protobuf types or a standalone helper does not establish a usable feature.
 
-A separate poll project should:
+### Received vote counts and safe persistence
 
-1. Define receive-details, create, receive-results, vote and removal as separate capabilities. Define unavailable states explicitly.
-2. For results/voting, evaluate a maintained upstream implementation/version that supports the required events and verified PN/LID behavior. Compare migration, compatibility, privacy and maintenance costs in an isolated branch before changing the pinned dependency.
-3. Add deterministic synthetic fixtures for creation variants, multi-choice limits, changed/removed votes, duplicates, out-of-order history, restart, missing origins, revocation and temporary messages.
-4. Arrange separately authorized provider/device testing before claiming interoperability.
+The pinned release does export the official `decryptPollVote` helper. Only its automatic pollUpdateMessage -> messages.update handler is commented out. Yahad now calls that helper from its own scoped receive path; no upstream commented code was re-enabled and no production vote encryption was written.
 
-This change does not re-enable commented upstream code, add custom vote cryptography, alter `node_modules`, switch libraries or connect a real account.
+Only validated V1/V2/V3 text polls can pin an origin: provider creator identities, the selectable count, content fingerprint and, if supplied, the 32-byte message secret. This minimal state is sealed under the conversation key in a separate `poll_contexts` table. The regular messages.body JSON never contains it, including for rollback to older DTO implementations. No secret, creator/voter identity, ciphertext, answer or raw context is exposed publicly.
+
+Origin identities stay pinned even if the key is missing. Recovery/enrichment requires overlapping provider-observed creator identities, matching content/selectable count/fromMe and, for a keyed origin, the same secret. A legacy row without a reliable origin can display fresh supplied content but cannot silently adopt new crypto context. PN/LID aliases are normalized without device suffixes; no phone-to-LID guessing or remote identity lookup occurs. At most two explicit identities per actor, with at most four creator/voter pairs, are tried through authenticated GCM decryption. Neither LID/LID nor mixed-mode addresses are assumed universally.
+
+Only authenticated hashes of known unique options within the selectable limit count. Source time and a deterministic event-ID tie-break prevent stale replacement. Withdrawal remains a durable empty ballot. Later provider alias evidence can merge two previously unlinked records while keeping the newest selection. Unknown aliases can therefore temporarily count as distinct; this is one reason results remain explicitly partial.
+
+The encrypted pending_poll_votes table handles missing origin/key/alias and reverse history arrival. It keeps at most 256 events per conversation, 2,048 per family for seven days, with 8,192-byte ciphertext and 12-byte IV bounds. It retains unresolved ciphertext for later authenticated enrichment, removes processed/stale/invalid/expired work, and never exposes payloads. Active ballot state is capped at 512 identities; capacity preserves existing withdrawal tombstones rather than evicting them and allowing stale resurrection. Overflow/expiry/missing history can omit votes.
+
+Initial origin persistence and alias/key recovery consume pending ciphertext and store ballots in one SQLite transaction, with notifications after commit. Duplicate unchanged origins do not rewrite state or notify. Private rows and pending work clear on deletion, restriction, accepted edits, group purge or key destruction. Conservative message INSERT/UPDATE triggers also erase private state under older binaries; the current Store restores only permitted state and work within its SAVEPOINT. Rolling back can consequently lose observed results on an old-code rewrite, which is preferable to retaining deleted private state. No installer/schema-version/dependency change is required; SQLite backups include the additive tables/triggers.
+
+The UI shows no zero count before any vote has authenticated. When counts exist it says they include only received/decrypted votes and may be incomplete. A received withdrawal can legitimately yield observed zeros. Poll snapshots, unverified variants, missing keys and missing provider events cannot establish complete live results. History-attached plaintext pollUpdates are not blindly trusted/imported as decrypted ballots. Tests are synthetic; live TypeScript/WhatsApp interoperability has not been claimed.
+
+### Sending boundary and remaining interoperability work
+
+An internal `PollVoteSending` boundary is present but its implementation is fixed unavailable and always rejects. There is no vote endpoint/control, raw-proto sender, custom production encryption or relay workaround. The ordinary connector now also rejects runtime-invalid outgoing content kinds before transport. [PR #2870](https://github.com/WhiskeySockets/Baileys/pull/2870) proposes official vote generation, encryption and stanza/retry markers, but was open/unreleased when checked; its author reports live Rust-port checks, not the TypeScript path. ACK alone is not proof of delivery. No unmerged dependency was adopted.
+
+Before activating a sender: use a maintained official release/verified implementation, test binary stanza and retry markers, then separately authorized paired-device TypeScript tests for PN/LID chat/group modes, own/received/history polls, multiple choices and withdrawal. The linked family account has one vote, so any future UI must state whose account votes and that changing it can replace a family member's choice. Poll creation is available in the upstream high-level generator but is not exposed by this product stage.
 
 ## Verification
 
