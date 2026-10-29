@@ -85,6 +85,12 @@ export interface StoredMessage {
   reactionTimes?: Record<string, number>;
   raw?: string;
   clientId?: string;
+  /** Private request identity, encrypted with the message; never returned publicly. */
+  sendRequestHash?: string;
+  /** Connector returned a matching acknowledgement; separate from delivery receipts. */
+  sendAcknowledged?: boolean;
+  /** True only for a proven failure before provider submission. */
+  retrySafe?: boolean;
   authorUserId?: string;
   authorLabel?: string;
 }

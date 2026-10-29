@@ -2,6 +2,7 @@ import {newPollState,recoverPollState,observedPollResults} from './polls/receive
 import {acceptPollVote,drainPollVotes,clearPollVotes} from './polls/pending.js';
 import type {ObservedPollResults} from './polls/types.js';
 import {readOnlyKind,sharedText} from './rich-content.js';
+import { confirmedSend } from './send-outcome.js';
 import { conversationKind } from './conversation-id.js';
 import { applyReactions, queueReaction, pendingReactions, clearPendingReactions } from './message-reactions.js';
 import { messageActions } from './message-actions.js';
@@ -31,7 +32,7 @@ export class AppError extends Error {
   }
 }
 export const deny = () => new AppError(404, 'NOT_FOUND');
-export interface PublicMessage extends Omit<StoredMessage, 'raw' | 'replyId' | 'reactions' | 'reactionTimes' | 'editTime' | 'originalTimeKnown' | 'pollState'> {
+export interface PublicMessage extends Omit<StoredMessage, 'raw' | 'replyId' | 'reactions' | 'reactionTimes' | 'editTime' | 'originalTimeKnown' | 'pollState' | 'sendRequestHash' | 'sendAcknowledged'> {
   pollResults?: ObservedPollResults;
   reply?: { id: string; text: string; sender: string; available?: boolean };
   reactions: { emoji: string; count: number; mine: boolean }[];
@@ -368,6 +369,7 @@ export class ChatService {
       !repairMissingMedia && !explainLegacyBlank && !explainUnsupported && !upgradeDisplay &&
       existing.status !== 'pending' &&
       existing.status !== 'failed' &&
+      !(existing.status === 'unknown' && confirmedSend(input.status)) &&
       (!input.fromMe || !!existing.raw || readOnlyKind(existing.kind))
     )
       return;
@@ -412,6 +414,9 @@ export class ChatService {
       reactionTimes: previous?.reactionTimes,
       raw: input.kind === 'unsupported' || readOnlyKind(input.kind) ? undefined : input.raw || previous?.raw,
       clientId: previous?.clientId,
+      sendRequestHash: previous?.sendRequestHash,
+      sendAcknowledged: previous?.sendAcknowledged,
+      retrySafe: previous?.retrySafe,
       authorUserId: previous?.authorUserId,
       authorLabel: previous?.authorLabel,
       edited: input.edited,
@@ -513,7 +518,7 @@ export class ChatService {
   }
   public(f: string, m: StoredMessage): PublicMessage {
     if(!m.deleted && restrictedStoredMessage(m))m=restrictedPlaceholder(m);
-    const { raw, replyId, reactions, reactionTimes, editTime, originalTimeKnown, poll, pollState, ...safe } = m;
+    const { raw, replyId, reactions, reactionTimes, editTime, originalTimeKnown, poll, pollState, sendRequestHash, sendAcknowledged, ...safe } = m;
     const display=!m.deleted && !m.restricted && m.kind==='poll'?pollDisplay(m.text,poll?.options):undefined;
     const target = replyId ? this.store.getMessage(f, m.groupId, replyId) : undefined;
     const aggregated = new Map<string, { emoji: string; count: number; mine: boolean }>();
@@ -527,6 +532,8 @@ export class ChatService {
       ...safe,
       ...((m.kind==='contact'||m.kind==='location'||m.kind==='interactive')&&!m.deleted&&!m.restricted&&!sharedText(m.text)?
         {kind:'unsupported' as const,text:'פרטי ההודעה אינם זמינים לתצוגה.',unsupportedReason:'content-variant' as const}:{}),
+      ...(m.clientId ? { retrySafe: m.status === 'failed' && m.retrySafe === true,
+        status: m.status === 'failed' && m.retrySafe !== true ? 'unknown' as const : m.status } : {}),
       ...(m.kind==='poll'&&!m.deleted&&!m.restricted ? display ? {poll:display.poll} : {kind:'unsupported' as const,text:invalidPollText,unsupportedReason:'poll-invalid' as const} : {}),
       pollResults:observedPollResults(m),
       actions:messageActions(m,this.connectors.get(f)),

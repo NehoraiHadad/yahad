@@ -4,6 +4,7 @@ import type { Connector, StoredMessage } from './connectors/types.js';
 export function messageActions(message: StoredMessage,connector?: Connector) {
   const available=!!connector && !message.deleted && !message.restricted && message.kind!=='unsupported' && !readOnlyKind(message.kind) &&
     message.status!=='pending' && message.status!=='failed' &&
+    !(message.clientId && message.status==='unknown' && !message.sendAcknowledged) &&
     (!connector.originalAvailable || connector.originalAvailable(message));
   return {reply:available && !!connector?.capabilities.reply,reactions:available && !!connector?.capabilities.reactions,
     edit:available && message.kind==='text' && !!connector?.capabilities.edit,delete:available && !!connector?.capabilities.delete};

@@ -200,7 +200,7 @@ test('a paused session cannot begin provider submission after delayed connector 
       assert.equal((await f.access(true, 0)).statusCode, 200);
       if (resume) assert.equal((await f.access(false, 1)).statusCode, 200);
       release();
-      assert.equal((await request).statusCode, 502, 'existing conservative send-uncertain response is preserved');
+      assert.equal((await request).statusCode, 401, 'revoked originating session remains unauthorized');
       assert.equal(submitted, 0, 'no provider submission is allowed for the revoked originating session');
       assert.equal(f.store.session(f.child.sid), undefined);
     } finally { await f.close(); }

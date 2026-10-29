@@ -982,7 +982,8 @@ function Chat({
                           void action(() =>
                             api('/groups/' + encodeURIComponent(current.id) + '/messages', 'POST', {
                               clientId: m.clientId,
-                              text: m.text,
+                              text: m.authorLabel && m.text.startsWith(m.authorLabel + ': ') ? m.text.slice(m.authorLabel.length + 2) : m.text,
+                              replyId: m.reply?.id,
                             }),
                           );
                       }}
@@ -1189,7 +1190,7 @@ function Message({
     pending: 'ממתינה לאישור',
     delivered: 'החיבור דיווח על מסירה',
     read: 'החיבור דיווח על קריאה — לא בהכרח כל חברי השיחה',
-    failed: 'לא התקבל אישור — ייתכן שההודעה הגיעה',
+    failed: 'ההודעה לא הוגשה לשליחה — אפשר לנסות שוב',
     unknown: 'מצב מסירה אינו ידוע',
   };
   return (
@@ -1274,7 +1275,7 @@ function Message({
               )}
             </span>
           )}
-          {m.status === 'failed' && m.kind === 'text' && (
+          {m.status === 'failed' && m.retrySafe === true && !!m.clientId && m.authorUserId === userId && m.kind === 'text' && (
             <button className="retry" onClick={onRetry}>
               ניסיון נוסף
             </button>
@@ -1374,6 +1375,7 @@ function Composer({
 }) {
   const [text, setText] = useState(''),
     [busy, setBusy] = useState(false),
+    [sendUncertain, setSendUncertain] = useState(false),
     [emojiOpen, setEmojiOpen] = useState(false),
     [recentEmojis, setRecentEmojis] = useState<string[]>([]),
     [favoriteStickerIds, setFavoriteStickerIds] = useState<string[]>([]),
@@ -1392,14 +1394,16 @@ function Composer({
     mediaStream = useRef<MediaStream | null>(null),
     chunks = useRef<Blob[]>([]),
     id = useRef(newId()),
+    lastAttempt = useRef<{ id: string; text: string; replyId?: string; file: File | null; voice: Blob | null; sticker: boolean } | null>(null),
     typingAt = useRef(0),
     mounted = useRef(true),
     cancelRecord = useRef(false),
     stickerRequest = useRef<AbortController | null>(null),
     submitting = useRef(false),
+    uncertain = useRef(false),
     copiedEdit = useRef(false),
     available = useRef(enabled && !suspended);
-  available.current = enabled && !suspended;
+  available.current = enabled && !suspended && !sendUncertain;
   const { burst, celebrate } = useChatCelebration(effects, flair, group);
   const path = '/groups/' + encodeURIComponent(group);
   useEffect(() => {
@@ -1421,6 +1425,7 @@ function Composer({
     }
   }, [suspended]);
   useEffect(() => {
+    if (uncertain.current) return;
     if (editing) {
       copiedEdit.current = true;
       setText(
@@ -1471,7 +1476,7 @@ function Composer({
   const availableStickers = [...new Map(messages.filter(m => m.groupId === group && m.kind === 'sticker' && !m.deleted && m.mediaId)
     .map(m => [m.mediaId!, { id: m.mediaId!, url: `/api/groups/${encodeURIComponent(group)}/media/${encodeURIComponent(m.mediaId!)}`, label: m.text || `מדבקה מאת ${m.sender}` }])).values()];
   const chooseSticker = async (mediaId: string) => {
-    if (!enabled || busy || editing || !caps.sticker || !availableStickers.some(s => s.id === mediaId)) return;
+    if (!available.current || busy || editing || !caps.sticker || !availableStickers.some(s => s.id === mediaId)) return;
     const controller = new AbortController();
     stickerRequest.current?.abort(); stickerRequest.current = controller;
     setEmojiOpen(false); setBusy(true); onBusyChange(true);
@@ -1483,9 +1488,34 @@ function Composer({
       if (mounted.current && !controller.signal.aborted) onError((e as Error).message);
     } finally { if (mounted.current && stickerRequest.current === controller) { setBusy(false); onBusyChange(false); } }
   };
+  const clearDraft = () => {
+    setText(''); setFile(null); setVoice(null); setSticker(false);
+    uncertain.current = false; setSendUncertain(false); lastAttempt.current = null; id.current = newId();
+  };
+  const checkSend = async () => {
+    if (!uncertain.current || submitting.current || busy || !enabled || suspended) return;
+    submitting.current = true; setBusy(true); onBusyChange(true);
+    try {
+      const result = await api<{ state: string }>(`${path}/outgoing/${encodeURIComponent(id.current)}`);
+      if (!mounted.current) return;
+      if (result.state === 'confirmed') { clearDraft(); celebrate(); onSent(); }
+      else if (result.state === 'failed') { uncertain.current = false; setSendUncertain(false); }
+      // Missing records cannot prove non-submission (for example after forgetting
+      // a conversation). Neither an absent record nor an unknown result retries.
+    } catch (e) { if (mounted.current) onError((e as Error).message); }
+    finally { submitting.current = false; if (mounted.current) { setBusy(false); onBusyChange(uncertain.current); } }
+  };
   const send = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (submitting.current || busy || !enabled || recording || (!text.trim() && !file && !voice)) return;
+    if (submitting.current || uncertain.current || busy || !available.current || recording || (!text.trim() && !file && !voice)) return;
+    if (!editing) {
+      const previous = lastAttempt.current, draft = { text, replyId: reply?.id, file, voice, sticker };
+      // Every payload change gets a new identity after proven non-submission,
+      // including quote/attachment dismissal and replacement recordings.
+      if (previous?.id === id.current && (previous.text !== text || previous.replyId !== draft.replyId ||
+        previous.file !== file || previous.voice !== voice || previous.sticker !== sticker)) id.current = newId();
+      lastAttempt.current = { id: id.current, ...draft };
+    }
     submitting.current = true; setBusy(true); onBusyChange(true);
     try {
       if (editing) {
@@ -1502,18 +1532,19 @@ function Composer({
       } else
         await api(path + '/messages', 'POST', { clientId: id.current, text, replyId: reply?.id });
       if (!mounted.current) return;
-      setText('');
-      setFile(null);
-      setVoice(null);
-      setSticker(false);
-      id.current = newId();
+      clearDraft();
       if (!editing) celebrate();
       onSent();
     } catch (e) {
-      if (mounted.current) onError((e as Error).message);
+      if (mounted.current) {
+        if (!editing && (e as { sendOutcome?: string }).sendOutcome !== 'not_submitted') {
+          uncertain.current = true; setSendUncertain(true); setEmojiOpen(false); setAttachOpen(false);
+        }
+        onError((e as Error).message);
+      }
     } finally {
       submitting.current = false;
-      if (mounted.current) { setBusy(false); onBusyChange(false); }
+      if (mounted.current) { setBusy(false); onBusyChange(uncertain.current); }
     }
   };
   const stopRecording = () => {
@@ -1522,7 +1553,7 @@ function Composer({
     setRecording(false);
   };
   const record = async () => {
-    if (!available.current) return;
+    if (!available.current || submitting.current || uncertain.current) return;
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
       onError('להקלטה צריך כתובת HTTPS שהמכשיר סומך עליה, או localhost.');
       return;
@@ -1533,7 +1564,7 @@ function Composer({
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      if (!mounted.current || !available.current) {
+      if (!mounted.current || !available.current || submitting.current || uncertain.current) {
         stream.getTracks().forEach((t) => t.stop());
         return;
       }
@@ -1578,6 +1609,7 @@ function Composer({
   return (
     <div className="composer-wrap" hidden={suspended}>
       <ChatCelebration burst={burst} />
+      <fieldset disabled={sendUncertain} style={{ display: 'contents' }}>
       {reply && !editing && (
         <div className="reply-preview">
           <Reply size={18} />
@@ -1795,6 +1827,12 @@ function Composer({
           </>
         )}
       </form>
+      </fieldset>
+      {sendUncertain && <div className="send-resolution" role="status">
+        <p>ייתכן שההודעה נשלחה. הטיוטה נשמרה, ולא נשלח אותה שוב בלי אישור שלא הוגשה.</p>
+        <button type="button" disabled={busy || !enabled} onClick={() => void checkSend()}>בדיקת מצב השליחה</button>
+        <button type="button" disabled={busy} onClick={() => { clearDraft(); clearReply(); clearEditing(); onBusyChange(false); }}>סגירת הטיוטה בלי לשלוח שוב</button>
+      </div>}
       <div className="composer-foot">
         <span>אפשר פשוט להיות בקשר.</span>
         <span>
