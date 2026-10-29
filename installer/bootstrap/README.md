@@ -13,9 +13,10 @@ Closing that installer is not reported as observed installation success.
 
 ## Distribution gate
 
-`payload-pin.json` identifies exactly the preserved 97b7ab4 offline installer:
-version 0.5.3, 290334518 bytes and SHA256
-`0ae76fb89c2df50ad68cc1b635d06003a893b5613f01aa9b9a4ba146269edf37`.
+`payload-pin.json` identifies exactly the production offline installer from
+`2d1b547cb7cadd0ed08c6cdb3584c78ae9060f51`: version 0.5.3,
+290342596 bytes and SHA256
+`540906a07c4b5c25f5a92250c5bb54eed2a31b9a144c9458ed9da318c41966fe`.
 No public upload or URL has been authorized. The default native artifact clearly
 shows that distribution is unconfigured and disables download. It never guesses
 a release URL or downloads a different/latest version. An authorized publisher
