@@ -231,3 +231,14 @@ test('consuming pending votes and saving initial or enriched poll state is one t
   fail=false;await f.ingest(enriched);assert.deepEqual(counts(f),[1,1]);assert.equal(f.store.one('SELECT count(*) AS n FROM pending_poll_votes').n,0);
  }finally{await f.close();}
 });
+
+test('ordinary message and poll reads require no database write lock or private-state cleanup',async()=>{
+ const f=await fixture();try{
+  await f.ingest(raw('plain',{conversation:'Synthetic text'}));await f.ingest(poll());await f.ingest(vote('one',['First']));
+  f.store.db.exec('PRAGMA query_only=ON');
+  try{
+   assert.equal(f.get('plain')!.text,'Synthetic text');assert.deepEqual(counts(f),[1,0]);
+   assert.equal(f.store.messages(f.a.familyId,group).length,2);
+  }finally{f.store.db.exec('PRAGMA query_only=OFF');}
+ }finally{await f.close();}
+});

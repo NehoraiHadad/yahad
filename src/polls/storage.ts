@@ -29,7 +29,7 @@ export function savePollState(store:Store,f:string,m:StoredMessage){
   f,m.groupId,m.id,seal(store.groupKey(f,m.groupId),JSON.stringify(m.pollState),scope(f,m.groupId,m.id)));
 }
 export function loadPollState(store:Store,f:string,m:StoredMessage):PollState|undefined{
- if(m.kind!=='poll'||m.deleted||m.restricted){savePollState(store,f,m);return;}
+ if(m.kind!=='poll'||m.deleted||m.restricted)return;
  const row=store.one('SELECT body FROM poll_contexts WHERE family_id=? AND group_id=? AND id=?',f,m.groupId,m.id);
  return row?JSON.parse(open(store.groupKey(f,m.groupId),row.body,scope(f,m.groupId,m.id)).toString()):undefined;
 }
