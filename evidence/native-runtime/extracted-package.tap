@@ -1,0 +1,16 @@
+TAP version 13
+# Subtest: offline packaged Node, production modules and private CLR run actual mock app with empty PATH
+ok 1 - offline packaged Node, production modules and private CLR run actual mock app with empty PATH
+  ---
+  duration_ms: 11262.1443
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 12021.6059

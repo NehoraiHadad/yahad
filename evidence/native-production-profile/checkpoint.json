@@ -1,0 +1,23 @@
+{
+  "kind": "production-source-preparation-checkpoint",
+  "firstStartRetryCommit": "8410ea0a5bb2cdc9d414ff3c580634ba860c363b",
+  "nativeFirstInstallPassed": 35,
+  "servicePassed": 45,
+  "bootstrapCorePassed": 39,
+  "webConsentPassed": 1,
+  "typecheck": true,
+  "webBuild": true,
+  "offscreenDpiChecks": 5,
+  "interactiveLaunch": {
+    "target": "Yahad.Setup.Web.exe from 7829604",
+    "result": "Computer Use app approval timed out",
+    "installAttempted": false,
+    "retryAttempted": false
+  },
+  "productionConnector": "baileys",
+  "connectionInitiator": "existing authenticated parent web connect action",
+  "realProviderCalls": false,
+  "customerPayloadRebuilt": false,
+  "downloadPinStillPreservesReviewed97b7ab4": true,
+  "machineInstallExecuted": false
+}

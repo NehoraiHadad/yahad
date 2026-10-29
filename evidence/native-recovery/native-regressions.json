@@ -1,0 +1,332 @@
+{
+  "platform": "Windows x64",
+  "kind": "synthetic-nonprivileged",
+  "passed": 81,
+  "failed": 0,
+  "tests": [
+    {
+      "name": "valid manifest and bytes",
+      "status": "PASS"
+    },
+    {
+      "name": "malformed JSON is a package diagnostic",
+      "status": "PASS"
+    },
+    {
+      "name": "reject unsafe path ../escape",
+      "status": "PASS"
+    },
+    {
+      "name": "reject unsafe path app/../../escape",
+      "status": "PASS"
+    },
+    {
+      "name": "reject unsafe path app/file:ads",
+      "status": "PASS"
+    },
+    {
+      "name": "reject unsafe path app/CON.txt",
+      "status": "PASS"
+    },
+    {
+      "name": "reject unsafe path app/LPT1",
+      "status": "PASS"
+    },
+    {
+      "name": "reject unsafe path app/folder./file",
+      "status": "PASS"
+    },
+    {
+      "name": "reject unsafe path app//file",
+      "status": "PASS"
+    },
+    {
+      "name": "reject unsafe path app/./file",
+      "status": "PASS"
+    },
+    {
+      "name": "reject unsafe path app/evil\\file",
+      "status": "PASS"
+    },
+    {
+      "name": "reject unsafe path /app/root",
+      "status": "PASS"
+    },
+    {
+      "name": "reject unsafe path data/family.sqlite",
+      "status": "PASS"
+    },
+    {
+      "name": "reject corrupt bytes",
+      "status": "PASS"
+    },
+    {
+      "name": "reject case collision",
+      "status": "PASS"
+    },
+    {
+      "name": "reject symlink entry",
+      "status": "PASS"
+    },
+    {
+      "name": "reject undeclared file",
+      "status": "PASS"
+    },
+    {
+      "name": "refuse production payload in slice",
+      "status": "PASS"
+    },
+    {
+      "name": "refuse unsupported architecture",
+      "status": "PASS"
+    },
+    {
+      "name": "stage and verify repeated run",
+      "status": "PASS"
+    },
+    {
+      "name": "cancel and resume preserves state",
+      "status": "PASS"
+    },
+    {
+      "name": "resume IO interruption after-journal",
+      "status": "PASS"
+    },
+    {
+      "name": "resume IO interruption before-publish",
+      "status": "PASS"
+    },
+    {
+      "name": "resume IO interruption after-publish",
+      "status": "PASS"
+    },
+    {
+      "name": "never replace changed published payload",
+      "status": "PASS"
+    },
+    {
+      "name": "refuse bundle change during resume",
+      "status": "PASS"
+    },
+    {
+      "name": "exclusive lock held by a separate process",
+      "status": "PASS"
+    },
+    {
+      "name": "refuse permissive session ACL",
+      "status": "PASS"
+    },
+    {
+      "name": "refuse junction ancestor",
+      "status": "PASS"
+    },
+    {
+      "name": "native argument quoting without shell",
+      "status": "PASS"
+    },
+    {
+      "name": "retain exact process exit status after early exit",
+      "status": "PASS"
+    },
+    {
+      "name": "native job child environment omits host hooks and search variables",
+      "status": "PASS"
+    },
+    {
+      "name": "job disposal kills child and grandchild",
+      "status": "PASS"
+    },
+    {
+      "name": "root exit cannot claim empty native process tree",
+      "status": "PASS"
+    },
+    {
+      "name": "host crash closes job and kills descendants",
+      "status": "PASS"
+    },
+    {
+      "name": "private LAN address boundaries",
+      "status": "PASS"
+    },
+    {
+      "name": "multiple adapters require explicit current selection",
+      "status": "PASS"
+    },
+    {
+      "name": "occupied loopback port is a recoverable conflict",
+      "status": "PASS"
+    },
+    {
+      "name": "native handle reads private bytes",
+      "status": "PASS"
+    },
+    {
+      "name": "native private handle supports canonical paths beyond MAX_PATH",
+      "status": "PASS"
+    },
+    {
+      "name": "native pinned ancestors and leaf refuse rename",
+      "status": "PASS"
+    },
+    {
+      "name": "native handle refuses broad read ACL",
+      "status": "PASS"
+    },
+    {
+      "name": "native bootstrap refuses application-owned capability",
+      "status": "PASS"
+    },
+    {
+      "name": "native bootstrap ACL policy accepts admin owner and read-only service",
+      "status": "PASS"
+    },
+    {
+      "name": "native handle rejects hardlink alias",
+      "status": "PASS"
+    },
+    {
+      "name": "native handle bounds secret size",
+      "status": "PASS"
+    },
+    {
+      "name": "native data lease excludes and releases",
+      "status": "PASS"
+    },
+    {
+      "name": "native data lease refuses unsafe existing child ACL",
+      "status": "PASS"
+    },
+    {
+      "name": "native path refuses \\\\server\\share\\secret",
+      "status": "PASS"
+    },
+    {
+      "name": "native path refuses C:\\one\\..\\secret",
+      "status": "PASS"
+    },
+    {
+      "name": "native path refuses C:\\path\\secret:ads",
+      "status": "PASS"
+    },
+    {
+      "name": "native path refuses C:\\path\\secret.",
+      "status": "PASS"
+    },
+    {
+      "name": "native path refuses C:\\path\\CON.txt",
+      "status": "PASS"
+    },
+    {
+      "name": "LAN plan cannot authorize network actions or Internet exposure",
+      "status": "PASS"
+    },
+    {
+      "name": "unselected managed certificate provider stays blocked",
+      "status": "PASS"
+    },
+    {
+      "name": "host health cannot claim other-device web reachability",
+      "status": "PASS"
+    },
+    {
+      "name": "existing family handoff discards obsolete setup link",
+      "status": "PASS"
+    },
+    {
+      "name": "fresh handoff reuses web fragment without serializing secrets",
+      "status": "PASS"
+    },
+    {
+      "name": "expired or closed setup never reopens family onboarding",
+      "status": "PASS"
+    },
+    {
+      "name": "public or insecure LAN handoff is refused",
+      "status": "PASS"
+    },
+    {
+      "name": "native host update orders barrier shutdown tree-empty authority then health",
+      "status": "PASS"
+    },
+    {
+      "name": "recovery barrier refuses app start without touching update authority",
+      "status": "PASS"
+    },
+    {
+      "name": "unclean root exit cannot grant activation",
+      "status": "PASS"
+    },
+    {
+      "name": "living descendant after root exit times out and prevents activation",
+      "status": "PASS"
+    },
+    {
+      "name": "uncertain activation never restarts old payload or restores data",
+      "status": "PASS"
+    },
+    {
+      "name": "failed new health stays behind recovery barrier without downgrade",
+      "status": "PASS"
+    },
+    {
+      "name": "repeated disposal retries unresolved cleanup and never reports false success",
+      "status": "PASS"
+    },
+    {
+      "name": "cancelled request cannot stop or activate running app",
+      "status": "PASS"
+    },
+    {
+      "name": "recovery cannot restore while app tree lives or exclusive data lease is absent",
+      "status": "PASS"
+    },
+    {
+      "name": "policy or pin drift prevents recovery without silently restoring old settings",
+      "status": "PASS"
+    },
+    {
+      "name": "preactivation crash resumes unchanged old payload only with compatible observed schema",
+      "status": "PASS"
+    },
+    {
+      "name": "possible new schema writes never trigger automatic downgrade",
+      "status": "PASS"
+    },
+    {
+      "name": "explicit recovery requires matching complete backup receipt and compatible backup schema",
+      "status": "PASS"
+    },
+    {
+      "name": "before candidate start owner can request payload-only rollback without database overwrite",
+      "status": "PASS"
+    },
+    {
+      "name": "after candidate start explicit recovery plans offline verified restore before old app",
+      "status": "PASS"
+    },
+    {
+      "name": "interrupted restore requires reconciliation instead of repeating uncertain writes",
+      "status": "PASS"
+    },
+    {
+      "name": "healthy candidate restarts only when active pointer and schema agree",
+      "status": "PASS"
+    },
+    {
+      "name": "completed rollback needs verified receipt and observed previous pointer and schema",
+      "status": "PASS"
+    },
+    {
+      "name": "invalid journal identifiers and unrecognized phases never produce recovery actions",
+      "status": "PASS"
+    },
+    {
+      "name": "native failed health cleans root and grandchild before returning failure",
+      "status": "PASS"
+    },
+    {
+      "name": "native health timeout cleans complete job before returning failure",
+      "status": "PASS"
+    }
+  ]
+}

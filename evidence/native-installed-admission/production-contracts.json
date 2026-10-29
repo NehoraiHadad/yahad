@@ -1,0 +1,120 @@
+{
+  "kind": "concrete-installed-adapters-synthetic-inputs",
+  "passed": 26,
+  "failed": 0,
+  "productionEntryWired": true,
+  "actualAdminProvisioningTested": false,
+  "actualStoreWrites": true,
+  "actualReceiptProducer": true,
+  "scmInvoked": false,
+  "networkListenersOpened": false,
+  "productionTrustOrOwnerStateCreated": false,
+  "fullRebuiltPayloadInspected": true,
+  "fixtureRoot": "C:\\projects\\yahad-native-production\\installer\\.scratch\\production\\temp\\yahad-fixture-125a5773ac2f42f9a811ca4c4489fcf8",
+  "tests": [
+    {
+      "name": "production admin boundary rejects current-user fixture records",
+      "status": "PASS"
+    },
+    {
+      "name": "production resolver refuses absent protected activation state",
+      "status": "PASS"
+    },
+    {
+      "name": "stale bootstrap digest cannot select a different protected activation",
+      "status": "PASS"
+    },
+    {
+      "name": "missing owner record refuses the concrete resolver",
+      "status": "PASS"
+    },
+    {
+      "name": "locked selected payload refuses without changing selected data",
+      "status": "PASS"
+    },
+    {
+      "name": "omitted owner expiry is not silently promoted to a persistent capability",
+      "status": "PASS"
+    },
+    {
+      "name": "same concrete resolver reads fixture capabilities and observes actual Store schema 5",
+      "status": "PASS"
+    },
+    {
+      "name": "protected-state binding refuses epoch",
+      "status": "PASS"
+    },
+    {
+      "name": "protected-state binding refuses head",
+      "status": "PASS"
+    },
+    {
+      "name": "protected-state binding refuses owner",
+      "status": "PASS"
+    },
+    {
+      "name": "protected-state binding refuses policy",
+      "status": "PASS"
+    },
+    {
+      "name": "protected-state binding refuses pin",
+      "status": "PASS"
+    },
+    {
+      "name": "protected-state binding refuses pending",
+      "status": "PASS"
+    },
+    {
+      "name": "protected-state binding refuses phase",
+      "status": "PASS"
+    },
+    {
+      "name": "owner expiration is observed again at mutable start barrier",
+      "status": "PASS"
+    },
+    {
+      "name": "exact pinned release bytes cannot be substituted",
+      "status": "PASS"
+    },
+    {
+      "name": "protected-control anchor cannot conceal a crash-left WAL",
+      "status": "PASS"
+    },
+    {
+      "name": "concrete production resolver launches real mutable Store through continuous handoff",
+      "status": "PASS"
+    },
+    {
+      "name": "child duplicate prevents a second writer even after host lease handle is closed",
+      "status": "PASS"
+    },
+    {
+      "name": "wrong host-lease nonce or data identity cannot authorize Store",
+      "status": "PASS"
+    },
+    {
+      "name": "actual recovery output is verified but cannot start before protected commit",
+      "status": "PASS"
+    },
+    {
+      "name": "actual receipt MAC corruption is refused even with matching control digest",
+      "status": "PASS"
+    },
+    {
+      "name": "actual completed-journal truncation refuses recovered selection",
+      "status": "PASS"
+    },
+    {
+      "name": "changed actual recovered plaintext refuses without overwriting original data",
+      "status": "PASS"
+    },
+    {
+      "name": "protected committed recovery selection launches real Store and restarts after writes",
+      "status": "PASS"
+    },
+    {
+      "name": "exact rebuilt full payload passes installed release and runtime admission without app launch",
+      "status": "PASS"
+    }
+  ]
+}

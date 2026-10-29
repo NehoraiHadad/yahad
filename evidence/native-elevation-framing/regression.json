@@ -1,0 +1,17 @@
+{
+  "kind": "blocked-UI-context-with-real-private-framing-method-and-in-memory-async-stream",
+  "before": {
+    "Ok": false,
+    "TimedOut": true,
+    "QueuedUiContinuations": 1,
+    "FrameValid": false
+  },
+  "after": {
+    "Ok": true,
+    "TimedOut": false,
+    "QueuedUiContinuations": 0,
+    "FrameValid": true
+  },
+  "nativeHostOperations": false,
+  "networkListeners": false
+}

@@ -1,0 +1,39 @@
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  Yahad.Install.Core -> C:\projects\yahad-native-recovery\installer\Yahad.Install.Core\bin\Release\net10.0-windows\Yahad.Install.Core.dll
+  Yahad.Recovery.Tests -> C:\projects\yahad-native-recovery\installer\Yahad.Recovery.Tests\bin\Release\net10.0-windows\Yahad.Recovery.Tests.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:02.41
+PASS actual nonempty job refuses offline boundary
+PASS actual exclusive data lease prevents backup admission
+PASS encrypted complete snapshot and new-directory restore preserve all source bytes
+PASS actual schema-5 Store preserves family login session grants encrypted history media and auth
+PASS future observed SQLite schema refuses older target before restore writes
+PASS actual SQLite probe defeats an authenticated false schema claim
+PASS backup rejects SQLite sidecars instead of guessing a checkpoint
+PASS corrupted SQLite is not accepted as a backup
+PASS changed master-key refuses old backup identity or policy
+PASS changed update-policy refuses old backup identity or policy
+PASS changed update-pin refuses old backup identity or policy
+PASS corrupt receipt refuses before publishing restored data
+PASS corrupt cipher refuses before publishing restored data
+PASS authenticated traversal member is refused
+PASS actual locked source file leaves active data unchanged
+PASS hardlink alias created after admission still refuses backup
+PASS cancellation between encrypted chunks refuses backup receipt
+PASS cancellation between encrypted chunks refuses restore publication
+PASS injected backup disk-full never publishes a receipt
+PASS partial receipt flush remains uncommitted and cannot restore
+PASS injected restore disk-full quarantines partial attempt then retries into fresh directory
+PASS three interrupted extraction attempts quarantine further retries
+PASS journal tampering refuses automatic retry
+PASS retry refuses changed receipt or schema policy
+PASS existing unexpected completed directory is preserved and refused
+PASS actual worker termination at restore-chunk-written reconciles without touching live DB
+PASS actual worker termination at after-restore-publication reconciles without touching live DB
+PASS completed output deletion is refused rather than replaying writes
+28 passed; 0 failed. Fixture: C:\projects\yahad-native-recovery\installer\.scratch\recovery\temp\yahad-fixture-ff45e893aa9141299f497fab8a5c5ff6

@@ -1,0 +1,11 @@
+{
+  "version": "0.5.3",
+  "sourceCommit": "e4599761e1c557fc2068cb21ceda2dd06da30d99",
+  "payloadSourceCommit": "2d1b547cb7cadd0ed08c6cdb3584c78ae9060f51",
+  "bytes": 290361696,
+  "sha256": "579605d2439fc0d39ef8f52d4034c4f70438df5e1d7920d7e263d0cb0156cd3a",
+  "url": null,
+  "distributionConfigured": false,
+  "profile": "loopback-real-baileys",
+  "offlineArtifactPreserved": true
+}

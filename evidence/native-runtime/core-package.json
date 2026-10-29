@@ -1,0 +1,23 @@
+{
+  "sourceCommit": "80fbeade8e5749e0e0e1808b207990ff235e1672",
+  "kind": "windows-runtime-candidate",
+  "profile": "core-fixture",
+  "fileCount": 9271,
+  "peCount": 195,
+  "payloadBytes": 289600919,
+  "archiveBytes": 102723267,
+  "sha256": "d7a467b642bb9c8f233641bb4d8101d3a255348e0a93c81c5f48ca544216648c",
+  "extractedFilesVerified": true,
+  "fullProfileRefusal": "MISSING_PAYLOAD: runtime/ffmpeg/ffmpeg.exe",
+  "familyInstallationReady": false,
+  "archive": "C:\\projects\\yahad-native-install\\installer\\artifacts\\yahad-core-80fbead-win-x64.zip",
+  "unpacked": "C:\\projects\\yahad-native-install\\installer\\.scratch\\windows-core-unpacked-80fbead",
+  "extractedRuntimeTest": {
+    "passed": 1,
+    "failed": 0,
+    "skipped": 0,
+    "durationMs": 12021.6059,
+    "report": "extracted-package.tap",
+    "scope": "actual extracted mock app; synthetic data and loopback only; empty child PATH"
+  }
+}

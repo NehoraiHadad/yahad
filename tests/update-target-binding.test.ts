@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { privateFixtureDirectory,assertPrivateFixtureFile } from './fixtures/private-directory.js';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, lstatSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -10,7 +11,7 @@ import type { Config } from '../src/config.js';
 const target = { version: '0.5.0', fingerprint: 'a'.repeat(64) };
 const newer = { version: '0.6.0', fingerprint: 'b'.repeat(64) };
 async function fixture() {
-  const dir = mkdtempSync(join(tmpdir(), 'yachad-target-'));
+  const dir = privateFixtureDirectory('yachad-target-');
   const config: Config = { dataDir: dir, masterKey: randomBytes(32), connector: 'mock', realAllowed: false,
     host: '127.0.0.1', port: 3000, origin: 'http://localhost:3000', secureCookie: false, maxMedia: 1048576,
     maxStorage: 67108864, childIdleMs: 60000, sessionMs: 3600000, diagnosticsEnabled: false,
@@ -44,7 +45,7 @@ test('HTTP install echoes the displayed root identity in a private atomic queue 
     const first = f.queue();
     assert.deepEqual(first.target, target);
     assert.equal(first.action, 'install');
-    assert.equal(lstatSync(join(f.dir, 'update-request.json')).mode & 0o777, 0o600);
+    assertPrivateFixtureFile(join(f.dir,'update-request.json'));
     assert.ok(readFileSync(join(f.dir, 'update-request.json')).length <= 512, 'matches privileged queue size bound');
     const reopened = (await f.get()).json();
     assert.deepEqual(reopened.queuedRequest.target, target);

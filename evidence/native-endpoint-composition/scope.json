@@ -1,0 +1,37 @@
+{
+  "sourceBase": "09dfba8585b1caea3bfeebb3a22b0d1305cfee63",
+  "counts": {
+    "integration-tests.json": 119,
+    "endpoint-tests.json": 12,
+    "service-tests.json": 45,
+    "recovery-tests.json": 35
+  },
+  "webPassed": 54,
+  "webSkipped": 1,
+  "typecheckPassed": true,
+  "webProductionBuildPassed": true,
+  "ownerCompiled": true,
+  "ownerActuallyOpened": false,
+  "actualPrivateStoreAndJobs": true,
+  "syntheticAuthorizationAndOuterHost": true,
+  "scmInvoked": false,
+  "nativeEndpointActivated": false,
+  "nativeImpersonationExecuted": false,
+  "installedRolesApplied": false,
+  "productionEnabled": false,
+  "hostSelected": "ASUSHADAD",
+  "vmRequired": false,
+  "systemConfigurationChanged": false,
+  "fullFamilyInstallerRebuilt": false,
+  "existingFamilyPayloadSource": "146857134c5ef326d3451ac5085b2da14edbef0d",
+  "existingFamilyPayloadVersion": "0.5.2",
+  "standaloneQuotaCoordination": {
+    "publishedMerge": "586c8d4",
+    "reviewedTree": "06c5c28b71be95b03c8b22c650193eece5d84a5e",
+    "version": "0.5.3",
+    "schema": 5,
+    "usageProtocol": 2,
+    "metadataIntegratedHere": false
+  },
+  "finalFocusedReason": "Full 119-case suite passed; final fixed bootstrap secret-class mapping and test filter were then compiled and covered by all 12 focused endpoint cases plus service/recovery suites. No repeated full unrelated run claimed."
+}

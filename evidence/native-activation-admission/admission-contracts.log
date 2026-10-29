@@ -1,0 +1,57 @@
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  Yahad.Install.Core -> C:\projects\yahad-native-admission\installer\Yahad.Install.Core\bin\Release\net10.0-windows\Yahad.Install.Core.dll
+  Yahad.ServiceHost -> C:\projects\yahad-native-admission\installer\Yahad.ServiceHost\bin\Release\net10.0-windows\Yahad.ServiceHost.dll
+  Yahad.Admission.Tests -> C:\projects\yahad-native-admission\installer\Yahad.Admission.Tests\bin\Release\net10.0-windows\Yahad.Admission.Tests.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:03.30
+PASS valid signed fixture links exact release and data to service lifecycle while holding actual lease
+PASS signed interrupted phase refuses: prepared
+PASS signed interrupted phase refuses: publish-intent
+PASS signed interrupted phase refuses: candidate-start-intent
+PASS signed interrupted phase refuses: recovery-pending
+PASS signed interrupted phase refuses: unknown
+PASS stale signed epoch fails the independently supplied fixture floor
+PASS exact head digest anchor rejects a different valid signed current head
+PASS foreign installation identity refuses
+PASS changed signed document bytes refuse: release.json
+PASS changed signed document bytes refuse: selection.json
+PASS changed signed document bytes refuse: intent.json
+PASS changed signed document bytes refuse: owner.json
+PASS unknown pinned key identity cannot be selected from the envelope
+PASS signature purpose separation rejects a control-key head signed for owner purpose
+PASS correctly signed duplicate payload fields still refuse
+PASS observation output must be an existing pinned private directory
+PASS expired owner authorization refuses before launch
+PASS missing owner authorization refuses
+PASS owner approval for a different intent nonce refuses
+PASS observed policy/pin drift refuses: update-policy
+PASS observed policy/pin drift refuses: update-pin
+PASS data master-key identity mismatch refuses
+PASS selected data identity cannot be retargeted to another data set
+PASS payload bytes and complete member closure are observed
+PASS extra payload file refuses even when signed member hashes still match
+PASS signed schema range cannot replace actual SQLite observation
+PASS WAL-mode clean database is inspected immutably without creating source sidecars
+PASS actual crash-left committed WAL is refused and never checkpointed or deleted
+PASS actual busy job blocks admission without a Boolean override
+PASS actual competing data lease blocks admission
+PASS owner expiration is rechecked immediately before lifecycle start
+PASS reservation pins data bytes and rejects a late new member
+PASS case-insensitive interrupted artifact refuses: PENDING.JSON
+PASS case-insensitive interrupted artifact refuses: HEAD.JSON.PARTIAL.crash
+PASS case-insensitive interrupted artifact refuses: Selection.Json.Partial
+PASS late extra payload file refuses again immediately before start
+PASS released reservation cannot become a later start grant
+PASS recovered data requires complete receipt and matching actual tree/schema/key/policy
+PASS a signed recovery receipt cannot hide changed recovered data
+PASS incomplete signed recovery record refuses
+PASS missing recovery owner scope refuses
+PASS actual interrupted publisher leaves durable pending evidence that blocks old selection
+PASS new verified recovered data selection leaves previous data bytes untouched
+PASS production entry still has no fixture trust or activation wiring
+45 passed; 0 failed. Test-only signatures; no production admission.

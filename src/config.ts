@@ -1,4 +1,5 @@
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { platformFiles, type PlatformFiles } from './platform-files.js';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 export interface Config {
@@ -20,7 +21,7 @@ export interface Config {
   diagnosticsFlushSeconds?: number;
   tls?: { cert: Buffer; key: Buffer };
 }
-export function loadConfig(): Config {
+export function loadConfig(files: PlatformFiles = platformFiles): Config {
   const env = z
     .object({
       DATA_DIR: z.string().default('./data'),
@@ -41,9 +42,7 @@ export function loadConfig(): Config {
     })
     .parse(process.env);
   const path = resolve(env.MASTER_KEY_FILE);
-  const st = statSync(path);
-  if (st.mode & 0o077) throw new Error('Master key file must have mode 0600');
-  const masterKey = Buffer.from(readFileSync(path, 'utf8').trim(), 'base64');
+  const masterKey = Buffer.from(files.readMasterKey(path).toString('utf8').trim(), 'base64');
   if (masterKey.length !== 32) throw new Error('Master key must be 32 random bytes in base64');
   if (env.CONNECTOR === 'baileys' && env.ALLOW_REAL_WHATSAPP !== 'I_APPROVE_UNOFFICIAL_LINK')
     throw new Error('Real WhatsApp needs explicit local approval');

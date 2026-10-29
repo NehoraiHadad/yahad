@@ -1,0 +1,17 @@
+{
+  "oldUiClosedNormally": true,
+  "oldHelperExitObserved": true,
+  "postCleanupFreshPreflightPassed": true,
+  "repairedExePid": 20564,
+  "repairedWindowId": 265110,
+  "repairedWindowTitle": "Yahad installer",
+  "actualImagePathVerified": true,
+  "toolInventoryApp": "Microsoft.VisualStudio.Installer",
+  "toolError": "window id 265110 no longer belongs to Microsoft.VisualStudio.Installer; current owner is Microsoft.VisualStudio.Installer",
+  "sameErrorAfterFreshInventoryRetry": true,
+  "toolPermissionRequestReturned": false,
+  "newInstallButtonInvoked": false,
+  "newUacRequested": false,
+  "serviceWebAcceptance": false,
+  "sourceArtifactPreserved": true
+}

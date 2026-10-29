@@ -1,0 +1,118 @@
+TAP version 13
+# Subtest: open authenticated SSE drains before HTTP shutdown and immediately permits a backup
+ok 1 - open authenticated SSE drains before HTTP shutdown and immediately permits a backup # SKIP Requires the Linux backup adapter; native Windows backup acceptance remains blocked
+  ---
+  duration_ms: 1.418
+  type: 'test'
+  ...
+# Subtest: shutdown rejects SSE reconnects while preClose is running
+ok 2 - shutdown rejects SSE reconnects while preClose is running
+  ---
+  duration_ms: 685.735
+  type: 'test'
+  ...
+# Subtest: already-ended backpressured SSE transport remains reachable during shutdown
+ok 3 - already-ended backpressured SSE transport remains reachable during shutdown
+  ---
+  duration_ms: 409.2225
+  type: 'test'
+  ...
+# Subtest: mode control requires designated parent, session, CSRF and strict mode-only input
+ok 4 - mode control requires designated parent, session, CSRF and strict mode-only input
+  ---
+  duration_ms: 701.9702
+  type: 'test'
+  ...
+# Subtest: old worker, disabled root gate and stale status cannot be used to enable UI mode control
+ok 5 - old worker, disabled root gate and stale status cannot be used to enable UI mode control
+  ---
+  duration_ms: 375.3523
+  type: 'test'
+  ...
+# Subtest: queued and root-journal pending requests never optimistically change applied mode or overwrite requests
+ok 6 - queued and root-journal pending requests never optimistically change applied mode or overwrite requests
+  ---
+  duration_ms: 405.622
+  type: 'test'
+  ...
+# Subtest: root rejection is visible and a fresh request can be queued without changing effective mode
+ok 7 - root rejection is visible and a fresh request can be queued without changing effective mode
+  ---
+  duration_ms: 357.7525
+  type: 'test'
+  ...
+# Subtest: request publication is complete/private and wakes without overwriting a competing request
+ok 8 - request publication is complete/private and wakes without overwriting a competing request
+  ---
+  duration_ms: 500.0334
+  type: 'test'
+  ...
+# Subtest: queue collision preserves a symlink target and cleans temporary files
+ok 9 - queue collision preserves a symlink target and cleans temporary files # SKIP File symlink creation requires unapproved Windows privilege; Linux symlink and native junction guards remain required
+  ---
+  duration_ms: 0.338
+  type: 'test'
+  ...
+# Subtest: root request journal exposes only actual stages and prevents concurrent submissions while running
+ok 10 - root request journal exposes only actual stages and prevents concurrent submissions while running
+  ---
+  duration_ms: 385.327
+  type: 'test'
+  ...
+# Subtest: wake-link ENOSPC cannot report failure after an install request was published
+ok 11 - wake-link ENOSPC cannot report failure after an install request was published
+  ---
+  duration_ms: 372.2012
+  type: 'test'
+  ...
+# Subtest: expired authenticated work is visible as a matching terminal failure, not success or continuing work
+ok 12 - expired authenticated work is visible as a matching terminal failure, not success or continuing work
+  ---
+  duration_ms: 363.0146
+  type: 'test'
+  ...
+# Subtest: HTTP install echoes the displayed root identity in a private atomic queue and repeated clicks preserve it
+ok 13 - HTTP install echoes the displayed root identity in a private atomic queue and repeated clicks preserve it
+  ---
+  duration_ms: 615.7899
+  type: 'test'
+  ...
+# Subtest: GET-to-POST release and same-version asset races fail closed without queue or wake mutation
+ok 14 - GET-to-POST release and same-version asset races fail closed without queue or wake mutation
+  ---
+  duration_ms: 211.1637
+  type: 'test'
+  ...
+# Subtest: lost install response followed by reload and duplicate request retains the one durable target and request ID
+ok 15 - lost install response followed by reload and duplicate request retains the one durable target and request ID
+  ---
+  duration_ms: 230.1166
+  type: 'test'
+  ...
+# Subtest: older status and invalid root target remain readable but cannot silently queue an unbound install
+ok 16 - older status and invalid root target remain readable but cannot silently queue an unbound install
+  ---
+  duration_ms: 292.2726
+  type: 'test'
+  ...
+# Subtest: root target and journal expose only opaque identity, while unknown request keys are rejected
+ok 17 - root target and journal expose only opaque identity, while unknown request keys are rejected
+  ---
+  duration_ms: 214.1223
+  type: 'test'
+  ...
+# Subtest: failed target capability needs a fresh check and recovery barriers dominate even a matching target
+ok 18 - failed target capability needs a fresh check and recovery barriers dominate even a matching target
+  ---
+  duration_ms: 285.2207
+  type: 'test'
+  ...
+1..18
+# tests 18
+# suites 0
+# pass 16
+# fail 0
+# cancelled 0
+# skipped 2
+# todo 0
+# duration_ms 12756.611

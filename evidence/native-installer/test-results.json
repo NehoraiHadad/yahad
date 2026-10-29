@@ -1,0 +1,152 @@
+{
+  "platform": "Windows x64",
+  "kind": "synthetic-nonprivileged",
+  "passed": 36,
+  "failed": 0,
+  "tests": [
+    {
+      "name": "valid manifest and bytes",
+      "status": "PASS"
+    },
+    {
+      "name": "malformed JSON is a package diagnostic",
+      "status": "PASS"
+    },
+    {
+      "name": "reject unsafe path ../escape",
+      "status": "PASS"
+    },
+    {
+      "name": "reject unsafe path app/../../escape",
+      "status": "PASS"
+    },
+    {
+      "name": "reject unsafe path app/file:ads",
+      "status": "PASS"
+    },
+    {
+      "name": "reject unsafe path app/CON.txt",
+      "status": "PASS"
+    },
+    {
+      "name": "reject unsafe path app/LPT1",
+      "status": "PASS"
+    },
+    {
+      "name": "reject unsafe path app/folder./file",
+      "status": "PASS"
+    },
+    {
+      "name": "reject unsafe path app//file",
+      "status": "PASS"
+    },
+    {
+      "name": "reject unsafe path app/./file",
+      "status": "PASS"
+    },
+    {
+      "name": "reject unsafe path app/evil\\file",
+      "status": "PASS"
+    },
+    {
+      "name": "reject unsafe path /app/root",
+      "status": "PASS"
+    },
+    {
+      "name": "reject unsafe path data/family.sqlite",
+      "status": "PASS"
+    },
+    {
+      "name": "reject corrupt bytes",
+      "status": "PASS"
+    },
+    {
+      "name": "reject case collision",
+      "status": "PASS"
+    },
+    {
+      "name": "reject symlink entry",
+      "status": "PASS"
+    },
+    {
+      "name": "reject undeclared file",
+      "status": "PASS"
+    },
+    {
+      "name": "refuse production payload in slice",
+      "status": "PASS"
+    },
+    {
+      "name": "refuse unsupported architecture",
+      "status": "PASS"
+    },
+    {
+      "name": "stage and verify repeated run",
+      "status": "PASS"
+    },
+    {
+      "name": "cancel and resume preserves state",
+      "status": "PASS"
+    },
+    {
+      "name": "resume IO interruption after-journal",
+      "status": "PASS"
+    },
+    {
+      "name": "resume IO interruption before-publish",
+      "status": "PASS"
+    },
+    {
+      "name": "resume IO interruption after-publish",
+      "status": "PASS"
+    },
+    {
+      "name": "never replace changed published payload",
+      "status": "PASS"
+    },
+    {
+      "name": "refuse bundle change during resume",
+      "status": "PASS"
+    },
+    {
+      "name": "exclusive lock held by a separate process",
+      "status": "PASS"
+    },
+    {
+      "name": "refuse permissive session ACL",
+      "status": "PASS"
+    },
+    {
+      "name": "refuse junction ancestor",
+      "status": "PASS"
+    },
+    {
+      "name": "native argument quoting without shell",
+      "status": "PASS"
+    },
+    {
+      "name": "retain exact process exit status after early exit",
+      "status": "PASS"
+    },
+    {
+      "name": "job disposal kills child and grandchild",
+      "status": "PASS"
+    },
+    {
+      "name": "host crash closes job and kills descendants",
+      "status": "PASS"
+    },
+    {
+      "name": "private LAN address boundaries",
+      "status": "PASS"
+    },
+    {
+      "name": "multiple adapters require explicit current selection",
+      "status": "PASS"
+    },
+    {
+      "name": "occupied loopback port is a recoverable conflict",
+      "status": "PASS"
+    }
+  ]
+}

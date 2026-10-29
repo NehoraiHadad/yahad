@@ -1,4 +1,5 @@
 node_modules/
+/native/
 dist/
 data/
 .env

@@ -1,0 +1,26 @@
+{
+  "baseCheckpoint": "e3388c6e6f97dfa41d08c2bdba9dab2ffeb2731c",
+  "scope": [
+    "plaintext probe isolation and authenticated residue reconciliation",
+    "shared 4194304-byte encoded receipt preflight/read/write budget",
+    "10000 payload records plus one receipt artifact budget"
+  ],
+  "recoveryTests": 36,
+  "nativeTests": 81,
+  "actualStoreIntegration": true,
+  "nodeSha256": "1c331340fa6cac5e4294725959070a143fa0507195a78ad77eed7943f719aac9",
+  "compilerWarnings": 0,
+  "compilerErrors": 0,
+  "actualKilledBackupWorker": true,
+  "faults": [
+    "actual SQLite inspector exception",
+    "cancellation after private copy",
+    "exclusive residue file lock",
+    "corrupt ownership MAC",
+    "metadata-only versus unowned payload",
+    "actual 10001-file artifact accepted and 10002 refused"
+  ],
+  "legacyFixtureArtifactsAutomaticallyChanged": false,
+  "hostInstallation": false,
+  "activeDataOverwritten": false
+}
