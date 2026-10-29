@@ -49,6 +49,7 @@ internal sealed class NativeServiceInstall:IDisposable
                Marshal.PtrToStringUni(config.Image)!="\""+InstallLocations.ServiceImage+"\" --service")throw new IOException("SERVICE_NOT_OWNED");}
         finally{Marshal.FreeHGlobal(memory);}
     }
+    internal void RequireStopped(){RequireOwned();if(Status().State!=1)throw new IOException("SERVICE_NOT_QUIESCENT");}
     internal void EnableAutomaticStart()
     {
         RequireOwned();if(!ChangeServiceConfigW(service,0xffffffff,2,0xffffffff,null,null,IntPtr.Zero,null,null,null,null))throw new Win32Exception();

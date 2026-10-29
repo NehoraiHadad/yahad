@@ -63,6 +63,38 @@ await Check("user installer enables existing real connector; only explicit test 
  try{RuntimeConnectorSettings.For((RuntimeConnectorProfile)99);throw new Exception("unknown profile accepted");}catch(IOException){}
  return Task.CompletedTask;
 });
+await Check("preserved reinstall binds exact owner package activation and keys without rewriting data",async()=>
+{
+ var fixture=Package();var manifest=NativeJson.Read<InstallPackageManifest>(fixture.Manifest);
+ var id=Guid.NewGuid().ToString("N");var dataId=Guid.NewGuid().ToString("N");var records=new Dictionary<string,byte[]>();
+ string Put<T>(string name,T value){var bytes=JsonSerializer.SerializeToUtf8Bytes(value);records[name]=bytes;return Convert.ToHexStringLower(SHA256.HashData(bytes));}
+ string Raw(string name,string value){records[name]=Encoding.UTF8.GetBytes(value);return Convert.ToHexStringLower(SHA256.HashData(records[name]));}
+ var key=Raw("datasets/"+dataId+"/master-key","synthetic-key");var policy=Raw("datasets/"+dataId+"/update-policy","preserved-policy");var pin=Raw("datasets/"+dataId+"/update-pin","preserved-pin");
+ var intent=Put("owner-intent.json",new InstalledOwnerIntent(1,id,1,Guid.NewGuid().ToString("N"),manifest.PayloadDigest,dataId,"activate",owner.Sid,1,null));
+ var web=Put("web.json",new InstalledWeb(1,id,"http://127.0.0.1:47123",47123));
+ var anchor=Put("activation.json",new InstalledActivation(1,id,1,manifest.PayloadDigest,dataId,5,5,key,policy,pin,intent,web,"committed",null));
+ Put("epoch.json",new InstalledEpoch(1,id,1,anchor));Put("bootstrap.json",new{installationId=id,activationReceiptDigest=anchor});
+ Put("installation.json",new FirstInstallReceipt(2,id,dataId,manifest.PayloadDigest,"0.5.3",new string('a',64),47123,manifest.ZipSha256,"committed",new string('b',64)));
+ var state=new InstallerState(1,id,dataId,manifest.ZipSha256,manifest.PayloadDigest,manifest.SourceCommit,owner.Sid,47123,"uninstalled",manifest.Files,"S-1-5-80-1-2-3-4-5",owner.ImageSha256);
+ var before=records.ToDictionary(x=>x.Key,x=>Convert.ToHexStringLower(SHA256.HashData(x.Value)));
+ void Verify(InstallerState value,OwnerProcess principal)=>PreservedInstallation.Require(value,manifest,principal,name=>records[name]);
+ Verify(state,owner);Verify(state with{Phase="reinstalling"},owner);
+ Assert(before.All(x=>x.Value==Convert.ToHexStringLower(SHA256.HashData(records[x.Key]))));
+ foreach(var bad in new[]{state with{Phase="preparing"},state with{PackageDigest=new string('0',64)},state with{SourceCommit=new string('0',40)},state with{SetupSha256=new string('0',64)},state with{DataId=Guid.NewGuid().ToString("N")}})await Refuse(()=>{Verify(bad,owner);return Task.CompletedTask;});
+ await Refuse(()=>{Verify(state,owner with{Sid="S-1-5-21-9-8-7-1001"});return Task.CompletedTask;});
+ var old=records["epoch.json"];Put("epoch.json",new InstalledEpoch(1,id,2,anchor));await Refuse(()=>{Verify(state,owner);return Task.CompletedTask;});records["epoch.json"]=old;
+ records["datasets/"+dataId+"/master-key"]=Encoding.UTF8.GetBytes("changed");await Refuse(()=>{Verify(state,owner);return Task.CompletedTask;});
+ Assert(!records.ContainsKey("initial-seed.json")&&!records.ContainsKey("initial-retry.json"));
+});
+await Check("reinstall cached payload verification rejects changed missing and additional files",async()=>
+{
+ var root=Path.Combine(SafeDirectory.CreatePrivateSession(Path.GetTempPath()),"payload");Directory.CreateDirectory(root);var bytes=Encoding.UTF8.GetBytes("pinned-payload");var file=Path.Combine(root,"node.exe");File.WriteAllBytes(file,bytes);
+ var records=new[]{new InstallMember("payload/node.exe",bytes.Length,Convert.ToHexStringLower(SHA256.HashData(bytes)))};
+ PreservedInstallation.VerifyDirectory(root,records,"payload/");
+ File.WriteAllText(Path.Combine(root,"unexpected"),"keep");await Refuse(()=>{PreservedInstallation.VerifyDirectory(root,records,"payload/");return Task.CompletedTask;});File.Delete(Path.Combine(root,"unexpected"));
+ File.WriteAllText(file,"changed");await Refuse(()=>{PreservedInstallation.VerifyDirectory(root,records,"payload/");return Task.CompletedTask;});File.Delete(file);
+ await Refuse(()=>{PreservedInstallation.VerifyDirectory(root,records,"payload/");return Task.CompletedTask;});
+});
 using var f=await ProductionFixture.Create(node,repo,helper);
 await Check("real Store first startup creates schema5 only after one-use authorization",async()=>
 {

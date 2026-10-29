@@ -94,3 +94,27 @@ One-use deletion uses the Windows `BOOLEAN` file disposition structure:
 [FILE_DISPOSITION_INFO](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_disposition_info).
 Signing, full corresponding-source/transitive-license distribution review and
 actual host acceptance remain release gates; no signing keys are enrolled here.
+
+## Preserved-data reinstall
+
+Same-package reinstall accepts a protected `uninstalled` record or interrupted
+`reinstalling` record only for the original owner, identical full installer hash,
+source, package and selected payload. It verifies the existing receipt, activation,
+epoch, owner intent, key and policy/pin anchors plus the complete cached payload.
+It holds the actual exclusive data lease before recreating the stopped service
+and restoring binaries. It does not mint an initial grant or replace any database,
+key, update policy/pin or activation record. Missing/changed cache or identities
+require repair; a different version requires an upgrade flow. Interrupted reinstall
+can resume from its durable phase. Automatic startup is enabled after committed
+state, immediately before starting the service.
+
+`installer/windows/asus_fresh_test_preflight.ps1` is a read-only gate for this
+specific approved host test: it refuses any existing product root, service or
+process, even an apparently empty root. This stronger fresh-test restriction
+prevents reconnecting any pre-existing linked family or WhatsApp auth store.
+It is not a product restriction on reinstalling a legitimate existing family.
+No account is linked, no QR is scanned and no family setup is completed by the
+automated acceptance check.
+
+Synthetic checkpoint: 37 first-install cases and 45 service-host cases passed.
+These are not evidence of actual Windows SCM installation or OS-token acceptance.

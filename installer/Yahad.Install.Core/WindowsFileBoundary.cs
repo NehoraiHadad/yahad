@@ -185,26 +185,38 @@ public static class WindowsFileBoundary
     public static DataLease AcquireDataLease(string directory, int? ownerProcessId = null)
     {
         var installed=InstalledProcessState.ForPath(directory);if(installed is not null){if(ownerProcessId is not null)throw new IOException("INSTALLED_LEASE_REQUIRES_HOST_HANDOFF");return installed.Lease(directory);}
+        return AcquireDataLeaseFor(directory,ApplicationSid(),ownerProcessId);
+    }
+
+    public static DataLease AcquireInstallerDataLease(string directory,SecurityIdentifier application)
+    {
+        using var identity=WindowsIdentity.GetCurrent();
+        if(!new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator))throw new UnauthorizedAccessException("ADMIN_REQUIRED");
+        if(!application.Value.StartsWith("S-1-5-80-",StringComparison.Ordinal))throw new IOException("INSTALL_SERVICE_IDENTITY");
+        return AcquireDataLeaseFor(directory,application,null);
+    }
+    private static DataLease AcquireDataLeaseFor(string directory,SecurityIdentifier application,int? ownerProcessId)
+    {
         var pinned = Pin(directory, leafDirectory: true, readContents: false);
         SafeFileHandle? gate = null;
         try
         {
-            ValidateAcl(Security(pinned.Leaf), ApplicationSid(), false);
-            AssertPrivateTree(directory);
+            ValidateAcl(Security(pinned.Leaf), application, false);
+            AssertPrivateTree(directory,application);
             var lockPath = Path.Combine(directory, "process.lock");
             // OPEN_ALWAYS + OPEN_REPARSE_POINT: atomically create/open without following a final link.
             gate = Native.CreateFileW(Extended(lockPath), GenericRead | 0x40000000 | ReadControl, 0, IntPtr.Zero,
                 4, 0x00200000, IntPtr.Zero);
             if (gate.IsInvalid) throw new Win32Exception();
             CheckKind(gate, false);
-            ValidateAcl(Security(gate), ApplicationSid(), false);
+            ValidateAcl(Security(gate), application, false);
             var remote = ownerProcessId.HasValue ? new RemoteGate(gate, ownerProcessId.Value) : null;
             return new(pinned, gate, remote);
         }
         catch { gate?.Dispose(); pinned.Dispose(); throw; }
     }
 
-    private static void AssertPrivateTree(string root)
+    private static void AssertPrivateTree(string root,SecurityIdentifier? application=null)
     {
         var seen = 0;
         void Walk(string directory, int depth)
@@ -218,7 +230,7 @@ public static class WindowsFileBoundary
                 CanonicalName(child);
                 var isDirectory = (File.GetAttributes(child) & FileAttributes.Directory) != 0;
                 using var file = Open(child, isDirectory, false);
-                ValidateAcl(Security(file), ApplicationSid(), false);
+                ValidateAcl(Security(file), application??ApplicationSid(), false);
                 if (isDirectory) Walk(child, depth + 1);
             }
         }
