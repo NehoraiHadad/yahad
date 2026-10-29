@@ -14,11 +14,15 @@ export type LocalUpdateRequest = {
   previousModeId?: string;
 };
 
-const activePhases = new Set(['awaiting_local_approval','checking', 'downloading', 'verifying', 'building', 'preparing',
+const activePhases = new Set(['awaiting_runtime','starting_runtime','quiescing_runtime','awaiting_local_approval','checking', 'downloading', 'verifying', 'building', 'preparing',
   'stopping', 'backing_up', 'activating', 'checking_health', 'rolling_back']);
 const repairPhases = new Set(['recovery_required', 'rollback_pending_health']);
 const failedPhases = new Set(['failed', 'rolled_back', 'incompatible', 'recovery_required', 'rollback_pending_health']);
 export const updatePhases: Record<string, string> = {
+  awaiting_runtime: 'הגרסה מוכנה וממתינים להפעלת היישום',
+  starting_runtime: 'מפעילים ובודקים את היישום',
+  quiescing_runtime: 'ממתינים לסיום בטוח של התהליכים',
+  cancelled: 'הפעלת היישום בוטלה',
   awaiting_local_approval: 'ממתינים לאישור במחשב הביתי',
   idle: 'אין עדכון ממתין', available: 'גרסה חדשה זמינה', checking: 'בודקים גרסה חדשה ב־GitHub',
   downloading: 'מורידים את קובצי הגרסה', verifying: 'מאמתים את קובצי הגרסה',
@@ -99,6 +103,8 @@ export function updateProgress(data: ConfiguredUpdate, local: LocalUpdateRequest
     title: 'אין דיווח מצב מוכר מהשירות', action: undefined,
     detail: 'אין כרגע אישור להתקדמות, להצלחה או לכשל. נבדוק שוב את המצב בלבד, בלי לשלוח בקשת עדכון נוספת.' } as const;
 
+  if (data.phase === 'cancelled') return { kind: 'failure', active: false, title: updatePhases.cancelled, action: undefined,
+    detail: 'ההפעלה בוטלה לאחר סיום התהליכים. לא נשלחה בקשה נוספת באופן אוטומטי.' } as const;
   if (data.phase === 'awaiting_local_approval') return { kind: 'queued', active: true,
     title: updatePhases.awaiting_local_approval, action: undefined,
     detail: 'פתחו את כלי האישור של יחד במחשב הביתי כדי לבדוק ולאשר את הפעולה. הבקשה נשמרה; אין צורך לשלוח אותה שוב.' } as const;

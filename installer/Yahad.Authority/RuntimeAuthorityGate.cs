@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 using Yahad.Service;
+using Yahad.Install;
 namespace Yahad.Authority;
 
 internal sealed record RuntimeGeneration(string InstallationId,string ReleaseDigest,string Nonce,int ProcessId,long Created);
@@ -37,16 +38,10 @@ internal sealed class NativeRuntimeGateKernel(SafeFileHandle ownedJob,SafeProces
     public bool InOwnedJob(RuntimeGeneration generation)
     {if(!IsProcessInJob(retainedHost,ownedJob,out var inside))throw new Win32Exception();return inside;}
     public bool HostExited(RuntimeGeneration generation)=>WaitForSingleObject(retainedHost,0)==0;
-    public bool OwnedTreeEmpty()
-    {
-        var bytes=Marshal.AllocHGlobal(48);
-        try{if(!QueryInformationJobObject(ownedJob,1,bytes,48,out _))throw new Win32Exception();return Marshal.ReadInt32(bytes,36)==0;}
-        finally{Marshal.FreeHGlobal(bytes);}
-    }
+    public bool OwnedTreeEmpty()=>JobAccounting.Read(ownedJob).TreeEmpty;
     [DllImport("kernel32.dll",SetLastError=true)]private static extern bool AssignProcessToJobObject(SafeFileHandle job,SafeProcessHandle process);
     [DllImport("kernel32.dll",SetLastError=true)]private static extern bool IsProcessInJob(SafeProcessHandle process,SafeFileHandle job,out bool result);
     [DllImport("kernel32.dll",SetLastError=true)]private static extern uint WaitForSingleObject(SafeProcessHandle process,uint milliseconds);
-    [DllImport("kernel32.dll",SetLastError=true)]private static extern bool QueryInformationJobObject(SafeFileHandle job,int kind,IntPtr data,uint length,out uint returned);
 }
 
 internal sealed class GatedRuntimeStartAuthorizer(IServiceStartAuthorizer installed,RuntimeAuthorityGate gate,RuntimeGeneration generation):IServiceStartAuthorizer,IObservedAdmission

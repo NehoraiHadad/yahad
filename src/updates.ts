@@ -23,7 +23,7 @@ const statusSchema = z.object({
   lastRequest: z.object({id:z.uuid(),action:z.enum(['check','install']),state:z.enum(['running','succeeded','failed']),
     startedAt:z.number(),finishedAt:z.number().nullable(),error:updateError.or(z.literal('expired')).nullable(),target:visibleTargetSchema}).nullable().optional(),
   operator: z.object({ familyId: z.string().max(100), userId: z.string().max(100) }),
-  phase: z.enum(['awaiting_local_approval','idle','available','checking','preparing','downloading','verifying','building','stopping','backing_up','activating','checking_health','healthy','rolled_back','failed','incompatible','rolling_back','recovery_required','rollback_pending_health']),
+  phase: z.enum(['awaiting_runtime','starting_runtime','quiescing_runtime','cancelled','awaiting_local_approval','idle','available','checking','preparing','downloading','verifying','building','stopping','backing_up','activating','checking_health','healthy','rolled_back','failed','incompatible','rolling_back','recovery_required','rollback_pending_health']),
   currentVersion: z.string().max(40).nullable(), latestVersion: z.string().max(40).nullable(),
   installTarget: visibleTargetSchema,
   checkedAt: z.number().nullable(), updatedAt: z.number(),
@@ -71,7 +71,7 @@ export async function requestUpdate(config: Config, user: User, action: 'check' 
   // GET status remains readable; only the root worker's recovery path clears it.
   if (status.phase === 'recovery_required' || status.phase === 'rollback_pending_health') return 'unavailable';
   if(action==='set_mode'&&(!status.modeControlAllowed||!mode))return 'mode_locked';
-  if(status.phase==='awaiting_local_approval')return 'pending';
+  if(['awaiting_local_approval','awaiting_runtime','starting_runtime','quiescing_runtime'].includes(status.phase))return 'pending';
   if(status.lastModeRequest?.state==='pending')return 'pending';
   if(status.lastRequest?.state==='running')return 'pending';
   if(action==='install') {

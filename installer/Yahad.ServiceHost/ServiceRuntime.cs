@@ -53,6 +53,8 @@ internal sealed class ServiceController
     private readonly TaskCompletionSource stop=new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int terminal;
     private ProbeOwnershipException? unresolvedProbe;private Task<AuthorizedServiceStart>? unresolvedAuthorization;
+    private AppLifecycle? unresolvedLifecycle;private AuthorizedServiceStart? unresolvedGrant;
+    internal bool CleanupReconciliationRequired=>unresolvedAuthorization is not null||unresolvedProbe is not null||unresolvedLifecycle is not null||unresolvedGrant is not null;
     internal ServiceController(IServiceStartAuthorizer authorizer,TimeSpan? startDeadline=null,TimeSpan? lifecycleDeadline=null)
     {
         this.authorizer=authorizer;this.startDeadline=startDeadline??(authorizer is IObservedAdmission observed?observed.AdmissionBudget:TimeSpan.FromSeconds(25));
@@ -68,6 +70,8 @@ internal sealed class ServiceController
             catch when(pending.IsFaulted||pending.IsCanceled){_ =pending.Exception;unresolvedAuthorization=null;}
         }
         if(unresolvedProbe is { } probe){await probe.RetryCleanupAsync(cancellation);unresolvedProbe=null;}
+        if(unresolvedLifecycle is { } life){await life.DisposeAsync();unresolvedLifecycle=null;}
+        if(unresolvedAuthorization is null&&unresolvedProbe is null&&unresolvedLifecycle is null&&unresolvedGrant is { } grant){grant.Dispose();unresolvedGrant=null;}
     }
     internal uint Control(uint control)
     {
@@ -188,7 +192,9 @@ internal sealed class ServiceController
             }
             if(unresolvedAuthorization is not null){quiescent=false;failure=ServiceFailure.QuiescenceUnknown;}
             if(unresolvedProbe?.CleanupComplete==true)unresolvedProbe=null;
-            if(quiescent)grant?.Dispose();
+            if(!quiescent){unresolvedLifecycle=lifecycle;unresolvedGrant=grant;}
+            else if(grant is not null)
+            {try{grant.Dispose();}catch{unresolvedGrant=grant;quiescent=false;failure=ServiceFailure.QuiescenceUnknown;}}
             Volatile.Write(ref terminal,1);
         }
         if(quiescent)

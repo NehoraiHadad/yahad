@@ -59,3 +59,16 @@ test('native UI install button submits directly while legacy UI keeps its confir
   assert.match(source,/if \(requiresWebUpdateConfirmation\(configured\)\) setConfirm/);
   assert.match(source,/else void request\('install', undefined, installTarget\)/);
 });
+
+test('committed and starting runtime phases never reuse an old healthy result',async()=>{
+  for(const phase of ['awaiting_runtime','starting_runtime','quiescing_runtime']) {
+    const f=fixture();f.set({phase,lastRequest:{id:'11111111-1111-4111-8111-111111111111',action:'install',state:'succeeded',startedAt:1,finishedAt:2,error:null,target}});
+    const status=await updateStatus(config,user,f.transport);if(!status.configured)throw Error();
+    const p=updateProgress(status);assert.notEqual(p.kind,'success');assert.equal(p.active,true);
+    assert.equal(await requestUpdate(config,user,'check',undefined,undefined,f.transport),'pending');assert.equal(f.calls.length,0);
+  }
+});
+test('confirmed startup cancellation overrides a stale running journal',async()=>{
+  const f=fixture();f.set({phase:'cancelled',lastRequest:{id:'11111111-1111-4111-8111-111111111111',action:'install',state:'running',startedAt:1,finishedAt:null,error:null,target}});
+  const status=await updateStatus(config,user,f.transport);if(!status.configured)throw Error();assert.equal(updateProgress(status).kind,'failure');assert.equal(updateProgress(status).active,false);
+});

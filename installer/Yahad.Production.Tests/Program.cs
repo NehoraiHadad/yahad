@@ -456,7 +456,74 @@ await Check("concrete catalog request coordinator uses ledger gate writer and co
  var kernel=new FakeRuntimeKernel{Empty=true};var gate=new RuntimeAuthorityGate(kernel);gate.Admit(kernel.Generation);kernel.Exit=true;
  var coordinator=new AuthorityCoordinator(RuntimeSid,new(catalog),l,Writer(l),gate);
  var c=coordinator.Submit(runtimePeer,JsonSerializer.SerializeToUtf8Bytes(new AuthorityRequest(1,Guid.NewGuid().ToString("N"),"install",op.ReleaseDigest,null)))!;
- Assert(coordinator.Phase=="awaiting_local_approval");await Denied(()=>coordinator.CommitAsync());l.Approve(ownerPeer,new(1,c.Id,c.Digest,true));await coordinator.CommitAsync();Assert(coordinator.Phase=="healthy");using var grant=await f.Resolve();
+ Assert(coordinator.Phase=="awaiting_local_approval");await Denied(()=>coordinator.CommitAsync());l.Approve(ownerPeer,new(1,c.Id,c.Digest,true));await coordinator.CommitAsync();Assert(coordinator.Phase=="awaiting_runtime");using var grant=await f.Resolve();
+});
+
+
+await Check("shared typed job accounting reads active at 40 and ignores nonzero lifetime total",async()=>
+{
+ Assert(System.Runtime.InteropServices.Marshal.SizeOf<JobAccounting>()==48);
+ Assert(System.Runtime.InteropServices.Marshal.OffsetOf<JobAccounting>(nameof(JobAccounting.TotalProcesses)).ToInt32()==36);
+ Assert(System.Runtime.InteropServices.Marshal.OffsetOf<JobAccounting>(nameof(JobAccounting.ActiveProcesses)).ToInt32()==40);
+ Assert(new JobAccounting{TotalProcesses=17,ActiveProcesses=0}.TreeEmpty);
+ Assert(!new JobAccounting{TotalProcesses=17,ActiveProcesses=1}.TreeEmpty);
+ using var job=JobProcess.Start(node,["-e",""],f.Root,LaunchEnvironment.Clean(f.Root));await job.WaitAsync(default);await job.WaitForTreeEmptyAsync(default);
+ var actual=job.ObserveAccounting();Assert(actual.TotalProcesses>0&&actual.ActiveProcesses==0&&actual.TreeEmpty);
+});
+ProtectedOperation? selectedHealthOperation=null;
+AuthorityCoordinator HealthCoordinator(RuntimeHealthCoordinator health)
+{
+ PrepareState();var op=Operation();selectedHealthOperation=op;var l=Ledger();var catalog=SafeDirectory.CreatePrivateSession(f.Root);
+ File.WriteAllBytes(Path.Combine(catalog,op.ReleaseDigest+".json"),JsonSerializer.SerializeToUtf8Bytes(new CatalogOperation(1,op,Facts())));
+ var kernel=new FakeRuntimeKernel{Empty=true};var oldGate=new RuntimeAuthorityGate(kernel);oldGate.Admit(kernel.Generation);kernel.Exit=true;
+ var coordinator=new AuthorityCoordinator(RuntimeSid,new(catalog),l,Writer(l),oldGate,health);
+ var challenge=coordinator.Submit(runtimePeer,JsonSerializer.SerializeToUtf8Bytes(new AuthorityRequest(1,Guid.NewGuid().ToString("N"),"install",op.ReleaseDigest,null)))!;
+ l.Approve(ownerPeer,new(1,challenge.Id,challenge.Digest,true));return coordinator;
+}
+IServiceStartAuthorizer InstalledHealth(InstallationBinding binding)=>new InstalledBindingStartAuthorizer(f.CreateResolver(),binding);
+await Check("commit remains awaiting runtime until actual admitted Store health and holds its lease",async()=>
+{
+ var health=new RuntimeHealthCoordinator(InstalledHealth,TimeSpan.FromSeconds(10),TimeSpan.FromSeconds(5));var c=HealthCoordinator(health);f.ClearSignals();
+ await c.CommitAsync();Assert(c.Phase=="awaiting_runtime");await c.StartRuntimeAsync();
+ try{Assert(c.Phase=="healthy");await Denied(()=>{using var lease=WindowsFileBoundary.AcquireDataLease(f.Data);return Task.CompletedTask;});}
+ finally{await c.StopRuntimeAsync();}
+ Assert(c.Phase=="stopped"&&f.Control.HeldAfterClose);using var admitted=await f.Resolve();
+});
+foreach(var failure in new[]{"admission","start","health","timeout","wrong-release"})await Check("committed runtime refuses premature healthy after "+failure,async()=>
+{
+ var faults=new RuntimeHealthFaults(failure);var health=new RuntimeHealthCoordinator(b=>new FaultHealthAuthorizer(InstalledHealth(b),faults),TimeSpan.FromSeconds(10),TimeSpan.FromMilliseconds(100));
+ var c=HealthCoordinator(health);f.ClearSignals();await c.CommitAsync();await Denied(()=>c.StartRuntimeAsync());
+ Assert(c.Phase=="failed"&&!health.CleanupReconciliationRequired);using var lease=WindowsFileBoundary.AcquireDataLease(f.Data);
+ if(failure=="admission"||failure=="start"||failure=="wrong-release")Assert(faults.Starts==0);
+});
+await Check("cancellation during actual runtime health cleans ownership and never marks healthy",async()=>
+{
+ var faults=new RuntimeHealthFaults("cancel");var health=new RuntimeHealthCoordinator(b=>new FaultHealthAuthorizer(InstalledHealth(b),faults),TimeSpan.FromSeconds(10),TimeSpan.FromSeconds(5));
+ var c=HealthCoordinator(health);f.ClearSignals();await c.CommitAsync();using var cancelled=new CancellationTokenSource();var starting=c.StartRuntimeAsync(cancelled.Token);
+ await faults.HealthEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));cancelled.Cancel();await Denied(()=>starting);
+ Assert(c.Phase=="cancelled"&&!health.CleanupReconciliationRequired);using var lease=WindowsFileBoundary.AcquireDataLease(f.Data);
+});
+await Check("uncertain health cleanup retains actual session and data grant until observed retry",async()=>
+{
+ var faults=new RuntimeHealthFaults("timeout"){DenyCleanup=true};var health=new RuntimeHealthCoordinator(b=>new FaultHealthAuthorizer(InstalledHealth(b),faults),TimeSpan.FromSeconds(10),TimeSpan.FromMilliseconds(100));
+ var c=HealthCoordinator(health);f.ClearSignals();await c.CommitAsync();await Denied(()=>c.StartRuntimeAsync());
+ Assert(c.Phase=="recovery_required"&&health.CleanupReconciliationRequired);await Denied(()=>{using var lease=WindowsFileBoundary.AcquireDataLease(f.Data);return Task.CompletedTask;});
+ faults.DenyCleanup=false;await c.RetryRuntimeCleanupAsync();Assert(c.Phase=="failed"&&!health.CleanupReconciliationRequired);using var lease=WindowsFileBoundary.AcquireDataLease(f.Data);
+});
+await Check("late admission after timeout remains owned and explicitly releases its eventual grant",async()=>
+{
+ var late=new LateHealthAuthorizer();var health=new RuntimeHealthCoordinator(_=>late,TimeSpan.FromMilliseconds(40),TimeSpan.FromMilliseconds(40),TimeSpan.FromMilliseconds(350));
+ var c=HealthCoordinator(health);await c.CommitAsync();await Denied(()=>c.StartRuntimeAsync());Assert(c.Phase=="recovery_required"&&health.CleanupReconciliationRequired);
+ var observed=new DisposalObservation();late.Result.SetResult(new(new(Operation().ReleaseDigest),new NeverHealthLauncher(),new PassHealthBarrier(),observed));
+ await c.RetryRuntimeCleanupAsync();Assert(observed.Disposed&&c.Phase=="failed"&&!health.CleanupReconciliationRequired);
+});
+await Check("interrupted commit reconciliation still awaits real new-runtime health",async()=>
+{
+ var health=new RuntimeHealthCoordinator(InstalledHealth,TimeSpan.FromSeconds(10),TimeSpan.FromSeconds(5));var c=HealthCoordinator(health);
+ var selected=selectedHealthOperation??throw new Exception("no selected operation");
+ // Use the same concrete operation and ledger as the coordinator; simulate interrupted publication.
+ await Denied(()=>Writer(Ledger()).CommitAsync(selected,p=>{if(p=="record-web.json")throw new IOException("interrupt");}));
+ Approve(Ledger(),selected,true);await c.ReconcileAsync();Assert(c.Phase=="awaiting_runtime");f.ClearSignals();await c.StartRuntimeAsync();Assert(c.Phase=="healthy");await c.StopRuntimeAsync();
 });
 
 if(preparedPayload is not null)await Check("exact rebuilt full payload passes installed release and runtime admission without app launch",async()=>
@@ -629,3 +696,39 @@ internal sealed class FakePeerApi(AuthorityPeer peer):IAuthorityPeerApi
  public AuthorityPeer ThreadIdentity(int p,long c){if(ThrowIdentity)throw new IOException("synthetic token failure");return peer;}
  public bool Revert(){Reverts++;return RevertAllowed;}private sealed class Noop:IDisposable{public void Dispose(){}}
 }
+
+internal sealed class RuntimeHealthFaults(string mode)
+{
+ internal string Mode=mode;internal bool DenyCleanup;internal int Starts;
+ internal TaskCompletionSource HealthEntered=new(TaskCreationOptions.RunContinuationsAsynchronously);
+}
+internal sealed class FaultHealthAuthorizer(IServiceStartAuthorizer inner,RuntimeHealthFaults faults):IServiceStartAuthorizer
+{
+ public async Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)
+ {
+  if(faults.Mode=="admission")throw new ServiceStartDenied(ServiceFailure.ActivationUnavailable);
+  var grant=await inner.AuthorizeAsync(cancellation);return new(faults.Mode=="wrong-release"?new(new string('0',64)):grant.Release,new Launcher(grant.Launcher,faults),grant.Recovery,grant);
+ }
+ private sealed class Launcher(IPrivateAppLauncher inner,RuntimeHealthFaults faults):IPrivateAppLauncher
+ {
+  public async Task<IContainedAppSession> StartAsync(AppRelease release,CancellationToken cancellation)
+  {if(faults.Mode=="start")throw new IOException("INJECTED_START_FAILURE");faults.Starts++;return new Session(await inner.StartAsync(release,cancellation),faults);}
+  public async Task WaitForHealthyAsync(IContainedAppSession session,CancellationToken cancellation)
+  {faults.HealthEntered.TrySetResult();if(faults.Mode=="health")throw new IOException("INJECTED_HEALTH_FAILURE");if(faults.Mode is "timeout" or "cancel")await Task.Delay(Timeout.Infinite,cancellation);else await inner.WaitForHealthyAsync(((Session)session).Inner,cancellation);}
+ }
+ private sealed class Session(IContainedAppSession inner,RuntimeHealthFaults faults):IContainedAppSession
+ {
+  internal IContainedAppSession Inner=>inner;
+  public Task RequestGracefulStopAsync(CancellationToken cancellation)=>inner.RequestGracefulStopAsync(cancellation);
+  public Task<int> WaitForRootExitAsync(CancellationToken cancellation)=>inner.WaitForRootExitAsync(cancellation);
+  public Task WaitForTreeEmptyAsync(CancellationToken cancellation)=>inner.WaitForTreeEmptyAsync(cancellation);
+  public async Task TerminateAndWaitForTreeEmptyAsync(CancellationToken cancellation){await inner.TerminateAndWaitForTreeEmptyAsync(cancellation);if(faults.DenyCleanup)throw new IOException("INJECTED_CLEANUP_OBSERVATION_UNKNOWN");}
+  public ValueTask DisposeAsync(){if(faults.DenyCleanup)throw new IOException("INJECTED_DISPOSAL_DENIED");return inner.DisposeAsync();}
+ }
+}
+internal sealed class LateHealthAuthorizer:IServiceStartAuthorizer
+{internal TaskCompletionSource<AuthorizedServiceStart> Result=new(TaskCreationOptions.RunContinuationsAsynchronously);public Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken c)=>Result.Task;}
+internal sealed class DisposalObservation:IDisposable{internal bool Disposed;public void Dispose(){Disposed=true;}}
+internal sealed class NeverHealthLauncher:IPrivateAppLauncher
+{public Task<IContainedAppSession> StartAsync(AppRelease r,CancellationToken c)=>throw new Exception("cancelled admission launched a process");public Task WaitForHealthyAsync(IContainedAppSession s,CancellationToken c)=>throw new Exception("no session expected");}
+internal sealed class PassHealthBarrier:IAppRecoveryBarrier{public Task RequireStartAllowedAsync(AppRelease r,CancellationToken c)=>Task.CompletedTask;}

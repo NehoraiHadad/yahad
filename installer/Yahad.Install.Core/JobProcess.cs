@@ -31,6 +31,7 @@ public sealed class JobProcess : IDisposable
     private readonly SafeProcessHandle process;
     private readonly JobProcessFaultInjection? fault;
     public int ProcessId { get; }
+    internal JobAccounting ObserveAccounting()=>JobAccounting.Read(job);
     private JobProcess(SafeFileHandle job, SafeProcessHandle process, int id,JobProcessFaultInjection? fault)
     { this.job = job; this.process = process; ProcessId = id;this.fault=fault; }
 
@@ -123,9 +124,8 @@ public sealed class JobProcess : IDisposable
         {
             cancellation.ThrowIfCancellationRequested();
             if(fault?.TreeObservationUnavailable==true)throw new IOException("INJECTED_TREE_OBSERVATION_UNAVAILABLE");
-            if (!Native.QueryInformationJobObject(job, 1, out var accounting,
-                    (uint)Marshal.SizeOf<BasicAccounting>(), IntPtr.Zero)) throw new Win32Exception();
-            if (accounting.ActiveProcesses == 0){if(fault is not null)fault.TreeEmptyObserved=true;return;}
+            var accounting=JobAccounting.Read(job);
+            if (accounting.TreeEmpty){if(fault is not null)fault.TreeEmptyObserved=true;return;}
             await Task.Delay(20, cancellation).ConfigureAwait(false);
         }
     }
@@ -154,11 +154,6 @@ public sealed class JobProcess : IDisposable
         return b.Append('\\', slashes * 2).Append('"').ToString();
     }
 
-    [StructLayout(LayoutKind.Sequential)] private struct BasicAccounting
-    {
-        public long TotalUser, TotalKernel, PeriodUser, PeriodKernel;
-        public uint PageFaults, TotalProcesses, ActiveProcesses, TerminatedProcesses;
-    }
     [StructLayout(LayoutKind.Sequential)] private struct BasicLimit
     {
         public long ProcessTime, JobTime;
@@ -195,9 +190,6 @@ public sealed class JobProcess : IDisposable
         internal static extern bool CreateProcessW(string app, StringBuilder command, IntPtr processAttributes,
             IntPtr threadAttributes, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint flags, IntPtr environment,
             string directory, ref StartupInfo startup, out ProcessInfo process);
-        [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
-        internal static extern bool QueryInformationJobObject(SafeFileHandle job, int kind,
-            out BasicAccounting information, uint length, IntPtr returnedLength);
         [DllImport("kernel32.dll", SetLastError = true)] internal static extern uint ResumeThread(IntPtr thread);
         [DllImport("kernel32.dll", SetLastError = true)] internal static extern uint WaitForSingleObject(SafeProcessHandle process, uint milliseconds);
         [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]

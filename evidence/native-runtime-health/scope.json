@@ -1,0 +1,19 @@
+{
+  "sourceBase": "499c6776d7215424240e5bcddd92ca3dfeae0f5b",
+  "integrationPassed": 107,
+  "servicePassed": 45,
+  "webPassed": 54,
+  "webSkipped": 1,
+  "webSkip": "Existing Windows symlink-privilege test, not attempted",
+  "typescriptTypecheckPassed": true,
+  "productionWebBuildPassed": true,
+  "actualPrivateStoreAndJobs": true,
+  "syntheticAuthorization": true,
+  "readOnlyHostInventory": true,
+  "featureReadBlocked": "OS administrator elevation required; not retried with UAC",
+  "vmAvailabilityVerified": false,
+  "scmInvoked": false,
+  "pipeListenerCreated": false,
+  "impersonationCalled": false,
+  "productionEnabled": false
+}
