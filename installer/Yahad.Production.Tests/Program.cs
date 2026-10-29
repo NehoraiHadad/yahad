@@ -128,6 +128,38 @@ await Check("unobserved "+missing+" after failed handoff retains session and res
     }
     using var released=WindowsFileBoundary.AcquireDataLease(f.Data);
 });
+foreach(var missing in new[]{"root","tree"})
+await Check("actual admission SQLite probe retains reservation when "+missing+" observation is unavailable",async()=>
+{
+    f.Reset();var fault=new JobProcessFaultInjection{FailAfterHandoff=true,RootObservationUnavailable=missing=="root",TreeObservationUnavailable=missing=="tree"};
+    var controller=new ServiceController(new ProbeAuthorization(f,fault));var reports=new List<ServiceReport>();
+    var result=await controller.RunAsync(reports.Add);
+    Assert(result.Failure==ServiceFailure.QuiescenceUnknown&&!result.QuiescenceConfirmed&&!reports.Any(r=>r.State is ServiceState.Running or ServiceState.Stopped));
+    try{using var wrong=WindowsFileBoundary.AcquireDataLease(f.Data);throw new Exception("probe reservation released");}catch(Win32Exception e)when(e.NativeErrorCode==32){}
+    fault.RootObservationUnavailable=false;fault.TreeObservationUnavailable=false;
+    using var bound=new CancellationTokenSource(TimeSpan.FromSeconds(5));await controller.RetryAdmissionCleanupAsync(bound.Token);
+    Assert(fault.RootExitObserved&&fault.TreeEmptyObserved);using var released=WindowsFileBoundary.AcquireDataLease(f.Data);
+});
+await Check("actual recovery probe failure retains recovery lease and private scratch until observed retry",async()=>
+{
+    f.Reset();f.ClearSignals();var fault=new JobProcessFaultInjection{FailAfterHandoff=true,TreeObservationUnavailable=true};
+    using var empty=JobProcess.Start(node,["-e",""],f.Root,LaunchEnvironment.Clean(f.Root));await empty.WaitAsync(default);await empty.WaitForTreeEmptyAsync(default);
+    var inspector=new NativeSqliteInspector(node,ProductionFixture.Hash(File.ReadAllBytes(node)),fault);var recovery=await NativeRecoveryFixture.OpenAsync(f.Dataset,empty,inspector);ProbeOwnershipException? owned=null;
+    try
+    {
+        try{await recovery.BackupAsync();throw new Exception("unknown probe accepted");}catch(ProbeOwnershipException error){owned=error;}
+        await Reject(()=>{recovery.Dispose();return Task.CompletedTask;},"RECOVERY_PROBE_QUIESCENCE_UNCONFIRMED");
+        await Reject(()=>{inspector.Dispose();return Task.CompletedTask;},"RECOVERY_PROBE_QUIESCENCE_UNCONFIRMED");
+        try{using var wrong=WindowsFileBoundary.AcquireDataLease(f.Data);throw new Exception("recovery lease released");}catch(Win32Exception e)when(e.NativeErrorCode==32){}
+        Assert(Directory.GetFiles(Path.Combine(f.Dataset,".recovery-probes"),"app.sqlite",SearchOption.AllDirectories).Length==1);
+    }
+    finally
+    {
+        fault.TreeObservationUnavailable=false;if(owned is not null){using var bound=new CancellationTokenSource(TimeSpan.FromSeconds(5));await owned.RetryCleanupAsync(bound.Token);}
+        recovery.Dispose();inspector.Dispose();
+    }
+    Assert(!Directory.GetFiles(Path.Combine(f.Dataset,".recovery-probes"),"app.sqlite",SearchOption.AllDirectories).Any());using var released=WindowsFileBoundary.AcquireDataLease(f.Data);
+});
 NativeBackupResult? backup=null;NativeRestoreResult? restored=null;
 await Check("actual recovery output is verified but cannot start before protected commit",async()=>
 {
@@ -272,7 +304,7 @@ internal sealed class ProductionFixture:IDisposable
         Write("epoch.json",new InstalledEpoch(1,InstallationId,AnchorEpoch,AnchorDigest??head));
     }
     internal InstallationBinding Binding=>new(InstallationId,Hash(File.ReadAllBytes(PathOf("activation.json"))));
-    internal InstalledActivationResolver CreateResolver()=>new(Root,new PrivateControlFiles(),Control,()=>Now);
+    internal InstalledActivationResolver CreateResolver(JobProcessFaultInjection? fault=null)=>new(Root,new PrivateControlFiles(),Control,()=>Now,fault);
     internal Task<AuthorizedServiceStart> Resolve(CancellationToken cancellation=default)=>CreateResolver().ResolveAsync(Binding,cancellation);
     private async Task Seed(string node)
     {
@@ -304,4 +336,11 @@ internal sealed class StartReservation(WindowsFileBoundary.DataLease lease,JobPr
 {
     internal WindowsFileBoundary.DataLease Lease=>lease;internal bool Released;
     public void Dispose(){if(Released)return;if(!fault.RootExitObserved||!fault.TreeEmptyObserved)throw new Exception("reservation release before native exit observations");lease.Dispose();Released=true;}
+}
+
+internal sealed class ProbeAuthorization(ProductionFixture fixture,JobProcessFaultInjection fault):IServiceStartAuthorizer,IObservedAdmission
+{
+    private readonly InstalledActivationResolver resolver=fixture.CreateResolver(fault);public TimeSpan AdmissionBudget=>resolver.AdmissionBudget;
+    public event Action? ObservedWork{add=>resolver.ObservedWork+=value;remove=>resolver.ObservedWork-=value;}
+    public Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)=>Task.Run(()=>resolver.ResolveAsync(fixture.Binding,cancellation),cancellation);
 }

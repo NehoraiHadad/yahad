@@ -7,7 +7,7 @@ namespace Yahad.Install;
 public sealed class NativeSqliteInspector : IDisposable
 {
     private readonly string node;
-    private readonly FileStream pinned;
+    private readonly FileStream pinned;private ProbeOwnershipException? pending;private readonly JobProcessFaultInjection? fault;
     private const string Script = """
         const {DatabaseSync}=require('node:sqlite');
         const fs=require('node:fs');
@@ -21,35 +21,20 @@ public sealed class NativeSqliteInspector : IDisposable
           fs.writeFileSync(process.argv[2],JSON.stringify({schema:versions[0].version}),{flag:'wx',mode:0o600});
         } finally {db.close();}
         """;
-    public NativeSqliteInspector(string privateNode, string expectedSha256)
-    {
+    public NativeSqliteInspector(string privateNode,string expectedSha256):this(privateNode,expectedSha256,null){}
+    internal NativeSqliteInspector(string privateNode,string expectedSha256,JobProcessFaultInjection? fault)
+    {this.fault=fault;
         node=Path.GetFullPath(privateNode); SafeDirectory.NoReparseAncestors(node);
         pinned=new FileStream(node,FileMode.Open,FileAccess.Read,FileShare.Read);
         if(Convert.ToHexStringLower(SHA256.HashData(pinned))!=expectedSha256)
         { pinned.Dispose();throw new IOException("RECOVERY_NODE_IDENTITY"); }
     }
-    public async Task<int> InspectAsync(string database, string privateScratch, CancellationToken cancellation)
+    public async Task<int> InspectAsync(string database,string privateScratch,CancellationToken cancellation)
     {
+        if(pending is not null)throw new IOException("RECOVERY_PROBE_PENDING");
         var output=Path.Combine(privateScratch,"sqlite-observation-"+Guid.NewGuid().ToString("N")+".json");
-        using var job=JobProcess.Start(node,["-e",Script,database,output],privateScratch,LaunchEnvironment.Clean(privateScratch));
-        try
-        {
-            using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancellation);deadline.CancelAfter(TimeSpan.FromSeconds(30));
-            if(await job.WaitAsync(deadline.Token)!=0)throw new IOException("RECOVERY_SQLITE_REFUSED");
-            await job.WaitForTreeEmptyAsync(deadline.Token);
-            using var file=WindowsFileBoundary.OpenPrivateRead(output);
-            using var json=JsonDocument.Parse(file.Small(4096));
-            var schema=json.RootElement.GetProperty("schema").GetInt32();
-            if(schema<1||schema>100000)throw new IOException("RECOVERY_SCHEMA_BOUND");
-            return schema;
-        }
-        catch
-        {
-            using var cleanup=new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            await job.TerminateAndWaitForTreeEmptyAsync(cleanup.Token);
-            throw;
-        }
-        finally { if(File.Exists(output))File.Delete(output); }
+        try{return await SqliteProbeProcess.ReadAsync(node,Script,database,privateScratch,output,TimeSpan.FromSeconds(30),cancellation,fault);}
+        catch(ProbeOwnershipException owned){pending=owned;owned.KeepAlive(this);owned.AfterCleanup(()=>pending=null);throw;}
     }
-    public void Dispose()=>pinned.Dispose();
+    public void Dispose(){if(pending is not null&&!pending.QuiescenceConfirmed)throw new IOException("RECOVERY_PROBE_QUIESCENCE_UNCONFIRMED");pinned.Dispose();}
 }

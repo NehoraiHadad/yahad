@@ -29,10 +29,10 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
     public event Action? ObservedWork;
     internal static string StateRoot=>Path.GetDirectoryName(WindowsInstallationReader.DescriptorPath)!;
     private readonly string root;private readonly IInstalledControlFiles control;private readonly IChildControlFactory channels;
-    private readonly Func<DateTimeOffset> clock;
+    private readonly Func<DateTimeOffset> clock;private readonly JobProcessFaultInjection? probeFault;
     internal InstalledActivationResolver():this(StateRoot,new AdminInstalledControlFiles(),new LocalChildControlFactory(),()=>DateTimeOffset.UtcNow){}
-    internal InstalledActivationResolver(string root,IInstalledControlFiles control,IChildControlFactory channels,Func<DateTimeOffset> clock)
-    {this.root=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(root));this.control=control;this.channels=channels;this.clock=clock;}
+    internal InstalledActivationResolver(string root,IInstalledControlFiles control,IChildControlFactory channels,Func<DateTimeOffset> clock,JobProcessFaultInjection? probeFault=null)
+    {this.root=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(root));this.control=control;this.channels=channels;this.clock=clock;this.probeFault=probeFault;}
     public async Task<AuthorizedServiceStart> ResolveAsync(InstallationBinding binding,CancellationToken cancellation)
     {
         var last=System.Diagnostics.Stopwatch.GetTimestamp();
@@ -77,7 +77,7 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
             reservation.VerifyPayload(payload,payloadManifest);
             var node=Path.Combine(payload,"runtime","node","node.exe");var temporary=Path.Combine(root,"temporary");
             reservation.Hold(WindowsFileBoundary.PinPrivateDirectory(temporary));
-            var schema=await FrozenAdmissionSchema.ReadAsync(node,Path.Combine(reservation.Data,"app.sqlite"),temporary,cancellation);
+            var schema=await FrozenAdmissionSchema.ReadAsync(node,Path.Combine(reservation.Data,"app.sqlite"),temporary,cancellation,probeFault);
             if(schema<head.MinimumSchema||schema>head.MaximumSchema||schema>reservation.PayloadSchema||head.MaximumSchema!=reservation.PayloadSchema)throw new IOException("INSTALLED_SCHEMA_INCOMPATIBLE");
             if(head.Recovery is { } recovered)
             {
@@ -101,6 +101,7 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
                 Path.Combine(payload,"runtime","ffmpeg","ffmpeg.exe"),environment,reservation.Lease,reservation.BeginMutableStart);
             return new(new(head.ReleaseDigest),new ServiceProcessLauncher(spec,channels),reservation,reservation);
         }
+        catch(ProbeOwnershipException owned){owned.Retain(reservation);throw;}
         catch{reservation.Dispose();throw;}
     }
     internal static string Hash(byte[] bytes)=>Convert.ToHexStringLower(SHA256.HashData(bytes));

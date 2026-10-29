@@ -95,6 +95,7 @@ internal sealed class SignedFixtureAdmissionResolver(string root,JobProcess reta
             var view=new ReadOnlyAdmissionView(release.ReleaseId,schema,state,Child(reservation.Root,container+"/master-key"),node,Child(reservation.Root,"payload/"+release.Entry),tree);
             return new(new(release.ReleaseId),launcherFactory.Create(view),reservation,reservation);
         }
+        catch(ProbeOwnershipException owned){owned.Retain(reservation);throw;}
         catch{reservation.Dispose();throw;}
     }
     internal static string Hash(byte[] bytes)=>Convert.ToHexStringLower(SHA256.HashData(bytes));

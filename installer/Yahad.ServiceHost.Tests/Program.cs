@@ -81,7 +81,7 @@ await Check("noncooperative read-only recovery barrier times out without launchi
 await Check("authorization returning after cancellation has its resources revoked",async()=>
 {
     var app=new FakeApp();var resource=new RevokedResource();var late=new LateAuthorization();var controller=new ServiceController(late);var reports=new List<ServiceReport>();var running=controller.RunAsync(reports.Add);
-    controller.Control(ServiceDefinition.Stop);await running.WaitAsync(TimeSpan.FromSeconds(3));late.Completion.TrySetResult(new(new("late"),app,app,resource));
+    controller.Control(ServiceDefinition.Stop);await running.WaitAsync(TimeSpan.FromSeconds(3));late.Completion.TrySetResult(new(new("late"),app,app,resource));await controller.RetryAdmissionCleanupAsync(default);
     await resource.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(3));Assert(app.Calls.Count==0&&!reports.Any(r=>r.State==ServiceState.Running));
 });
 await Check("normal lifecycle reports real milestones and graceful stop before STOPPED",async()=>

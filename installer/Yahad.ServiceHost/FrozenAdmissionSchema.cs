@@ -19,18 +19,9 @@ internal static class FrozenAdmissionSchema
           fs.writeFileSync(process.argv[2],JSON.stringify({schema:version[0].version}),{flag:'wx',mode:0o600});
         }finally{db.close();}
         """;
-    internal static async Task<int> ReadAsync(string node,string database,string privateTemporary,CancellationToken cancellation)
+    internal static Task<int> ReadAsync(string node,string database,string privateTemporary,CancellationToken cancellation,JobProcessFaultInjection? fault=null)
     {
         var output=Path.Combine(privateTemporary,"admission-schema-"+Guid.NewGuid().ToString("N")+".json");
-        using var job=JobProcess.Start(node,["-e",Script,database,output],privateTemporary,LaunchEnvironment.Clean(privateTemporary));
-        try
-        {
-            using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancellation);deadline.CancelAfter(TimeSpan.FromSeconds(20));
-            if(await job.WaitAsync(deadline.Token)!=0)throw new IOException("ADMISSION_SQLITE_REFUSED");await job.WaitForTreeEmptyAsync(deadline.Token);
-            using var read=WindowsFileBoundary.OpenPrivateRead(output);using var json=JsonDocument.Parse(read.Small(1024));
-            var schema=json.RootElement.GetProperty("schema").GetInt32();if(schema<1||schema>100000)throw new IOException("ADMISSION_SCHEMA_BOUND");return schema;
-        }
-        catch{using var cleanup=new CancellationTokenSource(TimeSpan.FromSeconds(5));await job.TerminateAndWaitForTreeEmptyAsync(cleanup.Token);throw;}
-        finally{if(File.Exists(output))File.Delete(output);}
+        return SqliteProbeProcess.ReadAsync(node,Script,database,privateTemporary,output,TimeSpan.FromSeconds(20),cancellation,fault);
     }
 }

@@ -52,11 +52,22 @@ internal sealed class ServiceController
     private readonly TimeSpan startDeadline,lifecycleDeadline;
     private readonly TaskCompletionSource stop=new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int terminal;
+    private ProbeOwnershipException? unresolvedProbe;private Task<AuthorizedServiceStart>? unresolvedAuthorization;
     internal ServiceController(IServiceStartAuthorizer authorizer,TimeSpan? startDeadline=null,TimeSpan? lifecycleDeadline=null)
     {
         this.authorizer=authorizer;this.startDeadline=startDeadline??(authorizer is IObservedAdmission observed?observed.AdmissionBudget:TimeSpan.FromSeconds(25));
         this.lifecycleDeadline=lifecycleDeadline??TimeSpan.FromSeconds(20);
         if(this.startDeadline<=TimeSpan.Zero||this.startDeadline>(authorizer is IObservedAdmission?TimeSpan.FromMinutes(5):TimeSpan.FromSeconds(30))||this.lifecycleDeadline<=TimeSpan.Zero||this.lifecycleDeadline>TimeSpan.FromSeconds(30))throw new ArgumentOutOfRangeException();
+    }
+    internal async Task RetryAdmissionCleanupAsync(CancellationToken cancellation)
+    {
+        if(unresolvedAuthorization is { } pending)
+        {
+            try{var late=await pending.WaitAsync(cancellation);late.Dispose();unresolvedAuthorization=null;}
+            catch(ProbeOwnershipException owned){unresolvedProbe=owned;unresolvedAuthorization=null;}
+            catch when(pending.IsFaulted||pending.IsCanceled){_ =pending.Exception;unresolvedAuthorization=null;}
+        }
+        if(unresolvedProbe is { } probe){await probe.RetryCleanupAsync(cancellation);unresolvedProbe=null;}
     }
     internal uint Control(uint control)
     {
@@ -120,7 +131,18 @@ internal sealed class ServiceController
             catch
             {
                 // Revoke late results; an authorizer may pin files, never start processes.
-                _=authorization.ContinueWith(t=>{if(t.Status==TaskStatus.RanToCompletion)t.Result.Dispose();else _=t.Exception;},TaskScheduler.Default);
+                // Let cooperative cancellation settle briefly. If it has not
+                // settled, retain the task: it may still own a probe/reservation.
+                if(!authorization.IsCompleted)await Task.WhenAny(authorization,Task.Delay(250));
+                if(authorization.IsCompletedSuccessfully)
+                {unresolvedAuthorization=authorization;authorization.Result.Dispose();unresolvedAuthorization=null;}
+                else if(authorization.IsCompleted)
+                {
+                    try{authorization.GetAwaiter().GetResult();}
+                    catch(ProbeOwnershipException){throw;}
+                    catch{_ =authorization.Exception;}
+                }
+                else{unresolvedAuthorization=authorization;quiescent=false;}
                 throw;
             }
             start.Token.ThrowIfCancellationRequested();Pending(ServiceState.StartPending);
@@ -136,6 +158,8 @@ internal sealed class ServiceController
             {failure=ServiceFailure.UnexpectedExit;try{await tracked.Exit;}catch{}}
             else await lifecycle.StopAsync();
         }
+        catch(ProbeOwnershipException owned)
+        {unresolvedProbe=owned;lifecycle=AppLifecycle.RetainFailedAdmission(owned.OwnedSession);failure=ServiceFailure.StartFailed;}
         catch(ServiceStartDenied denied){failure=denied.Failure;}
         catch(OperationCanceledException)
         {
@@ -162,6 +186,8 @@ internal sealed class ServiceController
                     try{await lifecycle.DisposeAsync();}catch{quiescent=false;failure=ServiceFailure.QuiescenceUnknown;}
                 }
             }
+            if(unresolvedAuthorization is not null){quiescent=false;failure=ServiceFailure.QuiescenceUnknown;}
+            if(unresolvedProbe?.CleanupComplete==true)unresolvedProbe=null;
             if(quiescent)grant?.Dispose();
             Volatile.Write(ref terminal,1);
         }

@@ -64,7 +64,7 @@ public sealed class NativeRecoveryFixture : IDisposable
     private readonly WindowsFileBoundary.PrivateReadLease keyFile,policyFile,pinFile;
     private readonly byte[] encryption,authentication;
     private readonly SemaphoreSlim serial=new(1,1);
-    private bool disposed;
+    private bool disposed;private ProbeOwnershipException? pendingProbe;private string? pendingProbeScratch;
     public int ReconciledProbeResidues { get; private set; }
     private string ProbeRoot=>Path.Combine(root,".recovery-probes");
     private NativeRecoveryFixture(string root,string data,JobProcess job,NativeSqliteInspector inspector,
@@ -304,7 +304,8 @@ public sealed class NativeRecoveryFixture : IDisposable
             fault?.Invoke("probe-copy-complete");cancellation.ThrowIfCancellationRequested();
             return await inspector.InspectAsync(copied,scratch,cancellation);
         }
-        finally {CleanupProbe(scratch);}
+        catch(ProbeOwnershipException owned){pendingProbe=owned;pendingProbeScratch=scratch;owned.KeepAlive(this);throw;}
+        finally {if(pendingProbeScratch!=scratch)CleanupProbe(scratch);}
     }
     private int ReconcileProbeResidues()
     {
@@ -464,7 +465,7 @@ public sealed class NativeRecoveryFixture : IDisposable
     }
     public void Dispose()
     {
-        serial.Wait();try{if(disposed)return;disposed=true;pinFile.Dispose();policyFile.Dispose();keyFile.Dispose();lease.Dispose();rootPin.Dispose();CryptographicOperations.ZeroMemory(encryption);CryptographicOperations.ZeroMemory(authentication);}
+        serial.Wait();try{if(disposed)return;if(pendingProbe is not null){if(!pendingProbe.QuiescenceConfirmed)throw new IOException("RECOVERY_PROBE_QUIESCENCE_UNCONFIRMED");if(pendingProbeScratch is not null)CleanupProbe(pendingProbeScratch);pendingProbe=null;pendingProbeScratch=null;}disposed=true;pinFile.Dispose();policyFile.Dispose();keyFile.Dispose();lease.Dispose();rootPin.Dispose();CryptographicOperations.ZeroMemory(encryption);CryptographicOperations.ZeroMemory(authentication);}
         finally{serial.Release();}
     }
     [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)]

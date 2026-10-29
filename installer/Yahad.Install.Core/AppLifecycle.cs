@@ -59,6 +59,9 @@ public sealed class AppLifecycle : IAsyncDisposable
         this.startupDeadline=startupDeadline??deadline;
         if(this.startupDeadline<=TimeSpan.Zero||this.startupDeadline>TimeSpan.FromMinutes(5))throw new ArgumentOutOfRangeException(nameof(startupDeadline));
     }
+    private AppLifecycle(AppRelease release,IContainedAppSession failed)
+    {active=release;session=failed;launcher=null!;recovery=null!;updater=null!;deadline=TimeSpan.FromSeconds(10);startupDeadline=deadline;State=AppLifecycleState.RecoveryRequired;}
+    public static AppLifecycle RetainFailedAdmission(IContainedAppSession failed)=>new(new("failed-admission"),failed);
     private CancellationTokenSource Bound(CancellationToken cancellation,TimeSpan? timeout=null)
     { var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellation); bounded.CancelAfter(timeout??deadline); return bounded; }
     private void Require(AppLifecycleState state)
