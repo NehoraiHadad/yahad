@@ -1,0 +1,109 @@
+{
+  "schema": 1,
+  "kind": "proposed-disposable-vm-service-test",
+  "authorized": false,
+  "requiresOwnerApproval": true,
+  "requiresIdentifiedDisposableVm": true,
+  "vmId": null,
+  "vmSnapshotId": null,
+  "artifact": {
+    "sourceCommit": "615b2919b9b7b74e70ace52b2351abc361406cba",
+    "archive": "yahad-service-host-615b291-win-x64.zip",
+    "archiveBytes": 35871898,
+    "archiveSha256": "a213b7daf517fb0ee389feed26ed485c670e0e4b76e33796d7ca41cebfa2cd2a",
+    "fileManifestSha256": "77c015b25d5b60038acbc2bcee2e2c4476cbb8bdfe06b55a5be1108694d5ca3f",
+    "executable": {
+      "path": "Yahad.ServiceHost.exe",
+      "bytes": 162304,
+      "sha256": "84fce1f972ff9b4060e7df14a40b0a162b7a193cdaaffbae772869d1d3bf57bd"
+    }
+  },
+  "purpose": "SCM entry, dedicated identity and fail-closed unprovisioned startup only; no app startup",
+  "target": {
+    "os": "supported Windows 11 x64",
+    "domainJoined": false,
+    "preinstalledRuntimesRequired": false
+  },
+  "service": {
+    "name": "Yahad.Acceptance",
+    "account": "NT SERVICE\\Yahad.Acceptance",
+    "password": "OS-managed virtual account; no supplied password",
+    "type": "SERVICE_WIN32_OWN_PROCESS",
+    "imagePath": "\"C:\\Program Files\\Yahad.Acceptance\\bootstrap\\Yahad.ServiceHost.exe\" --service",
+    "startType": "SERVICE_DEMAND_START",
+    "delayedAutostart": false,
+    "failureActions": [],
+    "requiredPrivileges": [
+      "SeChangeNotifyPrivilege"
+    ],
+    "serviceSidType": "SERVICE_SID_TYPE_UNRESTRICTED",
+    "serviceObjectDacl": "D:P(A;;GA;;;SY)(A;;GA;;;BA)"
+  },
+  "privileges": {
+    "installer": "administrator in the identified VM only",
+    "runtime": "non-administrator; service-logon group; exact required-privilege set verified by host"
+  },
+  "files": {
+    "copyOnlyVerifiedPackageTo": "C:\\Program Files\\Yahad.Acceptance\\bootstrap",
+    "owner": "BUILTIN\\Administrators",
+    "protectedAcl": true,
+    "allowedAccess": {
+      "SYSTEM": "FullControl",
+      "BUILTIN\\Administrators": "FullControl",
+      "NT SERVICE\\Yahad.Acceptance": "ReadAndExecute"
+    },
+    "readButDoNotCreate": "C:\\ProgramData\\Yahad.Acceptance\\bootstrap.json",
+    "programDataWritesAllowed": [],
+    "syntheticStateCreation": false
+  },
+  "persistentChanges": [
+    "SCM registration under HKLM\\SYSTEM\\CurrentControlSet\\Services\\Yahad.Acceptance",
+    "only the new verified Program Files test subtree and its private ACL"
+  ],
+  "preconditions": [
+    "owner names VM/console/snapshot and authorizes this exact manifest",
+    "service and both Yahad.Acceptance machine-directory roots absent; abort on any collision",
+    "verify archive hash and every extracted bootstrap/runtime file; executable hash alone is insufficient",
+    "private snapshot/revert path available; no family data or domain membership"
+  ],
+  "procedure": [
+    "copy verified self-contained folder, apply scoped ACL and create exact demand-start service",
+    "configure and read back dedicated account, required privileges, SID type, DACL and empty failure actions",
+    "start once through SCM; record status/exit codes; do not create a bootstrap descriptor to bypass refusal"
+  ],
+  "expected": {
+    "state": "SERVICE_STOPPED",
+    "win32ExitCode": 1066,
+    "serviceSpecificExitCode": 1002,
+    "meaning": "identity checks passed; absent admin-owned bootstrap refused",
+    "applicationChildren": 0,
+    "applicationListeners": 0
+  },
+  "failConditions": [
+    "identity denial 1001 or any unexpected service-specific code",
+    "RUNNING or app child/listener",
+    "machine data/credential creation",
+    "modified existing service/file/configuration",
+    "uncertain owned process-tree cleanup"
+  ],
+  "rollback": [
+    "confirm exact test service/owned process exit; never report recovery if quiescence is uncertain",
+    "delete only the test SCM registration and receipt-owned Program Files test files",
+    "preserve any unexpected data and stop for reconciliation; do not delete it as cleanup",
+    "owner-approved VM snapshot reversion is the final rollback if normal removal cannot be verified"
+  ],
+  "notIncluded": [
+    "autostart or reboot",
+    "positive authenticated app launch",
+    "real family/WhatsApp setup",
+    "firewall/CA/trust/DNS/tunnel changes",
+    "machine-global runtime/PATH changes",
+    "production credentials/signing enrollment",
+    "release or website publication"
+  ],
+  "limitations": [
+    "native SCM, service-account/token and service-object ACL acceptance remain unverified",
+    "no application listener is expected; runtime OS diagnostics are not an authenticated app-control endpoint",
+    "no existing disposable VM is identified through current access"
+  ]
+}

@@ -12,7 +12,7 @@ The installed activation resolver is deliberately unconfigured and always refuse
 
 ## Lifecycle and process adapters
 
-The controller reports START_PENDING for actual startup milestones, RUNNING only after app readiness, STOP_PENDING during shutdown/cleanup and STOPPED only after confirmed quiescence (or when no app was started). It accepts stop/shutdown only while running; the handler merely signals an asynchronous request and returns. Unsupported controls are refused; interrogate has no side effect. It never implements a second payload update authority.
+The controller reports START_PENDING for actual startup milestones, RUNNING only after app readiness, STOP_PENDING during shutdown/cleanup and STOPPED only after confirmed quiescence (or when no app was started). It advertises stop/shutdown controls while running; a startup-stop race cancels initialization. The handler merely signals an asynchronous request and returns. Unsupported controls are refused; interrogate has no side effect. It never implements a second payload update authority.
 
 Startup authorization is bounded and late grants are disposed after cancellation. Read-only recovery/start barriers are also bounded, including an adapter that ignores cancellation. Such barriers must never execute restore/activation writes. The concrete native process launcher returns its owned Job Object synchronously, assigns the suspended process before resume, pins/checks its executable image, builds an explicit allowlisted empty-PATH environment and assigns the private FFmpeg path. Full payload authentication/dependency pinning remains the activation resolver's responsibility.
 
@@ -39,3 +39,12 @@ The proposed first VM test is intentionally **identity/SCM/fail-closed startup o
 Safe next code work: authenticated activation/start-admission integration and installer/rollback adapters with synthetic fixtures. VM/owner approval is required for registration, actual token/ACL checks, autostart/reboot and OS uninstall acceptance. Firewall/CA/provider/publication actions remain separate scopes. The existing web UI continues to own family/WhatsApp setup.
 
 Primary references: [dispatcher](https://learn.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-startservicectrldispatcherw), [handler registration](https://learn.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-registerservicectrlhandlerexw), [control handler](https://learn.microsoft.com/en-us/windows/win32/services/service-control-handler-function). Pending checkpoints represent actual milestones; no timer pretends that a stalled initializer is progressing.
+
+
+## Built artifact and exact proposal
+
+The executable/managed host source is `615b2919b9b7b74e70ace52b2351abc361406cba`; its extracted `--describe` reports that revision. The self-contained folder includes .NET 10.0.14 and exact cached runtime license/notices plus the project license. The cached runtime package SHA512 matched its recorded checksum; this is consistency evidence, not a new publisher-signature claim.
+
+`Yahad.ServiceHost.exe`: 162,304 bytes, SHA256 **`84fce1f972ff9b4060e7df14a40b0a162b7a193cdaaffbae772869d1d3bf57bd`**. The complete archive `yahad-service-host-615b291-win-x64.zip` is **35,871,898 bytes**, SHA256 **`a213b7daf517fb0ee389feed26ed485c670e0e4b76e33796d7ca41cebfa2cd2a`**. All **195 files / 190 PE modules** passed the runtime/dependency checks and byte verification in a new extraction. Only extracted `--describe` ran, with empty PATH and no DOTNET_ROOT; native SCM was not invoked. This does not establish a clean-machine result.
+
+`evidence/native-service-host/artifact/proposed-vm-test.json` binds the exact executable/archive/file-manifest hashes, account, privileges, demand-start persistence, paths, ACLs, expected failure status and rollback. VM/snapshot IDs are deliberately unset and `authorized=false`. The entire `package/` folder is required; the 162 KiB apphost alone is not the self-contained artifact. A positive app launch is not part of this proposal and remains refused by the unconfigured installed activation adapter.
