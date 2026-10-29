@@ -6,6 +6,21 @@ import {validReaction} from '../src/message-actions.js';
 import {raw,fixture,group,other} from './helpers/message-fixture.js';
 const poll={name:'Synthetic question',options:[{optionName:'A'},{optionName:'B'}],selectableOptionsCount:1};
 
+test('quote eligibility and contents are rechecked after asynchronous preparation, before submission',async()=>{
+ for(const change of ['delete','restrict','edit']){
+  const f=await fixture();try{
+   await f.ingest(raw('target',{conversation:'Original'}));
+   let proceed!:()=>void,started!:()=>void;const preparing=new Promise<void>(r=>started=r),gate=new Promise<void>(r=>proceed=r);
+   const send=f.connector.send.bind(f.connector);f.connector.send=async message=>{started();await gate;return send(message);};
+   const pending=f.request('/messages','POST',{clientId:randomUUID(),text:'Reply',replyId:'target'});pending.then(()=>{});await preparing;
+   if(change==='delete')f.service.update(f.a.familyId,group,'target',{deleted:true});
+   else if(change==='restrict')await f.ingest(raw('target',{ephemeralMessage:{message:{conversation:'PRIVATE'}}}));
+   else f.service.update(f.a.familyId,group,'target',{text:'Changed'});
+   proceed();const response=await pending;assert.equal(response.statusCode,409);assert.equal(response.json().error,'ORIGINAL_UNAVAILABLE');assert.equal(f.sent.length,0);
+  }finally{await f.close();}
+ }
+});
+
 test('replies to unavailable originals are rejected before creating a pending message or sending',async()=>{
  const f=await fixture();try{
   await f.ingest(raw('poll',{pollCreationMessageV3:poll}));const clientId=randomUUID();

@@ -18,8 +18,23 @@ test('temporary wrappers and flags at every supported nesting depth never retain
   const m=normalizeIncoming(raw(field,{[field]:{viewOnce:true,caption:'PRIVATE'}}))!;assert.equal(m.raw,undefined);assert.equal(m.restricted,true);
  }
  assert.equal(normalizeIncoming(raw('key',{conversation:'PRIVATE'},{key:{id:'key',remoteJid:group,isViewOnce:true}}))!.restricted,true);
+ for(const metadata of [{ephemeralDuration:60},{ephemeralStartTimestamp:1700000000},{ephemeralOutOfSync:true}]){
+  const m=normalizeIncoming(raw('metadata',{conversation:'PRIVATE'},metadata))!;assert.equal(m.restricted,true);assert.equal(m.raw,undefined);
+ }
  const expired=normalizeIncoming(raw('expiration',{editedMessage:{message:{extendedTextMessage:{text:'PRIVATE',contextInfo:{expiration:60}}}}}))!;
  assert.equal(expired.restricted,true);assert.equal(expired.raw,undefined);
+});
+
+test('legacy temporary rows are scrubbed lazily and cannot be quoted or served as media',async()=>{
+ const f=await fixture();try{
+  const legacy={...normalizeIncoming(raw('legacy',{imageMessage:{caption:'Visible'}}))!,status:'sent' as const,reactions:{},
+    raw:JSON.stringify(raw('legacy',{documentWithCaptionMessage:{message:{ephemeralMessage:{message:{imageMessage:{caption:'PRIVATE LEGACY'}}}}}})),text:'PRIVATE LEGACY'};
+  f.store.putMessage(f.a.familyId,legacy);const media='legacy-media';
+  f.store.putMedia(f.a.familyId,group,media,legacy.id,readFileSync('fixtures/flower.webp'));f.store.putMessage(f.a.familyId,{...legacy,mediaId:media});
+  assert.equal(f.connector.originalAvailable(legacy),false);assert.ok(!JSON.stringify(f.service.public(f.a.familyId,legacy)).includes('PRIVATE LEGACY'));
+  const message=f.get('legacy')!;assert.equal(message.restricted,true);assert.equal(message.raw,undefined);assert.equal(message.mediaId,undefined);assert.ok(!message.text.includes('PRIVATE LEGACY'));
+  assert.equal(f.store.getMedia(f.a.familyId,group,media),undefined);assert.equal(f.get('legacy')!.restricted,true);
+ }finally{await f.close();}
 });
 
 test('privacy detection ignores embedded quote payload and caps excessive message wrappers',()=>{

@@ -44,6 +44,7 @@ export interface Incoming {
   download?: () => Promise<Buffer>;
   status?: Receipt;
   edited?: boolean;
+  editTime?: number;
   deleted?: boolean;
   reaction?: ReactionUpdate;
   historicalReactions?: ReactionUpdate[];
@@ -64,6 +65,8 @@ export interface StoredMessage {
   filename?: string;
   status: Receipt;
   edited?: boolean;
+  editTime?: number;
+  originalTimeKnown?: boolean;
   deleted?: boolean;
   reactions: Record<string, string>;
   reactionTimes?: Record<string, number>;

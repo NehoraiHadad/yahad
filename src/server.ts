@@ -425,6 +425,14 @@ export async function createApp(
       current(s, g);
       if (!sameRetention()) throw deny();
     };
+    const currentQuote = (quoted?: StoredMessage) => {
+      currentSend();
+      if (!quoted)return;
+      const latest=store.getMessage(f,g,quoted.id);
+      if (!latest || latest.deleted || latest.restricted || latest.raw!==quoted.raw || latest.text!==quoted.text)
+        throw new AppError(409,'ORIGINAL_UNAVAILABLE');
+      requireOriginal(s,latest);
+    };
     if (service.states.get(f)?.state !== 'connected') throw new AppError(409, 'NOT_CONNECTED');
     if (attachment) capable(s, attachment.kind);
     if (!attachment && !data.text) throw new AppError(400, 'EMPTY_MESSAGE');
@@ -481,7 +489,7 @@ export async function createApp(
           let sentMarker;
           try {
             sentMarker = await c.send({
-              beforeSend: currentSend,
+              beforeSend: () => currentQuote(reply),
               id: markerId,
               groupId: g,
               text: marker.text,
@@ -490,7 +498,7 @@ export async function createApp(
             });
           } catch (error) {
             if (sameRetention()) service.update(f, g, markerId, { status: 'failed' });
-            if (error instanceof UsageError) throw error;
+            if (error instanceof UsageError || error instanceof AppError && error.code==='ORIGINAL_UNAVAILABLE') throw error;
             throw new Error('Marker send failed');
           }
           currentSend();
@@ -501,7 +509,7 @@ export async function createApp(
       }
       currentSend();
       const sent = await c.send({
-        beforeSend: currentSend,
+        beforeSend: () => currentQuote(wireReply),
         id,
         groupId: g,
         text: wireText,
@@ -526,7 +534,7 @@ export async function createApp(
     } catch (error) {
       if (sameRetention())
         service.update(f, g, id, { status: 'failed' });
-      if (error instanceof UsageError) throw error;
+      if (error instanceof UsageError || error instanceof AppError && error.code==='ORIGINAL_UNAVAILABLE') throw error;
       throw new AppError(502, 'SEND_UNCERTAIN');
     } finally {
       pending.delete(requestKey);

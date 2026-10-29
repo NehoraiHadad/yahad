@@ -2,6 +2,7 @@ import { conversationKind } from './conversation-id.js';
 import { DatabaseSync, backup } from 'node:sqlite';
 import { initializeChatReadState, recordUnread } from './chat-read-state.js';
 import { initializePendingReactions } from './message-reactions.js';
+import { restrictedStoredMessage, restrictedPlaceholder } from './connectors/message-retention.js';
 import { Diagnostics } from './diagnostics.js';
 import { DATABASE_SCHEMA, USERS_TABLE, migrateAccountNames } from './db.js';
 import { migrateUsage, migrateUsageCalendar, migrateUsageAdmission } from './usage-schema.js';
@@ -276,9 +277,18 @@ export class Store {
     if (!this.retained(f, g)) return;
     const row = this.diagnostics.measure(f, 'db_read', () => this.one(
       'SELECT body FROM messages WHERE family_id=? AND group_id=? AND id=?', f, g, id));
-    return row
-      ? JSON.parse(open(this.groupKey(f, g), row.body, `${f}:${g}:${id}`).toString())
-      : undefined;
+    if(!row)return;
+    const message:StoredMessage=JSON.parse(open(this.groupKey(f,g),row.body,`${f}:${g}:${id}`).toString());
+    // Lazy cleanup for legacy rows admitted before retention markers were checked.
+    // No scan or recovery: discard identified payload when that row is requested.
+    if(!message.deleted && !message.restricted && restrictedStoredMessage(message)){
+      if(message.mediaId)this.deleteMedia(f,g,message.mediaId);
+      const safe=restrictedPlaceholder(message);
+      this.putMessage(f,safe,false);
+      this.run('DELETE FROM pending_message_reactions WHERE family_id=? AND group_id=? AND target=?',f,g,id);
+      return safe;
+    }
+    return message;
   }
   putMessage(f: string, m: StoredMessage, live = true) {
     if (!this.retained(f, m.groupId)) return false;

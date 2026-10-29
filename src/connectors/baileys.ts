@@ -1,7 +1,7 @@
 import { conversationKind } from '../conversation-id.js';
 import { fetchGroupPhoto } from '../group-photos.js';
 import { IngestionQueue } from './ingestion.js';
-import { restrictedContent } from './message-retention.js';
+import { restrictedMessage, restrictedStoredMessage, temporaryMessageText } from './message-retention.js';
 import { editedEnvelope, historicalReactions, reactionActor, reactionTime } from './message-updates.js';
 import makeWASocket, {
   BufferJSON,
@@ -109,7 +109,7 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
   if (!groupId || !conversationKind(groupId) || !id) return;
   const content = normalizeMessageContent(raw.message);
   if (!content) return;
-  const restricted = !!raw.key.isViewOnce || restrictedContent(raw.message);
+  const restricted = restrictedMessage(raw);
   const base: Incoming = {
     id,
     groupId,
@@ -123,12 +123,13 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
     historicalReactions: restricted ? undefined : historicalReactions(raw),
     raw: restricted ? undefined : stringify(stripEmbeddedContext(raw)),
   };
+  if(base.edited)base.editTime=base.time;
   if (restricted) {
     const p = content.protocolMessage;
     if (p?.key?.remoteJid && p.key.remoteJid !== groupId) return;
     return { ...base, restricted: true,
       id: p?.type === proto.Message.ProtocolMessage.Type.MESSAGE_EDIT ? p.key?.id || id : id,
-      text: 'הודעה זמנית או לצפייה חד־פעמית — לפתיחה ב־WhatsApp בלבד' };
+      text: temporaryMessageText };
   }
   if (content.pollCreationMessage || content.pollCreationMessageV2 || content.pollCreationMessageV3)
     return {...base,raw:undefined,unsupportedReason:'poll',text:'סקר ב־WhatsApp — פרטי הסקר, ההצבעה והתוצאות זמינים כרגע ב־WhatsApp בלבד'};
@@ -162,7 +163,7 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
         key: { ...raw.key, id: p.key?.id || id },
         message: p.editedMessage,
       });
-      return nested ? { ...nested, edited: true } : undefined;
+      return nested ? { ...nested, edited: true, editTime: reactionTime(p.timestampMs,base.time) } : undefined;
     }
     return;
   }
@@ -200,7 +201,7 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
   return base;
 }
 export function validateMediaSource(raw: WAMessage) {
-  if (raw.key.isViewOnce || restrictedContent(raw.message)) throw new Error('Temporary media unavailable');
+  if (restrictedMessage(raw)) throw new Error('Temporary media unavailable');
   const content = normalizeMessageContent(raw.message);
   const body: any =
     content?.imageMessage ||
@@ -500,7 +501,7 @@ export class BaileysConnector implements Connector {
     return parse(m.raw!).key;
   }
   originalAvailable(m: StoredMessage) {
-    if (!m.raw || m.deleted || m.restricted || m.kind==='unsupported') return false;
+    if (!m.raw || m.deleted || restrictedStoredMessage(m) || m.kind==='unsupported') return false;
     try {
       const original=parse(m.raw);
       return !!original.message && original.key?.id===m.id && original.key?.remoteJid===m.groupId;
@@ -570,6 +571,7 @@ export class BaileysConnector implements Connector {
     if (keys.length) await this.require().readMessages(keys);
   }
   historyAnchor(g: string, m: StoredMessage) {
+    if(m.originalTimeKnown===false || restrictedStoredMessage(m))return false;
     if (m.groupId !== g || m.deleted || m.kind === 'unsupported' || ['pending','failed'].includes(m.status) || !m.raw || !Number.isFinite(m.time) || m.time <= 0) return false;
     try {
       const parsed=parse(m.raw);

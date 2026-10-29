@@ -1,6 +1,8 @@
 import { conversationKind } from './conversation-id.js';
 import { applyReactions, queueReaction, pendingReactions, clearPendingReactions } from './message-reactions.js';
 import { messageActions } from './message-actions.js';
+import { rawAtOriginalTime, boundedEditTime } from './message-edits.js';
+import { temporaryMessageText, restrictedStoredMessage, restrictedPlaceholder } from './connectors/message-retention.js';
 import { GroupPhotoCache } from './group-photos.js';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { Store, type User } from './store.js';
@@ -24,7 +26,7 @@ export class AppError extends Error {
   }
 }
 export const deny = () => new AppError(404, 'NOT_FOUND');
-export interface PublicMessage extends Omit<StoredMessage, 'raw' | 'replyId' | 'reactions' | 'reactionTimes'> {
+export interface PublicMessage extends Omit<StoredMessage, 'raw' | 'replyId' | 'reactions' | 'reactionTimes' | 'editTime' | 'originalTimeKnown'> {
   reply?: { id: string; text: string; sender: string; available?: boolean };
   reactions: { emoji: string; count: number; mine: boolean }[];
   actions?: {reply:boolean;reactions:boolean;edit:boolean;delete:boolean};
@@ -279,7 +281,7 @@ export class ChatService {
       if (existing?.mediaId) this.store.deleteMedia(f, g, existing.mediaId);
       this.store.putMessage(f, { id: input.id, groupId: g, sender: existing?.sender || input.sender.slice(0,80),
         fromMe: existing?.fromMe ?? input.fromMe, time: existing?.time ?? Date.now(),
-        kind: 'unsupported', text: 'הודעה זמנית או לצפייה חד־פעמית — לפתיחה ב־WhatsApp בלבד',
+        kind: 'unsupported', text: temporaryMessageText,
         restricted: true, status: existing?.status || input.status || 'unknown', reactions: {} }, !input.history);
       this.notify(f,g);
       return;
@@ -291,14 +293,25 @@ export class ChatService {
     // Never recover content that a prior provider envelope marked temporary.
     if (existing?.restricted) return;
     if (input.edited && existing) {
-      this.update(f, g, input.id, { text: input.text, edited: true, raw: input.raw });
+      const editTime=boundedEditTime(input.editTime??input.time);
+      if(editTime<(existing.editTime??0))return;
+      if(input.kind==='unsupported'){
+        if(existing.mediaId)this.store.deleteMedia(f,g,existing.mediaId);
+        this.store.putMessage(f,{...existing,kind:'unsupported',text:input.text.slice(0,65536),raw:undefined,mediaId:undefined,
+          replyId:undefined,mime:undefined,filename:undefined,unsupportedReason:input.unsupportedReason,edited:true,editTime},false);
+        this.notify(f,g);return;
+      }
+      this.update(f, g, input.id, { text: input.text.slice(0,65536), edited: true, editTime,
+        raw: rawAtOriginalTime(input.raw,existing.time,existing.originalTimeKnown===false?undefined:existing.raw) });
       return;
     }
     if (existing?.edited && !input.edited) {
+      if(input.historicalReactions?.length)applyReactions(existing,input.historicalReactions);
       // An edit can arrive before its original. Recover original ordering and
       // sender metadata without replacing the edited content with old history.
-      if (input.raw && Number.isFinite(input.time) && input.time < existing.time) {
-        this.store.putMessage(f,{...existing,time:Math.max(0,input.time),sender:input.sender.slice(0,80)},false);
+      if (input.raw && Number.isFinite(input.time) && input.time <= existing.time) {
+        this.store.putMessage(f,{...existing,time:Math.max(0,input.time),sender:input.sender.slice(0,80),
+          raw:rawAtOriginalTime(existing.raw,input.time,input.raw),originalTimeKnown:true},false);
         this.notify(f,g);
       }
       return;
@@ -322,7 +335,7 @@ export class ChatService {
       return;
     const key = this.store.groupKey(f, g).toString('hex');
     let bytes = input.bytes;
-    if (!bytes && input.download) {
+    if (!existing?.mediaId && !bytes && input.download) {
       try {
         bytes = await this.store.diagnostics.measureAsync(f, 'media_download', () => input.download!());
       } catch {
@@ -332,41 +345,45 @@ export class ChatService {
     if (!active() || !this.store.retained(f, g) || this.store.groupKey(f, g).toString('hex') !== key) return;
     const current=this.store.getMessage(f,g,input.id);
     if(current?.deleted || current?.restricted || current?.edited && !input.edited)return;
+    const previous=current||existing;
     const m: StoredMessage = {
       id: input.id,
       groupId: g,
       sender: input.sender.slice(0, 80),
       fromMe: input.fromMe,
-      time: Number.isFinite(input.time)
+      time: previous?.time ?? (Number.isFinite(input.time)
         ? Math.max(0, Math.min(input.time, Date.now() + 300000))
-        : Date.now(),
-      kind: input.kind,
+        : Date.now()),
+      kind: previous?.mediaId ? previous.kind : input.kind,
       unsupportedReason: input.unsupportedReason,
       text:
         input.text.length > 65536
           ? input.text.slice(0, 65536) + '\n[ההודעה קוצרה בגלל מגבלת גודל]'
           : input.text,
       status:
-        existing &&
-        ['sent', 'delivered', 'read'].indexOf(existing.status) >
+        previous &&
+        ['sent', 'delivered', 'read'].indexOf(previous.status) >
           ['sent', 'delivered', 'read'].indexOf(input.status || 'unknown')
-          ? existing.status
+          ? previous.status
           : input.status || 'unknown',
-      reactions: existing?.reactions || {},
-      reactionTimes: existing?.reactionTimes,
-      raw: input.kind === 'unsupported' ? undefined : input.raw,
-      clientId: existing?.clientId,
-      authorUserId: existing?.authorUserId,
-      authorLabel: existing?.authorLabel,
+      reactions: previous?.reactions || {},
+      reactionTimes: previous?.reactionTimes,
+      raw: input.kind === 'unsupported' ? undefined : input.raw || previous?.raw,
+      clientId: previous?.clientId,
+      authorUserId: previous?.authorUserId,
+      authorLabel: previous?.authorLabel,
       edited: input.edited,
+      editTime: input.edited ? boundedEditTime(input.editTime??input.time) : previous?.editTime,
+      originalTimeKnown: input.edited ? previous?.originalTimeKnown ?? !!previous : previous?.originalTimeKnown,
       replyId: input.replyId && input.replyId.length<=180 && input.replyId!==input.id ? input.replyId : undefined,
-      mime: input.mime,
-      filename: input.filename?.replace(/[\r\n\\/]/g, '_').slice(0, 160),
+      mediaId: previous?.mediaId,
+      mime: previous?.mediaId ? previous.mime : input.mime,
+      filename: input.filename?.replace(/[\r\n\\/]/g, '_').slice(0, 160) || previous?.filename,
     };
     applyReactions(m,[...pendingReactions(this.store,f,g,m.id),...(input.historicalReactions||[])]);
     this.store.putMessage(f, m, !input.history);
     clearPendingReactions(this.store,f,g,m.id);
-    if (bytes && bytes.length <= this.store.config.maxMedia) {
+    if (!m.mediaId && bytes && bytes.length <= this.store.config.maxMedia) {
       const mediaId = randomUUID();
       try {
         const { fileTypeFromBuffer } = await import('file-type');
@@ -413,7 +430,7 @@ export class ChatService {
       m={id,groupId:g,sender:'',fromMe:false,time:Date.now(),kind:'text',text:'',status:'unknown',reactions:{}};
     }
     const allowed: Partial<StoredMessage> = {};
-    for (const k of ['text', 'edited', 'deleted', 'status', 'reactions', 'raw'] as const)
+    for (const k of ['text', 'edited', 'editTime', 'deleted', 'status', 'reactions', 'raw'] as const)
       if (patch[k] !== undefined && (!m.restricted || k === 'deleted' || k === 'status'))
         (allowed as any)[k] = patch[k];
     const ranks: Record<string, number> = {
@@ -445,7 +462,8 @@ export class ChatService {
     this.notify(f, g);
   }
   public(f: string, m: StoredMessage): PublicMessage {
-    const { raw, replyId, reactions, reactionTimes, ...safe } = m;
+    if(!m.deleted && restrictedStoredMessage(m))m=restrictedPlaceholder(m);
+    const { raw, replyId, reactions, reactionTimes, editTime, originalTimeKnown, ...safe } = m;
     const target = replyId ? this.store.getMessage(f, m.groupId, replyId) : undefined;
     const aggregated = new Map<string, { emoji: string; count: number; mine: boolean }>();
     for (const [actor, emoji] of Object.entries(reactions)) {

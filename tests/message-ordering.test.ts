@@ -70,8 +70,36 @@ test('actual editedMessage update preserves original position; edit before histo
   await f.ingest(raw('target',{conversation:'Original'}));const originalTime=f.get('target')!.time;
   const update=(id:string)=>[{key:{remoteJid:group,id},update:{message:{editedMessage:{message:{conversation:'Changed'}}},messageTimestamp:Math.floor(Date.now()/1000)}}];
   await f.emit('messages.update',update('target'));assert.equal(f.get('target')!.text,'Changed');assert.equal(f.get('target')!.edited,true);assert.equal(f.get('target')!.time,originalTime);
+  assert.equal(f.connector.historyAnchor(group,f.get('target')!),true);
+  await f.emit('messages.update',[{key:{remoteJid:group,id:'target'},update:{message:{editedMessage:{message:{conversation:'Stale edit'}}},messageTimestamp:Math.floor(Date.now()/1000)-5}}]);
+  assert.equal(f.get('target')!.text,'Changed');
+  await f.emit('messages.update',update('unknown-origin'));assert.equal(f.connector.historyAnchor(group,f.get('unknown-origin')!),false);
   await f.emit('messages.update',update('late'));await f.ingest(raw('late',{conversation:'Old content'},{messageTimestamp:Math.floor(Date.now()/1000)-100,pushName:'Original sender'}));
   assert.equal(f.get('late')!.text,'Changed');assert.equal(f.get('late')!.sender,'Original sender');assert.ok(f.get('late')!.time<originalTime);
+  assert.equal(f.connector.historyAnchor(group,f.get('late')!),true);
+ }finally{await f.close();}
+});
+
+test('delayed duplicate media preserves reactions and receipts stored while the first download waited',async()=>{
+ const f=await fixture();try{
+  let finish!:(bytes:Buffer)=>void;
+  const original=normalizeIncoming(raw('race',{imageMessage:{caption:'Visible'}}))!;
+  const downloading=f.service.ingest(f.a.familyId,{...original,download:()=>new Promise<Buffer>(r=>finish=r)});
+  await Promise.resolve();await f.service.ingest(f.a.familyId,original);await f.ingest(react('race','👍'));
+  f.service.update(f.a.familyId,group,'race',{status:'read'});
+  finish(readFileSync('fixtures/flower.webp'));await downloading;
+  assert.equal(f.get('race')!.reactions['100@lid'],'👍');assert.equal(f.get('race')!.status,'read');assert.ok(f.get('race')!.mediaId);
+ }finally{await f.close();}
+});
+
+test('existing pending media merges acknowledgement/raw without downloading or replacing its bytes',async()=>{
+ const f=await fixture();try{
+  const image=normalizeIncoming(raw('pending-media',{imageMessage:{caption:'Caption'}},{status:1}))!;
+  await f.service.ingest(f.a.familyId,{...image,bytes:readFileSync('fixtures/flower.webp')});
+  const initial=f.get(image.id)!;assert.equal(initial.status,'pending');assert.ok(initial.mediaId);
+  f.store.putMessage(f.a.familyId,{...initial,raw:undefined});let downloads=0;
+  await f.service.ingest(f.a.familyId,{...image,status:'sent',download:async()=>{downloads++;throw new Error('Should reuse media');}});
+  const stored=f.get(image.id)!;assert.equal(stored.status,'sent');assert.ok(stored.raw);assert.equal(stored.mediaId,initial.mediaId);assert.equal(downloads,0);
  }finally{await f.close();}
 });
 
