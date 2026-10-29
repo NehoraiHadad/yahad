@@ -154,8 +154,6 @@ await Check("changed child image hash refuses before process/channel creation",a
     var directory=Session();var fake=new FileControlFactory(directory,"normal");var spec=new VerifiedProcessSpec(node,new string('0',64),[],directory,directory,node,new Dictionary<string,string>());
     await Reject(()=>new ServiceProcessLauncher(spec,fake).StartAsync(new("test"),default));Assert(fake.Created==0);
 });
-File.WriteAllText(report,JsonSerializer.Serialize(new{kind="SCM-host-noninstalling-contracts",passed=checks.Count-failures,failed=failures,
-    nativeScmInvoked=false,serviceInstalled=false,listenersOpened=false,realNativeJobTests=4,privateNodeSha256=nodeHash,tests=checks},new JsonSerializerOptions{WriteIndented=true}));
 await Check("observed admission checkpoints follow work and detach before terminal status",async()=>
 {
     var auth=new ObservedTestAuthorizer(new FakeApp());var controller=new ServiceController(auth);var reports=new List<ServiceReport>();
@@ -182,6 +180,8 @@ await Check("large admission budget does not extend graceful stop budget",async(
     var controller=new ServiceController(new ObservedTestAuthorizer(new FakeApp{StuckGraceful=true}),lifecycleDeadline:TimeSpan.FromMilliseconds(50));
     var result=await controller.RunAsync(r=>{if(r.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);}).WaitAsync(TimeSpan.FromSeconds(2));Assert(result.Failure==ServiceFailure.StopFailed);
 });
+File.WriteAllText(report,JsonSerializer.Serialize(new{kind="SCM-host-noninstalling-contracts",passed=checks.Count-failures,failed=failures,
+    nativeScmInvoked=false,serviceInstalled=false,listenersOpened=false,realNativeJobTests=4,privateNodeSha256=nodeHash,tests=checks},new JsonSerializerOptions{WriteIndented=true}));
 Console.WriteLine($"{checks.Count-failures} passed; {failures} failed. No SCM calls/listeners. Fixture: {root}");return failures==0?0:1;
 
 static bool Alive(int id){try{using var process=Process.GetProcessById(id);return !process.HasExited;}catch(ArgumentException){return false;}}

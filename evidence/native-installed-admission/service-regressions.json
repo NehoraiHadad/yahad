@@ -1,6 +1,6 @@
 {
   "kind": "SCM-host-noninstalling-contracts",
-  "passed": 40,
+  "passed": 45,
   "failed": 0,
   "nativeScmInvoked": false,
   "serviceInstalled": false,
@@ -166,6 +166,26 @@
     },
     {
       "name": "changed child image hash refuses before process/channel creation",
+      "status": "PASS"
+    },
+    {
+      "name": "observed admission checkpoints follow work and detach before terminal status",
+      "status": "PASS"
+    },
+    {
+      "name": "observed admission status transport failure cannot become readiness",
+      "status": "PASS"
+    },
+    {
+      "name": "observed admission budget remains capped at five minutes",
+      "status": "PASS"
+    },
+    {
+      "name": "stalled observed admission invents no checkpoints and cancels before app launch",
+      "status": "PASS"
+    },
+    {
+      "name": "large admission budget does not extend graceful stop budget",
       "status": "PASS"
     }
   ]
