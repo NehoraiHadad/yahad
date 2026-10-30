@@ -51,3 +51,27 @@ are explicitly approved for release. Existing app packaging excludes `landing/`.
 The family illustration is project-specific generated artwork, stored locally
 as WebP. Noto Sans Hebrew fonts and Lucide icons retain their license notices
 in `dist/assets/FONT-LICENSE.txt` and `dist/assets/ICON-LICENSE.txt`.
+## Download area
+
+`dist/index.html` contains a `download` section with one card per platform
+(Windows, Linux), each in `data-state="pending"` with a disabled button. The
+platforms are independent: either one can go live without the other.
+
+Activating a ready, tested installer for one platform:
+
+1. In that card, replace the disabled button with
+   `<a class="primary download-action" href="RELEASE-ASSET-URL">`, pointing at
+   the real file under this repo's GitHub Releases
+   (`https://github.com/NehoraiHadad/yahad/releases/download/...`).
+2. Flip the card's `data-state` to `ready` and update its status text.
+3. Only after separate release approval, update all availability copy (hero,
+   download introduction, FAQ and connection disclosure) to accurately describe
+   which platform is ready. Update the explicitly pending-only shipped-page
+   assertions in `tests/static.test.py` in the same commit; retain the per-platform
+   validator and its positive/negative fixtures. The current assertions deliberately
+   reject any ready state or release URL until that reviewed activation change.
+
+`tests/static.test.py` enforces the contract: a pending card carries no link,
+a ready card must carry exactly one link to a release asset of this repo, and
+no release URL ships while pending. Fixture runs cover windows-only,
+linux-only and both-ready, plus rejected non-repo URLs.
