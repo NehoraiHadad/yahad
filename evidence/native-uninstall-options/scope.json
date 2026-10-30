@@ -1,0 +1,13 @@
+{
+  "feature": "keep-data-default-or-explicit-full-local-removal",
+  "actualUninstallExecuted": false,
+  "activeInstallationChanged": false,
+  "sourceParent": "bd4c50093df7ffee0446c6730f38684b88bda812",
+  "default": "keep_data",
+  "fullConfirmation": "מחיקה",
+  "syntheticFilesOnly": true,
+  "offscreenUiOnly": true,
+  "liveServiceTestPending": true,
+  "fullRemovalIsNotSecureErase": true,
+  "retainedAppServiceSource": "2d1b547cb7cadd0ed08c6cdb3584c78ae9060f51"
+}

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { readFileSync } from 'node:fs';
-import { ChatCelebration } from '../web/ChatCelebration.js';
+import { ChatCelebration } from '../web/ChatCelebrationView.js';
 import {
   createCelebrationController, celebrationFlair, CELEBRATION_PARTICLES,
   CELEBRATION_DURATION_MS, CELEBRATION_COOLDOWN_MS, type CelebrationBurst,

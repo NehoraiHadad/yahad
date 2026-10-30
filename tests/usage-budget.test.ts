@@ -221,9 +221,9 @@ test('expiry is precise and cannot bill more than quota; bounded late heartbeat 
 });
 
 test('schema and local recovery/package contract agree; UI preserves mounted drafts through quota suspension', () => {
-  assert.equal(DATABASE_SCHEMA, 5);
+  assert.equal(DATABASE_SCHEMA, 6);
   const recovery = readFileSync(new URL('../scripts/recover-account.py', import.meta.url), 'utf8');
-  assert.match(recovery, /DATABASE_SCHEMA = 5/);
+  assert.match(recovery, /DATABASE_SCHEMA = 6/);
   const release = readFileSync(new URL('../scripts/release.mjs', import.meta.url), 'utf8');
   assert.match(release, /databaseSchema:DATABASE_SCHEMA/);
   const main = readFileSync(new URL('../web/main.tsx', import.meta.url), 'utf8');

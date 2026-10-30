@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType><UseWPF>true</UseWPF>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <ItemGroup><ProjectReference Include="../Yahad.Install.Core/Yahad.Install.Core.csproj" /><ProjectReference Include="../Yahad.ServiceHost/Yahad.ServiceHost.csproj"/><InternalsVisibleTo Include="Yahad.FirstInstall.Tests"/></ItemGroup>
+<ItemGroup Condition="Exists('$(SetupPayloadDirectory)/install.zip')"><EmbeddedResource Include="$(SetupPayloadDirectory)/install.zip" LogicalName="Yahad.Install.Payload"/><EmbeddedResource Include="$(SetupPayloadDirectory)/install-manifest.json" LogicalName="Yahad.Install.Manifest"/></ItemGroup></Project>

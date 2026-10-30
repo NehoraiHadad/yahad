@@ -1,0 +1,102 @@
+An issue was encountered verifying workloads. For more information, run "dotnet workload update".
+  Determining projects to restore...
+  Restored C:\Users\nehor\Documents\Codex\2026-10-29\task-2\yahad-lan-combined\installer\Yahad.Install.Core\Yahad.Install.Core.csproj (in 194 ms).
+  Restored C:\Users\nehor\Documents\Codex\2026-10-29\task-2\yahad-lan-combined\installer\Yahad.Install.Tests\Yahad.Install.Tests.csproj (in 222 ms).
+  Yahad.Install.Core -> C:\Users\nehor\Documents\Codex\2026-10-29\task-2\yahad-lan-combined\installer\Yahad.Install.Core\bin\Debug\net10.0-windows\Yahad.Install.Core.dll
+  Yahad.Install.Tests -> C:\Users\nehor\Documents\Codex\2026-10-29\task-2\yahad-lan-combined\installer\Yahad.Install.Tests\bin\Debug\net10.0-windows\Yahad.Install.Tests.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:11.93
+  Determining projects to restore...
+  Restored C:\Users\nehor\Documents\Codex\2026-10-29\task-2\yahad-lan-combined\installer\Yahad.Setup\Yahad.Setup.csproj (in 231 ms).
+  Restored C:\Users\nehor\Documents\Codex\2026-10-29\task-2\yahad-lan-combined\installer\Yahad.FirstInstall.Tests\Yahad.FirstInstall.Tests.csproj (in 231 ms).
+  Restored C:\Users\nehor\Documents\Codex\2026-10-29\task-2\yahad-lan-combined\installer\Yahad.ServiceHost\Yahad.ServiceHost.csproj (in 231 ms).
+  1 of 4 projects are up-to-date for restore.
+  Yahad.Install.Core -> C:\Users\nehor\Documents\Codex\2026-10-29\task-2\yahad-lan-combined\installer\Yahad.Install.Core\bin\Debug\net10.0-windows\Yahad.Install.Core.dll
+  Yahad.ServiceHost -> C:\Users\nehor\Documents\Codex\2026-10-29\task-2\yahad-lan-combined\installer\Yahad.ServiceHost\bin\Debug\net10.0-windows\Yahad.ServiceHost.dll
+  Yahad.Setup -> C:\Users\nehor\Documents\Codex\2026-10-29\task-2\yahad-lan-combined\installer\Yahad.Setup\bin\Debug\net10.0-windows\Yahad.Setup.dll
+  Yahad.FirstInstall.Tests -> C:\Users\nehor\Documents\Codex\2026-10-29\task-2\yahad-lan-combined\installer\Yahad.FirstInstall.Tests\bin\Debug\net10.0-windows\Yahad.FirstInstall.Tests.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:16.53
+  Determining projects to restore...
+  Restored C:\Users\nehor\Documents\Codex\2026-10-29\task-2\yahad-lan-combined\installer\Yahad.Authority\Yahad.Authority.csproj (in 265 ms).
+  Restored C:\Users\nehor\Documents\Codex\2026-10-29\task-2\yahad-lan-combined\installer\Yahad.Production.Tests\Yahad.Production.Tests.csproj (in 265 ms).
+  2 of 4 projects are up-to-date for restore.
+  Yahad.Install.Core -> C:\Users\nehor\Documents\Codex\2026-10-29\task-2\yahad-lan-combined\installer\Yahad.Install.Core\bin\Debug\net10.0-windows\Yahad.Install.Core.dll
+  Yahad.ServiceHost -> C:\Users\nehor\Documents\Codex\2026-10-29\task-2\yahad-lan-combined\installer\Yahad.ServiceHost\bin\Debug\net10.0-windows\Yahad.ServiceHost.dll
+  Yahad.Authority -> C:\Users\nehor\Documents\Codex\2026-10-29\task-2\yahad-lan-combined\installer\Yahad.Authority\bin\Debug\net10.0-windows\Yahad.Authority.dll
+  Yahad.Production.Tests -> C:\Users\nehor\Documents\Codex\2026-10-29\task-2\yahad-lan-combined\installer\Yahad.Production.Tests\bin\Debug\net10.0-windows\Yahad.Production.Tests.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:17.97
+  Determining projects to restore...
+  Restored C:\Users\nehor\Documents\Codex\2026-10-29\task-2\yahad-lan-combined\installer\Yahad.Recovery.Tests\Yahad.Recovery.Tests.csproj (in 325 ms).
+  1 of 2 projects are up-to-date for restore.
+  Yahad.Install.Core -> C:\Users\nehor\Documents\Codex\2026-10-29\task-2\yahad-lan-combined\installer\Yahad.Install.Core\bin\Debug\net10.0-windows\Yahad.Install.Core.dll
+  Yahad.Recovery.Tests -> C:\Users\nehor\Documents\Codex\2026-10-29\task-2\yahad-lan-combined\installer\Yahad.Recovery.Tests\bin\Debug\net10.0-windows\Yahad.Recovery.Tests.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:10.72
+PASS LAN deployment preserves exact selected adapter and never selects VPN automatically
+PASS LAN resume detects address disappearance without adopting another private address
+PASS LAN Caddy generation pins private bind, loopback upstream and local CA without trust installation
+PASS LAN HTTP helper exposes only two public files and has no application proxy
+PASS LAN firewall is application-bound TCP Private LocalSubnet and rejects same-name drift
+PASS LAN Caddy paths reject interpolation, control tokens, device paths and public-private overlap
+PASS LAN public CA export re-encodes certificate only and exposes a stable independent fingerprint
+PASS LAN public CA export refuses whole mixed private-key files, PFX, trailing bytes and leaf certificates
+{"suite":"lan-only","failed":0,"results":[{"name":"LAN deployment preserves exact selected adapter and never selects VPN automatically","status":"PASS"},{"name":"LAN resume detects address disappearance without adopting another private address","status":"PASS"},{"name":"LAN Caddy generation pins private bind, loopback upstream and local CA without trust installation","status":"PASS"},{"name":"LAN HTTP helper exposes only two public files and has no application proxy","status":"PASS"},{"name":"LAN firewall is application-bound TCP Private LocalSubnet and rejects same-name drift","status":"PASS"},{"name":"LAN Caddy paths reject interpolation, control tokens, device paths and public-private overlap","status":"PASS"},{"name":"LAN public CA export re-encodes certificate only and exposes a stable independent fingerprint","status":"PASS"},{"name":"LAN public CA export refuses whole mixed private-key files, PFX, trailing bytes and leaf certificates","status":"PASS"}]}
+PASS LAN proxy receipt requires private canonical address and exact pinned service identity
+PASS LAN address watch cannot substitute a different adapter or newly assigned private address
+PASS LAN service collision policy refuses alternate executable arguments or shared service accounts
+PASS LAN repair accepts confirmed empty stopped status after known address start or exit failures
+PASS LAN repair refuses crashes unknown status active process or unconfirmed cleanup
+PASS LAN SCM stop is nonblocking and releases exact proxy only after observed empty tree
+PASS LAN stop before admission starts performs no process start and publishes stopped
+PASS LAN DHCP or wake address loss stops proxy without rebinding or claiming ready
+PASS LAN unexpected proxy exit returns failure after exact tree cleanup
+PASS LAN uncertain proxy cleanup never publishes stopped or disposes owned process
+PASS LAN failed start retaining a native job still transfers it into cleanup
+PASS LAN stop racing a late successful start still cleans the returned exact process
+PASS LAN start timeout with unknown ownership never reports stopped
+PASS LAN SCM dispatcher refuses another service name without native process admission
+{"suite":"lan-runtime-pure","ok":true,"failed":0,"nativeOperations":false,"cases":[{"name":"LAN proxy receipt requires private canonical address and exact pinned service identity","status":"PASS"},{"name":"LAN address watch cannot substitute a different adapter or newly assigned private address","status":"PASS"},{"name":"LAN service collision policy refuses alternate executable arguments or shared service accounts","status":"PASS"},{"name":"LAN repair accepts confirmed empty stopped status after known address start or exit failures","status":"PASS"},{"name":"LAN repair refuses crashes unknown status active process or unconfirmed cleanup","status":"PASS"},{"name":"LAN SCM stop is nonblocking and releases exact proxy only after observed empty tree","status":"PASS"},{"name":"LAN stop before admission starts performs no process start and publishes stopped","status":"PASS"},{"name":"LAN DHCP or wake address loss stops proxy without rebinding or claiming ready","status":"PASS"},{"name":"LAN unexpected proxy exit returns failure after exact tree cleanup","status":"PASS"},{"name":"LAN uncertain proxy cleanup never publishes stopped or disposes owned process","status":"PASS"},{"name":"LAN failed start retaining a native job still transfers it into cleanup","status":"PASS"},{"name":"LAN stop racing a late successful start still cleans the returned exact process","status":"PASS"},{"name":"LAN start timeout with unknown ownership never reports stopped","status":"PASS"},{"name":"LAN SCM dispatcher refuses another service name without native process admission","status":"PASS"}]}
+PASS LAN request requires explicit consent, canonical private address and well-formed action
+PASS installer passes validated LAN request and owner between publication and server observation
+PASS invalid LAN consent stops installer before any preparation or publication
+PASS LAN install failure at prepare cannot reach browser-ready or uninstall
+PASS LAN install failure at publish cannot reach browser-ready or uninstall
+PASS LAN install failure at lan:Enable cannot reach browser-ready or uninstall
+PASS LAN install failure at start cannot reach browser-ready or uninstall
+PASS LAN selection cancellation prevents subsequent host operation
+PASS keep-current and omitted LAN preserve ordinary install while disable is explicitly conveyed
+PASS unsupported LAN host refuses before server or browser observation
+PASS uninstall preserves keep/delete mode and never calls LAN configuration
+PASS verified payload schema accepts supported numeric revisions and refuses missing or malformed values
+PASS legacy installer receipt without PayloadSchema retains schema five without changing other fields
+PASS schema six LAN origin transaction preserves six and refuses a silent downgrade to five
+PASS LAN preparation survives the service-created owner-not-yet-saved checkpoint without changing consent
+PASS LAN removal receipt alone preserves confirmed mode and identity after owner-record removal
+PASS LAN origin transaction preserves data, schema, key, policy, pin and owner intent anchors
+PASS LAN origin transaction refuses public, HTTP LAN, noncanonical and credential-bearing browser URLs
+PASS LAN journal validates both snapshots and every current control part before recovery
+PASS LAN snapshot validation rejects a changed anchor or foreign data identity
+PASS LAN snapshot rejects foreign control formats and bootstrap schema or service even with matching hashes
+PASS LAN native UI renders synthetic RTL choices, explicit consent and preserved uninstall options without showing
+{"suite":"lan-integration-pure","ok":true,"failed":0,"nativeOperations":false,"cases":[{"name":"LAN request requires explicit consent, canonical private address and well-formed action","status":"PASS"},{"name":"installer passes validated LAN request and owner between publication and server observation","status":"PASS"},{"name":"invalid LAN consent stops installer before any preparation or publication","status":"PASS"},{"name":"LAN install failure at prepare cannot reach browser-ready or uninstall","status":"PASS"},{"name":"LAN install failure at publish cannot reach browser-ready or uninstall","status":"PASS"},{"name":"LAN install failure at lan:Enable cannot reach browser-ready or uninstall","status":"PASS"},{"name":"LAN install failure at start cannot reach browser-ready or uninstall","status":"PASS"},{"name":"LAN selection cancellation prevents subsequent host operation","status":"PASS"},{"name":"keep-current and omitted LAN preserve ordinary install while disable is explicitly conveyed","status":"PASS"},{"name":"unsupported LAN host refuses before server or browser observation","status":"PASS"},{"name":"uninstall preserves keep/delete mode and never calls LAN configuration","status":"PASS"},{"name":"verified payload schema accepts supported numeric revisions and refuses missing or malformed values","status":"PASS"},{"name":"legacy installer receipt without PayloadSchema retains schema five without changing other fields","status":"PASS"},{"name":"schema six LAN origin transaction preserves six and refuses a silent downgrade to five","status":"PASS"},{"name":"LAN preparation survives the service-created owner-not-yet-saved checkpoint without changing consent","status":"PASS"},{"name":"LAN removal receipt alone preserves confirmed mode and identity after owner-record removal","status":"PASS"},{"name":"LAN origin transaction preserves data, schema, key, policy, pin and owner intent anchors","status":"PASS"},{"name":"LAN origin transaction refuses public, HTTP LAN, noncanonical and credential-bearing browser URLs","status":"PASS"},{"name":"LAN journal validates both snapshots and every current control part before recovery","status":"PASS"},{"name":"LAN snapshot validation rejects a changed anchor or foreign data identity","status":"PASS"},{"name":"LAN snapshot rejects foreign control formats and bootstrap schema or service even with matching hashes","status":"PASS"},{"name":"LAN native UI renders synthetic RTL choices, explicit consent and preserved uninstall options without showing","status":"PASS"}]}
+{"suite":"store-schema-source-pure","ok":true,"schema":6,"declaredSchemasTested":[5,6,17],"nativeOperations":false,"storeOpened":false}
+{"suite":"production-store-schema-source-pure","ok":true,"schema":6,"declaredSchemasTested":[5,6,17],"nativeOperations":false,"storeOpened":false}
+{"suite":"recovery-store-schema-package-pure","ok":true,"schema":6,"declaredSchemasTested":[5,6,17],"nativeOperations":false,"storeOpened":false}

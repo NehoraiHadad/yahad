@@ -1,0 +1,17 @@
+{
+  "version": "0.5.3",
+  "sourceCommit": "2d1b547cb7cadd0ed08c6cdb3584c78ae9060f51",
+  "bytes": 290342596,
+  "sha256": "540906a07c4b5c25f5a92250c5bb54eed2a31b9a144c9458ed9da318c41966fe",
+  "url": null,
+  "distributionConfigured": false,
+  "profile": "loopback-real-baileys",
+  "offlineArtifactPreserved": true,
+  "embeddedZip": "2c4f948de14ca9f21b1325c2c6bcac7065eb3236c3e789183fd1b2ee2a80e929",
+  "payloadDigest": "d3dc28257ac4c10fa4ef45db14a7944f32e232c962292525f51ca506ae3c0af4",
+  "files": 9498,
+  "headlessVerificationExit": 0,
+  "emptyPath": true,
+  "systemOperationsInvoked": false,
+  "machineAcceptance": false
+}

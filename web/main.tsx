@@ -1,3 +1,5 @@
+import {SharedContentMessage} from './SharedContentMessage';
+import {readOnlyKind} from '../src/rich-content';
 import { compareChatActivity } from './chatOrder';
 import { newClientId as newId } from './clientId';
 import { useVisibleChatRead } from './useVisibleChatRead';
@@ -11,10 +13,12 @@ import { insertEmoji, rememberEmoji } from './emojiSelection';
 import { loadStickerFile } from './stickerFile';
 import './emoji-picker.css';
 import './groupAvatar.css';
-import { ChatCelebration, useChatCelebration } from './ChatCelebration';
+import { ChatCelebration, useChatCelebration } from './ChatCelebrationView';
 import './chatCelebration.css';
 import { HistoryPanel } from './HistoryPanel';
 import { MessageImage } from './MessageImage';
+import { PollMessage } from './PollMessage';
+import './poll-message.css';
 import { DisconnectPanel } from './DisconnectPanel';
 import { GroupAvatar } from './GroupAvatar';
 import { ErrorToast } from './ErrorToast';
@@ -81,6 +85,7 @@ import { api, isTransientApiError, setCsrf } from './api';
 import './style.css';
 import './child-management.css';
 import { DiagnosticsPanel } from './DiagnosticsPanel';
+import { ConnectionGuidance, useBrowserOnline } from './ConnectionGuidanceView';
 import { UpdatesPanel } from './UpdatesPanel';
 import type { PublicMessage } from '../src/service';
 import type { Capabilities } from '../src/connectors/types';
@@ -977,7 +982,8 @@ function Chat({
                           void action(() =>
                             api('/groups/' + encodeURIComponent(current.id) + '/messages', 'POST', {
                               clientId: m.clientId,
-                              text: m.text,
+                              text: m.authorLabel && m.text.startsWith(m.authorLabel + ': ') ? m.text.slice(m.authorLabel.length + 2) : m.text,
+                              replyId: m.reply?.id,
                             }),
                           );
                       }}
@@ -1184,7 +1190,7 @@ function Message({
     pending: 'ממתינה לאישור',
     delivered: 'החיבור דיווח על מסירה',
     read: 'החיבור דיווח על קריאה — לא בהכרח כל חברי השיחה',
-    failed: 'לא התקבל אישור — ייתכן שההודעה הגיעה',
+    failed: 'ההודעה לא הוגשה לשליחה — אפשר לנסות שוב',
     unknown: 'מצב מסירה אינו ידוע',
   };
   return (
@@ -1192,7 +1198,7 @@ function Message({
       <div className={'bubble ' + (m.kind === 'sticker' ? 'sticker-bubble' : '')}>
         <div className="bubble-top">
           {!m.fromMe && <b className="sender">{m.sender}</b>}
-          {!m.deleted && (
+          {!m.deleted && !readOnlyKind(m.kind) && (
             <IconButton className="message-menu-button" label="פעולות בהודעה" onClick={onMenu}>
               <MoreHorizontal size={17} />
             </IconButton>
@@ -1208,6 +1214,8 @@ function Message({
           <p className="deleted">ההודעה נמחקה</p>
         ) : (
           <>
+            {(m.kind==='contact'||m.kind==='location'||m.kind==='interactive') && <SharedContentMessage text={m.text}/>}
+            {m.kind==='poll' && <PollMessage question={m.text} options={m.poll?.options} results={m.pollResults}/>}
             {url && (m.kind === 'image' || m.kind === 'sticker') && (
               <MessageImage key={url} url={url} sticker={m.kind==='sticker'} alt={m.kind==='sticker'?'מדבקה':m.text||'תמונה שנשלחה בשיחה'}/>
             )}
@@ -1234,13 +1242,13 @@ function Message({
                 <Download size={19} />
               </a>
             )}
-            {!url && m.kind !== 'text' && m.kind !== 'unsupported' && (
+            {!url && m.kind !== 'text' && m.kind !== 'unsupported' && !readOnlyKind(m.kind) && (
               <p className="media-missing">
                 <AlertCircle size={15} /> המדיה לא נשמרה או שכבר אינה זמינה
               </p>
             )}
             {!url&&!m.text&&(m.kind==='text'||m.kind==='unsupported')&&<p className="media-missing" role="status">תוכן ההודעה אינו זמין בתצוגה הזאת.</p>}
-            {m.text && (
+            {m.text && !readOnlyKind(m.kind) && (
               <p className="message-text" dir="auto">
                 {m.text}
               </p>
@@ -1267,7 +1275,7 @@ function Message({
               )}
             </span>
           )}
-          {m.status === 'failed' && m.kind === 'text' && (
+          {m.status === 'failed' && m.retrySafe === true && !!m.clientId && m.authorUserId === userId && m.kind === 'text' && (
             <button className="retry" onClick={onRetry}>
               ניסיון נוסף
             </button>
@@ -1278,7 +1286,7 @@ function Message({
             {m.reactions.map((r) => (
               <button
                 key={r.emoji}
-                disabled={!caps.reactions}
+                disabled={!caps.reactions || m.actions?.reactions===false}
                 className={r.mine ? 'mine' : ''}
                 aria-label={`תגובה ${r.emoji}, ${r.count}`}
                 onClick={() => onReaction(r.mine ? '' : r.emoji)}
@@ -1292,14 +1300,14 @@ function Message({
         {menu && (
           <div className="message-actions">
             <div className="reaction-picker">
-              {caps.reactions &&
+              {caps.reactions && m.actions?.reactions!==false &&
                 emojiChoices.map((e) => (
                   <button aria-label={'תגובה ' + e} key={e} onClick={() => onReaction(e)}>
                     {e}
                   </button>
                 ))}
             </div>
-            {caps.reply && (
+            {caps.reply && m.actions?.reply!==false && (
               <button onClick={onReply}>
                 <Reply size={16} />
                 מענה
@@ -1309,13 +1317,14 @@ function Message({
               (isParent || m.authorUserId === userId) &&
               m.kind === 'text' &&
               caps.edit &&
+              m.actions?.edit!==false &&
               Date.now() - m.time < (caps.editWindowMs || 0) && (
                 <button onClick={onEdit}>
                   <Pencil size={16} />
                   עריכה
                 </button>
               )}
-            {m.fromMe && (isParent || m.authorUserId === userId) && caps.delete && (
+            {m.fromMe && (isParent || m.authorUserId === userId) && caps.delete && m.actions?.delete!==false && (
               <button className="danger-text" onClick={onDelete}>
                 <Trash2 size={16} />
                 מחיקה לכולם
@@ -1366,6 +1375,7 @@ function Composer({
 }) {
   const [text, setText] = useState(''),
     [busy, setBusy] = useState(false),
+    [sendUncertain, setSendUncertain] = useState(false),
     [emojiOpen, setEmojiOpen] = useState(false),
     [recentEmojis, setRecentEmojis] = useState<string[]>([]),
     [favoriteStickerIds, setFavoriteStickerIds] = useState<string[]>([]),
@@ -1384,14 +1394,16 @@ function Composer({
     mediaStream = useRef<MediaStream | null>(null),
     chunks = useRef<Blob[]>([]),
     id = useRef(newId()),
+    lastAttempt = useRef<{ id: string; text: string; replyId?: string; file: File | null; voice: Blob | null; sticker: boolean } | null>(null),
     typingAt = useRef(0),
     mounted = useRef(true),
     cancelRecord = useRef(false),
     stickerRequest = useRef<AbortController | null>(null),
     submitting = useRef(false),
+    uncertain = useRef(false),
     copiedEdit = useRef(false),
     available = useRef(enabled && !suspended);
-  available.current = enabled && !suspended;
+  available.current = enabled && !suspended && !sendUncertain;
   const { burst, celebrate } = useChatCelebration(effects, flair, group);
   const path = '/groups/' + encodeURIComponent(group);
   useEffect(() => {
@@ -1413,6 +1425,7 @@ function Composer({
     }
   }, [suspended]);
   useEffect(() => {
+    if (uncertain.current) return;
     if (editing) {
       copiedEdit.current = true;
       setText(
@@ -1463,7 +1476,7 @@ function Composer({
   const availableStickers = [...new Map(messages.filter(m => m.groupId === group && m.kind === 'sticker' && !m.deleted && m.mediaId)
     .map(m => [m.mediaId!, { id: m.mediaId!, url: `/api/groups/${encodeURIComponent(group)}/media/${encodeURIComponent(m.mediaId!)}`, label: m.text || `מדבקה מאת ${m.sender}` }])).values()];
   const chooseSticker = async (mediaId: string) => {
-    if (!enabled || busy || editing || !caps.sticker || !availableStickers.some(s => s.id === mediaId)) return;
+    if (!available.current || busy || editing || !caps.sticker || !availableStickers.some(s => s.id === mediaId)) return;
     const controller = new AbortController();
     stickerRequest.current?.abort(); stickerRequest.current = controller;
     setEmojiOpen(false); setBusy(true); onBusyChange(true);
@@ -1475,9 +1488,34 @@ function Composer({
       if (mounted.current && !controller.signal.aborted) onError((e as Error).message);
     } finally { if (mounted.current && stickerRequest.current === controller) { setBusy(false); onBusyChange(false); } }
   };
+  const clearDraft = () => {
+    setText(''); setFile(null); setVoice(null); setSticker(false);
+    uncertain.current = false; setSendUncertain(false); lastAttempt.current = null; id.current = newId();
+  };
+  const checkSend = async () => {
+    if (!uncertain.current || submitting.current || busy || !enabled || suspended) return;
+    submitting.current = true; setBusy(true); onBusyChange(true);
+    try {
+      const result = await api<{ state: string }>(`${path}/outgoing/${encodeURIComponent(id.current)}`);
+      if (!mounted.current) return;
+      if (result.state === 'confirmed') { clearDraft(); celebrate(); onSent(); }
+      else if (result.state === 'failed') { uncertain.current = false; setSendUncertain(false); }
+      // Missing records cannot prove non-submission (for example after forgetting
+      // a conversation). Neither an absent record nor an unknown result retries.
+    } catch (e) { if (mounted.current) onError((e as Error).message); }
+    finally { submitting.current = false; if (mounted.current) { setBusy(false); onBusyChange(uncertain.current); } }
+  };
   const send = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (submitting.current || busy || !enabled || recording || (!text.trim() && !file && !voice)) return;
+    if (submitting.current || uncertain.current || busy || !available.current || recording || (!text.trim() && !file && !voice)) return;
+    if (!editing) {
+      const previous = lastAttempt.current, draft = { text, replyId: reply?.id, file, voice, sticker };
+      // Every payload change gets a new identity after proven non-submission,
+      // including quote/attachment dismissal and replacement recordings.
+      if (previous?.id === id.current && (previous.text !== text || previous.replyId !== draft.replyId ||
+        previous.file !== file || previous.voice !== voice || previous.sticker !== sticker)) id.current = newId();
+      lastAttempt.current = { id: id.current, ...draft };
+    }
     submitting.current = true; setBusy(true); onBusyChange(true);
     try {
       if (editing) {
@@ -1494,18 +1532,19 @@ function Composer({
       } else
         await api(path + '/messages', 'POST', { clientId: id.current, text, replyId: reply?.id });
       if (!mounted.current) return;
-      setText('');
-      setFile(null);
-      setVoice(null);
-      setSticker(false);
-      id.current = newId();
+      clearDraft();
       if (!editing) celebrate();
       onSent();
     } catch (e) {
-      if (mounted.current) onError((e as Error).message);
+      if (mounted.current) {
+        if (!editing && (e as { sendOutcome?: string }).sendOutcome !== 'not_submitted') {
+          uncertain.current = true; setSendUncertain(true); setEmojiOpen(false); setAttachOpen(false);
+        }
+        onError((e as Error).message);
+      }
     } finally {
       submitting.current = false;
-      if (mounted.current) { setBusy(false); onBusyChange(false); }
+      if (mounted.current) { setBusy(false); onBusyChange(uncertain.current); }
     }
   };
   const stopRecording = () => {
@@ -1514,7 +1553,7 @@ function Composer({
     setRecording(false);
   };
   const record = async () => {
-    if (!available.current) return;
+    if (!available.current || submitting.current || uncertain.current) return;
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
       onError('להקלטה צריך כתובת HTTPS שהמכשיר סומך עליה, או localhost.');
       return;
@@ -1525,7 +1564,7 @@ function Composer({
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      if (!mounted.current || !available.current) {
+      if (!mounted.current || !available.current || submitting.current || uncertain.current) {
         stream.getTracks().forEach((t) => t.stop());
         return;
       }
@@ -1570,6 +1609,7 @@ function Composer({
   return (
     <div className="composer-wrap" hidden={suspended}>
       <ChatCelebration burst={burst} />
+      <fieldset disabled={sendUncertain} style={{ display: 'contents' }}>
       {reply && !editing && (
         <div className="reply-preview">
           <Reply size={18} />
@@ -1787,6 +1827,12 @@ function Composer({
           </>
         )}
       </form>
+      </fieldset>
+      {sendUncertain && <div className="send-resolution" role="status">
+        <p>ייתכן שההודעה נשלחה. הטיוטה נשמרה, ולא נשלח אותה שוב בלי אישור שלא הוגשה.</p>
+        <button type="button" disabled={busy || !enabled} onClick={() => void checkSend()}>בדיקת מצב השליחה</button>
+        <button type="button" disabled={busy} onClick={() => { clearDraft(); clearReply(); clearEditing(); onBusyChange(false); }}>סגירת הטיוטה בלי לשלוח שוב</button>
+      </div>}
       <div className="composer-foot">
         <span>אפשר פשוט להיות בקשר.</span>
         <span>
@@ -1811,7 +1857,7 @@ function Parent({
   const [createdChild, setCreatedChild] = useState('');
   const [settingsChild, setSettingsChild] = useState('');
   const [settingsMode, setSettingsMode] = useState<'profile' | 'password'>('profile');
-  const [overviewStale, setOverviewStale] = useState(false);
+  const [overviewStale, setOverviewStale] = useState(false), [overviewFailed, setOverviewFailed] = useState(false);
   const [data, setData] = useState<FamilyOverview | null>(null),
     [qr, setQr] = useState<string | null>(null),
     [busy, setBusy] = useState(false),
@@ -1822,6 +1868,7 @@ function Parent({
     [password, setPassword] = useState(''),
     [confirmError, setConfirmError] = useState('');
   useEffect(() => { if (data) saveChildSelection(me.user.id, child); }, [me.user.id, child, !!data]);
+  const browserOnline = useBrowserOnline();
   const acting = useRef(false), overviewRequest = useRef(0);
   const load = useCallback(async (background = false) => {
     const request = ++overviewRequest.current;
@@ -1831,14 +1878,23 @@ function Parent({
       setData(d);
       setChild(prev => reconcileChildSelection(d, prev));
       if (d.state === 'qr') {
-        const q = await api('/parent/qr');
-        if (request !== overviewRequest.current) return;
-        setQr(q.qr);
+        // A QR read failure is not an overview failure: the overview succeeded. Drop any old code.
+        try {
+          const q = await api('/parent/qr');
+          if (request !== overviewRequest.current) return;
+          setQr(q.qr);
+        } catch (e) {
+          if (request !== overviewRequest.current) return;
+          setQr(null);
+          if (!(background && isTransientApiError(e))) onError((e as Error).message);
+        }
       } else setQr(null);
       setOverviewStale(false);
+      setOverviewFailed(false);
     } catch (e) {
       if (request !== overviewRequest.current) return;
       setOverviewStale(true);
+      setOverviewFailed(true);
       if (background && isTransientApiError(e)) return;
       else onError((e as Error).message);
     }
@@ -1878,6 +1934,11 @@ function Parent({
     }
   };
   const selectedChild = data ? familyProgress(data).children.find(item => item.id === child) : undefined;
+  // Existing accounts/catalog are persisted setup evidence, not the current
+  // connection state: a temporary disconnect must never hide family management.
+  const familySetupAvailable = !!data && (data.state === 'connected' || data.children.length > 0 || data.groups.length > 0);
+  const connectionReadUnavailable = overviewFailed || !browserOnline;
+  const connectionPending = ['connecting', 'reconnecting', 'qr'].includes(data?.state || '');
   const stateLabels: Record<string, string> = {
     connected: 'מחובר',
     connecting: 'מתחברים…',
@@ -1918,30 +1979,18 @@ function Parent({
           </div>
         )}
         {data && familyProgress(data).completed < 3 && <FamilyProgress data={data} busy={busy} stale={overviewStale} onAdd={() => setAddingChild(true)} onSelect={id => { setChild(id); setCreatedChild(''); }} />}
-        <ChildManagement data={data} selected={child} busy={busy} stale={overviewStale} createdChild={createdChild}
-          photoRetryKey={`${data?.state || 'idle'}:${groupPhotoRevision}`}
-          onAdd={() => setAddingChild(true)} onSelect={id => { setChild(id); setCreatedChild(''); }}
-          onSettings={(id, mode) => { setSettingsChild(id); setSettingsMode(mode); setSettings(true); }}
-          onRetry={() => void load()} onRefresh={() => void act('/parent/sync-groups')}
-          onGrant={change => { setCreatedChild(''); return act('/parent/grant', change, 'PUT'); }}>
-          <IdentitySettings key={child} childId={child} disabled={busy || overviewStale}
-            value={data?.children.find(account => account.id === child)?.senderLabel || ''}
-            onSave={async label => {
-              const saved = await act('/parent/identity', { childId: child, label }, 'PUT');
-              if (!saved) throw new Error('לא התקבל אישור לשמירת החתימה. בדקו את המצב לאחר הרענון.');
-            }} onError={onError}/>
-        </ChildManagement>
-        <details className="parent-connection-details" open={data?.state !== 'connected' || !!data?.disconnect}>
-          <summary>חיבור החשבון <span>{data?.state === 'connected' && !data?.disconnect ? 'מחובר' : 'נדרשת בדיקה'}</span></summary>
+        <details className="parent-connection-details" open={connectionReadUnavailable || data?.state !== 'connected' || !!data?.disconnect}>
+          <summary>חיבור החשבון <span>{!connectionReadUnavailable && data?.state === 'connected' && !data?.disconnect ? 'מחובר' : 'נדרשת בדיקה'}</span></summary>
           <section className="parent-card" id="family-connection" tabIndex={-1}>
             <div className="step-title">
               <span>01</span>
               <h2>מחברים את WhatsApp</h2>
-              <span className={'state-pill ' + (data?.state === 'connected' ? 'connected' : '')}>
-                {(data?.disconnect ? 'מנותק' : stateLabels[data?.state || '']) || 'טוענים…'}
+              <span className={'state-pill ' + (!connectionReadUnavailable && data?.state === 'connected' && !data?.disconnect ? 'connected' : '')}>
+                {!browserOnline ? 'אין חיבור לרשת' : overviewFailed ? 'ממתינים לאימות' : (data?.disconnect ? 'מנותק' : stateLabels[data?.state || '']) || 'טוענים…'}
               </span>
             </div>
             <p>חשבון ההורה משמש לשליחה ולקבלה. פרטי הקישור נשארים בשרת.</p>
+            <ConnectionGuidance loaded={!!data} input={{ overviewFailed, browserOnline, state: data?.state, qrVisible: !!qr, disconnected: !!data?.disconnect }} />
             {qr ? (
               <div className="qr">
                 <img src={qr} alt="קוד QR לקישור WhatsApp — להורה בלבד" />
@@ -1961,18 +2010,18 @@ function Parent({
               </div>
             )}
             {data?.state === 'connected' ? (
-              <div className="connected-note">
+              !connectionReadUnavailable && <div className="connected-note">
                 <CheckCheck size={20} />{' '}
                 {me.connector === 'mock' ? 'המתאם המדומה פעיל' : 'החשבון מחובר'}
               </div>
             ) : (
               <button
                 className="primary"
-                disabled={busy}
+                disabled={busy || !data || overviewStale || !browserOnline || connectionPending}
                 onClick={() => void act('/parent/connect')}
               >
                 {busy ? <LoaderCircle className="spin" size={18} /> : <Plus size={19} />}{' '}
-                {me.connector === 'mock' ? 'הפעלת המתאם המדומה' : 'קישור החשבון'}
+                {connectionPending ? (data?.state === 'qr' ? 'ממתינים לסריקת הקוד' : 'ממתינים לחיבור…') : me.connector === 'mock' ? 'הפעלת המתאם המדומה' : 'קישור החשבון'}
               </button>
             )}
             {data && <DisconnectPanel active={!!data.linked || data.state !== 'idle'} busy={busy}
@@ -1990,9 +2039,30 @@ function Parent({
             </div>
           </section>
         </details>
-        <ChildTabletSetup child={selectedChild} loaded={!!data} stale={overviewStale} busy={busy}
-          origin={location.origin} openChat={openChat}
-          onPassword={id => { setSettingsChild(id); setSettingsMode('password'); setSettings(true); }}/>
+        {familySetupAvailable ? <>
+          <ChildManagement data={data} selected={child} busy={busy} stale={overviewStale} createdChild={createdChild}
+            photoRetryKey={`${data?.state || 'idle'}:${groupPhotoRevision}`}
+            onAdd={() => setAddingChild(true)} onSelect={id => { setChild(id); setCreatedChild(''); }}
+            onSettings={(id, mode) => { setSettingsChild(id); setSettingsMode(mode); setSettings(true); }}
+            onRetry={() => void load()} onRefresh={() => void act('/parent/sync-groups')}
+            onAccess={change => act('/parent/child-access', change, 'PUT')}
+            onGrant={change => { setCreatedChild(''); return act('/parent/grant', change, 'PUT'); }}>
+            <IdentitySettings key={child} childId={child} disabled={busy || overviewStale}
+              value={data?.children.find(account => account.id === child)?.senderLabel || ''}
+              onSave={async label => {
+                const saved = await act('/parent/identity', { childId: child, label }, 'PUT');
+                if (!saved) throw new Error('לא התקבל אישור לשמירת החתימה. בדקו את המצב לאחר הרענון.');
+              }} onError={onError}/>
+          </ChildManagement>
+          <ChildTabletSetup child={selectedChild} loaded={!!data} stale={overviewStale} busy={busy}
+            origin={location.origin} openChat={openChat}
+            onPassword={id => { setSettingsChild(id); setSettingsMode('password'); setSettings(true); }}/>
+        </> : <section className="parent-card" aria-label="השלבים הבאים" aria-live="polite">
+          <h2>אחרי חיבור החשבון</h2>
+          <p>2. מוסיפים ילד או ילדה. 3. בוחרים אילו שיחות להציג להם.</p>
+          <p>{!data ? 'טוענים את מצב החשבון…' : 'קודם מחברים את WhatsApp למעלה. לאחר החיבור אפשר להמשיך להגדרת הילדים והשיחות.'}</p>
+          {overviewFailed && <button type="button" className="outline-button" disabled={busy} onClick={() => void load()}>ניסיון נוסף</button>}
+        </section>}
         <DiagnosticsPanel />
         <UpdatesPanel />
         <details className="transparency">

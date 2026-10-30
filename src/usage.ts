@@ -1,6 +1,7 @@
 import type { Store, Session } from './store.js';
 import { hash } from './crypto.js';
 import { randomUUID } from 'node:crypto';
+import { ChildAccessError } from './child-access.js';
 
 export const USAGE_LEASE_MS = 15_000;
 export const USAGE_HEARTBEAT_MS = 5_000;
@@ -98,6 +99,7 @@ export class UsageBudgets {
   open(s: Session) {
     const f = s.user.familyId, c = s.user.id, now = this.clock(), sh = hash(s.sid);
     return this.store.tx(() => {
+      if (!this.store.session(s.sid)) throw new ChildAccessError(401, 'SIGN_IN_REQUIRED');
       this.settle(f, c, now);
       // Admission is separate from heartbeat. Only a server-issued identity may
       // activate, so recycling a stopped/expired row never makes an old delayed
@@ -115,6 +117,7 @@ export class UsageBudgets {
   heartbeat(s: Session, tab: string, seq: number, active: boolean) {
     const f = s.user.familyId, c = s.user.id, now = this.clock(), sh = hash(s.sid);
     return this.store.tx(() => {
+      if (!this.store.session(s.sid)) throw new ChildAccessError(401, 'SIGN_IN_REQUIRED');
       this.settle(f, c, now);
       const previous = this.store.one('SELECT seq,until FROM usage_leases WHERE family_id=? AND child_id=? AND session_hash=? AND tab=?', f, c, sh, tab);
       if (!previous || previous.seq === -1 && previous.until <= now) throw new UsageError('USAGE_TAB_EXPIRED');
@@ -201,14 +204,17 @@ export class UsageBudgets {
     });
   }
   revokeUser(f: string, c: string) {
+    this.store.tx(() => this.revokeUserInTransaction(f, c));
+  }
+  /** Allows access policy and usage revocation to commit atomically. */
+  revokeUserInTransaction(f: string, c: string) {
+    if (!this.store.db.isTransaction) throw new Error('Usage revocation requires a transaction');
     const now = this.clock();
-    this.store.tx(() => {
-      const policy = this.store.one('SELECT cursor FROM usage_policy WHERE family_id=? AND child_id=?', f, c);
-      // Revocation must remain available during a clock rollback. Its existing
-      // high-water mark was already settled; it never grants new content time.
-      if (policy) this.settle(f, c, Math.max(now, policy.cursor));
-      this.store.run('UPDATE usage_leases SET until=0 WHERE family_id=? AND child_id=?', f, c);
-    });
+    const policy = this.store.one('SELECT cursor FROM usage_policy WHERE family_id=? AND child_id=?', f, c);
+    // Revocation must remain available during a clock rollback. Its existing
+    // high-water mark was already settled; it never grants new content time.
+    if (policy) this.settle(f, c, Math.max(now, policy.cursor));
+    this.store.run('UPDATE usage_leases SET until=0 WHERE family_id=? AND child_id=?', f, c);
   }
   restart() {
     const now = this.clock();

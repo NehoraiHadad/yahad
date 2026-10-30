@@ -1,0 +1,34 @@
+{
+  "sourceBase": "2ee1aeb2756739f19d22cbaf20729c99360b4af4",
+  "integrationPassed": 96,
+  "servicePassed": 45,
+  "webPassed": 52,
+  "webSkipped": 1,
+  "webSkipReason": "Existing symlink collision test requires unapproved Windows symlink privilege; no privilege change requested.",
+  "typescriptTypecheckPassed": true,
+  "productionWebBuildPassed": true,
+  "authoritySourceCompiled": true,
+  "actualPrivateWriterConsumerAndStoreTests": true,
+  "syntheticPrincipals": true,
+  "actualCrossAccountRoleTests": false,
+  "nativeImpersonationCalled": false,
+  "pipeListenerCreated": false,
+  "scmInvoked": false,
+  "productionDelegationCreated": false,
+  "productionEntryEnabled": false,
+  "remainingCode": [
+    "authenticated pipe listener/client composition",
+    "native owner confirmation window",
+    "trusted intake catalog publisher",
+    "installed-role writer/consumer factory",
+    "SCM outer-job bootstrap composition and mode/check dispatcher"
+  ],
+  "remainingAcceptance": [
+    "real token/role ACL/pipe identity",
+    "cross-service job and startup gate",
+    "native confirmation/delegation UX",
+    "clean install/reboot/power loss/update/uninstall",
+    "new complete dependency payload build",
+    "TLS/LAN handoff"
+  ]
+}

@@ -1,3 +1,4 @@
+import { SendNotSubmittedError } from '../src/send-outcome.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -373,6 +374,19 @@ test('real adapter maps actual media bytes, captions, Opus duration and thumbnai
   assert.equal(calls[3].content.caption, 'Signature: document');
 });
 
+test('real adapter rechecks outgoing authorization after asynchronous media preparation before provider submission', async () => {
+  const { h } = hooks(), c = new BaileysConnector(h);
+  let paused = false, submitted = 0, checks = 0;
+  c.sock = { sendMessage: async () => { submitted++; throw new Error('must not submit after pause'); } } as any;
+  const preparation = c.send({ id: 'synthetic-revoked-image', groupId: '1@g.us', kind: 'image', text: '',
+    bytes: readFileSync('fixtures/garden.jpg'), mime: 'image/jpeg',
+    beforeSend: () => { checks++; if (paused) throw new Error('synthetic session revoked'); } });
+  // thumbnail() has yielded to asynchronous processing; no provider call has started.
+  assert.equal(submitted, 0); paused = true;
+  await assert.rejects(preparation, /synthetic session revoked/);
+  assert.equal(checks, 1); assert.equal(submitted, 0);
+});
+
 test('documented setup CLI creates real separate accounts and a protected random key without printing passwords', { skip: process.platform === 'win32' ? 'Requires Linux private file modes; run on Linux before activation' : false }, async () => {
   const { spawn } = await import('node:child_process');
   const directory = mkdtempSync(join(tmpdir(), 'yachad-setup-'));
@@ -439,4 +453,16 @@ test('documented setup CLI creates real separate accounts and a protected random
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test('adapter proves preparation rejection only before handoff; provider failures and guard rejection retain their identity', async () => {
+  const { h } = hooks(), connector = new BaileysConnector(h); let calls = 0;
+  const message = { id: 'synthetic-proof', groupId: '1@g.us', kind: 'text' as const, text: 'Synthetic only' };
+  await assert.rejects(connector.send(message), error => error instanceof SendNotSubmittedError);
+  connector.sock = { sendMessage: async () => { calls++; throw new Error('Synthetic lost ACK'); } } as any;
+  const rejected = new Error('Synthetic permission revoked');
+  await assert.rejects(connector.send({ ...message, beforeSend: () => { throw rejected; } }), error => error === rejected);
+  assert.equal(calls, 0);
+  await assert.rejects(connector.send(message), error => error instanceof Error && !(error instanceof SendNotSubmittedError));
+  assert.equal(calls, 1);
 });

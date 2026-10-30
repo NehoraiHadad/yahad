@@ -1,10 +1,15 @@
+import {initializePollContexts,savePollState,loadPollState} from './polls/storage.js';
+import {initializePollVotes} from './polls/pending.js';
 import { conversationKind } from './conversation-id.js';
 import { DatabaseSync, backup } from 'node:sqlite';
 import { initializeChatReadState, recordUnread } from './chat-read-state.js';
+import { initializePendingReactions } from './message-reactions.js';
+import { restrictedStoredMessage, restrictedPlaceholder } from './connectors/message-retention.js';
 import { Diagnostics } from './diagnostics.js';
 import { DATABASE_SCHEMA, USERS_TABLE, migrateAccountNames } from './db.js';
 import { migrateUsage, migrateUsageCalendar, migrateUsageAdmission } from './usage-schema.js';
 import { UsageBudgets } from './usage.js';
+import { ChildAccessError, migrateChildAccess } from './child-access.js';
 import { normalizeAccountName, accountNameKey } from './account-name.js';
 import {
   mkdirSync,
@@ -72,6 +77,7 @@ export class Store {
       migrateUsage(this.db);
       migrateUsageCalendar(this.db);
       migrateUsageAdmission(this.db);
+      migrateChildAccess(this.db);
       this.usage = new UsageBudgets(this, options.usageClock);
       this.usage.restart();
       this.run('INSERT OR IGNORE INTO instance_metadata VALUES(?,?)', 'connector', config.connector);
@@ -84,6 +90,9 @@ export class Store {
           this.ensureGroupKey(row.family_id, row.id);
       });
       initializeChatReadState(this);
+      initializePendingReactions(this);
+      initializePollVotes(this);
+      initializePollContexts(this);
       this.cleanOrphans();
     } catch (error) { this.db.close(); throw error; }
   }
@@ -148,6 +157,8 @@ export class Store {
     };
   }
   createSession(user: User) {
+    if (user.role === 'child' && this.childAccess(user.familyId, user.id).paused)
+      throw new ChildAccessError(403, 'CHILD_ACCESS_PAUSED');
     const sid = token(),
       csrf = token(),
       now = Date.now();
@@ -168,6 +179,7 @@ export class Store {
       hash(sid),
     );
     if (!row) return;
+    if (row.role === 'child' && this.childAccess(row.family_id, row.id).paused) return;
     if (
       row.expires < Date.now() ||
       (row.role === 'child' && row.last + this.config.childIdleMs < Date.now())
@@ -181,6 +193,7 @@ export class Store {
   allowed(user: User, g: string) {
     if (!this.knownGroup(user.familyId, g)) return false;
     if (user.role === 'parent') return true;
+    if (this.childAccess(user.familyId, user.id).paused) return false;
     return !!this.one(
       'SELECT 1 FROM grants WHERE family_id=? AND user_id=? AND group_id=?',
       user.familyId,
@@ -190,6 +203,28 @@ export class Store {
   }
   knownGroup(f: string, g: string) {
     return !!this.one('SELECT 1 FROM groups WHERE family_id=? AND id=?', f, g);
+  }
+  childAccess(f: string, c: string) {
+    const row = this.one('SELECT paused,revision FROM child_access WHERE family_id=? AND child_id=?', f, c);
+    return { paused: !!row?.paused, revision: Number(row?.revision || 0) };
+  }
+  setChildAccess(f: string, c: string, paused: boolean, revision: number) {
+    // Usage settlement, policy transition and session deletion commit together.
+    return this.tx(() => {
+      if (!this.one("SELECT 1 FROM users WHERE family_id=? AND id=? AND role='child'", f, c))
+        throw new ChildAccessError(404, 'NOT_FOUND');
+      const current = this.childAccess(f, c);
+      if (current.revision !== revision) {
+        if (current.revision === revision + 1 && current.paused === paused) return current;
+        throw new ChildAccessError(409, 'CHILD_ACCESS_CHANGED');
+      }
+      if (current.paused === paused) return current;
+      this.usage.revokeUserInTransaction(f, c);
+      this.run(`INSERT INTO child_access VALUES(?,?,?,?) ON CONFLICT(family_id,child_id)
+        DO UPDATE SET paused=excluded.paused,revision=excluded.revision`, f, c, Number(paused), revision + 1);
+      this.run('DELETE FROM sessions WHERE family_id=? AND user_id=?', f, c);
+      return { paused, revision: revision + 1 };
+    });
   }
   retained(f: string, g: string) {
     // The family parent's access is independent of child grants. Unknown groups
@@ -246,14 +281,28 @@ export class Store {
     if (!this.retained(f, g)) return;
     const row = this.diagnostics.measure(f, 'db_read', () => this.one(
       'SELECT body FROM messages WHERE family_id=? AND group_id=? AND id=?', f, g, id));
-    return row
-      ? JSON.parse(open(this.groupKey(f, g), row.body, `${f}:${g}:${id}`).toString())
-      : undefined;
+    if(!row)return;
+    const message:StoredMessage=JSON.parse(open(this.groupKey(f,g),row.body,`${f}:${g}:${id}`).toString());
+    // Lazy cleanup for legacy rows admitted before retention markers were checked.
+    // No scan or recovery: discard identified payload when that row is requested.
+    if(!message.deleted && !message.restricted && restrictedStoredMessage(message)){
+      if(message.mediaId)this.deleteMedia(f,g,message.mediaId);
+      const safe=restrictedPlaceholder(message);
+      this.putMessage(f,safe,false);
+      this.run('DELETE FROM pending_message_reactions WHERE family_id=? AND group_id=? AND target=?',f,g,id);
+      this.run('DELETE FROM pending_poll_votes WHERE family_id=? AND group_id=? AND target=?',f,g,id);
+      return safe;
+    }
+    delete message.pollState;
+    message.pollState=loadPollState(this,f,message);
+    return message;
   }
   putMessage(f: string, m: StoredMessage, live = true) {
     if (!this.retained(f, m.groupId)) return false;
     this.db.exec('SAVEPOINT message_with_unread');
     try {
+      const pollWork=m.kind==='poll'&&!m.deleted&&!m.restricted?this.all(
+        'SELECT * FROM pending_poll_votes WHERE family_id=? AND group_id=? AND target=?',f,m.groupId,m.id):[];
       const isNew = !this.one('SELECT 1 FROM messages WHERE family_id=? AND group_id=? AND id=?', f, m.groupId, m.id);
       this.diagnostics.measure(f, 'db_write', () => this.run(
         'INSERT INTO messages VALUES(?,?,?,?,?) ON CONFLICT(family_id,group_id,id) DO UPDATE SET body=excluded.body,time=excluded.time',
@@ -261,8 +310,11 @@ export class Store {
         m.groupId,
         m.id,
         m.time,
-        seal(this.groupKey(f, m.groupId), JSON.stringify(m), `${f}:${m.groupId}:${m.id}`),
+        seal(this.groupKey(f, m.groupId), JSON.stringify({...m,pollState:undefined}), `${f}:${m.groupId}:${m.id}`),
       ));
+      savePollState(this,f,m);
+      for(const row of pollWork)this.run('INSERT OR IGNORE INTO pending_poll_votes VALUES(?,?,?,?,?,?)',
+        row.family_id,row.group_id,row.target,row.slot,row.received,row.body);
       recordUnread(this, f, m, isNew, live);
       this.db.exec('RELEASE message_with_unread');
     } catch (error) {
@@ -338,6 +390,8 @@ export class Store {
   purgeGroup(f: string, g: string) {
     const media = this.all('SELECT id FROM media WHERE family_id=? AND group_id=?', f, g);
     this.tx(() => {
+      this.run('DELETE FROM pending_message_reactions WHERE family_id=? AND group_id=?', f, g);
+      this.run('DELETE FROM pending_poll_votes WHERE family_id=? AND group_id=?',f,g);
       this.run('DELETE FROM media WHERE family_id=? AND group_id=?', f, g);
       this.run('DELETE FROM messages WHERE family_id=? AND group_id=?', f, g);
       this.run('DELETE FROM group_keys WHERE family_id=? AND group_id=?', f, g);

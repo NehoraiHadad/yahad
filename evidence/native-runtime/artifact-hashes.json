@@ -1,0 +1,20 @@
+{
+  "sourceCommit": "80fbeade8e5749e0e0e1808b207990ff235e1672",
+  "artifacts": {
+    "Yahad.Setup/Yahad.Setup.exe": {
+      "bytes": 139863701,
+      "sha256": "d62590697f7998debc975c9bf5d75a95885ab2d317cfc052805a25d52ebae170",
+      "execution": "not-launched-as-installer-or-service"
+    },
+    "Yahad.Host.Slice/Yahad.Host.Slice.exe": {
+      "bytes": 73618808,
+      "sha256": "96875944f00d8b3c5cf82f75c9adf8d2e89f09c8c3ec9b0cd634569ff3c1e8f6",
+      "execution": "not-launched-as-installer-or-service"
+    },
+    "Yahad.Platform.Bundle/Yahad.Platform.exe": {
+      "bytes": 162304,
+      "sha256": "6b162c1aaebf9290b15470a12b6d78f79c67aeeea128eb620240fff60d7d80a6",
+      "execution": "not-launched-as-installer-or-service"
+    }
+  }
+}

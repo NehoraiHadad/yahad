@@ -1,0 +1,197 @@
+{
+  "format": 1,
+  "combinedHead": "430f589815a7b5a1714eb92f8eac4befa1af9b15",
+  "branch": "feat/local-lan-combined",
+  "fixedInputs": {
+    "applicationBase": "0bf1e9d4d71221fcb77c6aa2b2213aaf4ea0a5ae",
+    "nativeInstallerBase": "040fcd410e6c035da0cac20cdb3920999f2c3999",
+    "appLanSource": "8ac764a6b0b19cad83a974b34336cc490a35e7d7",
+    "funnelGuideTightening": "b2c28b3",
+    "installerLanSource": "17121a54a10f49a44ebd07c4f35826ae3ff56317"
+  },
+  "integration": {
+    "twoParentFoundationMerge": "85df756717ceabc5d8fb6285030e193690019fcc",
+    "appCherryPick": "426927a",
+    "guideCherryPick": "03ba96f",
+    "nativeFileBoundaryRegression": "31f7e36812bb5faffe36aea2ad5f914379e0736e",
+    "installerLanCherryPick": "430f589815a7b5a1714eb92f8eac4befa1af9b15",
+    "textualConflicts": [],
+    "databaseSchema": 6,
+    "schemaIntegrationDecision": "Preserve app schema6 and migration5-to6; installer uses schema from verified payload metadata rather than dropping app work or forcing schema5.",
+    "payloadIntegrationDecision": "Native payload stages the public LAN help template and explicit capability marker. A markerless older payload cannot enable LAN silently."
+  },
+  "checksOnCombinedHead": {
+    "node": "24.22.2",
+    "typescriptNoEmit": "passed",
+    "viteBuild": {
+      "status": "passed",
+      "modules": 1630
+    },
+    "mockAndInjectTests": {
+      "passed": 96,
+      "failed": 0,
+      "skipped": 0,
+      "log": "evidence/lan-local/app-tests.log"
+    },
+    "suiteFiles": [
+      "tests/native-lan-config.test.ts",
+      "tests/lan-origins.test.ts",
+      "tests/security.test.ts",
+      "tests/child-access.test.ts",
+      "tests/child-access-ui.test.ts",
+      "tests/connection-guidance.test.ts",
+      "tests/parent-connection-integration.test.ts",
+      "tests/installer-connector-consent.test.ts",
+      "tests/windows-authority-ui.test.ts",
+      "tests/update-progress-ui.test.ts"
+    ],
+    "dotnetInstallerChecks": {
+      "buildProjects": [
+        "Yahad.Install.Tests",
+        "Yahad.FirstInstall.Tests",
+        "Yahad.Production.Tests",
+        "Yahad.Recovery.Tests"
+      ],
+      "buildWarnings": 0,
+      "buildErrors": 0,
+      "lanContractPassed": 8,
+      "lanRuntimePassed": 14,
+      "lanIntegrationPassed": 22,
+      "sourceSchemaParsers": {
+        "production": 6,
+        "recoveryPackage": 6,
+        "firstInstall": 6
+      },
+      "nativeOperations": false,
+      "log": "evidence/lan-local/installer-tests.log"
+    },
+    "packagingTests": {
+      "passed": 6,
+      "failed": 0,
+      "files": [
+        "tests/test_first_install_schema.py",
+        "tests/test_native_lan_assets.py"
+      ],
+      "actualSourceSchema": 6,
+      "actualPublicAssetSmoke": "passed",
+      "stagedPublicFiles": [
+        "deploy/lan-help.html",
+        "deploy/lan-capabilities.json"
+      ],
+      "privateFilesCopied": false
+    },
+    "caddyAdapt": {
+      "status": "passed",
+      "proof": "evidence/lan-local/caddy-adapt-proof.json",
+      "listenerStarted": false,
+      "trustChanged": false
+    },
+    "syntheticUi": {
+      "images": 10,
+      "widths": [
+        760,
+        980
+      ],
+      "windowShown": false,
+      "directory": "evidence/lan-local/ui"
+    },
+    "independentReview": {
+      "status": "no remaining blocking findings",
+      "covered": [
+        "exact origins and CSRF",
+        "private CA separation",
+        "scoped firewall ownership",
+        "preparation and removal recovery",
+        "schema admission",
+        "combined native and child-access foundation"
+      ]
+    }
+  },
+  "notEstablished": [
+    "live installation",
+    "firewall mutation",
+    "CA trust enrollment",
+    "second-device access",
+    "physical microphone recording",
+    "router or Internet access",
+    "provider or WhatsApp connection",
+    "signed or published distribution"
+  ],
+  "excludedMovingInputs": [
+    "C9",
+    "moving message-support branch"
+  ],
+  "deliveryRef": "feat/local-lan-combined",
+  "implementationComplete": true,
+  "liveAcceptanceComplete": false,
+  "availableParentHeadNotMerged": "c9e7478e27ae30de1f9954912b8b2ac62640330e",
+  "integrationInstructions": [
+    "Use the combined branch; both fixed input commits are ancestors through the explicit two-parent merge.",
+    "Merge the combined tip into the parent integration branch and preserve its later onboarding/message/timer work. Do not replace parent src/ or web/ with an old installer tree.",
+    "Do not cherry-pick only the new installer LAN commit onto 0bf: it requires the stable 040 native application foundation.",
+    "Build a fresh coherent app/native payload from the final integrated commit; schema and source hashes must match. Do not reuse or edit old embedded payload bytes.",
+    "Current release/download pins, signed assets, live services and provider accounts were not changed. Rerun appropriate checks after integration; hardware acceptance remains separate."
+  ],
+  "newWorkFiles": [
+    "deploy/lan-capabilities.json",
+    "deploy/lan-help.html",
+    "docs/INTERNET-ACCESS.md",
+    "docs/LAN-INSTALL.md",
+    "docs/NATIVE-FIRST-INSTALL.md",
+    "installer/check-lan.ps1",
+    "installer/windows/first_install_package.py",
+    "installer/windows/prepare_core_fixture.py",
+    "installer/Yahad.FirstInstall.Tests/LanIntegrationTests.cs",
+    "installer/Yahad.FirstInstall.Tests/LanRuntimeTests.cs",
+    "installer/Yahad.FirstInstall.Tests/Program.cs",
+    "installer/Yahad.FirstInstall.Tests/StoreFixture.cs",
+    "installer/Yahad.Install.Core/LanDeployment.cs",
+    "installer/Yahad.Install.Tests/LanDeploymentTests.cs",
+    "installer/Yahad.Install.Tests/Program.cs",
+    "installer/Yahad.Production.Tests/Program.cs",
+    "installer/Yahad.Recovery.Tests/Program.cs",
+    "installer/Yahad.ServiceHost/InstalledActivation.cs",
+    "installer/Yahad.ServiceHost/LanProxyService.cs",
+    "installer/Yahad.ServiceHost/Program.cs",
+    "installer/Yahad.ServiceHost/ServiceProcess.cs",
+    "installer/Yahad.Setup/InstallFlow.cs",
+    "installer/Yahad.Setup/InstallState.cs",
+    "installer/Yahad.Setup/LanRecoveryPolicy.cs",
+    "installer/Yahad.Setup/LanServiceRegistration.cs",
+    "installer/Yahad.Setup/LanSetupRequest.cs",
+    "installer/Yahad.Setup/LanWebConfiguration.cs",
+    "installer/Yahad.Setup/MainWindow.Lan.cs",
+    "installer/Yahad.Setup/MainWindow.xaml",
+    "installer/Yahad.Setup/MainWindow.xaml.cs",
+    "installer/Yahad.Setup/NativeLanFirewall.cs",
+    "installer/Yahad.Setup/NativeLanInstall.cs",
+    "installer/Yahad.Setup/NativeSetupHost.cs",
+    "installer/Yahad.Setup/PayloadSchema.cs",
+    "installer/Yahad.Setup/PreservedInstallation.cs",
+    "installer/Yahad.Setup/SetupElevation.cs",
+    "src/allowed-origins.ts",
+    "src/config.ts",
+    "src/server.ts",
+    "tests/lan-origins.test.ts",
+    "tests/native-lan-config.test.ts",
+    "tests/test_first_install_schema.py",
+    "tests/test_native_lan_assets.py"
+  ],
+  "executionDisclosures": {
+    "browserHelpPreview": {
+      "action": "open synthetic local help HTML in Chrome",
+      "reason": "Browser URL policy allows HTTP/HTTPS only. No workaround attempted.",
+      "target": "file:///C:/Users/nehor/Documents/Codex/2026-10-29/task-2/yahad-lan-app/.local/lan-help-preview.html",
+      "status": "denied"
+    },
+    "sdkFirstRun": {
+      "message": "SDK first-run reported creation of ASP.NET development certificate before suppression flags in isolated builds",
+      "remainingUncertainty": "No matching localhost ASP.NET certificate was visible in inspected CurrentUser/My. SDK log side effect was not silently treated as a trust action.",
+      "explicitTrustCommandRun": false,
+      "readOnlyPersonalStoreMatchingCount": 0,
+      "certificateRemoved": false
+    },
+    "testIsolation": "All final SDK calls disable certificate generation, telemetry and PATH mutation; offline NuGet sources; process-local workspace cache/temp."
+  },
+  "evidenceOnlyDeliveryCommit": "The delivery tip may add this manifest and evidence; implementation code remains identical to combinedHead. Final-tip verification is supplied alongside the Git bundle."
+}

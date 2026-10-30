@@ -1,6 +1,15 @@
+import {normalizeInteractive} from './interactive-content.js';
+import {unavailablePollVoting} from '../polls/sending.js';
+import {pollContext,pollVote} from '../polls/normalize.js';
+import { SendNotSubmittedError } from '../send-outcome.js';
 import { conversationKind } from '../conversation-id.js';
 import { fetchGroupPhoto } from '../group-photos.js';
 import { IngestionQueue } from './ingestion.js';
+import { restrictedMessage, restrictedStoredMessage, temporaryMessageText } from './message-retention.js';
+import { editedEnvelope, historicalReactions, reactionActor, reactionTime } from './message-updates.js';
+import { normalizeSharedContent } from './shared-content.js';
+import { readOnlyKind } from '../rich-content.js';
+import { normalizePoll } from './poll-content.js';
 import makeWASocket, {
   BufferJSON,
   initAuthCreds,
@@ -101,12 +110,16 @@ function stripEmbeddedContext(value: any): any {
       out[k] = stripEmbeddedContext(v);
   return out;
 }
-export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
+export function normalizeIncoming(raw: WAMessage,self?:{id?:string;lid?:string}): Incoming | undefined {
   const groupId = raw.key.remoteJid,
     id = raw.key.id;
   if (!groupId || !conversationKind(groupId) || !id) return;
   const content = normalizeMessageContent(raw.message);
   if (!content) return;
+  const restricted = restrictedMessage(raw);
+  const poll=!restricted && !content.protocolMessage && !content.reactionMessage ? normalizePoll(content) : undefined;
+  const interactive=!restricted && !content.protocolMessage && !content.reactionMessage ? normalizeInteractive(content) : undefined;
+  const shared=!restricted && !content.protocolMessage && !content.reactionMessage ? normalizeSharedContent(content) : undefined;
   const base: Incoming = {
     id,
     groupId,
@@ -116,8 +129,23 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
     kind: 'unsupported',
     text: 'סוג הודעה זה עדיין אינו נתמך',
     status: receipt(raw.status),
-    raw: stringify(stripEmbeddedContext(raw)),
+    edited: editedEnvelope(raw.message) || undefined,
+    historicalReactions: restricted ? undefined : historicalReactions(raw),
+    raw: restricted || poll || shared || interactive ? undefined : stringify(stripEmbeddedContext(raw)),
   };
+  if(base.edited)base.editTime=base.time;
+  if (restricted) {
+    const p = content.protocolMessage;
+    if (p?.key?.remoteJid && p.key.remoteJid !== groupId) return;
+    return { ...base, restricted: true,
+      id: p?.type === proto.Message.ProtocolMessage.Type.MESSAGE_EDIT ? p.key?.id || id : id,
+      text: temporaryMessageText };
+  }
+  if(poll)return {...base,...poll,
+    pollContext:poll.kind==='poll'?pollContext(raw,content,self):undefined,
+    pollVote:poll.unsupportedReason==='poll-vote'?pollVote(raw,content,self):undefined};
+  if(shared)return {...base,...shared};
+  if(interactive)return {...base,...interactive};
   if (content.reactionMessage) {
     const r = content.reactionMessage;
     if (r.key?.remoteJid && r.key.remoteJid !== groupId) return;
@@ -127,8 +155,9 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
       text: '',
       reaction: {
         target: r.key?.id || '',
-        actor: raw.key.fromMe ? 'self' : raw.key.participant || 'unknown',
+        actor: reactionActor(raw.key,groupId),
         emoji: r.text || '',
+        time: reactionTime(r.senderTimestampMs,base.time),
       },
     };
   }
@@ -142,23 +171,13 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
         ...raw,
         key: { ...raw.key, id: p.key?.id || id },
         message: p.editedMessage,
-      });
-      return nested ? { ...nested, edited: true } : undefined;
+      },self);
+      return nested ? { ...nested, edited: true, editTime: reactionTime(p.timestampMs,base.time) } : undefined;
     }
     return;
   }
-  // View-once and disappearing content is deliberately never retained.
-  if (
-    raw.message?.viewOnceMessage ||
-    raw.message?.viewOnceMessageV2 ||
-    raw.message?.viewOnceMessageV2Extension ||
-    raw.message?.ephemeralMessage
-  )
-    return {
-      ...base,
-      text: 'הודעה זמנית או לצפייה חד־פעמית — לפתיחה ב־WhatsApp בלבד',
-      raw: undefined,
-    };
+  if(content.ptvMessage && [content.imageMessage,content.videoMessage,content.documentMessage,content.audioMessage,content.stickerMessage].some(Boolean))
+    return {...base,raw:undefined,text:'הודעת מדיה עם שדות סותרים אינה מוצגת כאן. אפשר לפתוח אותה ב־WhatsApp.'};
   let body: any;
   if (content.lottieStickerMessage || content.stickerMessage?.isLottie)
     return {...base, text:'מדבקה בפורמט שאינו נתמך כאן — אפשר לפתוח אותה ב־WhatsApp.',raw:undefined};
@@ -173,6 +192,7 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
     const pairs = [
       ['imageMessage', 'image'],
       ['videoMessage', 'video'],
+      ['ptvMessage', 'video'],
       ['documentMessage', 'document'],
       ['audioMessage', 'audio'],
       ['stickerMessage', 'sticker'],
@@ -181,29 +201,26 @@ export function normalizeIncoming(raw: WAMessage): Incoming | undefined {
       if (content[field]) {
         body = content[field];
         base.kind = kind;
-        base.text = body.caption || '';
+        base.text = body.caption || (field==='ptvMessage'?'הודעת וידאו עגולה':'');
         base.mime = body.mimetype;
         base.filename = body.fileName;
         break;
       }
   }
-  if (body?.contextInfo?.expiration)
-    return {
-      ...base,
-      kind: 'unsupported',
-      text: 'הודעה זמנית — לפתיחה ב־WhatsApp בלבד',
-      raw: undefined,
-    };
   // Resolve only an existing message from THIS group in the application layer. Never copy quoted payload.
   const ctx = body?.contextInfo;
   if (ctx?.stanzaId && (!ctx.remoteJid || ctx.remoteJid === groupId)) base.replyId = ctx.stanzaId;
   return base;
 }
 export function validateMediaSource(raw: WAMessage) {
+  if (restrictedMessage(raw)) throw new Error('Temporary media unavailable');
   const content = normalizeMessageContent(raw.message);
+  if(content?.ptvMessage && [content.imageMessage,content.videoMessage,content.documentMessage,content.audioMessage,content.stickerMessage].some(Boolean))
+    throw new Error('Ambiguous media');
   const body: any =
     content?.imageMessage ||
     content?.videoMessage ||
+    content?.ptvMessage ||
     content?.audioMessage ||
     content?.documentMessage ||
     content?.stickerMessage;
@@ -231,7 +248,12 @@ export function validateMediaSource(raw: WAMessage) {
 export async function incomingMediaStream(raw:WAMessage,reuploadRequest:WASocket['updateMediaMessage'],
   transport={message:downloadMediaMessage,direct:downloadContentFromMessage}) {
   validateMediaSource(raw);
-  const sticker=normalizeMessageContent(raw.message)?.stickerMessage;
+  const content=normalizeMessageContent(raw.message);
+  // PTV uses the official Video media-key domain. The high-level helper's
+  // url-property check rejects sanitized directPath-only plain objects.
+  if(content?.ptvMessage && !content.videoMessage)
+    return transport.direct(content.ptvMessage,'ptv',{});
+  const sticker=content?.stickerMessage;
   // Sanitized plain objects omit protobuf's inherited url property. The pinned
   // high-level helper rejects those even though the supported directPath exists.
   if(sticker?.directPath&&!sticker.url)
@@ -239,7 +261,13 @@ export async function incomingMediaStream(raw:WAMessage,reuploadRequest:WASocket
   return transport.message(raw,'stream',{}, {logger,reuploadRequest});
 }
 export class BaileysConnector implements Connector {
+  readonly pollVoting=unavailablePollVoting;
   readonly capabilities: Capabilities = {
+    interactive:{textDisplay:true,actions:false},
+    contacts:{display:true,send:false},
+    location:{display:true,live:false,send:false},
+    roundVideo:{receive:true,send:false},
+    polls: {identify:true,display:true,observedResults:true,create:false,vote:false,results:false},
     reply: true,
     reactions: true,
     image: true,
@@ -371,7 +399,7 @@ export class BaileysConnector implements Connector {
           discover([{id:raw.key.remoteJid, name:raw.key.fromMe ? undefined : raw.pushName}]);
         if (!this.hooks.allowed(raw.key.remoteJid)) continue;
         try {
-          const m = normalizeIncoming(raw);
+          const m = normalizeIncoming(raw,sock.user||auth.state.creds.me);
           if (!m) continue;
           const retention = this.hooks.retentionToken?.(m.groupId);
           m.guard = () => valid() && this.hooks.allowed(m.groupId) && (!this.hooks.retentionToken || this.hooks.retentionToken(m.groupId) === retention);
@@ -465,8 +493,9 @@ export class BaileysConnector implements Connector {
             text: '',
             reaction: {
               target: key.id || '',
-              actor: reaction.key?.fromMe ? 'self' : reaction.key?.participant || 'unknown',
+              actor: reactionActor(reaction.key,key.remoteJid),
               emoji: reaction.text || '',
+              time: reactionTime(reaction.senderTimestampMs,Date.now()),
             },
           })
           .catch(() => {});
@@ -493,8 +522,15 @@ export class BaileysConnector implements Connector {
     return this.sock;
   }
   key(m: StoredMessage) {
-    if (!m.raw) throw new Error('Original message unavailable');
-    return parse(m.raw).key;
+    if (!this.originalAvailable(m)) throw new Error('Original message unavailable');
+    return parse(m.raw!).key;
+  }
+  originalAvailable(m: StoredMessage) {
+    if (!m.raw || m.deleted || restrictedStoredMessage(m) || m.kind==='unsupported' || readOnlyKind(m.kind)) return false;
+    try {
+      const original=parse(m.raw);
+      return !!original.message && original.key?.id===m.id && original.key?.remoteJid===m.groupId;
+    } catch { return false; }
   }
   async groups() {
     const sock = this.require(), generation = this.generation;
@@ -515,27 +551,37 @@ export class BaileysConnector implements Connector {
     } catch { return; }
   }
   async send(m: Outgoing) {
-    const sock = this.require();
-    const content: any =
-      m.kind === 'text'
-        ? { text: m.text, linkPreview: null }
-        : m.kind === 'audio'
-          ? { audio: m.bytes, mimetype: m.mime, ptt: true }
-          : m.kind === 'sticker'
-            ? { sticker: m.bytes }
-            : m.kind === 'document'
-              ? { document: m.bytes, mimetype: m.mime, fileName: m.filename, caption: m.text }
-              : { [m.kind]: m.bytes, caption: m.text, mimetype: m.mime };
-    if (m.kind === 'audio' && m.bytes) {
-      const seconds = await getAudioDuration(m.bytes);
-      if (!Number.isFinite(seconds)) throw new Error('Audio duration unavailable');
-      content.seconds = seconds;
-      content.waveform = new Uint8Array(0);
-    }
-    if ((m.kind === 'image' || m.kind === 'video') && m.bytes)
-      content.jpegThumbnail = await thumbnail(m.bytes);
-    const quoted = m.reply?.raw ? parse(m.reply.raw) : undefined;
-    const sent = await sock.sendMessage(m.groupId, content, { messageId: m.id, quoted });
+    const prepare = async () => {
+      if((m.kind as string)==='poll')throw new Error('Poll sending unavailable');
+      if(readOnlyKind(m.kind))throw new Error('Shared content sending unavailable');
+      if(!['text','image','video','audio','sticker','document'].includes(m.kind))throw new Error('Message sending unavailable');
+      if (m.reply && !this.originalAvailable(m.reply)) throw new Error('Original message unavailable');
+      const sock = this.require();
+      const content: any =
+        m.kind === 'text'
+          ? { text: m.text, linkPreview: null }
+          : m.kind === 'audio'
+            ? { audio: m.bytes, mimetype: m.mime, ptt: true }
+            : m.kind === 'sticker'
+              ? { sticker: m.bytes }
+              : m.kind === 'document'
+                ? { document: m.bytes, mimetype: m.mime, fileName: m.filename, caption: m.text }
+                : { [m.kind]: m.bytes, caption: m.text, mimetype: m.mime };
+      if (m.kind === 'audio' && m.bytes) {
+        const seconds = await getAudioDuration(m.bytes);
+        if (!Number.isFinite(seconds)) throw new Error('Audio duration unavailable');
+        content.seconds = seconds;
+        content.waveform = new Uint8Array(0);
+      }
+      if ((m.kind === 'image' || m.kind === 'video') && m.bytes)
+        content.jpegThumbnail = await thumbnail(m.bytes);
+      const quoted = m.reply?.raw ? parse(m.reply.raw) : undefined;
+      return { sock, content, quoted };
+    };
+    let prepared: Awaited<ReturnType<typeof prepare>>;
+    try { prepared = await prepare(); } catch (error) { throw new SendNotSubmittedError(error); }
+    m.beforeSend?.();
+    const sent = await prepared.sock.sendMessage(m.groupId, prepared.content, { messageId: m.id, quoted: prepared.quoted });
     if (!sent) throw new Error('No acknowledgement');
     return normalizeIncoming(sent)!;
   }
@@ -544,7 +590,11 @@ export class BaileysConnector implements Connector {
   }
   async edit(g: string, m: StoredMessage, text: string) {
     await this.require().sendMessage(g, { text, edit: this.key(m), linkPreview: null });
-    this.hooks.update(g, m.id, { text, edited: true });
+    // Subsequent quotes must contain the edited text, even before the echo.
+    // Preserve original key/time metadata, never restore the prior body.
+    const original=parse(m.raw!);
+    original.message={conversation:text};
+    this.hooks.update(g, m.id, { text, edited: true, editTime:Math.floor(Date.now()/1000)*1000, raw:stringify(original) });
   }
   async delete(g: string, m: StoredMessage) {
     await this.require().sendMessage(g, { delete: this.key(m) });
@@ -558,6 +608,7 @@ export class BaileysConnector implements Connector {
     if (keys.length) await this.require().readMessages(keys);
   }
   historyAnchor(g: string, m: StoredMessage) {
+    if(m.originalTimeKnown===false || restrictedStoredMessage(m))return false;
     if (m.groupId !== g || m.deleted || m.kind === 'unsupported' || ['pending','failed'].includes(m.status) || !m.raw || !Number.isFinite(m.time) || m.time <= 0) return false;
     try {
       const parsed=parse(m.raw);

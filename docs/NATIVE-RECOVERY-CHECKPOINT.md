@@ -1,0 +1,41 @@
+# Native offline recovery checkpoint
+
+Historical `e3388c6` checkpoint. See `NATIVE-RECOVERY-AUDIT-FIX.md` for corrected plaintext-probe isolation and receipt/member budgets.
+
+This is a bounded source slice after preserved `213a75a`, on `feat/native-recovery` in `C:\projects\yahad-native-recovery`. It adds a callable, explicitly fixture-only Windows backup/restore adapter. It does not install a service, replace an active database, switch an active data directory or publish a release. The previous combined binary archive remains the `ae406ed` payload documented in the integration checkpoint; it was not relabeled or rebuilt here.
+
+## Actual observations and file boundaries
+
+`NativeRecoveryFixture.OpenAsync` requires the private fixture marker/DACL, the retained owned native `JobProcess`, an observed empty complete Job Object and an actual exclusive `WindowsFileBoundary` data lease. It checks the native job again before committing work. It does not accept UI booleans for quiescence or lease ownership. Production binding between a service's active app configuration and the correct retained job is not implemented; a fixture job is not evidence about an installed service.
+
+Source data, the existing master key, update policy and pin are read through the same pinned-ancestor, no-follow, single-link, private-ACL native boundary used by the app. Files remain pinned against writes/replacement during snapshotting. The source member set is re-observed before committing its receipt. The generic reader streams bounded media instead of loading the entire tree in memory. Win32 opens now use an extended local-path prefix internally **after** the existing canonical drive-path validation, fixing MAX_PATH failures without accepting UNC/device paths from callers.
+
+The adapter refuses SQLite WAL, SHM or rollback-journal sidecars. It requires a closed/checkpointed source and never guesses whether a crash-left WAL is safe. A fixed script in the checksum-pinned private Node runs read-only SQLite integrity, foreign-key and schema queries on a private copy, so even SQLite-created sidecars do not touch the original or restored tree. Caller/manifest schema claims cannot replace the observed database version. Production Node/release authentication and target schema bounds must come from the sole updater's verified release intake; supplied development hashes/ranges do not establish that production authority.
+
+## Authenticated snapshots and recovery journal
+
+Backups contain every data file except the process lock, plus the master-key bytes, policy and pin. Each file is encrypted in bounded AES-256-GCM chunks with fresh nonces and associated backup ID, member name, chunk index and plaintext length. A domain-separated HKDF derives encryption and HMAC keys from the existing master key. This creates no production credential or enrollment. The receipt authenticates exact membership, plaintext and ciphertext sizes/hashes, observed schema and key/policy/pin context. It is an HMAC-authenticated fixture format, not a release signature or the existing Linux backup format.
+
+Restore validates the complete receipt and ciphertext closure before writing into a new operation directory. An HMAC-authenticated, hash-chained journal binds its sequence, backup receipt digest, schema range, current key/policy/pin context, data-path digest, observed native job root PID and acquired lease generation. Its phases are planned, extracting, validated and complete. These records follow verified local observations; they are not durable claims about SCM, a remote service or an authenticated owner request.
+
+New files use write-through handles and `Flush(true)` before no-replacement publication through `MoveFileExW`. This follows the documented [flush](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers) and [move](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw) APIs. Process-crash tests are observed results; sudden power loss, storage-controller behavior and AV behavior still require disposable-machine acceptance.
+
+Restore produces `restore-<operation>/completed` with data, identity and policy subtrees. It never overwrites the live DB, current keys, policy or pin. Interrupted extraction attempts remain private and quarantined; retry uses a fresh staging directory, with a maximum of three attempts. A process killed after directory publication but before the complete record is reconciled by verifying all actual output bytes and SQLite again. Missing/tampered journals, changed receipt/context/range, unexpected existing output and missing completed output fail closed. An interrupted initial journal flush without a valid plan is not automatically restarted. No cleanup removes old or live data.
+
+Limits are explicit: at most 10,000 files, 256 MiB per file, 2 GiB total and depth 64; actual free space is checked, while subsequent write failures remain possible and are handled without active-data replacement. These fixture limits and format need review before production adoption. Local MACs are not monotonic anti-rollback storage against an owner/admin who controls the key and disk.
+
+## Lifecycle disposal contract
+
+An unsuccessful `AppLifecycle.DisposeAsync` retains its session and recovery quarantine. Every later disposal retries bounded cleanup and throws again while native quiescence remains unconfirmed. After observed successful cleanup, repeated disposal is idempotent. The disposed lifecycle cannot restart or activate an app. A regression test covers two failures, a later successful retry and the final idempotent call.
+
+## Validation and remaining integration
+
+The existing native harness passed **81/81** checks, including the new long-path and repeated-disposal regressions. The dedicated recovery suite passed **28/28**, with zero skips, using the private Node 24.22.2 from the verified combined archive. It includes a real schema-5 `Store` round trip preserving parent password verification, child session, grants, encrypted history/media and connector auth with synthetic data only.
+
+The dedicated cases also cover actual busy jobs and data leases, locked source files, hardlink aliases, ciphertext/receipt/journal corruption, policy/pin/key drift, future schema refusal, a MAC-valid false schema claim defeated by SQLite, cancellation, injected disk-full/flush failures, bounded retry, unexpected output preservation and two **actual worker Job Object terminations**: during extraction and after publication. Live synthetic source DB bytes remain unchanged. Disk-full is fault injection, not a claim that the host disk was filled. Test evidence is under `evidence/native-recovery`.
+
+Reproduce with `installer/build.ps1` for the existing harness, then `installer/test-native-recovery.ps1 -DotNet <private-sdk-exe> -Node <verified-private-node> -PackageCache <private-cache> -PreparedApp <verified-combined-extraction>`. The latter's `actualStoreIntegration` evidence field states whether the real Store case ran; without `PreparedApp`, only the smaller SQLite fixture suite runs. All environment changes are process-local and restored.
+
+Still unwired: production service/job/configuration binding, authenticated owner rollback requests, signed release/schema-range intake, start barriers that consume this journal, activation of the restored data directory and active payload, real uncheckpointed crash-WAL recovery, existing backup-format compatibility and safe retention/cleanup policy. The pure `UpdateRecovery` planner remains separate; no UI-supplied `RecoveryFacts` are promoted to executor authority. There is no automatic schema downgrade or installer-owned second updater.
+
+No SCM installation, persistent security/access setting, firewall, certificate trust, production credential/signing key, provider enrollment, network listener, deployment or publication was performed. No host-change action was attempted or needs approval to reproduce this fixture slice. Production installation and power-loss acceptance require a disposable supported machine and the separately authorized integration steps.

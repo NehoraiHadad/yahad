@@ -1,0 +1,14 @@
+{
+  "kind": "windows-runtime-candidate",
+  "profile": "full",
+  "target": "win-x64",
+  "fileCount": 9303,
+  "peCount": 204,
+  "payloadBytes": 501482401,
+  "archiveBytes": 187602075,
+  "archiveSha256": "1a193dd9df1d678b4442665f931062f5ce63d29f528d3154222e9f8b4d1dd8bc",
+  "allExtractedFilesVerified": true,
+  "familyInstallationReady": false,
+  "releaseSignatureVerified": false,
+  "output": "C:\\projects\\yahad-native-integration\\installer\\.scratch\\combined-unpacked-ae406ed"
+}

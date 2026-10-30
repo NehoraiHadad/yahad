@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { SendNotSubmittedError } from '../send-outcome.js';
 import type {
   Connector,
   ConnectorHooks,
@@ -117,7 +118,8 @@ export class MockConnector implements Connector {
     });
   }
   async send(m: Outgoing): Promise<Incoming> {
-    if (!this.running) throw new Error('Disconnected');
+    if (!this.running) throw new SendNotSubmittedError(new Error('Disconnected'));
+    m.beforeSend?.();
     const id = m.id || randomUUID();
     this.later(() => this.hooks.update(m.groupId, id, { status: 'delivered' }), 700);
     this.later(() => this.hooks.update(m.groupId, id, { status: 'read' }), 1800);

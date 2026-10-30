@@ -1,6 +1,16 @@
-export type Kind = 'text' | 'image' | 'video' | 'document' | 'sticker' | 'audio' | 'unsupported';
+import type {PollVoteSending} from '../polls/sending.js';
+import type {PollContext,EncryptedPollVote,PollState} from '../polls/types.js';
+export type Kind = 'text' | 'image' | 'video' | 'document' | 'sticker' | 'audio' | 'poll' | 'contact' | 'location' | 'interactive' | 'unsupported';
+export type SendKind=Exclude<Kind,'poll'|'contact'|'location'|'interactive'>;
+export interface PollOptions {options:string[]}
 export type Receipt = 'pending' | 'sent' | 'delivered' | 'read' | 'unknown' | 'failed';
+export interface ReactionUpdate { target: string; actor: string; emoji: string; time?: number }
 export interface Capabilities {
+  interactive?: {textDisplay:boolean;actions:boolean};
+  contacts?: {display:boolean;send:boolean};
+  location?: {display:boolean;live:boolean;send:boolean};
+  roundVideo?: {receive:boolean;send:boolean};
+  polls?: { identify: boolean; display?: boolean; observedResults?: boolean; create: boolean; vote: boolean; results: boolean };
   reply: boolean;
   reactions: boolean;
   image: boolean;
@@ -23,6 +33,9 @@ export interface ChatGroup {
   title: string;
 }
 export interface Incoming {
+  pollContext?: PollContext;
+  pollVote?: EncryptedPollVote;
+  restricted?: boolean;
   guard?: () => boolean;
   history?: { requestId?: string };
   id: string;
@@ -32,6 +45,8 @@ export interface Incoming {
   time: number;
   kind: Kind;
   text: string;
+  unsupportedReason?: 'poll' | 'poll-vote' | 'poll-results' | 'poll-variant' | 'poll-invalid' | 'contact-variant' | 'location-invalid' | 'live-location' | 'content-variant' | 'interactive-variant';
+  poll?: PollOptions;
   replyId?: string;
   mime?: string;
   filename?: string;
@@ -40,10 +55,14 @@ export interface Incoming {
   download?: () => Promise<Buffer>;
   status?: Receipt;
   edited?: boolean;
+  editTime?: number;
   deleted?: boolean;
-  reaction?: { target: string; actor: string; emoji: string };
+  reaction?: ReactionUpdate;
+  historicalReactions?: ReactionUpdate[];
 }
 export interface StoredMessage {
+  pollState?: PollState;
+  restricted?: boolean;
   id: string;
   groupId: string;
   sender: string;
@@ -51,24 +70,37 @@ export interface StoredMessage {
   time: number;
   kind: Kind;
   text: string;
+  unsupportedReason?: 'poll' | 'poll-vote' | 'poll-results' | 'poll-variant' | 'poll-invalid' | 'contact-variant' | 'location-invalid' | 'live-location' | 'content-variant' | 'interactive-variant';
+  poll?: PollOptions;
   replyId?: string;
   mediaId?: string;
   mime?: string;
   filename?: string;
   status: Receipt;
   edited?: boolean;
+  editTime?: number;
+  originalTimeKnown?: boolean;
   deleted?: boolean;
   reactions: Record<string, string>;
+  reactionTimes?: Record<string, number>;
   raw?: string;
   clientId?: string;
+  /** Private request identity, encrypted with the message; never returned publicly. */
+  sendRequestHash?: string;
+  /** Connector returned a matching acknowledgement; separate from delivery receipts. */
+  sendAcknowledged?: boolean;
+  /** True only for a proven failure before provider submission. */
+  retrySafe?: boolean;
   authorUserId?: string;
   authorLabel?: string;
 }
 export interface Outgoing {
+  /** Recheck the originating session after preparation, immediately before provider submission. */
+  beforeSend?: () => void;
   groupId: string;
   id: string;
   text: string;
-  kind: Kind;
+  kind: SendKind;
   reply?: StoredMessage;
   bytes?: Buffer;
   mime?: string;
@@ -101,6 +133,8 @@ export interface ConnectorHooks {
   maxMedia: number;
 }
 export interface Connector {
+  readonly pollVoting?: PollVoteSending;
+  originalAvailable?(message: StoredMessage): boolean;
   readonly capabilities: Capabilities;
   start(): Promise<void>;
   stop(logout?: boolean): Promise<void | { remoteRevoked: boolean; unlinkRequested?: boolean }>;

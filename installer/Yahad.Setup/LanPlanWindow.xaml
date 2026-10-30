@@ -1,0 +1,49 @@
+<Window x:Class="Yahad.Setup.LanPlanWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="יחד · כניסה ממכשיר נוסף" Width="790" Height="800"
+ MinWidth="700" MinHeight="720" WindowStartupLocation="CenterOwner" FontFamily="Segoe UI" FontSize="14"
+ FlowDirection="RightToLeft" Language="he-IL" Foreground="#263E3A" Background="#F7F8F4">
+ <Grid Margin="32">
+  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+  <StackPanel>
+   <TextBlock Text="תכנון בלבד · אין שינוי בהגדרות המחשב" Foreground="#157C69" FontSize="12"/>
+   <TextBlock Text="כניסה ממכשיר נוסף" FontSize="30" FontWeight="SemiBold" Margin="0,8,0,10"/>
+   <TextBlock Text="שלב ההתקנה מכין את השרת ואת הגישה ליחד, ואז פותח את הווב־אפ. הגדרות הורים, ילדים ו־WhatsApp ימשיכו בממשק יחד הקיים." Foreground="#5C716B" LineHeight="23"/>
+  </StackPanel>
+  <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,22,0,18">
+   <StackPanel>
+    <Border Background="White" BorderBrush="#DFE7E0" BorderThickness="1" CornerRadius="16" Padding="20">
+     <StackPanel>
+      <TextBlock Text="1  ·  בוחרים את הרשת הביתית" FontSize="16" FontWeight="SemiBold"/>
+      <TextBlock Text="בחרו במפורש את הכתובת של הרשת שאליה מחובר גם הטאבלט. כתובת פרטית יכולה להשתייך גם ל־VPN; יחד לא בוחרת במקומכם." Foreground="#5C716B" Margin="0,8,0,12"/>
+      <ComboBox x:Name="AddressChoice" MinHeight="38" DisplayMemberPath="Label" SelectionChanged="AddressChanged" AutomationProperties.Name="בחירת כתובת הרשת הביתית"/>
+      <TextBlock x:Name="AddressStatus" Foreground="#83662F" Margin="0,8,0,0"/>
+      <TextBox x:Name="PlannedLink" IsReadOnly="True" FlowDirection="LeftToRight" Padding="12" Margin="0,12,0,0" FontSize="17" Background="#EFF4EE" BorderThickness="0" AutomationProperties.Name="כתובת מקומית מתוכננת, עדיין לא פעילה"/>
+      <TextBlock Text="זו כתובת IP נוכחית, לא שם קבוע. אם הנתב משנה אותה, הקישור והסימנייה עלולים להפסיק לעבוד. שמירת כתובת קבועה בנתב או שם מנוהל דורשים מסלול שטרם הושלם." FontSize="12" Foreground="#5C716B" Margin="0,9,0,0"/>
+     </StackPanel>
+    </Border>
+    <Border Background="White" BorderBrush="#DFE7E0" BorderThickness="1" CornerRadius="16" Padding="20" Margin="0,14,0,0">
+     <StackPanel>
+      <TextBlock Text="2  ·  מבינים את HTTPS ואת ההרשאה" FontSize="16" FontWeight="SemiBold"/>
+      <TextBlock Text="המסלול המקומי משתמש בתעודה מקומית. טרם נוצרה תעודה וטרם ניתן בה אמון. בכל טאבלט ייתכן שתידרש התקנה מפורשת של התעודה הציבורית ואימות הטביעה שלה. לא מדלגים על אזהרות הדפדפן." Foreground="#5C716B" Margin="0,8,0,10" LineHeight="22"/>
+      <TextBlock Text="הרשאת הרשת המתוכננת: HTTPS בפורט 443, בפרופיל רשת פרטית ומחשבים ברשת המקומית בלבד. אישור נפרד יידרש בעת ביצוע. חלון זה אינו מעניק את ההרשאה ואינו פותח פורט." FontSize="13" Foreground="#46665B" Background="#EAF1EA" Padding="12"/>
+      <TextBlock Text="שם מנוהל עם תעודה ציבורית: אפשרות עתידית, לא מוגדרת. גישה מהאינטרנט, פתיחת נתב ומנהרות: לא מוגדרות ולא מופעלות." FontSize="12" Foreground="#5C716B" Margin="0,10,0,0"/>
+     </StackPanel>
+    </Border>
+    <Border Background="White" BorderBrush="#DFE7E0" BorderThickness="1" CornerRadius="16" Padding="20" Margin="0,14,0,0">
+     <StackPanel>
+      <TextBlock Text="3  ·  פותחים את יחד ממכשיר נוסף" FontSize="16" FontWeight="SemiBold"/>
+      <TextBlock Text="מחברים את הטאבלט לאותה רשת, פותחים את הקישור לאחר ההתקנה ומשלימים את שלב האמון בתעודה. משפחה קיימת תגיע לכניסה הרגילה. משפחה חדשה תמשיך באשף הווב הקיים. לאחר מכן אפשר לשמור סימנייה או קיצור דרך דרך הדפדפן." Foreground="#5C716B" Margin="0,8,0,12" LineHeight="22"/>
+      <TextBlock Text="המחשב: לא נבדק כאן" FontWeight="SemiBold"/>
+      <TextBlock Text="גישה ממכשיר נוסף: טרם אומתה" Margin="0,5,0,0"/>
+      <TextBlock Text="הגדרות המשפחה וחיבור WhatsApp: בממשק יחד" Margin="0,5,0,0"/>
+      <TextBlock Text="בריאות המחשב לבדה אינה מוכיחה שהטאבלט מגיע אליו. QR ובדיקת הגעה ממכשיר נוסף יתחברו למארח בהמשך. בדיקת כניסה של ילד היא בדיקת שילוב של הממשק הקיים, לא אשף חדש במתקין." FontSize="12" Foreground="#5C716B" Margin="0,12,0,0"/>
+     </StackPanel>
+    </Border>
+   </StackPanel>
+  </ScrollViewer>
+  <Grid Grid.Row="2"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+   <Button x:Name="SavePlan" Content="שמירת תכנית לבדיקה" Click="Save_Click" IsEnabled="False"/>
+   <Button Grid.Column="1" Content="סגירה" Click="Close_Click" Background="Transparent" Foreground="#5C716B" Margin="12,0,0,0"/>
+  </Grid>
+ </Grid>
+</Window>

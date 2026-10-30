@@ -3,7 +3,7 @@ export function setCsrf(value: string) {
   csrf = value;
 }
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number, readonly code: string) {
+  constructor(message: string, readonly status: number, readonly code: string, readonly sendOutcome?: 'not_submitted') {
     super(message); this.name = 'ApiError';
   }
 }
@@ -14,6 +14,9 @@ export function isTransientApiError(error: unknown) {
     error.code !== 'LOGIN_WAIT' && (error.status === 408 || error.status === 429 || error.status >= 500 && error.status < 600);
 }
 const errors: Record<string, string> = {
+  ORIGINAL_UNAVAILABLE: 'ההודעה המקורית אינה זמינה לפעולה הזאת. אפשר לפתוח אותה ב־WhatsApp.',
+  CHILD_ACCESS_PAUSED: 'ההורה השהה את הגישה לחשבון. אפשר לפנות אליו כדי להפעיל אותה מחדש.',
+  CHILD_ACCESS_CHANGED: 'מצב הגישה השתנה. בדקו את המצב המעודכן ונסו שוב.',
   USAGE_TAB_LIMIT: 'יותר מדי חלונות פעילים בחשבון הזה. סגרו חלון אחר ונסו שוב בעוד כמה שניות.',
   USAGE_TAB_EXPIRED: 'החלון דורש בדיקה מחדש לפני המשך השימוש.',
   USAGE_EXHAUSTED: 'מכסת הזמן להיום הסתיימה. ההורה יכול להוסיף זמן.',
@@ -36,7 +39,10 @@ const errors: Record<string, string> = {
   NOT_FOUND: 'השיחה או ההודעה כבר אינן זמינות.',
   PARENT_ONLY: 'הפעולה זמינה להורה בלבד.',
   NOT_CONNECTED: 'אין כרגע חיבור. אפשר לנסות שוב כשיחזור.',
-  SEND_UNCERTAIN: 'לא התקבל אישור שליחה. לפני ניסיון נוסף, כדאי לבדוק אם ההודעה הגיעה.',
+  SEND_PENDING: 'השליחה עדיין מתבצעת. אפשר לבדוק את מצבה בלי לשלוח שוב.',
+  SEND_ID_CONFLICT: 'מזהה השליחה כבר שייך להודעה אחרת. לא נשלחה הודעה נוספת.',
+  SEND_NOT_SUBMITTED: 'ההודעה לא הוגשה לשליחה. אפשר לנסות שוב.',
+  SEND_UNCERTAIN: 'לא התקבל אישור שליחה. אפשר לבדוק את המצב; לא נשלח שוב כל עוד התוצאה לא ידועה.',
   FILE_TOO_LARGE: 'הקובץ גדול מדי. אפשר לבחור קובץ קטן יותר.',
   EDIT_WINDOW_CLOSED: 'חלון הזמן לעריכה הסתיים.',
   AUDIO_ENCODING_FAILED: 'לא הצלחנו לעבד את ההקלטה. אפשר לנסות שוב.',
@@ -61,13 +67,14 @@ export async function api<T = any>(path: string, method = 'GET', body?: unknown)
     throw error;
   });
   if (!res.ok) {
-    let error = 'REQUEST_FAILED';
+    let error = 'REQUEST_FAILED', sendOutcome: 'not_submitted' | undefined;
     try {
-      error = (await res.json()).error;
+      const result = await res.json(); error = result.error;
+      if (result.sendOutcome === 'not_submitted') sendOutcome = result.sendOutcome;
     } catch {}
     if (res.status === 401 && path !== '/login') window.dispatchEvent(new Event('session-expired'));
     if (error.startsWith('USAGE_') && path !== '/usage/heartbeat') window.dispatchEvent(new Event('usage-required'));
-    throw new ApiError(errors[error] || 'הפעולה לא הושלמה. אפשר לנסות שוב.', res.status, error);
+    throw new ApiError(errors[error] || 'הפעולה לא הושלמה. אפשר לנסות שוב.', res.status, error, sendOutcome);
   }
   return res.json();
 }

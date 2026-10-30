@@ -1,0 +1,44 @@
+{
+  "kind": "offscreen-layout-and-native-download-tests",
+  "emptyPath": true,
+  "coreExit": 0,
+  "layouts": [
+    {
+      "mode": "--render",
+      "dpi": 96,
+      "keyboardTabOrder": true,
+      "footerVisible": true,
+      "scrollMaximum": 0
+    },
+    {
+      "mode": "--render-small",
+      "dpi": 96,
+      "keyboardTabOrder": true,
+      "footerVisible": true,
+      "scrollMaximum": 0
+    },
+    {
+      "mode": "--render-dpi144",
+      "dpi": 144,
+      "keyboardTabOrder": true,
+      "footerVisible": true,
+      "scrollMaximum": 189
+    },
+    {
+      "mode": "--render-dpi192",
+      "dpi": 192,
+      "keyboardTabOrder": true,
+      "footerVisible": true,
+      "scrollMaximum": 189
+    },
+    {
+      "mode": "--render-dpi192-bottom",
+      "dpi": 192,
+      "keyboardTabOrder": true,
+      "footerVisible": true,
+      "scrollMaximum": 189
+    }
+  ],
+  "hostInstallExecuted": false,
+  "interactiveAcceptance": false
+}

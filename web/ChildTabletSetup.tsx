@@ -13,6 +13,7 @@ export function ChildTabletSetup({ child, loaded, stale, busy, origin, onPasswor
   const ready = loaded && !stale && !!child?.ready;
   const status = !loaded ? 'טוענים את מצב ההכנה…' : stale ? 'ממתינים לאימות מצב ההכנה מול השרת.'
     : !child ? 'בחרו חשבון ילד ברשימת הילדים. אם עדיין אין חשבון, הוסיפו אותו תחילה.'
+    : child.paused ? 'הגישה לחשבון מושהית. הפעילו אותה מחדש בניהול הילד לפני כניסה בטאבלט.'
     : !child.groups.length ? 'לפני הכניסה, בחרו לפחות שיחה אחת עבור החשבון הזה.'
     : !child.ready ? 'השיחות נשמרו. חברו את חשבון WhatsApp כדי להמשיך.'
     : 'החשבון מוכן לכניסה. את השלבים הבאים מבצעים בטאבלט של הילד או הילדה.';
@@ -22,8 +23,8 @@ export function ChildTabletSetup({ child, loaded, stale, busy, origin, onPasswor
       <div><span className="eyebrow">כניסה במכשיר של הילד או הילדה</span>
         <h2 id="tablet-setup-title">{child ? <>מכניסים את <bdi>{child.name}</bdi> ליחד</> : 'מכינים את הטאבלט לכניסה'}</h2>
         <p role="status" className={ready ? 'tablet-ready' : ''}>{status}</p>
-        {loaded && !stale && !ready && <a href={child?.groups.length ? '#family-connection' : '#children-title'}>
-          {child?.groups.length ? 'לחיבור החשבון' : 'לניהול הילדים והשיחות'}</a>}
+        {loaded && !stale && !ready && <a href={child?.paused ? '#family-groups' : child?.groups.length ? '#family-connection' : '#children-title'}>
+          {child?.paused ? 'לניהול הגישה של הילד' : child?.groups.length ? 'לחיבור החשבון' : 'לניהול הילדים והשיחות'}</a>}
       </div>
     </header>
     {loaded && !stale && child && <ol className="tablet-setup-steps" aria-label="שלבי הכניסה בטאבלט">

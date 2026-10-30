@@ -23,7 +23,8 @@ function harness() {
       useEffect(effect: () => (() => void)) { const i = cursor++; if (!(i in slots)) { slots[i] = true; const cleanup = effect(); if (cleanup) cleanups.push(cleanup); } },
     } : name === './GroupPicker' ? { GroupPicker } : name === './FamilyProgress' ? { familyProgress }
       : name === './childLabels' ? { childLabel } : name === './childManagementState' ? { ChildActionGuard, confirmedChildGrant }
-      : name === './ChildUsageSettings' ? { ChildUsageSettings: () => null } : require(name),
+      : name === './ChildUsageSettings' ? { ChildUsageSettings: () => null }
+      : name === './ChildAccessSettings' ? { ChildAccessSettings: () => null } : require(name),
   });
   const data: FamilyOverview = { state: 'connected', children: [{ id: 'a', name: 'אלף' }, { id: 'b', name: 'בית' }],
     groups: [{ id: 'g', title: 'שיחה סינתטית' }], grants: [] };

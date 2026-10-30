@@ -1,4 +1,6 @@
-import Fastify from 'fastify';
+import type { WindowsUpdateTransport } from './windows-update-client.js';
+import {readOnlyKind} from './rich-content.js';
+import Fastify, { type FastifyRequest } from 'fastify';
 import { CredentialThrottle } from './credential-throttle.js';
 import { performance } from 'node:perf_hooks';
 import cookie from '@fastify/cookie';
@@ -13,13 +15,17 @@ import QRCode from 'qrcode';
 import { hash, verifyPassword, passwordHash } from './crypto.js';
 import { timingSafeEqual, randomUUID } from 'node:crypto';
 import type { Config } from './config.js';
+import { parseAdditionalOrigins } from './allowed-origins.js';
 import { Store, type Session } from './store.js';
 import { UsageError } from './usage.js';
+import { ChildAccessError } from './child-access.js';
+import { SendNotSubmittedError, confirmedSend, acknowledgedSend, sendState, sendRequestHash, type SendState } from './send-outcome.js';
 import { unreadCount, markLocallyViewed } from './chat-read-state.js';
 import { ChatService, AppError, deny } from './service.js';
 import { voiceToOpus } from './media.js';
+import { validReaction } from './message-actions.js';
 import { updateStatus, requestUpdate, updateTargetSchema } from './updates.js';
-import type { ConnectorHooks, Connector, StoredMessage, Kind } from './connectors/types.js';
+import type { ConnectorHooks, Connector, StoredMessage, SendKind } from './connectors/types.js';
 const textSchema = z.string().trim().max(12000);
 const accountNameSchema = z.string().max(240).transform((value, ctx) => {
   try { return normalizeAccountName(value); }
@@ -37,9 +43,12 @@ declare module 'fastify' {
 }
 export async function createApp(
   config: Config,
-  options: { store?: Store; factory?: (h: ConnectorHooks) => Connector; boot?: boolean;
+  options: { windowsUpdates?: WindowsUpdateTransport; store?: Store; factory?: (h: ConnectorHooks) => Connector; boot?: boolean;
     bootstrap?: { token: string; expiresAt: number } } = {},
 ) {
+  const acceptedOrigins = new Set([config.origin,
+    ...parseAdditionalOrigins((config.additionalOrigins ?? []).join(','), config.secureCookie)]);
+  const acceptedOrigin = (origin: string | undefined) => origin !== undefined && acceptedOrigins.has(origin);
   const app = Fastify({
     logger: false,
     bodyLimit: 100_000,
@@ -68,22 +77,37 @@ export async function createApp(
     finally { activeLogins--; }
   };
   const sends = new Map<string, number[]>();
-  const pending = new Set<string>();
+  const pending = new Map<string, string>();
+  const preparing = new Map<string, { token: symbol; owner: string; fingerprint: string }>();
+  // A failure hint is emitted only after resolving this ID's durable state.
+  const sendOutcomes = new WeakMap<object, { state: SendState; current: () => SendState }>();
+  const reportSend = (req: FastifyRequest, g: string, clientId: string) => (state: SendState) => {
+    sendOutcomes.set(req, { state, current: () => {
+      const f = req.session.user.familyId, id = outgoingId(clientId), m = store.getMessage(f, g, id);
+      if (m && m.authorUserId !== req.session.user.id) return 'unknown';
+      const key = outgoingKey(f, g, id), inFlight = pending.has(key) || preparing.has(key);
+      if (pending.has(key) && pending.get(key) !== req.session.user.id ||
+        preparing.has(key) && preparing.get(key)!.owner !== req.session.user.id) return 'unknown';
+      return m || inFlight ? sendState(m, inFlight) : state;
+    } });
+  };
   const activeUploads = new Set<string>();
   app.decorateRequest('session', null as unknown as Session);
   app.setErrorHandler((error, req, reply) => {
     const e = error as any;
     const status =
-      e instanceof AppError || e instanceof UsageError
+      e instanceof AppError || e instanceof UsageError || e instanceof ChildAccessError
         ? e.status
         : e instanceof z.ZodError
           ? 400
           : e.statusCode === 413 || e.code === 'FST_REQ_FILE_TOO_LARGE'
             ? 413
             : 500;
+    const outcome = sendOutcomes.get(req);
     reply.code(status).send({
+      ...(outcome?.state === 'failed' && outcome.current() === 'failed' ? { sendOutcome: 'not_submitted' } : {}),
       error:
-        e instanceof AppError || e instanceof UsageError
+        e instanceof AppError || e instanceof UsageError || e instanceof ChildAccessError
           ? e.code
           : status === 400
             ? 'INVALID_INPUT'
@@ -105,13 +129,13 @@ export async function createApp(
       );
     if (!req.url.startsWith('/api/')) return;
     const origin = req.headers.origin;
-    if (origin && origin !== config.origin) throw new AppError(403, 'ORIGIN_DENIED');
+    if (origin && !acceptedOrigin(origin)) throw new AppError(403, 'ORIGIN_DENIED');
     if (req.url === '/api/login' || req.url === '/api/setup' || req.url === '/api/setup/status') return;
     const s = store.session(req.cookies.sid || '');
     if (!s) throw new AppError(401, 'SIGN_IN_REQUIRED');
     req.session = s;
     if (!['GET', 'HEAD'].includes(req.method)) {
-      if (origin !== config.origin || req.headers['x-csrf-token'] !== s.csrf)
+      if (!acceptedOrigin(origin) || req.headers['x-csrf-token'] !== s.csrf)
         throw new AppError(403, 'CSRF_DENIED');
       if (req.url !== '/api/logout') store.session(s.sid, true);
     }
@@ -123,7 +147,10 @@ export async function createApp(
     if (req.url.split('?')[0].startsWith('/api/groups')) store.usage.require(req.session);
   });
   app.addHook('onSend', async (req, reply, payload) => {
-    if (reply.statusCode < 400 && req.url.split('?')[0].startsWith('/api/groups') && req.session) store.usage.require(req.session);
+    if (reply.statusCode < 400 && req.url.split('?')[0].startsWith('/api/groups') && req.session) {
+      if (!store.session(req.session.sid)) throw new AppError(401, 'SIGN_IN_REQUIRED');
+      store.usage.require(req.session);
+    }
     return payload;
   });
   const group = (s: Session, g: string) => { store.usage.require(s); return service.requireGroup(s.user, g); };
@@ -154,10 +181,15 @@ export async function createApp(
       !m.fromMe ||
       (s.user.role === 'child' && m.authorUserId !== s.user.id) ||
       m.status === 'pending' ||
-      m.status === 'failed'
+      m.status === 'failed' || !!m.clientId && m.status === 'unknown' && !acknowledgedSend(m)
     )
       throw new AppError(403, 'OWN_MESSAGE_ONLY');
     return m;
+  };
+  const requireOriginal = (s: Session,m: StoredMessage) => {
+    const c=service.connector(s.user.familyId);
+    if (m.restricted || m.kind==='unsupported' || readOnlyKind(m.kind) || c.originalAvailable && !c.originalAvailable(m))
+      throw new AppError(409,'ORIGINAL_UNAVAILABLE');
   };
   let settingUp = false;
   app.get('/api/setup/status', async () => ({
@@ -167,7 +199,7 @@ export async function createApp(
   app.post('/api/setup', async (req, reply) => {
     const capability = req.headers['x-setup-token'];
     const bootstrap = options.bootstrap;
-    if (req.headers.origin !== config.origin) throw new AppError(403, 'ORIGIN_DENIED');
+    if (!acceptedOrigin(req.headers.origin)) throw new AppError(403, 'ORIGIN_DENIED');
     if (!bootstrap || Date.now() > bootstrap.expiresAt || typeof capability !== 'string' ||
         !timingSafeEqual(Buffer.from(hash(capability)), Buffer.from(hash(bootstrap.token))) ||
         store.one('SELECT 1 FROM families LIMIT 1')) throw new AppError(403, 'SETUP_CLOSED');
@@ -190,11 +222,12 @@ export async function createApp(
     } finally { settingUp = false; }
   });
   app.post('/api/login', async (req, reply) => {
-    if (req.headers.origin !== config.origin) throw new AppError(403, 'ORIGIN_DENIED');
+    if (!acceptedOrigin(req.headers.origin)) throw new AppError(403, 'ORIGIN_DENIED');
     const input = z
       .object({ name: accountNameSchema, password: z.string().max(256) }).strict()
       .parse(req.body);
     const row = store.one('SELECT * FROM users WHERE name_key=?', accountNameKey(input.name));
+    const accessRevision = row?.role === 'child' ? store.childAccess(row.family_id, row.id).revision : 0;
     if (activeLogins >= 3) throw new AppError(429, 'SLOW_DOWN');
     const credentialKey = row ? `account:${row.family_id}:${row.id}` : `unknown:${accountNameKey(input.name)}`;
     if (!credentialThrottle.reserve(credentialKey, req.ip)) {
@@ -209,6 +242,11 @@ export async function createApp(
     const authenticated = store.one('SELECT * FROM users WHERE family_id=? AND id=? AND name_key=? AND password=?',
       row.family_id, row.id, accountNameKey(input.name), row.password);
     if (!authenticated) throw new AppError(401, 'INVALID_CREDENTIALS');
+    if (authenticated.role === 'child') {
+      const access = store.childAccess(authenticated.family_id, authenticated.id);
+      if (access.paused) throw new AppError(403, 'CHILD_ACCESS_PAUSED');
+      if (access.revision !== accessRevision) throw new AppError(401, 'SIGN_IN_REQUIRED');
+    }
     if (req.cookies.sid) {
       store.usage.pauseSession(req.cookies.sid);
       store.run('DELETE FROM sessions WHERE id=?', hash(req.cookies.sid));
@@ -394,134 +432,153 @@ export async function createApp(
       };
     },
   );
+  const outgoingId = (clientId: string) => 'FC' + clientId.replaceAll('-', '').toUpperCase();
+  const outgoingKey = (f: string, g: string, id: string) => `${f}:${g}:${id}`;
+  const markUnconfirmed = (f: string, g: string, id: string, safe: boolean) => {
+    const m = store.getMessage(f, g, id);
+    if (!m || m.deleted || m.restricted || acknowledgedSend(m)) return;
+    store.putMessage(f, { ...m, status: safe ? 'failed' : 'unknown', retrySafe: safe });
+    service.notify(f, g);
+  };
+  const existingSend = (s: Session, g: string, data: z.infer<typeof sendSchema>, fingerprint: string, report: (state: SendState) => void = () => {}, reservation?: symbol) => {
+    const f = s.user.familyId, id = outgoingId(data.clientId), m = store.getMessage(f, g, id);
+    const key = outgoingKey(f, g, id), preparation = preparing.get(key);
+    if (preparation && preparation.token !== reservation) {
+      if (preparation.owner !== s.user.id) throw deny();
+      report('pending');
+      throw new AppError(409, preparation.fingerprint === fingerprint ? 'SEND_PENDING' : 'SEND_ID_CONFLICT');
+    }
+    if (!m) { if (pending.has(key)) { if (pending.get(key) !== s.user.id) throw deny(); report('pending'); throw new AppError(409, 'SEND_PENDING'); } return; }
+    if (!m.fromMe || m.authorUserId !== s.user.id || m.clientId !== data.clientId) throw deny();
+    const state = sendState(m, pending.has(outgoingKey(f, g, id)));
+    report(state);
+    if (m.sendRequestHash && m.sendRequestHash !== fingerprint) throw new AppError(409, 'SEND_ID_CONFLICT');
+    if (state === 'confirmed') return { outcome: 'confirmed' as const, message: service.public(f, m) };
+    if (state === 'pending') throw new AppError(409, 'SEND_PENDING');
+    if (state === 'unknown') { markUnconfirmed(f, g, id, false); throw new AppError(502, 'SEND_UNCERTAIN'); }
+    // Only a proven non-submission permits an explicit retry with the same ID.
+  };
+  app.get<{ Params: { g: string; clientId: string } }>('/api/groups/:g/outgoing/:clientId', async req => {
+    const s = req.session, g = req.params.g, clientId = z.uuid().parse(req.params.clientId);
+    current(s, g);
+    const f = s.user.familyId, id = outgoingId(clientId), m = store.getMessage(f, g, id);
+    const preparation = preparing.get(outgoingKey(f, g, id));
+    if (pending.has(outgoingKey(f, g, id)) && pending.get(outgoingKey(f, g, id)) !== s.user.id ||
+      preparation && preparation.owner !== s.user.id || m && (!m.fromMe || m.authorUserId !== s.user.id || m.clientId !== clientId)) throw deny();
+    const state = sendState(m, pending.has(outgoingKey(f, g, id)) || !!preparation);
+    if (m && state === 'unknown') markUnconfirmed(f, g, id, false);
+    return { state };
+  });
   async function send(
-    s: Session,
-    g: string,
-    data: z.infer<typeof sendSchema>,
-    attachment?: { bytes: Buffer; mime: string; filename: string; kind: Kind },
+    s: Session, g: string, data: z.infer<typeof sendSchema>,
+    attachment?: { bytes: Buffer; mime: string; filename: string; kind: SendKind },
+    fingerprint = sendRequestHash(data, attachment),
+    report: (state: SendState) => void = () => {},
+    reservation?: symbol,
   ) {
     current(s, g);
-    const f = s.user.familyId;
-    const c = service.connector(f);
-    const retentionToken = store.groupKey(f, g).toString('hex');
+    const f = s.user.familyId, prior = existingSend(s, g, data, fingerprint, report, reservation);
+    if (prior) return prior;
+    report('failed');
+    const c = service.connector(f), retentionToken = store.groupKey(f, g).toString('hex');
     const sameRetention = () => store.retained(f, g) && store.groupKey(f, g).toString('hex') === retentionToken;
-    const currentSend = () => {
-      current(s, g);
-      if (!sameRetention()) throw deny();
+    const currentSend = () => { current(s, g); if (!sameRetention()) throw deny(); };
+    const currentQuote = (quoted?: StoredMessage) => {
+      currentSend(); if (!quoted) return;
+      const latest = store.getMessage(f, g, quoted.id);
+      if (!latest || latest.deleted || latest.restricted || latest.raw !== quoted.raw || latest.text !== quoted.text)
+        throw new AppError(409, 'ORIGINAL_UNAVAILABLE');
+      requireOriginal(s, latest);
     };
     if (service.states.get(f)?.state !== 'connected') throw new AppError(409, 'NOT_CONNECTED');
     if (attachment) capable(s, attachment.kind);
     if (!attachment && !data.text) throw new AppError(400, 'EMPTY_MESSAGE');
-    const id = 'FC' + data.clientId.replaceAll('-', '').toUpperCase(),
-      requestKey = `${f}:${g}:${id}`;
-    const existing = store.getMessage(f, g, id);
-    if (existing && existing.status !== 'failed') return { message: service.public(f, existing) };
-    if (pending.has(requestKey)) throw new AppError(409, 'SEND_PENDING');
+    const id = outgoingId(data.clientId), requestKey = outgoingKey(f, g, id);
     rateSend(s);
     const reply = data.replyId ? getMessage(s, g, data.replyId) : undefined;
-    if (reply) capable(s, 'reply');
+    if (reply) { capable(s, 'reply'); requireOriginal(s, reply); }
     const label = s.user.role === 'child' ? store.identityLabel(f, s.user.id) : '';
     const needsMarker = !!label && (attachment?.kind === 'audio' || attachment?.kind === 'sticker');
     const wireText = label && !needsMarker ? `${label}: ${data.text}` : data.text;
-    const pendingMessage: StoredMessage = {
-      id,
-      groupId: g,
-      sender: 'אני',
-      fromMe: true,
-      time: Date.now(),
-      kind: attachment?.kind || 'text',
-      text: wireText,
-      status: 'pending',
-      reactions: {},
-      clientId: data.clientId,
-      replyId: reply?.id,
-      authorUserId: s.user.id,
-      authorLabel: label || undefined,
-    };
-    store.putMessage(f, pendingMessage);
-    pending.add(requestKey);
-    service.notify(f, g);
-    try {
-      currentSend();
-      let wireReply = reply;
-      if (needsMarker) {
-        const markerId = id + 'L';
-        let marker = store.getMessage(f, g, markerId);
-        if (!marker || marker.status === 'failed' || marker.status === 'pending') {
-          marker = {
-            id: markerId,
-            groupId: g,
-            sender: 'אני',
-            fromMe: true,
-            time: Date.now() - 1,
-            kind: 'text',
-            text: `${label} · ${attachment?.kind === 'audio' ? 'הודעה קולית' : 'מדבקה'}`,
-            status: 'pending',
-            reactions: {},
-            authorUserId: s.user.id,
-            authorLabel: label,
-          };
-          store.putMessage(f, marker);
-          let sentMarker;
-          try {
-            sentMarker = await c.send({
-              id: markerId,
-              groupId: g,
-              text: marker.text,
-              kind: 'text',
-              reply,
-            });
-          } catch {
-            if (sameRetention()) service.update(f, g, markerId, { status: 'failed' });
-            throw new Error('Marker send failed');
+    store.putMessage(f, { id, groupId: g, sender: 'אני', fromMe: true, time: Date.now(), kind: attachment?.kind || 'text',
+      text: wireText, status: 'pending', reactions: {}, clientId: data.clientId, sendRequestHash: fingerprint,
+      retrySafe: false, replyId: reply?.id, authorUserId: s.user.id, authorLabel: label || undefined });
+    pending.set(requestKey, s.user.id); service.notify(f, g);
+    let mainStarted = false, mainConfirmed = false, markerUncertain = false;
+    const submit = async (target: string, outgoing: Parameters<typeof c.send>[0]) => {
+      let started = false, gateRejected = false;
+      try {
+        report('unknown');
+        const sent = await c.send({ ...outgoing, beforeSend: () => {
+          try { currentQuote(outgoing.reply); } catch (error) { gateRejected = true; throw error; }
+          started = true;
+          if (target === id) mainStarted = true;
+        } });
+        if (!sent || sent.id !== target || sent.groupId !== g || !sent.fromMe) throw new Error('No matching provider acknowledgement');
+        const status = sent.status || 'unknown';
+        // Retain a known acknowledgement for the parent even if the originating
+        // child expires/pauses meanwhile. Returning content still rechecks current().
+        if (sameRetention()) {
+          const row = store.getMessage(f, g, target);
+          if (row && !row.deleted && !row.restricted) {
+            store.putMessage(f, { ...row, sendAcknowledged: true, retrySafe: false,
+              status: confirmedSend(row.status) ? row.status : status });
+            await service.ingest(f, { ...sent, id: target, status, bytes: outgoing.bytes,
+              mime: outgoing.mime || sent.mime, filename: outgoing.filename || sent.filename,
+              replyId: outgoing.reply?.id }, sameRetention);
           }
-          currentSend();
-          await service.ingest(f, { ...sentMarker, id: markerId });
-          marker = store.getMessage(f, g, markerId);
+        }
+        if (target === id) { mainConfirmed = true; report('confirmed'); }
+        return sent;
+      } catch (error) {
+        const safe = !started && (gateRejected || error instanceof SendNotSubmittedError);
+        if (sameRetention()) markUnconfirmed(f, g, target, safe);
+        if (target === id && !safe) mainStarted = true;
+        if (target !== id && !safe) markerUncertain = true;
+        throw error;
+      }
+    };
+    try {
+      currentSend(); let wireReply = reply;
+      if (needsMarker) {
+        const markerId = id + 'L'; let marker = store.getMessage(f, g, markerId);
+        if (marker && !acknowledgedSend(marker) && !(marker.status === 'failed' && marker.retrySafe === true)) {
+          markerUncertain = true; throw new AppError(502, 'SEND_UNCERTAIN');
+        }
+        if (!marker || !acknowledgedSend(marker)) {
+          marker = { id: markerId, groupId: g, sender: 'אני', fromMe: true, time: Date.now() - 1, kind: 'text',
+            text: `${label} · ${attachment?.kind === 'audio' ? 'הודעה קולית' : 'מדבקה'}`, status: 'pending',
+            reactions: {}, authorUserId: s.user.id, authorLabel: label, retrySafe: false };
+          store.putMessage(f, marker);
+          await submit(markerId, { id: markerId, groupId: g, text: marker.text, kind: 'text', reply });
+          currentSend(); marker = store.getMessage(f, g, markerId);
         }
         if (!wireReply) wireReply = marker;
       }
       currentSend();
-      const sent = await c.send({
-        id,
-        groupId: g,
-        text: wireText,
-        kind: attachment?.kind || 'text',
-        bytes: attachment?.bytes,
-        mime: attachment?.mime,
-        filename: attachment?.filename,
-        reply: wireReply,
-      });
+      await submit(id, { id, groupId: g, text: wireText, kind: attachment?.kind || 'text', bytes: attachment?.bytes,
+        mime: attachment?.mime, filename: attachment?.filename, reply: wireReply });
       currentSend();
-      await service.ingest(f, {
-        ...sent,
-        id,
-        bytes: attachment?.bytes,
-        mime: attachment?.mime || sent.mime,
-        filename: attachment?.filename || sent.filename,
-        replyId: wireReply?.id,
-        status: sent.status,
-      });
-      currentSend();
-      return { message: service.public(f, store.getMessage(f, g, id)!) };
+      return { outcome: 'confirmed' as const, message: service.public(f, store.getMessage(f, g, id)!) };
     } catch (error) {
-      if (sameRetention())
-        service.update(f, g, id, { status: 'failed' });
-      if (error instanceof UsageError) throw error;
-      throw new AppError(502, 'SEND_UNCERTAIN');
-    } finally {
-      pending.delete(requestKey);
-    }
+      if (sameRetention() && !mainConfirmed) markUnconfirmed(f, g, id, !mainStarted && !markerUncertain);
+      report(mainConfirmed ? 'confirmed' : store.getMessage(f, g, id)?.retrySafe === true ? 'failed' : 'unknown');
+      if (error instanceof UsageError || error instanceof AppError) throw error;
+      const safe = error instanceof SendNotSubmittedError && store.getMessage(f, g, id)?.retrySafe === true;
+      throw new AppError(safe ? 409 : 502, safe ? 'SEND_NOT_SUBMITTED' : 'SEND_UNCERTAIN');
+    } finally { pending.delete(requestKey); }
   }
-  app.post<{ Params: { g: string } }>('/api/groups/:g/messages', async (req) =>
-    send(req.session, req.params.g, sendSchema.parse(req.body)),
-  );
+  app.post<{ Params: { g: string } }>('/api/groups/:g/messages', async req => {
+    const data = sendSchema.parse(req.body);
+    return send(req.session, req.params.g, data, undefined, undefined, reportSend(req, req.params.g, data.clientId));
+  });
   app.post<{ Params: { g: string } }>('/api/groups/:g/media', async (req) => {
     const s = req.session,
       g = req.params.g;
     group(s, g);
     if (activeUploads.size >= 2) throw new AppError(429, 'SLOW_DOWN');
     activeUploads.add(req.id);
+    let preparationKey: string | undefined, reservation: symbol | undefined;
     try {
       const fields: Record<string, string> = {};
       let bytes: Buffer | undefined,
@@ -540,10 +597,16 @@ export async function createApp(
         text: fields.text || '',
         replyId: fields.replyId || undefined,
       });
+      const fingerprint = sendRequestHash(data, { bytes, mime, filename, voice: fields.voice === 'true', sticker: fields.sticker === 'true' });
+      const report = reportSend(req, g, data.clientId), prior = existingSend(s, g, data, fingerprint, report);
+      if (prior) return prior;
+      preparationKey = outgoingKey(s.user.familyId, g, outgoingId(data.clientId)); reservation = Symbol();
+      preparing.set(preparationKey, { token: reservation, owner: s.user.id, fingerprint });
+      report('failed');
       const { fileTypeFromBuffer } = await import('file-type');
       const type = await fileTypeFromBuffer(bytes);
       const detected = (type?.mime || 'application/octet-stream').split(';')[0];
-      let kind: Kind = 'document';
+      let kind: SendKind = 'document';
       if (fields.voice === 'true') {
         capable(s, 'audio');
         if (
@@ -578,8 +641,9 @@ export async function createApp(
         if (detected === 'video/mp4') kind = 'video';
       }
       current(s, g);
-      return await send(s, g, data, { bytes, mime, filename, kind });
+      return await send(s, g, data, { bytes, mime, filename, kind }, fingerprint, report, reservation);
     } finally {
+      if (preparationKey && preparing.get(preparationKey)?.token === reservation) preparing.delete(preparationKey);
       activeUploads.delete(req.id);
     }
   });
@@ -642,8 +706,9 @@ export async function createApp(
         g = req.params.g;
       capable(s, 'reactions');
       const m = getMessage(s, g, req.params.id);
+      requireOriginal(s,m);
       const { emoji } = z
-        .object({ emoji: z.enum(['', '💚', '❤️', '👍', '😂', '✨', '🌸', '🎉', '🙏']) })
+        .object({ emoji: z.string().max(64).refine(validReaction) })
         .parse(req.body);
       rateSend(s);
       await service.connector(s.user.familyId).react(g, m, emoji);
@@ -656,6 +721,7 @@ export async function createApp(
     capable(s, 'edit');
     const m = own(s, g, req.params.id),
       c = service.connector(s.user.familyId);
+      requireOriginal(s,m);
     if (m.kind !== 'text' || Date.now() - m.time > c.capabilities.editWindowMs)
       throw new AppError(409, 'EDIT_WINDOW_CLOSED');
     const { text } = z.object({ text: textSchema.min(1) }).parse(req.body);
@@ -671,6 +737,7 @@ export async function createApp(
       g = req.params.g;
     capable(s, 'delete');
     const m = own(s, g, req.params.id);
+      requireOriginal(s,m);
     rateSend(s);
     await service.connector(s.user.familyId).delete(g, m);
     return { ok: true };
@@ -731,7 +798,10 @@ export async function createApp(
     return {
       children: store
         .all('SELECT id,name FROM users WHERE family_id=? AND role=?', f, 'child')
-        .map((u) => ({ ...u, senderLabel: store.identityLabel(f, u.id) })),
+        .map(u => {
+          const access = store.childAccess(f, u.id);
+          return { ...u, senderLabel: store.identityLabel(f, u.id), paused: access.paused, accessRevision: access.revision };
+        }),
       groups: store.groups(f),
       grants: store.all('SELECT user_id,group_id FROM grants WHERE family_id=?', f),
       state: service.states.get(f)?.state || 'idle',
@@ -743,7 +813,7 @@ export async function createApp(
   });
   app.get('/api/parent/updates', async req => {
     parent(req.session);
-    return updateStatus(config, req.session.user);
+    return updateStatus(config, req.session.user, options.windowsUpdates);
   });
   app.post('/api/parent/updates', async req => {
     parent(req.session);
@@ -753,7 +823,7 @@ export async function createApp(
       z.object({action:z.literal('set_mode'),mode:z.enum(['notify','auto'])}).strict(),
     ]).parse(req.body);
     const state = await requestUpdate(config, req.session.user, request.action, 'mode' in request?request.mode:undefined,
-      request.action==='install'?request.target:undefined);
+      'target' in request?request.target:undefined, options.windowsUpdates);
     if (state === 'unavailable') throw new AppError(409, 'UPDATES_UNAVAILABLE');
     if (state === 'target_changed') throw new AppError(409, 'UPDATES_TARGET_CHANGED');
     if (state === 'mode_locked') throw new AppError(409, 'UPDATES_MODE_LOCKED');
@@ -826,6 +896,13 @@ export async function createApp(
     store.setIdentityLabel(s.user.familyId, data.childId, data.label);
     service.notify(s.user.familyId, undefined, 'identity');
     return { ok: true };
+  });
+  app.put('/api/parent/child-access', async req => {
+    parent(req.session);
+    const data = z.object({ childId: z.uuid(), paused: z.boolean(), revision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER - 1) }).strict().parse(req.body);
+    const access = store.setChildAccess(req.session.user.familyId, data.childId, data.paused, data.revision);
+    service.notify(req.session.user.familyId, undefined, 'session');
+    return { ok: true, childId: data.childId, ...access };
   });
   app.put('/api/parent/child-profile', async (req) => {
     const s = req.session;

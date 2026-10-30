@@ -1,0 +1,48 @@
+{
+  "launcherBytes": 495104,
+  "launcherSha256": "b5247cb0f1a53c0c5de39c95a99c73d243b0c4fdb8b0fdcea67d00bef935f78f",
+  "payload": {
+    "version": "0.5.3",
+    "sourceCommit": "e4599761e1c557fc2068cb21ceda2dd06da30d99",
+    "payloadSourceCommit": "2d1b547cb7cadd0ed08c6cdb3584c78ae9060f51",
+    "bytes": 290361696,
+    "sha256": "579605d2439fc0d39ef8f52d4034c4f70438df5e1d7920d7e263d0cb0156cd3a",
+    "url": null,
+    "distributionConfigured": false,
+    "profile": "loopback-real-baileys",
+    "offlineArtifactPreserved": true
+  },
+  "nativeImage": {
+    "machine": "AMD64",
+    "imports": [
+      "winhttp.dll",
+      "bcrypt.dll",
+      "shell32.dll",
+      "ole32.dll",
+      "advapi32.dll",
+      "comctl32.dll",
+      "gdi32.dll",
+      "user32.dll",
+      "api-ms-win-crt-heap-l1-1-0.dll",
+      "api-ms-win-crt-private-l1-1-0.dll",
+      "api-ms-win-crt-runtime-l1-1-0.dll",
+      "api-ms-win-crt-stdio-l1-1-0.dll",
+      "api-ms-win-crt-string-l1-1-0.dll",
+      "kernel32.dll",
+      "api-ms-win-crt-math-l1-1-0.dll",
+      "api-ms-win-crt-environment-l1-1-0.dll",
+      "api-ms-win-crt-convert-l1-1-0.dll",
+      "api-ms-win-crt-locale-l1-1-0.dll",
+      "api-ms-win-crt-time-l1-1-0.dll",
+      "api-ms-win-crt-multibyte-l1-1-0.dll"
+    ],
+    "initialDllSearchFlags": 2048,
+    "asInvoker": true,
+    "aslr": true,
+    "nx": true,
+    "highEntropyVa": true,
+    "privateRuntimeRequired": false
+  },
+  "hostInstallExecuted": false,
+  "compiler": "0.15.2"
+}

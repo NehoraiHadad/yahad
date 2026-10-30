@@ -56,7 +56,7 @@ test('parent opens, reads, sends and repeats in known same-family groups without
     assert.equal(sent.statusCode, 200, sent.body);
     assert.equal(sent.json().message.reply.id, 'received');
     const id = sent.json().message.id;
-    assert.equal((await f.req(f.parent, `/api/groups/${ungranted}/messages`, 'POST', { clientId, text: 'Repeat' })).json().message.id, id);
+    assert.equal((await f.req(f.parent, `/api/groups/${ungranted}/messages`, 'POST', { clientId, text: 'Parent sends', replyId: 'received' })).json().message.id, id);
     assert.equal(f.store.messages(f.family.familyId, ungranted).length, 2, 'repeat is idempotent');
     assert.equal((await f.req(f.parent, `/api/groups/${ungranted}/messages/${id}/reaction`, 'POST', { emoji: '👍' })).statusCode, 200);
     assert.equal((await f.req(f.parent, `/api/groups/${ungranted}/messages/${id}`, 'PATCH', { text: 'Edited by parent' })).statusCode, 200);
@@ -193,7 +193,7 @@ test('a delayed send acknowledgement cannot resurrect content after group remova
     await f.service.syncGroups(f.family.familyId);
     f.store.syncGroups(f.family.familyId, [mockGroups[3]]);
     finish();
-    assert.equal((await result).statusCode, 502, 'provider send already began, so outcome remains uncertain');
+    assert.equal((await result).statusCode, 404, 'lost retention denies content even after a provider acknowledgement');
     assert.equal(f.store.messages(f.family.familyId, ungranted).length, 0);
   } finally { finish?.(); await f.close(); }
 });
@@ -216,7 +216,7 @@ test('child grant revoked during async send ingestion cannot disclose a response
     await f.service.grant(f.family.familyId, f.family.childId, first, false);
     finish();
     const response = await result;
-    assert.equal(response.statusCode, 502);
+    assert.equal(response.statusCode, 404);
     assert.ok(!response.body.includes('Synthetic in-flight child send'));
     assert.equal((await f.req(f.child, `/api/groups/${first}/messages`)).statusCode, 404);
     assert.equal((await f.req(f.parent, `/api/groups/${first}/messages`)).json().messages[0].text, 'Synthetic in-flight child send');

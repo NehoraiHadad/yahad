@@ -1,0 +1,15 @@
+{
+  "ownerUacApprovalObserved": true,
+  "originalUiPid": 19940,
+  "elevatedChildPid": 20616,
+  "firstProgressNotDelivered": true,
+  "serviceCreated": false,
+  "binaryRootCreated": false,
+  "dataRootCreated": false,
+  "reproducedSourceDefect": "Elevated WPF UI calls progress synchronously; WriteAsync captured that blocked UI synchronization context.",
+  "cleanupAttempt": "Aborted before termination: privileged Win32_Process.ExecutablePath was empty, so exact-image verification could not complete.",
+  "oldArtifactPreserved": true,
+  "actualInstallAccepted": false,
+  "webAccepted": false,
+  "uninstallExecuted": false
+}

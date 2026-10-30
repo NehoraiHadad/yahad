@@ -1,0 +1,274 @@
+TAP version 13
+# Subtest: effects do not run on mount, opt-out, hidden tab or reduced-motion denial
+ok 1 - effects do not run on mount, opt-out, hidden tab or reduced-motion denial
+  ---
+  duration_ms: 10.8995
+  type: 'test'
+  ...
+# Subtest: send bursts are bounded to one timer, expire, and throttle repeated sends
+ok 2 - send bursts are bounded to one timer, expire, and throttle repeated sends
+  ---
+  duration_ms: 1.4093
+  type: 'test'
+  ...
+# Subtest: preference/visibility cancellation and unmount cancel all pending work
+ok 3 - preference/visibility cancellation and unmount cancel all pending work
+  ---
+  duration_ms: 1.2285
+  type: 'test'
+  ...
+# Subtest: decorations reuse personal flair, stay hidden to assistive tech, and contain no controls
+ok 4 - decorations reuse personal flair, stay hidden to assistive tech, and contain no controls
+  ---
+  duration_ms: 60.1125
+  type: 'test'
+  ...
+# Subtest: CSS protects pointer interaction and reduced-motion independently of JavaScript
+ok 5 - CSS protects pointer interaction and reduced-motion independently of JavaScript
+  ---
+  duration_ms: 10.6327
+  type: 'test'
+  ...
+# Subtest: first-run requires local capability, same origin, confirmation, and single empty-store claim
+ok 6 - first-run requires local capability, same origin, confirmation, and single empty-store claim
+  ---
+  duration_ms: 1779.203
+  type: 'test'
+  ...
+# Subtest: normal startup and expired bootstrap cannot claim an empty database
+ok 7 - normal startup and expired bootstrap cannot claim an empty database
+  ---
+  duration_ms: 271.4924
+  type: 'test'
+  ...
+# Subtest: one Hebrew account name is both the display identity and login; obsolete alias fields are rejected
+ok 8 - one Hebrew account name is both the display identity and login; obsolete alias fields are rejected
+  ---
+  duration_ms: 982.5869
+  type: 'test'
+  ...
+# Subtest: child creation is parent-only, CSRF protected, unique, and grants no groups
+ok 9 - child creation is parent-only, CSRF protected, unique, and grants no groups
+  ---
+  duration_ms: 476.6234
+  type: 'test'
+  ...
+# Subtest: own and child password confirmation reject mismatch and reset revokes sessions
+ok 10 - own and child password confirmation reject mismatch and reset revokes sessions
+  ---
+  duration_ms: 721.1063
+  type: 'test'
+  ...
+# Subtest: prompt preserves buffered Unicode lines and never echoes supplied secrets
+ok 11 - prompt preserves buffered Unicode lines and never echoes supplied secrets
+  ---
+  duration_ms: 1261.8039
+  type: 'test'
+  ...
+# Subtest: terminal multiline paste never echoes later secret lines before their prompt
+ok 12 - terminal multiline paste never echoes later secret lines before their prompt
+  ---
+  duration_ms: 8.0004
+  type: 'test'
+  ...
+# Subtest: first parent can choose a four-character code, not fewer; no default credential is generated
+ok 13 - first parent can choose a four-character code, not fewer; no default credential is generated
+  ---
+  duration_ms: 316.2488
+  type: 'test'
+  ...
+# Subtest: Windows native private key reader and app config use ACLs rather than POSIX mode
+ok 14 - Windows native private key reader and app config use ACLs rather than POSIX mode
+  ---
+  duration_ms: 1918.3772
+  type: 'test'
+  ...
+# Subtest: Windows capability keeps administrator-owner requirement and missing-file semantics
+ok 15 - Windows capability keeps administrator-owner requirement and missing-file semantics
+  ---
+  duration_ms: 1121.1011
+  type: 'test'
+  ...
+# Subtest: Windows native data lease excludes a second process and releases normally
+ok 16 - Windows native data lease excludes a second process and releases normally
+  ---
+  duration_ms: 1720.4326
+  type: 'test'
+  ...
+# Subtest: missing Windows helper fails closed without falling back to chmod
+ok 17 - missing Windows helper fails closed without falling back to chmod
+  ---
+  duration_ms: 1.8006
+  type: 'test'
+  ...
+# Subtest: abrupt Node parent death closes the native helper lifetime pipe and releases its lease
+ok 18 - abrupt Node parent death closes the native helper lifetime pipe and releases its lease
+  ---
+  duration_ms: 2052.4504
+  type: 'test'
+  ...
+# Subtest: actual mock app starts without development tools on PATH, excludes another writer and stops through private IPC
+ok 19 - actual mock app starts without development tools on PATH, excludes another writer and stops through private IPC
+  ---
+  duration_ms: 26503.9231
+  type: 'test'
+  ...
+# Subtest: repeated parent grant actions are idempotent and preserve selections hidden by group filtering
+ok 20 - repeated parent grant actions are idempotent and preserve selections hidden by group filtering
+  ---
+  duration_ms: 1064.7417
+  type: 'test'
+  ...
+# Subtest: intentional disconnect commits local revocation before provider wait, retains chats, blocks stale hooks and reboot reconnect
+ok 21 - intentional disconnect commits local revocation before provider wait, retains chats, blocks stale hooks and reboot reconnect
+  ---
+  duration_ms: 605.5278
+  type: 'test'
+  ...
+# Subtest: in-flight provider media cannot persist after a retaining disconnect
+ok 22 - in-flight provider media cannot persist after a retaining disconnect
+  ---
+  duration_ms: 599.7516
+  type: 'test'
+  ...
+# Subtest: separately requested history deletion completes locally before unlink network wait and reports its outcome
+ok 23 - separately requested history deletion completes locally before unlink network wait and reports its outcome
+  ---
+  duration_ms: 575.7914
+  type: 'test'
+  ...
+# Subtest: a group refresh finishing after retaining disconnect cannot revoke grants or history
+ok 24 - a group refresh finishing after retaining disconnect cannot revoke grants or history
+  ---
+  duration_ms: 601.9349
+  type: 'test'
+  ...
+# Subtest: persisted incomplete deletion blocks reconnect until explicit deletion is completed
+ok 25 - persisted incomplete deletion blocks reconnect until explicit deletion is completed
+  ---
+  duration_ms: 624.5762
+  type: 'test'
+  ...
+# Subtest: authentication, separate roles, secure headers and CSRF
+ok 26 - authentication, separate roles, secure headers and CSRF
+  ---
+  duration_ms: 551.7171
+  type: 'test'
+  ...
+# Subtest: login uses salted passwords, expiring HttpOnly sessions and throttles
+ok 27 - login uses salted passwords, expiring HttpOnly sessions and throttles
+  ---
+  duration_ms: 1469.3194
+  type: 'test'
+  ...
+# Subtest: family isolation with identical group/message/media IDs, all direct actions scoped
+ok 28 - family isolation with identical group/message/media IDs, all direct actions scoped
+  ---
+  duration_ms: 579.7124
+  type: 'test'
+  ...
+# Subtest: filter unknown groups BEFORE media download and storage; external quote content removed
+ok 29 - filter unknown groups BEFORE media download and storage; external quote content removed
+  ---
+  duration_ms: 613.8635
+  type: 'test'
+  ...
+# Subtest: send, idempotency, scoped replies, real media bytes, edit, delete and reactions
+ok 30 - send, idempotency, scoped replies, real media bytes, edit, delete and reactions
+  ---
+  duration_ms: 659.652
+  type: 'test'
+  ...
+# Subtest: multipart upload is sniffed, authorized, bounded, converted voice and persists media
+ok 31 - multipart upload is sniffed, authorized, bounded, converted voice and persists media
+  ---
+  duration_ms: 2940.3422
+  type: 'test'
+  ...
+# Subtest: membership removal purges messages, media and active key; in-flight download cannot resurrect
+ok 32 - membership removal purges messages, media and active key; in-flight download cannot resurrect
+  ---
+  duration_ms: 584.1428
+  type: 'test'
+  ...
+# Subtest: one child revocation preserves another child grant within the same family
+ok 33 - one child revocation preserves another child grant within the same family
+  ---
+  duration_ms: 491.5983
+  type: 'test'
+  ...
+# Subtest: pagination stable on identical timestamps, search and cross-group reply protections
+ok 34 - pagination stable on identical timestamps, search and cross-group reply protections
+  ---
+  duration_ms: 871.5254
+  type: 'test'
+  ...
+# Subtest: SSE reauthorizes per family/group and closes on session revocation
+ok 35 - SSE reauthorizes per family/group and closes on session revocation
+  ---
+  duration_ms: 484.0648
+  type: 'test'
+  ...
+# Subtest: ciphertext storage survives restart, auth is encrypted and disconnect purge scoped
+ok 36 - ciphertext storage survives restart, auth is encrypted and disconnect purge scoped
+  ---
+  duration_ms: 567.0957
+  type: 'test'
+  ...
+# Subtest: parent-controlled sender signature is enforced on server, isolated, and retained on edits
+ok 37 - parent-controlled sender signature is enforced on server, isolated, and retained on edits
+  ---
+  duration_ms: 552.9166
+  type: 'test'
+  ...
+# Subtest: terminal pairing state survives service restart, clears invalid auth and stops auto boot
+ok 38 - terminal pairing state survives service restart, clears invalid auth and stops auto boot
+  ---
+  duration_ms: 548.1732
+  type: 'test'
+  ...
+# Subtest: missing connector receipts stay unknown and an out-of-order pending echo cannot regress read
+ok 39 - missing connector receipts stay unknown and an out-of-order pending echo cannot regress read
+  ---
+  duration_ms: 547.7171
+  type: 'test'
+  ...
+# Subtest: four-character codes work across child creation, child reset and own password change
+ok 40 - four-character codes work across child creation, child reset and own password change
+  ---
+  duration_ms: 1420.714
+  type: 'test'
+  ...
+# Subtest: login guessing budget follows the account across IPs and does not lock the family NAT
+ok 41 - login guessing budget follows the account across IPs and does not lock the family NAT
+  ---
+  duration_ms: 1366.5037
+  type: 'test'
+  ...
+# Subtest: credential throttle is durable, bounded, expires, and does not reset the network budget on success
+ok 42 - credential throttle is durable, bounded, expires, and does not reset the network budget on success
+  ---
+  duration_ms: 872.8697
+  type: 'test'
+  ...
+# Subtest: short code hashing preserves salted scrypt format and rejects fewer than four characters
+ok 43 - short code hashing preserves salted scrypt format and rejects fewer than four characters
+  ---
+  duration_ms: 318.5516
+  type: 'test'
+  ...
+# Subtest: password re-verification shares account budget and explicit child reset restores access
+ok 44 - password re-verification shares account budget and explicit child reset restores access
+  ---
+  duration_ms: 1384.3937
+  type: 'test'
+  ...
+1..44
+# tests 44
+# suites 0
+# pass 44
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 80085.4647

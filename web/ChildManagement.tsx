@@ -4,6 +4,8 @@ import { familyProgress, type FamilyOverview } from './FamilyProgress';
 import { childLabel } from './childLabels';
 import { ChildUsageSettings } from './ChildUsageSettings';
 import { GroupPicker } from './GroupPicker';
+import { ChildAccessSettings } from './ChildAccessSettings';
+import type { ChildAccessChange } from './childManagementState';
 import { ChildActionGuard, confirmedChildGrant, type ChildGrantChange } from './childManagementState';
 
 type Props = {
@@ -11,6 +13,7 @@ type Props = {
   photoRetryKey?: string; onSelect: (id: string) => void; onAdd: () => void;
   onSettings: (id: string, mode: 'profile' | 'password') => void;
   onGrant: (change: ChildGrantChange) => Promise<boolean>; onRefresh: () => void; onRetry: () => void;
+  onAccess?: (change: ChildAccessChange) => Promise<boolean>;
   children?: React.ReactNode;
 };
 
@@ -49,7 +52,7 @@ export function ChildManagement(props: Props) {
             <span className="child-card-top"><span className="child-initial" aria-hidden="true">{Array.from(account.name)[0]}</span>
               <strong dir="auto">{childLabel(account)}</strong>{selected === account.id && <Check size={17} aria-hidden="true"/>}</span>
             <span className="child-card-count">{account.groups.length === 1 ? 'שיחה אחת מאושרת' : `${account.groups.length} שיחות מאושרות`}</span>
-            <span className={'child-readiness ' + (!account.groups.length ? 'needs-groups' : '')}>{stale ? 'ממתינים לרענון' : account.ready ? 'מוכן לכניסה בטאבלט' : !account.groups.length ? 'צריך לבחור שיחות' : 'ממתין לחיבור החשבון'}</span>
+            <span className={'child-readiness ' + (account.paused || !account.groups.length ? 'needs-groups' : '')}>{stale ? 'ממתינים לרענון' : account.paused ? 'הגישה מושהית' : account.ready ? 'מוכן לכניסה בטאבלט' : !account.groups.length ? 'צריך לבחור שיחות' : 'ממתין לחיבור החשבון'}</span>
             {!!account.groups.length && <span className="child-card-groups">{account.groups.slice(0, 2).map(group => group.title).join(' · ')}{account.groups.length > 2 ? ` · ועוד ${account.groups.length - 2}` : ''}</span>}
             <span className="child-card-link">{selected === account.id ? 'החשבון שנבחר' : 'ניהול שיחות וחשבון'}<ChevronLeft size={15}/></span>
           </button>
@@ -61,7 +64,7 @@ export function ChildManagement(props: Props) {
   </section>;
 }
 
-function ChildWorkspace({ data, selectedChild: child, busy, stale, createdChild, onGrant, onSettings, onRefresh, photoRetryKey, children }: Props & {
+function ChildWorkspace({ data, selectedChild: child, busy, stale, createdChild, onGrant, onAccess, onSettings, onRefresh, photoRetryKey, children }: Props & {
   data: FamilyOverview; selectedChild: ReturnType<typeof familyProgress>['children'][number];
 }) {
   const [change, setChange] = useState<(ChildGrantChange & { title: string; phase: 'saving' | 'settled'; acknowledged?: boolean }) | null>(null);
@@ -89,6 +92,7 @@ function ChildWorkspace({ data, selectedChild: child, busy, stale, createdChild,
     </header>
     {createdChild === child.id && <p className="setup-success" role="status">החשבון של <bdi>{child.name}</bdi> נוצר ונבחר. עכשיו בוחרים אילו שיחות להציג בו.</p>}
     {stale && <p className="child-sync-note" role="status">מציגים את המידע האחרון. שינוי שיחות והגדרות יתאפשר אחרי אימות מול השרת.</p>}
+    {onAccess && <ChildAccessSettings child={child} disabled={busy || stale || saving} stale={stale} onChange={onAccess}/>}
     <ChildUsageSettings key={child.id} childId={child.id} name={child.name} disabled={busy || stale || saving}/>
     <section className="child-groups-section" aria-labelledby="selected-groups-title">
       <div className="child-groups-heading"><div><h4 id="selected-groups-title">השיחות של <bdi>{child.name}</bdi></h4><p>{child.groups.length ? `${child.groups.length === 1 ? 'שיחה אחת מאושרת' : `${child.groups.length} שיחות מאושרות`} לחשבון הזה` : 'עדיין אין שיחות מאושרות — בחרו מהרשימה למטה'}</p></div>

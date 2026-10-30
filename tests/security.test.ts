@@ -389,7 +389,9 @@ test('filter unknown groups BEFORE media download and storage; external quote co
     );
     await f.ingest(f.a.familyId, 'reply', 'Visible', { replyId: 'outside-message' });
     const r = await f.req(f.child, `/api/groups/${group}/messages`);
-    assert.equal(r.json().messages[0].reply, undefined);
+    assert.deepEqual(r.json().messages[0].reply, {
+      id: 'outside-message', text: 'ההודעה המקורית אינה זמינה', sender: '', available: false,
+    });
     assert.equal('raw' in r.json().messages[0], false);
     for (const file of readdirSync(f.config.dataDir))
       if (file.startsWith('app.sqlite'))
@@ -419,7 +421,8 @@ test('send, idempotency, scoped replies, real media bytes, edit, delete and reac
       clientId,
       text: 'duplicate',
     });
-    assert.equal(r.json().message.id, id);
+    assert.equal(r.statusCode, 409);
+    assert.equal(r.json().error, 'SEND_ID_CONFLICT');
     assert.equal(
       f.store.all('SELECT id FROM messages WHERE family_id=? AND group_id=?', f.a.familyId, group)
         .length,

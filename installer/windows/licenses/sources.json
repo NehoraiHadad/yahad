@@ -1,0 +1,14 @@
+[
+  {
+    "path": "legal/FFmpeg-GPLv3.txt",
+    "sourceUrl": "https://www.gnu.org/licenses/gpl-3.0.txt",
+    "size": 35149,
+    "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+  },
+  {
+    "path": "legal/Go-LICENSE.txt",
+    "sourceUrl": "https://raw.githubusercontent.com/golang/go/go1.26.8/LICENSE",
+    "size": 1453,
+    "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+  }
+]

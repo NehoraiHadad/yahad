@@ -1,4 +1,5 @@
 import {test} from 'node:test';
+import {privateFixtureDirectory,assertPrivateFixtureFile} from './fixtures/private-directory.js';
 import assert from 'node:assert/strict';
 import {mkdtempSync,writeFileSync,readFileSync,rmSync,readdirSync,lstatSync,symlinkSync,watch} from 'node:fs';
 import {join} from 'node:path';
@@ -10,7 +11,7 @@ import {createApp} from '../src/server.js';
 import type {Config} from '../src/config.js';
 const installTarget={version:'0.3.2',fingerprint:'a'.repeat(64)};
 async function fixture(){
-  const dir=mkdtempSync(join(tmpdir(),'yachad-mode-'));
+  const dir=privateFixtureDirectory('yachad-mode-');
   const config:Config={dataDir:dir,masterKey:randomBytes(32),connector:'mock',realAllowed:false,host:'127.0.0.1',port:3000,origin:'http://localhost:3000',secureCookie:false,maxMedia:1048576,maxStorage:67108864,childIdleMs:60000,sessionMs:3600000,diagnosticsEnabled:false,updateStatusFile:join(dir,'root-status.json')};
   const {app,store}=await createApp(config,{boot:false});const password=randomBytes(24).toString('hex');
   const a=await store.createFamily('A',{name:'parent-a',password},{name:'child-a',password}),b=await store.createFamily('B',{name:'parent-b',password},{name:'child-b',password});
@@ -80,7 +81,7 @@ test('request publication is complete/private and wakes without overwriting a co
     assert.deepEqual(results.map(x=>x.json().state).sort(),['pending','queued']);
     assert.deepEqual(await publication,f.queue());
     const queue=join(f.dir,'update-request.json'),wake=join(f.dir,'update-request.wake');
-    assert.equal(lstatSync(queue).mode&0o777,0o600);assert.equal(lstatSync(wake).mode&0o777,0o600);
+    assertPrivateFixtureFile(queue);assertPrivateFixtureFile(wake);
     assert.equal(lstatSync(queue).ino,lstatSync(wake).ino);
     assert.equal(lstatSync(queue).isSymbolicLink(),false);
     assert.deepEqual(readdirSync(f.dir).filter(x=>x.startsWith('.update-request-')),[]);
@@ -89,7 +90,7 @@ test('request publication is complete/private and wakes without overwriting a co
     assert.equal(view.queuedRequest.familyId,undefined);assert.equal(view.queuedRequest.userId,undefined);
   }finally{if(timer)clearTimeout(timer);watcher?.close();await f.close();}
 });
-test('queue collision preserves a symlink target and cleans temporary files',async()=>{
+test('queue collision preserves a symlink target and cleans temporary files',{skip:process.platform==='win32'?'File symlink creation requires unapproved Windows privilege; Linux symlink and native junction guards remain required':false},async()=>{
   const f=await fixture();try{
     const target=join(f.dir,'preserve-fixture');writeFileSync(target,'unchanged synthetic fixture');
     symlinkSync(target,join(f.dir,'update-request.json'));
