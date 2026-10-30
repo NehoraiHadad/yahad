@@ -1,0 +1,5 @@
+# This buildless site's dist directory is editable source, not app build output.
+!dist/
+!dist/**
+__pycache__/
+*.pyc
