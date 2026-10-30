@@ -56,27 +56,62 @@ html.js-reveal .reveal:focus-within,html.js-reveal .reveal:target{opacity:1;tran
 .download-action[disabled]:hover{background:var(--green);transform:none}
 @media(max-width:700px){.download{padding-top:30px}.download h2{font-size:25px}.download-list{grid-template-columns:1fr;gap:16px}}
 
-/* flow-clarity: visible stage caption — one line names the current action */
-.demo-caption{display:grid;min-height:1.7em;font-size:13px;line-height:1.7;color:var(--muted);padding:10px 0 0;border-top:1px solid var(--line);margin-top:-4px}
-.demo-caption span{grid-area:1/1;visibility:hidden}
-.family-demo:not(.s-check) .cap-choose{visibility:visible}
-.s-check .cap-choose{visibility:hidden}
-.s-check .cap-approve{visibility:visible}
-.s-arrive .cap-approve{visibility:hidden}
-.s-arrive .cap-arrive{visibility:visible}
-.s-msg1 .cap-arrive{visibility:hidden}
-.s-msg1 .cap-message{visibility:visible}
-.s-reply .cap-message{visibility:hidden}
-.s-reply .cap-reply{visibility:visible}
-.s-done .cap-reply{visibility:hidden}
-.s-done .cap-done{visibility:visible}
-.family-demo.is-live .demo-caption span{animation:cap-in .25s ease}
-@keyframes cap-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-/* flow-clarity: highlight the side that is acting while the demo runs or is paused */
-.parent-context,.child-context{border-radius:10px;transition:background .3s,box-shadow .3s}
-.family-demo:is(.is-live,.is-paused):is([data-stage="0"],[data-stage="1"]) .parent-context{background:#f0f5eb;box-shadow:inset 0 0 0 1.5px #c9d8c0}
-.family-demo:is(.is-live,.is-paused)[data-stage="2"] .child-context{background:#f0f5eb;box-shadow:inset 0 0 0 1.5px #c9d8c0}
-/* flow-clarity: the active step pill is unmistakable */
-.demo-steps button[aria-pressed=true]{color:var(--ink);background:#e2ecda;font-weight:700;box-shadow:inset 0 0 0 1px #c9d8c0}
-@media(max-width:700px){.demo-caption{font-size:12px;min-height:52px}}
-@media(prefers-reduced-motion:reduce){.demo-caption span{animation:none}}
+/* the event: parent marks chats, they move to the child, the child chats */
+.pick-list{display:grid;gap:10px}
+.pick-row{position:relative;display:flex;align-items:center;gap:10px;padding:10px 12px;background:#fff;border:1px solid var(--line);border-radius:10px;min-height:58px}
+.pick-row .contact-avatar{width:30px;height:30px;font-size:15px;flex-shrink:0}
+.contact-avatar.g{background:#d7e4d0;color:#3d5540}
+.pick-row b{display:block;font-size:14px;line-height:1.4}
+.pick-row small{display:block;font-size:11px;color:var(--muted);margin-top:2px}
+.pick-check{margin-right:auto;display:grid;place-items:center;width:22px;height:22px;border:1.5px solid var(--line);border-radius:50%;flex-shrink:0;transition:background .25s,border-color .25s}
+.pick-check img{width:14px;height:14px;opacity:0;transform:scale(.5);transition:opacity .25s,transform .25s;filter:brightness(0) invert(1)}
+.s-check .pr1 .pick-check,.s-check2 .pr2 .pick-check{background:var(--green);border-color:var(--green)}
+.s-check .pr1 .pick-check img,.s-check2 .pr2 .pick-check img{opacity:1;transform:none}
+.pr3{background:var(--paper)}
+.tap-ring{position:absolute;inset:-1px;border:2px solid var(--green);border-radius:11px;opacity:0;pointer-events:none}
+.s-tap .pr1 .tap-ring,.s-tap2 .pr2 .tap-ring,.s-open .cr1 .tap-ring{animation:tap-ring .6s ease}
+@keyframes tap-ring{0%{opacity:.9;transform:scale(.96)}100%{opacity:0;transform:scale(1.05)}}
+.chat-rows{display:grid;gap:8px}
+.chat-row{position:relative;display:flex;align-items:center;gap:9px;padding:9px 11px;background:#fff;border:1px solid var(--line);border-radius:9px;visibility:hidden;transform:translateY(6px);transition:transform .35s}
+.chat-row .contact-avatar{width:26px;height:26px;font-size:13px;flex-shrink:0}
+.chat-row b{font-size:13px;display:block;line-height:1.4}
+.chat-row small{display:block;font-size:10px;color:var(--muted)}
+.s-arrive .cr1,.s-arrive2 .cr2{visibility:visible;transform:none}
+.child-empty{transition:opacity .3s}
+.s-arrive .child-empty{opacity:0}
+.child-device{display:grid}
+.chat-rows,.open-chat{grid-area:1/1;align-self:start}
+.open-chat{visibility:hidden}
+.s-open .chat-rows{visibility:hidden}
+.s-open .chat-row{visibility:hidden}
+.s-open .open-chat{visibility:visible}
+.is-live.s-open .open-chat{animation:fade-up .4s ease}
+@keyframes fade-up{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.chat-head{display:flex;align-items:center;gap:9px;padding-bottom:10px;border-bottom:1px solid var(--line);margin-bottom:12px}
+.chat-head .contact-avatar{width:26px;height:26px;font-size:13px}
+.chat-head b{font-size:14px}
+.compose-typed{display:none;color:var(--ink)}
+.s-write .compose-ph{display:none}
+.s-write .compose-typed{display:inline}
+.s-msg1 .compose-typed{display:none}
+.s-msg1 .compose-ph{display:inline}
+.child-device{min-height:232px}
+@media(max-width:700px){
+.demo-scene{gap:12px;padding-top:12px}
+.demo-scene h3{margin-bottom:8px}
+.pick-list{gap:8px}
+.pick-row{min-height:48px;padding:8px 10px}
+.pick-row .contact-avatar{width:26px;height:26px;font-size:13px}
+.pick-row small{display:none}
+.chat-rows{gap:6px}
+.chat-row{padding:7px 9px}
+.child-device{min-height:236px}
+.chat-head{padding-bottom:8px;margin-bottom:8px}
+}
+@media(prefers-reduced-motion:reduce){.s-tap .pr1 .tap-ring,.s-tap2 .pr2 .tap-ring,.s-open .cr1 .tap-ring,.s-open .open-chat{animation:none}}
+.open-chat{position:relative}
+.s-open .demo-compose{opacity:1;transform:none}
+.demo-reply .sender{display:block;font-size:11px;font-weight:700;color:#2f6b57;margin-bottom:1px}
+
+/* Manual/static stages do not replay event animations. */
+.family-demo:not(.is-live) .tap-ring,.family-demo:not(.is-live) .open-chat{animation:none}

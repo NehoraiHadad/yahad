@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 css=(Path(__file__).resolve().parents[1]/'dist/style.css').read_text()
 def declarations(selector):
- match=re.search(re.escape(selector)+r'\{([^}]+)\}',css)
+ match=re.search(r'(?:^|})\s*'+re.escape(selector)+r'\{([^}]+)\}',css)
  assert match,selector
  return dict(p.split(':',1) for p in match.group(1).split(';') if ':' in p)
 vars=declarations(':root')
@@ -27,10 +27,12 @@ cases=[
  ('body muted',vars['--muted'],vars['--paper']),
  ('contact caption',vars['--muted'],declarations('.approval-row')['background']),
  ('control hover',vars['--ink'],'#f0f5eb'),
- ('primary label','#ffffff',vars['--green'])]
+ ('primary label','#ffffff',vars['--green']),
+ ('group avatar',declarations('.contact-avatar.g')['color'],declarations('.contact-avatar.g')['background']),
+ ('group reply sender',declarations('.demo-reply .sender')['color'],declarations('.demo-reply')['background'])]
 for name,f,b in cases:
  r=ratio(f,b);print(f'{name}: {value(f)} / {value(b)} = {r:.3f}:1');assert r>=4.5,(name,r)
 assert declarations('.compose-input')['color']=='var(--muted)'
 assert declarations('.disclaimer')['color']=='var(--muted)'
 assert '#667d6e' not in css and '#735e4c' not in css
-print('PASS: all nine text/background pairs exceed 4.5:1; three failing selector/color pairs corrected.')
+print('PASS: all text/background pairs exceed 4.5:1; three failing selector/color pairs corrected.')
