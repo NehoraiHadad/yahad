@@ -12,7 +12,7 @@ function setup(reduce=false){
  const frame=()=>{const list=[...frames.values()];frames.clear();list.forEach(f=>f(now));};
  return{root,control,announce,steps,media,doc,events,animations,timers,frames,nodes,frame,enter:()=>observe([{isIntersecting:true}]),leave:()=>observe([{isIntersecting:false}]),advance(ms){now+=ms;for(const [k,v]of [...timers])if(v.t<=now){timers.delete(k);v.f()}frame()}};
 }
-let h=setup();assert.equal(h.root.dataset.stage,'2');h.enter();h.frame();h.advance(1700);assert.equal(h.root.dataset.stage,'1');h.control.click();assert.equal(h.timers.size,0);assert.equal(h.frames.size,0);assert.equal(h.animations[0].playState,'paused');h.leave();h.enter();assert.equal(h.timers.size,0,'manual pause persists');h.control.click();assert.ok(h.timers.size);h.advance(6000);assert.equal(h.root.dataset.stage,'2');assert.equal(h.timers.size,0);assert.equal(h.frames.size,0);
+let h=setup();assert.equal(h.root.dataset.stage,'2');h.enter();h.frame();h.advance(1700);assert.equal(h.root.dataset.stage,'1');h.control.click();assert.equal(h.timers.size,0);assert.equal(h.frames.size,0);assert.equal(h.animations[0].playState,'paused');h.leave();h.enter();assert.equal(h.timers.size,0,'manual pause persists');h.control.click();assert.ok(h.timers.size);h.advance(14000);assert.equal(h.root.dataset.stage,'2');assert.equal(h.timers.size,0);assert.equal(h.frames.size,0);
 h.control.click();h.frame();h.advance(1200);h.media.matches=true;h.media.change();assert.equal(h.timers.size,0);assert.equal(h.frames.size,0);assert.equal(h.root.dataset.stage,'2');assert.match(h.control.attrs['aria-label'],/לשלב הבא/);h.advance(10000);assert.equal(h.root.dataset.stage,'2');h.control.click();assert.equal(h.root.dataset.stage,'0');assert.equal(h.timers.size,0);
 h=setup();h.enter();h.frame();h.advance(2000);h.events.resize();assert.ok(h.timers.size);h.frame();assert.equal(h.nodes['.travel-chip'].style.visibility,'visible');h.leave();assert.equal(h.timers.size,0);h.enter();assert.ok(h.timers.size);h.doc.hidden=true;h.events.visibilitychange();assert.equal(h.frames.size,0);h.doc.hidden=false;h.events.visibilitychange();assert.ok(h.frames.size);h.steps[1].click();assert.equal(h.root.dataset.stage,'1');assert.equal(h.timers.size,0);
 h=setup(true);h.enter();assert.equal(h.timers.size,0);assert.match(h.control.attrs['aria-label'],/לשלב הבא/);h.control.click();assert.equal(h.root.dataset.stage,'0');
@@ -20,3 +20,20 @@ console.log('PASS: finite timeline, CSS pause/resume, manual pause persistence, 
 
 h=setup();h.media.matches=true;h.media.change();h.media.matches=false;h.media.change();h.enter();assert.equal(h.timers.size,0,'preference change prevents surprise autoplay');
 console.log('PASS: v2 labels, visibility, preference-change autoplay guard');
+
+// Flow captions: preserve a readable account-origin beat and deterministic controls.
+h=setup();h.enter();h.frame();h.advance(6700);
+assert.ok(h.root.classList.contains('s-msg1'));
+assert.ok(!h.root.classList.contains('s-reply'));
+h.advance(4400);assert.ok(!h.root.classList.contains('s-reply'),'account-origin caption needs >=4.5 seconds');
+h.control.click();h.advance(8000);assert.ok(!h.root.classList.contains('s-reply'),'pause preserves caption');
+h.control.click();h.frame();h.advance(3000);assert.ok(h.root.classList.contains('s-done'));
+h.control.click();h.frame();assert.equal(h.root.dataset.stage,'0','replay starts with selection');
+h.steps[1].click();assert.ok(h.root.classList.contains('s-check'));assert.ok(!h.root.classList.contains('s-travel'));assert.equal(h.timers.size,0);
+h.steps[0].click();assert.equal(h.root.dataset.stage,'0');assert.equal(h.timers.size,0);
+const flowCSS=fs.readFileSync('dist/style.css','utf8');
+assert.ok(flowCSS.includes('.demo-caption{display:grid;'),'all captions share intrinsic reserved height');
+assert.ok(flowCSS.includes('grid-area:1/1;visibility:hidden'),'hidden captions retain height at narrow widths');
+assert.ok(flowCSS.includes('.family-demo:not(.s-check) .cap-choose{visibility:visible}'),'step zero always has caption');
+assert.ok(flowCSS.includes('.family-demo.is-live .demo-caption span{animation:'),'only live demo animates captions');
+console.log('PASS: readable caption dwell, pause/resume/replay/manual states and intrinsic caption height guards');

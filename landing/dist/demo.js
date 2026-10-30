@@ -24,15 +24,15 @@ const labels = [
 ];
 /* beat timeline (ms): [time, class, data-stage] */
 const BEATS = [
-  [300, 's-tap', 0], [760, 's-check', 1], [1300, 's-travel', 1],
-  [2420, 's-arrive', 2], [2900, 's-msg1', 2], [3450, 's-typing', 2],
-  [4250, 's-reply', 2], [4800, 's-compose', 2], [5300, 's-done', 2]
+  [400, 's-tap', 0], [1200, 's-check', 1], [1900, 's-travel', 1],
+  [4100, 's-arrive', 2], [6700, 's-msg1', 2], [9500, 's-typing', 2],
+  [11200, 's-reply', 2], [12200, 's-compose', 2], [13000, 's-done', 2]
 ];
 const ORDER = BEATS.map(b => b[1]);
-const TRAVEL = [1300, 2420];          /* chip flight */
-const END = 5300;                     /* last beat */
+const TRAVEL = [1900, 4100];          /* chip flight */
+const END = 13000;                     /* last beat */
 const FINAL = END + 400;              /* settled final frame */
-const STEP_T = [0, 1250, FINAL];      /* what each step pill shows */
+const STEP_T = [0, 1500, FINAL];      /* what each step pill shows */
 
 /* button: one table keeps visible text and aria-label in sync */
 const BUTTON = {
