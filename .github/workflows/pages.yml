@@ -1,0 +1,94 @@
+name: Publish landing to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'landing/**'
+      - '.github/workflows/pages.yml'
+
+permissions: {}
+
+concurrency:
+  group: github-pages-landing
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.repository == 'NehoraiHadad/yahad' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: read
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Validate static publication boundary
+        shell: python
+        run: |
+          import os
+          import stat
+          from pathlib import Path
+
+          for ancestor in (Path('landing'), Path('landing/dist')):
+              assert stat.S_ISDIR(ancestor.lstat().st_mode), f'Unsafe directory: {ancestor}'
+          root = Path('landing/dist').resolve(strict=True)
+          allowed = {'.html', '.css', '.js', '.svg', '.webp', '.ttf', '.txt'}
+          total = 0
+          count = 0
+          for directory, dirs, files in os.walk(root, followlinks=False):
+              for name in dirs + files:
+                  path = Path(directory) / name
+                  relative = path.relative_to(root)
+                  assert all(not part.startswith('.') for part in relative.parts), f'Hidden entry: {relative}'
+                  info = path.lstat()
+                  assert not stat.S_ISLNK(info.st_mode), f'Symlink: {relative}'
+                  assert path.resolve(strict=True).is_relative_to(root), f'Escaping path: {relative}'
+                  if name in dirs:
+                      assert stat.S_ISDIR(info.st_mode), f'Unsafe directory: {relative}'
+                  else:
+                      assert stat.S_ISREG(info.st_mode), f'Non-regular file: {relative}'
+                      assert info.st_nlink == 1, f'Hard-linked file: {relative}'
+                      assert path.suffix in allowed, f'Non-static file type: {relative}'
+                      count += 1
+                      total += info.st_size
+          assert (root / 'index.html').stat().st_size > 0, 'Missing or empty index.html'
+          assert total <= 10 * 1024 * 1024, f'Artifact too large: {total}'
+          print(f'Validated {count} static files, {total} bytes')
+      - name: Check JavaScript syntax and landing behavior
+        working-directory: landing
+        run: |
+          node --check dist/demo.js
+          node --check dist/reveal.js
+          node tests/demo.test.cjs
+          node tests/reveal.test.cjs
+          python3 -X utf8 tests/static.test.py
+          python3 -X utf8 tests/contrast.test.py
+      - name: Read existing Pages configuration
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+        with:
+          enablement: false
+      - name: Upload static landing only
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        with:
+          path: landing/dist
+          retention-days: 1
+
+  deploy:
+    needs: prepare
+    if: github.repository == 'NehoraiHadad/yahad' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy prepared landing artifact
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
