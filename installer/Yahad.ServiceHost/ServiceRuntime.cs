@@ -165,12 +165,14 @@ internal sealed class ServiceController
         var failure=ServiceFailure.None;var quiescent=true;var checkpoint=0u;
         var pending=ServiceState.StartPending;var statusGate=new object();var acceptingProgress=true;var progressStatusFailed=false;
         var observed=authorizer as IObservedAdmission;
+        // Startup accepts STOP/SHUTDOWN: the handler cancels it (below), so a
+        // long admission never makes the SCM refuse a stop with 1052.
         void Pending(ServiceState state)
         {
             lock(statusGate)
             {
                 if(state!=pending){pending=state;checkpoint=0;}
-                publish(new(state,0,++checkpoint,60000,0,0));
+                publish(new(state,state==ServiceState.StartPending?0x1u|0x4u:0,++checkpoint,60000,0,0));
             }
         }
         void Observed()

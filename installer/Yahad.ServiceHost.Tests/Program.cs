@@ -83,6 +83,8 @@ await Check("authorization returning after cancellation has its resources revoke
     var app=new FakeApp();var resource=new RevokedResource();var late=new LateAuthorization();var controller=new ServiceController(late);var reports=new List<ServiceReport>();var running=controller.RunAsync(reports.Add);
     controller.Control(ServiceDefinition.Stop);await running.WaitAsync(TimeSpan.FromSeconds(3));late.Completion.TrySetResult(new(new("late"),app,app,resource));await controller.RetryAdmissionCleanupAsync(default);
     await resource.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(3));Assert(app.Calls.Count==0&&!reports.Any(r=>r.State==ServiceState.Running));
+    // STOP is advertised while starting, so the SCM delivers it instead of refusing with 1052.
+    Assert(reports.Any(r=>r.State==ServiceState.StartPending)&&reports.Where(r=>r.State==ServiceState.StartPending).All(r=>r.AcceptedControls==5));
 });
 await Check("normal lifecycle reports real milestones and graceful stop before STOPPED",async()=>
 {
@@ -90,7 +92,7 @@ await Check("normal lifecycle reports real milestones and graceful stop before S
     var result=await controller.RunAsync(r=>{reports.Add(r);if(r.State==ServiceState.Running)Assert(controller.Control(ServiceDefinition.Stop)==0);});
     Assert(result.Failure==ServiceFailure.None&&result.QuiescenceConfirmed&&app.Calls.IndexOf("graceful")<app.Calls.IndexOf("tree-empty"));
     Assert(reports.Where(r=>r.State==ServiceState.StartPending).Select(r=>r.Checkpoint).SequenceEqual(new uint[]{1,2}));
-    Assert(reports.All(r=>r.State==ServiceState.Running?r.AcceptedControls==5:r.AcceptedControls==0));Assert(reports[^1].State==ServiceState.Stopped&&reports[^1].Win32ExitCode==0);
+    Assert(reports.All(r=>r.State is ServiceState.Running or ServiceState.StartPending?r.AcceptedControls==5:r.AcceptedControls==0));Assert(reports[^1].State==ServiceState.Stopped&&reports[^1].Win32ExitCode==0);
     Assert(controller.Control(ServiceDefinition.Stop)==1062&&controller.Control(ServiceDefinition.Interrogate)==0&&controller.Control(128)==120);
 });
 foreach(var control in new[]{ServiceDefinition.Stop,ServiceDefinition.Shutdown})

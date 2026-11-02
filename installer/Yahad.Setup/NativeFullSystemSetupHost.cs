@@ -304,13 +304,18 @@ internal sealed class NativeFullSystemSetupHost(InstallPackage package,UpdateSet
     {
         if(maintenance is null)throw new IOException("UPDATE_SERVICE_QUIESCENCE_UNCONFIRMED");
         foreach(var service in services.Values)service.FenceForRemoval();
-        foreach(var kind in new[]{FullServiceKind.RecoveryA,FullServiceKind.RecoveryB,FullServiceKind.Authority,FullServiceKind.Runtime})
+        // Request every accepted STOP first: a START_PENDING Authority settles
+        // only once the Runtime it is starting stops or becomes ready.
+        foreach(var kind in StopOrder)if(services.TryGetValue(kind,out var service))service.RequestStop();
+        foreach(var kind in StopOrder)
             if(services.TryGetValue(kind,out var service))await service.StopForRemovalAsync(cancellation);
     }
+    private static readonly FullServiceKind[] StopOrder=[FullServiceKind.RecoveryA,FullServiceKind.RecoveryB,FullServiceKind.Authority,FullServiceKind.Runtime];
     private async Task StopAllAsync(CancellationToken cancellation,bool fence)
     {
         foreach(var service in services.Values)if(fence)service.FenceForRemoval();
-        foreach(var kind in new[]{FullServiceKind.RecoveryA,FullServiceKind.RecoveryB,FullServiceKind.Authority,FullServiceKind.Runtime})if(services.TryGetValue(kind,out var service))await service.StopAsync(cancellation);
+        foreach(var kind in StopOrder)if(services.TryGetValue(kind,out var service))service.RequestStop();
+        foreach(var kind in StopOrder)if(services.TryGetValue(kind,out var service))await service.StopAsync(cancellation);
     }
     public async Task<SetupResult> StartAndObserveAsync(Action<SetupProgress> progress,CancellationToken cancellation)
     {

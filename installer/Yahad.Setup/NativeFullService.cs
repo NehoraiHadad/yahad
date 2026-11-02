@@ -325,11 +325,57 @@ internal sealed class NativeFullService:IDisposable
     }
     internal async Task StopAsync(CancellationToken cancellation)
     {
-        RequireOwned();var before=Status();using var process=before.Pid==0?null:Process.GetProcessById((int)before.Pid);if(process is not null)_=process.SafeHandle;
-        if(before.State!=1&&!ControlService(service,1,out _)&&Marshal.GetLastPInvokeError()!=1062)throw new Win32Exception();
-        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancellation);deadline.CancelAfter(TimeSpan.FromSeconds(60));
-        while(Status().State!=1)await Task.Delay(100,deadline.Token);if(process is not null)await process.WaitForExitAsync(deadline.Token);
+        RequireOwned();using var process=await StopSettledAsync(cancellation);await WaitForExitAsync(process,cancellation);
         var stopped=Status();if(stopped.State!=1||stopped.Pid!=0||stopped.Specific!=0||stopped.Win32 is not(0 or 1077))throw new IOException("UPDATE_SERVICE_QUIESCENCE_UNCONFIRMED");
+    }
+    // The SCM refuses STOP (1052/1061) unless the current state accepts it, as
+    // with a START_PENDING service that does not. STOP is sent only when
+    // accepted; otherwise the service is waited on until it settles, then sent.
+    internal static bool SendsStop(uint state,uint accepted,bool requested)=>!requested&&state is not(1 or 3)&&(accepted&1)!=0;
+    // SCM pending protocol: a state is live while its checkpoint advances within
+    // its own wait hint. A settled state gets the fixed stop bound.
+    internal static bool Stalled(uint waitHint,TimeSpan unchanged)=>unchanged>TimeSpan.FromMilliseconds(Math.Max(waitHint,60000));
+    private bool stopRequested;
+    internal void RequestStop()
+    {
+        RequireOwned();var state=Status();if(!SendsStop(state.State,state.Accepted,stopRequested))return;
+        if(ControlService(service,1,out _)){stopRequested=true;return;}
+        // The state moved between query and control. The settle loop re-reads it.
+        var error=Marshal.GetLastPInvokeError();if(error is not(1052 or 1061 or 1062))throw new Win32Exception(error);
+    }
+    private async Task<Process?> StopSettledAsync(CancellationToken cancellation)
+    {
+        Process? process=null;
+        try
+        {
+            var observed=Status();var unchanged=Stopwatch.StartNew();
+            while(true)
+            {
+                var state=Status();
+                if(state.State==1){stopRequested=false;return process;}
+                // Windows documents a valid process ID only for RUNNING.
+                if(state.State==4&&state.Pid!=0)
+                {
+                    if(process is null)
+                    {
+                        process=Process.GetProcessById((int)state.Pid);_=process.SafeHandle;
+                        var again=Status();if(again.State!=4||again.Pid!=state.Pid)throw new IOException("UPDATE_SERVICE_GENERATION_CHANGED");
+                    }
+                    else if(process.Id!=state.Pid)throw new IOException("UPDATE_SERVICE_GENERATION_CHANGED");
+                }
+                RequestStop();
+                if(state.State!=observed.State||state.Checkpoint!=observed.Checkpoint){observed=state;unchanged.Restart();}
+                else if(Stalled(state.WaitHint,unchanged.Elapsed))throw new IOException("UPDATE_SERVICE_STOP_STALLED");
+                await Task.Delay(100,cancellation);
+            }
+        }
+        catch{process?.Dispose();throw;}
+    }
+    private static async Task WaitForExitAsync(Process? process,CancellationToken cancellation)
+    {
+        if(process is null)return;
+        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancellation);deadline.CancelAfter(TimeSpan.FromSeconds(60));
+        await process.WaitForExitAsync(deadline.Token);
     }
     internal static void RequireRemovalStopped(uint state,uint pid)
     {if(state!=1||pid!=0)throw new IOException("UPDATE_SERVICE_QUIESCENCE_UNCONFIRMED");}
@@ -345,13 +391,7 @@ internal sealed class NativeFullService:IDisposable
     // retains serial+data leases and rechecks durable custody before deletion.
     internal async Task StopForRemovalAsync(CancellationToken cancellation)
     {
-        RequireRemovalFence();var before=Status();
-        using var process=before.State==4&&before.Pid!=0?Process.GetProcessById((int)before.Pid):null;
-        if(process is not null){_=process.SafeHandle;var again=Status();if(again.State!=4||again.Pid!=before.Pid)throw new IOException("UPDATE_SERVICE_GENERATION_CHANGED");}
-        if(before.State!=1&&!ControlService(service,1,out _)&&Marshal.GetLastPInvokeError()!=1062)throw new Win32Exception();
-        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancellation);deadline.CancelAfter(TimeSpan.FromSeconds(60));
-        while(Status().State!=1)await Task.Delay(100,deadline.Token);
-        if(process is not null)await process.WaitForExitAsync(deadline.Token);
+        RequireRemovalFence();using var process=await StopSettledAsync(cancellation);await WaitForExitAsync(process,cancellation);
         RequireFencedStoppedForRemoval();
     }
     internal void Delete()

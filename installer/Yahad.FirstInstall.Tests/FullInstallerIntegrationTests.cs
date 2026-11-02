@@ -36,6 +36,16 @@ internal static class FullInstallerIntegrationTests
             foreach(var kind in new[]{FullServiceKind.Runtime,FullServiceKind.Authority})Deny(()=>NativeFullService.OneShotCompleted(kind,true,1,0,0,0));
             return Task.CompletedTask;
         });
+        await check("stop is sent only when the service state accepts it and a pending state is bounded by its own progress",()=>
+        {
+            // START_PENDING without STOP is what refused removal with 1052.
+            Assert(!NativeFullService.SendsStop(2,0,false));Assert(NativeFullService.SendsStop(2,1,false));
+            Assert(NativeFullService.SendsStop(4,5,false));Assert(!NativeFullService.SendsStop(4,5,true));
+            Assert(!NativeFullService.SendsStop(3,1,false));Assert(!NativeFullService.SendsStop(1,1,false));
+            Assert(!NativeFullService.Stalled(300000,TimeSpan.FromMinutes(4)));Assert(NativeFullService.Stalled(300000,TimeSpan.FromMinutes(6)));
+            Assert(!NativeFullService.Stalled(0,TimeSpan.FromSeconds(59)));Assert(NativeFullService.Stalled(0,TimeSpan.FromSeconds(61)));
+            return Task.CompletedTask;
+        });
         await check("full installer parses source-bound baseline using policy protocol 2 without a fake GitHub receipt",()=>
         {
             var system=System();Assert(system.Components.Count==5&&system.Protocols["policy"].Writer==2&&system.SourceCommit==ApplicationRelease.SourceCommit);
