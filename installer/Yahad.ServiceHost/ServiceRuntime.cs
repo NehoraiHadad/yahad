@@ -198,7 +198,9 @@ internal sealed class ServiceController
                 throw;
             }
             start.Token.ThrowIfCancellationRequested();Pending(ServiceState.StartPending);
-            var tracked=new TrackedLauncher(grant.Launcher,lifecycleDeadline,Observe,ObservedExit,session=>Volatile.Write(ref updateSession,session));
+            // Readiness belongs to startup. The linked start token still bounds
+            // total admission + launch; stop/cleanup retain lifecycleDeadline.
+            var tracked=new TrackedLauncher(grant.Launcher,startDeadline,Observe,ObservedExit,session=>Volatile.Write(ref updateSession,session));
             lifecycle=new(grant.Release,tracked,new BoundedStartBarrier(grant.Recovery),new NoHostUpdateAuthority(),lifecycleDeadline,authorizer is IObservedAdmission?startDeadline:null);
             Observe(ServiceStartupStage.ValidatingStart,null);
             await lifecycle.StartAsync(start.Token);

@@ -14,6 +14,11 @@ using Yahad.Setup;
 
 await using var storeCompilerLifetime=StoreFixtureModules.OwnInvocation();
 
+if(args is ["--packaged-native-start-only",var preparedRuntime,var startupReport])
+    return await PackagedNativeStartupProbe.Run(preparedRuntime,startupReport);
+if(args is ["--startup-budget-only"])
+    return await PackagedNativeStartupProbe.CheckBudget();
+
 if(args is ["--fixture-native-launch-race",var fixtureNode])
 {
     await FixtureProcessesTests.NativeLaunchRace(fixtureNode);

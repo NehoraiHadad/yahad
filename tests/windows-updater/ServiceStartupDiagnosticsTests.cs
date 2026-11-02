@@ -8,7 +8,7 @@ internal static class ServiceStartupDiagnosticsTests
         foreach(var mode in new[]{"admission","launch","launch_cancel","readiness","timeout","early_exit","healthy","late_completion"})await check("startup observation classifies "+mode+" without changing ownership",async()=>
         {
             var resource=new Resource();var launcher=new Launcher(mode);var authorizer=new Authorizer(mode,launcher,resource);
-            var controller=new ServiceController(authorizer,mode=="late_completion"?TimeSpan.FromMilliseconds(50):TimeSpan.FromSeconds(2),mode=="late_completion"?TimeSpan.FromMilliseconds(200):TimeSpan.FromMilliseconds(100));
+            var controller=new ServiceController(authorizer,mode is "late_completion" or "timeout" or "early_exit"?TimeSpan.FromMilliseconds(50):TimeSpan.FromSeconds(2),mode=="late_completion"?TimeSpan.FromMilliseconds(200):TimeSpan.FromMilliseconds(100));
             var reports=new List<ServiceReport>();
             var result=await controller.RunAsync(report=>{reports.Add(report);if(report.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);});
             var observation=controller.StartupObservation;
@@ -19,6 +19,8 @@ internal static class ServiceStartupDiagnosticsTests
                 launcher.LateReady.TrySetResult();await Task.Delay(30);
                 if(controller.StartupObservation!=observation)throw new Exception("STARTUP_LATE_COMPLETION_OVERWROTE_FAILURE");
             }
+            else if(mode is "timeout" or "early_exit")
+            {if(observation.Failure is not("readiness_timeout" or "readiness_cancelled" or "startup_timeout"))throw new Exception("STARTUP_OBSERVATION_REASON "+observation.Failure);}
             else if(observation.Failure!=expected)throw new Exception("STARTUP_OBSERVATION_REASON "+observation.Failure);
             if(observation.ElapsedMilliseconds<0)throw new Exception("STARTUP_OBSERVATION_TIME");
             var stage=mode switch{"admission"=>ServiceStartupStage.Authorizing,"launch" or "launch_cancel"=>ServiceStartupStage.Launching,"healthy"=>ServiceStartupStage.Running,_=>ServiceStartupStage.WaitingForHealth};

@@ -10,6 +10,18 @@ on ASUS, but Runtime startup failed. Commit
 it is not a confirmed Runtime fix. Clean installation and native update acceptance
 are still required before presenting the package as ready.
 
+The subsequent local attempt with that build stopped during readiness: Authority
+ran, Runtime stopped and no application listener remained. Investigation found
+that readiness reused the 20-second lifecycle/stop budget despite the separate
+bounded startup budget. The source now uses startup's budget; overall cancellation
+still caps authorization + launch + readiness, and stop/cleanup limits are unchanged.
+A 150ms-readiness/2000ms-start/50ms-stop regression failed before the change and
+passed afterward. The packaged mock app reached health through its actual native
+job, data-lease and ready channel in about 25 seconds, then stopped and cleaned up.
+Eight existing startup-observation cases also passed. This demonstrates a budget
+defect; it does not prove it was the only cause of the installed failure. The
+updated host has **not** been installed or verified under the real service accounts.
+
 Subsequent test teardown change `4775332` owns jobs, awaits pending starts,
 cleans validated fixture roots and releases the shared Store compiler cache.
 Fifteen focused cases passed, including actual Node launch-race and synthetic

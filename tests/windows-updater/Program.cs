@@ -40,6 +40,11 @@ await ServiceStartupDiagnosticsTests.Run(async(name,test)=>
     try{await test();Console.WriteLine("PASS "+name);results.Add(new{name,status="PASS"});}
     catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);results.Add(new{name,status="FAIL",reason=error.Message});}
 });
+if(args is ["--startup-observation-only"])
+{
+    Console.WriteLine(JsonSerializer.Serialize(new{suite="startup-observation-synthetic",passed=results.Count-failed,failed,realServices=false}));
+    return failed==0?0:1;
+}
 
 await Check("Notify checks never reserve approval, stop runtime or write activation",async f=>
 {
