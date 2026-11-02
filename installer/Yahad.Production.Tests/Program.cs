@@ -397,6 +397,19 @@ await Check("actual role validator allows only the exact authority/runtime file 
  {try{roles.Validate(bad,InstalledFileRole.Control);throw new Exception("role accepted");}catch(IOException){}}
  try{roles.Validate(valid,InstalledFileRole.Anchor);throw new Exception("mutable anchor accepted");}catch(IOException){}return Task.CompletedTask;
 });
+await Check("runtime-created inherited directories are accepted only in runtime-writable roles and stay mask-bounded",()=>
+{
+ var roles=new InstalledFileRoles(new(AuthoritySid),new(RuntimeSid));
+ // Exactly what node's mkdir under the provisioned temporary root produces.
+ var inherited=new RawSecurityDescriptor($"O:{RuntimeSid}D:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;0x1200a9;;;{AuthoritySid})(A;OICIID;0x1301bf;;;{RuntimeSid})");
+ roles.Validate(inherited,InstalledFileRole.Data);roles.Validate(inherited,InstalledFileRole.Lease);
+ foreach(var role in new[]{InstalledFileRole.Control,InstalledFileRole.Anchor,InstalledFileRole.Payload,InstalledFileRole.MasterKey,InstalledFileRole.RecoveryEvidence})
+ {try{roles.Validate(inherited,role);throw new Exception("unprotected "+role+" directory accepted");}catch(IOException){}}
+ var widened=new RawSecurityDescriptor($"O:{RuntimeSid}D:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;{RuntimeSid})");
+ try{roles.Validate(widened,InstalledFileRole.Data);throw new Exception("widened inherited data accepted");}catch(IOException){}
+ var foreign=new RawSecurityDescriptor($"O:{RuntimeSid}D:(A;OICIID;FA;;;SY)(A;OICIID;0x1200a9;;;{OwnerSid})");
+ try{roles.Validate(foreign,InstalledFileRole.Data);throw new Exception("foreign inherited data accepted");}catch(IOException){}return Task.CompletedTask;
+});
 await Check("bounded protocol refuses oversized duplicate and forged owner fields",async()=>
 {
  await Denied(()=>{AuthorityProtocol.Request(new byte[32769]);return Task.CompletedTask;});

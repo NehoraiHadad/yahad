@@ -24,8 +24,13 @@ public sealed record InstalledFileRoles(SecurityIdentifier Authority,SecurityIde
     public void Validate(RawSecurityDescriptor acl,InstalledFileRole role,bool directory=true)
     {
         var system=new SecurityIdentifier("S-1-5-18");var admins=new SecurityIdentifier("S-1-5-32-544");
+        // The runtime's own processes (node, its libraries) create directories in
+        // runtime-writable roles with ordinary inherited DACLs. Protection there adds
+        // nothing: the runtime already holds write access, and every ACE below is
+        // still bounded by the role masks. All other directories must be protected.
+        var inheritable=role is InstalledFileRole.Data or InstalledFileRole.Lease;
         if(!Authority.Value.StartsWith("S-1-5-80-")||!Runtime.Value.StartsWith("S-1-5-80-")||Authority==Runtime||UpdaterServicePrincipals.IsRecovery(Authority)||UpdaterServicePrincipals.IsRecovery(Runtime)||
-            acl.Owner is null||acl.DiscretionaryAcl is null||(acl.ControlFlags&ControlFlags.DiscretionaryAclPresent)==0||directory&&(acl.ControlFlags&ControlFlags.DiscretionaryAclProtected)==0)
+            acl.Owner is null||acl.DiscretionaryAcl is null||(acl.ControlFlags&ControlFlags.DiscretionaryAclPresent)==0||directory&&!inheritable&&(acl.ControlFlags&ControlFlags.DiscretionaryAclProtected)==0)
             throw new IOException("INSTALLED_ROLE_BINDING");
         var administrative=acl.Owner==system||acl.Owner==admins;
         if(!administrative&&!(role!=InstalledFileRole.Anchor&&IsUpdater(acl.Owner))&&!(role is InstalledFileRole.Data or InstalledFileRole.Lease&&acl.Owner==Runtime))throw new IOException("INSTALLED_ROLE_OWNER");
