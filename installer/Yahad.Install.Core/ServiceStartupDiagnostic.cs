@@ -5,19 +5,30 @@ using System.Text.Json;
 namespace Yahad.Install;
 
 internal enum StartupDiagnosticRole { Dispatch,Authority,RecoveryA,RecoveryB,Runtime }
+// One startup stage transition: a fixed stage name, elapsed time since the
+// service began starting, and a fixed failure token latched at that stage.
+internal sealed record StartupStep(string Stage,long ElapsedMilliseconds,string? Failure);
+// The contained app root ended before it reported readiness. Its exit code is
+// the only fact the host owns about why; the app's own output stays private.
+internal sealed class ChildExitedException(int exitCode):IOException("SERVICE_CHILD_EXITED")
+{internal int ExitCode=>exitCode;}
 // Fixed local Application event only. No source-registration/registry writes,
 // exception text, paths, arguments, tokens or data. Logging cannot authorize
 // recovery or replace the original failure when the event log is unavailable.
 internal static class ServiceStartupDiagnostic
 {
-    internal static string Encode(StartupDiagnosticRole role,Exception error)
+    internal static string Encode(StartupDiagnosticRole role,Exception error,IReadOnlyList<StartupStep>? steps=null)
     {
         if(!Enum.IsDefined(role))throw new ArgumentOutOfRangeException(nameof(role));
-        var cause=error;int? native=null;
+        var cause=error;int? native=null,exit=null;
         for(var depth=0;depth<8;depth++)
-        {if(cause is Win32Exception win32){native=win32.NativeErrorCode;break;}if(cause.InnerException is not{} inner)break;cause=inner;}
+        {
+            if(cause is ChildExitedException exited)exit??=exited.ExitCode;
+            if(cause is Win32Exception win32){native=win32.NativeErrorCode;break;}if(cause.InnerException is not{} inner)break;cause=inner;
+        }
         return JsonSerializer.Serialize(new{Format=1,Role=role.ToString(),SourceCommit=ApplicationRelease.SourceCommit,ProcessId=Environment.ProcessId,
-            Code=KnownCode(error.Message),HResult=error.HResult,NativeError=native,Sites=Sites(error)});
+            Code=KnownCode(error.Message),HResult=error.HResult,NativeError=native,ExitCode=exit,Sites=Sites(error),
+            Steps=steps?.TakeLast(16).Select(step=>new{step.Stage,Ms=step.ElapsedMilliseconds,step.Failure}).ToArray()});
     }
     // Compiled Yahad method names and IL offsets locate a refusal that has no
     // allowlisted code; with the exact build they map to one source line.
@@ -40,11 +51,12 @@ internal static class ServiceStartupDiagnostic
         "MIGRATION_PROFILE_USER_LOOKUP" or "MIGRATION_PROFILE_FOLDER_LOOKUP" or "MIGRATION_PROFILE_FOLDER_KIND" or
         "MIGRATION_PROFILE_LOOPBACK_EXEMPT" or "MIGRATION_PROFILE_NETWORK_INSPECTION" or "MIGRATION_PROFILE_RUNTIME_IDENTITY" or
         "MIGRATION_PROFILE_THREAD_QUERY" or "MIGRATION_PROFILE_DERIVE" or "RUNTIME_INSTALLATION_ANCHOR" or "RUNTIME_UPDATER_NOT_ENROLLED" or "RUNTIME_QUIESCENCE_UNCONFIRMED"=>value,
+        "SERVICE_CHILD_EXITED" or "SERVICE_CHILD_EOF" or "SERVICE_CHILD_PEER" or "SERVICE_CHILD_READY" or "SERVICE_IMAGE_CHANGED"=>value,
         _=>null
     };
-    internal static bool TryRecord(StartupDiagnosticRole role,Exception error)=>TryRecord(role,error,Write);
-    internal static bool TryRecord(StartupDiagnosticRole role,Exception error,Func<string,bool> write)
-    {try{return write(Encode(role,error));}catch{return false;}}
+    internal static bool TryRecord(StartupDiagnosticRole role,Exception error,IReadOnlyList<StartupStep>? steps=null)=>TryRecord(role,error,Write,steps);
+    internal static bool TryRecord(StartupDiagnosticRole role,Exception error,Func<string,bool> write,IReadOnlyList<StartupStep>? steps=null)
+    {try{return write(Encode(role,error,steps));}catch{return false;}}
     private static bool Write(string value)
     {
         // RegisterEventSource retrieves a handle; an unregistered fixed source

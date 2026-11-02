@@ -143,6 +143,22 @@ await Check("non-listening real native job with synthetic control channel: "+mod
     }
     finally{Environment.SetEnvironmentVariable("NODE_OPTIONS",before);}
 });
+await Check("root exiting before readiness fails startup at once with its exit code and stage history",async()=>
+{
+    // The synthetic channel never reports for this root, so only the observed
+    // exit can end the wait; the old behavior held startup to the deadline.
+    var directory=Session();var fake=new FileControlFactory(directory,"normal");
+    var spec=new VerifiedProcessSpec(node,nodeHash,["-e","process.exit(23)"],directory,directory,node,new Dictionary<string,string>());
+    var launcher=new ServiceProcessLauncher(spec,fake);var auth=new TestAuthorization(null!,()=>new(new("verified-test"),launcher,new Barrier()));
+    var seen=new List<(Exception Error,StartupStep[] Steps)>();ServiceController? controller=null;
+    controller=new ServiceController(auth,TimeSpan.FromSeconds(20),TimeSpan.FromSeconds(5),error=>seen.Add((error,controller!.StartupSteps)));
+    var timer=Stopwatch.StartNew();var reports=new List<ServiceReport>();var result=await controller.RunAsync(reports.Add);
+    Assert(timer.Elapsed<TimeSpan.FromSeconds(10)&&result.Failure==ServiceFailure.StartFailed&&result.QuiescenceConfirmed&&!reports.Any(r=>r.State==ServiceState.Running));
+    Assert(seen.Count==1&&seen[0].Error is ChildExitedException{ExitCode:23});
+    Assert(seen[0].Steps.Select(s=>s.Stage).SequenceEqual(["Authorizing","ValidatingStart","Launching","WaitingForHealth","WaitingForHealth"])&&seen[0].Steps[^1].Failure=="readiness_failed");
+    using var encoded=JsonDocument.Parse(ServiceStartupDiagnostic.Encode(StartupDiagnosticRole.Runtime,seen[0].Error,seen[0].Steps));var json=encoded.RootElement;
+    Assert(json.GetProperty("Code").GetString()=="SERVICE_CHILD_EXITED"&&json.GetProperty("ExitCode").GetInt32()==23&&json.GetProperty("Steps").GetArrayLength()==5);
+});
 await Check("unknown child environment keys refuse before opening any control endpoint",async()=>
 {
     var directory=Session();var fake=new FileControlFactory(directory,"normal");

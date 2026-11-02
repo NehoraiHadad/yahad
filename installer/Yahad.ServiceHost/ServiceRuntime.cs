@@ -67,6 +67,10 @@ internal sealed class ServiceController
     private AppLifecycle? unresolvedLifecycle;private AuthorizedServiceStart? unresolvedGrant;
     private ServiceStartupObservation startupObservation=new(ServiceStartupStage.NotStarted,0,null);
     internal ServiceStartupObservation StartupObservation=>Volatile.Read(ref startupObservation);
+    // Every accepted observation, in order, so a failure report shows where the
+    // admission budget went rather than only the stage it ended in.
+    private readonly List<StartupStep> startupSteps=[];
+    internal StartupStep[] StartupSteps{get{lock(startupSteps)return [..startupSteps];}}
     private ServiceRootExitObservation? rootExitObservation;
     internal ServiceRootExitObservation? RootExitObservation=>Volatile.Read(ref rootExitObservation);
     internal bool CleanupReconciliationRequired=>unresolvedAuthorization is not null||unresolvedProbe is not null||unresolvedLifecycle is not null||unresolvedGrant is not null;
@@ -143,11 +147,16 @@ internal sealed class ServiceController
         var elapsed=System.Diagnostics.Stopwatch.StartNew();
         var observationGate=new object();var observationsComplete=false;
         Volatile.Write(ref startupObservation,new(ServiceStartupStage.NotStarted,0,null));Volatile.Write(ref rootExitObservation,null);
+        lock(startupSteps)startupSteps.Clear();
         void Observe(ServiceStartupStage stage,string? error)
         {
             // First cause is latched. A late readiness task cannot clear it or
             // publish a false Ready after the controller has already returned.
-            lock(observationGate){if(observationsComplete||StartupObservation.Failure is not null)return;Volatile.Write(ref startupObservation,new(stage,elapsed.ElapsedMilliseconds,error));}
+            lock(observationGate)
+            {
+                if(observationsComplete||StartupObservation.Failure is not null)return;var observation=new ServiceStartupObservation(stage,elapsed.ElapsedMilliseconds,error);
+                Volatile.Write(ref startupObservation,observation);lock(startupSteps)startupSteps.Add(new(stage.ToString(),observation.ElapsedMilliseconds,error));
+            }
         }
         // Exit can be observed after unresolved cleanup returns. Record it once,
         // separately from the frozen startup verdict; it is not proof of tree exit.
@@ -219,20 +228,22 @@ internal sealed class ServiceController
             }
             else await lifecycle.StopAsync();
         }
+        // Each handler latches its fixed failure token before reporting, so the
+        // report carries the complete stage history including the verdict.
         catch(ProbeOwnershipException owned)
-        {ReportFailure(owned);Refused("probe_quiescence_unconfirmed");unresolvedProbe=owned;lifecycle=AppLifecycle.RetainFailedAdmission(owned.OwnedSession);failure=ServiceFailure.StartFailed;}
-        catch(ServiceStartDenied denied){ReportFailure(denied);if(pending==ServiceState.StartPending)Refused("admission_denied");failure=denied.Failure;}
+        {Refused("probe_quiescence_unconfirmed");ReportFailure(owned);unresolvedProbe=owned;lifecycle=AppLifecycle.RetainFailedAdmission(owned.OwnedSession);failure=ServiceFailure.StartFailed;}
+        catch(ServiceStartDenied denied){if(pending==ServiceState.StartPending)Refused("admission_denied");ReportFailure(denied);failure=denied.Failure;}
         catch(OperationCanceledException error)
         {
-            ReportFailure(error);
             if(pending==ServiceState.StartPending)Refused(stop.Task.IsCompleted?"startup_cancelled":"startup_timeout");
+            ReportFailure(error);
             // Expected cancellation before RUNNING differs from a failed stop
             // after RUNNING. Forced cleanup must never turn that timeout into
             // a successful STOPPED status merely because STOP was requested.
             failure=pending==ServiceState.StopPending?ServiceFailure.StopFailed:
                 stop.Task.IsCompleted?ServiceFailure.None:ServiceFailure.StartFailed;
         }
-        catch(Exception error){ReportFailure(error);if(pending==ServiceState.StartPending)Refused("startup_failed");failure=pending==ServiceState.StopPending?ServiceFailure.StopFailed:ServiceFailure.StartFailed;}
+        catch(Exception error){if(pending==ServiceState.StartPending)Refused("startup_failed");ReportFailure(error);failure=pending==ServiceState.StopPending?ServiceFailure.StopFailed:ServiceFailure.StartFailed;}
         finally
         {
             lock(statusGate)acceptingProgress=false;

@@ -158,7 +158,21 @@ internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildCont
     }
     public async Task WaitForHealthyAsync(IContainedAppSession session,CancellationToken cancellation)
     {
-        var native=(Session)session;if(native.StartFailure is not null)throw new IOException("SERVICE_PROCESS_START_FAILED",native.StartFailure);var ready=await native.Channel.ReadyAsync(native.Job.ProcessId,cancellation);
+        var native=(Session)session;if(native.StartFailure is not null)throw new IOException("SERVICE_PROCESS_START_FAILED",native.StartFailure);
+        // A root that ends before reporting can never report. Observe its exit
+        // alongside the channel so it fails now with its exit code, instead of
+        // holding startup open until the whole admission budget expires. If the
+        // exit cannot be observed, the channel alone decides, as before.
+        using var settle=CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+        var reporting=native.Channel.ReadyAsync(native.Job.ProcessId,settle.Token);var exited=native.Job.WaitAsync(settle.Token);
+        if(await Task.WhenAny(reporting,exited)==exited&&exited.IsCompletedSuccessfully&&!reporting.IsCompleted)
+        {
+            settle.Cancel();try{await reporting;}catch{}
+            if(!reporting.IsCompletedSuccessfully)throw new ChildExitedException(exited.Result);
+        }
+        ChildReady ready;
+        try{ready=await reporting;}
+        finally{settle.Cancel();try{await exited;}catch{}}
         if(ready.PeerPid!=(uint)native.Job.ProcessId||ready.Type!="ready")throw new IOException("SERVICE_CHILD_READY");
         spec.AfterHealthy?.Invoke();
     }

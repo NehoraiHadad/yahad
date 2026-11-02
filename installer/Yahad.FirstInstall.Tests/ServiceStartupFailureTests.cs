@@ -25,6 +25,16 @@ internal static class ServiceStartupFailureTests
             Require(result.Failure==(cause is ServiceStartDenied?ServiceFailure.IdentityDenied:ServiceFailure.StartFailed));
             Require(reports[^1].State==ServiceState.Stopped&&reports[^1].Win32ExitCode==1066&&reports.All(r=>r.State!=ServiceState.Running));
         });
+        foreach(var cause in new Exception[]{new IOException("RUNTIME_INSTALLATION_ANCHOR"),new ServiceStartDenied(ServiceFailure.IdentityDenied),new OperationCanceledException()})
+        await check("Runtime failure report carries the stage history and its latched verdict "+cause.GetType().Name,async()=>
+        {
+            StartupStep[]? steps=null;ServiceController? controller=null;
+            controller=new ServiceController(new RefusedStart(cause),reportFailure:_=>steps=controller!.StartupSteps);await controller.RunAsync(_=>{});
+            var verdict=cause switch{ServiceStartDenied=>"admission_denied",OperationCanceledException=>"startup_timeout",_=>"startup_failed"};
+            Require(steps is [{Stage:"Authorizing",Failure:null},{Stage:"Authorizing"} last]&&last.Failure==verdict);
+            using var json=JsonDocument.Parse(ServiceStartupDiagnostic.Encode(StartupDiagnosticRole.Runtime,cause,steps));
+            Require(json.RootElement.GetProperty("Steps")[1].GetProperty("Failure").GetString()==verdict&&json.RootElement.GetProperty("ExitCode").ValueKind==JsonValueKind.Null);
+        });
         await check("Runtime status transport retains startup cause and reports failed final status",async()=>
         {
             var cause=new IOException("RUNTIME_INSTALLATION_ANCHOR");var transport=new IOException("TEST_STATUS_TRANSPORT");var seen=new List<Exception>();

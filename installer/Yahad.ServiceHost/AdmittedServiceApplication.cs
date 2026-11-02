@@ -43,9 +43,9 @@ internal static class AdmittedServiceApplication
         }
         var resolver=new InstalledActivationResolver(root,new RoleControlFiles(files),new LocalChildControlFactory(),()=>DateTimeOffset.UtcNow,stateFiles:files,fresh:fresh);
         return Run(new NativeScmApi(),new InstalledStartAuthorizer(new WindowsServiceTokenReader(),reader,resolver),reader,Environment.Exit,files,
-            error=>ServiceStartupDiagnostic.TryRecord(StartupDiagnosticRole.Runtime,error));
+            (error,steps)=>ServiceStartupDiagnostic.TryRecord(StartupDiagnosticRole.Runtime,error,steps));
     }
-    internal static int Run(IScmApi api,IServiceStartAuthorizer installed,IInstallationReader installation,Action<int> unsafeExit,InstalledStateFiles? purposeFiles=null,Action<Exception>? reportFailure=null)
+    internal static int Run(IScmApi api,IServiceStartAuthorizer installed,IInstallationReader installation,Action<int> unsafeExit,InstalledStateFiles? purposeFiles=null,Action<Exception,StartupStep[]>? reportFailure=null)
     {
         var result=new ServiceRunResult(ServiceFailure.StatusTransport,false);
         api.Dispatch(ServiceDefinition.Name,arguments=>
@@ -70,7 +70,8 @@ internal static class AdmittedServiceApplication
                 ()=>controller?.Control(ServiceDefinition.Stop),
                 (id,c)=>controller?.ReleaseEffectsAsync(probation??throw new IOException("PROBATION_NOT_ADMITTED"),id,c)??throw new IOException("RUNTIME_CONTROLLER_UNAVAILABLE"),purposeFiles?.Roles?.HasRecoveryHelpers==true);
             activeChannel=channel;
-            controller=new(new WaitingRuntimeAuthorizer(installed,installation,channel,ObserveCurrentHost,Purpose),reportFailure:reportFailure);
+            controller=new(new WaitingRuntimeAuthorizer(installed,installation,channel,ObserveCurrentHost,Purpose),
+                reportFailure:reportFailure is null?null:error=>reportFailure(error,controller!.StartupSteps));
             api.Register(ServiceDefinition.Name,controller.Control);
             if(arguments.Length!=1||arguments[0]!=ServiceDefinition.Name)
             {api.Publish(new(ServiceState.Stopped,0,0,0,1066,(uint)ServiceFailure.ArgumentsRejected));result=new(ServiceFailure.ArgumentsRejected,true);return;}
