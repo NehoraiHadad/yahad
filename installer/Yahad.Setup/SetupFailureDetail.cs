@@ -21,7 +21,7 @@ internal sealed class SetupOperationException(UninstallPhase phase, Exception ca
     internal bool DiagnosticRecorded { get; set; }
 }
 
-internal sealed record SetupFailureDetail(string? Phase, int? NativeError, int HResult,bool DiagnosticRecorded=false,string? RecoveryCheck=null)
+internal sealed record SetupFailureDetail(string? Phase, int? NativeError, int HResult,bool DiagnosticRecorded=false,string? RecoveryCheck=null,string[]? Sites=null)
 {
     internal static Exception Cause(Exception error) =>
         error is SetupOperationException { InnerException: { } cause } ? cause : error;
@@ -32,7 +32,8 @@ internal sealed record SetupFailureDetail(string? Phase, int? NativeError, int H
         return new(error is SetupOperationException operation ? operation.Phase.ToString() : null,
             cause is Win32Exception native ? native.NativeErrorCode : null, cause.HResult,
             error is SetupOperationException {DiagnosticRecorded:true},
-            cause is Yahad.Install.ReceiptRecoveryRefusal refusal ? refusal.Check.ToString() : null);
+            cause is Yahad.Install.ReceiptRecoveryRefusal refusal ? refusal.Check.ToString() : null,
+            Yahad.Install.ServiceStartupDiagnostic.Sites(cause));
     }
 
     internal string Display() =>

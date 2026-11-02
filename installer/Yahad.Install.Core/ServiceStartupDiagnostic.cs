@@ -16,11 +16,15 @@ internal static class ServiceStartupDiagnostic
         var cause=error;int? native=null;
         for(var depth=0;depth<8;depth++)
         {if(cause is Win32Exception win32){native=win32.NativeErrorCode;break;}if(cause.InnerException is not{} inner)break;cause=inner;}
-        var sites=new StackTrace(error,false).GetFrames().Select(frame=>frame.GetMethod()).Where(method=>method?.DeclaringType?.Assembly.GetName().Name is "Yahad.Install.Core" or "Yahad.Authority" or "Yahad.ServiceHost")
-            .Select(method=>method!.DeclaringType!.FullName+"."+method.Name).Where(site=>site.Length<=512).Take(3).ToArray();
         return JsonSerializer.Serialize(new{Format=1,Role=role.ToString(),SourceCommit=ApplicationRelease.SourceCommit,ProcessId=Environment.ProcessId,
-            Code=KnownCode(error.Message),HResult=error.HResult,NativeError=native,Sites=sites});
+            Code=KnownCode(error.Message),HResult=error.HResult,NativeError=native,Sites=Sites(error)});
     }
+    // Compiled Yahad method names and IL offsets locate a refusal that has no
+    // allowlisted code; with the exact build they map to one source line.
+    internal static string[] Sites(Exception error)=>new StackTrace(error,false).GetFrames()
+        .Where(frame=>frame.GetMethod()?.DeclaringType?.Assembly.GetName().Name?.StartsWith("Yahad.",StringComparison.Ordinal)==true)
+        .Select(frame=>frame.GetMethod()!.DeclaringType!.FullName+"."+frame.GetMethod()!.Name+"+IL_"+frame.GetILOffset().ToString("X4"))
+        .Where(site=>site.Length<=512).Take(4).ToArray();
     internal static string? KnownCode(string value)=>value switch
     {
         "INSTALLED_ROLE_BINDING" or "INSTALLED_ROLE_OWNER" or "INSTALLED_ROLE_ACE" or "INSTALLED_ROLE_ACCESS" or

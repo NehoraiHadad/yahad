@@ -11,7 +11,7 @@ namespace Yahad.Setup;
 // It contains no exception messages, file lists, payloads, SIDs or credentials.
 internal sealed record UninstallDiagnosticRecord(int Format,string InstallationBinding,
     string Action,string Mode,string RecordedAtUtc,string SetupSourceCommit,string Code,
-    string? Phase,int? NativeError,int HResult)
+    string? Phase,int? NativeError,int HResult,string[]? Sites=null)
 {
     internal static string Binding(InstallerState state)=>Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(state.InstallationId)));
     internal static UninstallDiagnosticRecord Create(InstallerState state,UninstallMode mode,Exception failure)
@@ -19,7 +19,7 @@ internal sealed record UninstallDiagnosticRecord(int Format,string InstallationB
         var detail=SetupFailureDetail.From(failure);
         return new(1,Binding(state),"uninstall",mode.ToString(),DateTimeOffset.UtcNow.ToString("O"),
             ApplicationRelease.CompiledSourceCommit(typeof(App).Assembly),SetupElevation.Code(failure),
-            detail.Phase,detail.NativeError,detail.HResult);
+            detail.Phase,detail.NativeError,detail.HResult,detail.Sites);
     }
     internal void RequireSameInstallation(InstallerState state)
     {

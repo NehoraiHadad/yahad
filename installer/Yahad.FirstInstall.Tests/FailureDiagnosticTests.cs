@@ -203,6 +203,18 @@ internal static class FailureDiagnosticTests
             Require(copiedDetail.Display().Contains("Windows 87",StringComparison.Ordinal));
             return Task.CompletedTask;
         });
+        await check("unlisted refusal records compiled throw sites without its text",()=>
+        {
+            const string text=@"UNLISTED_FAMILY_TOKEN C:\hidden\connection.json";
+            static void Refuse()=>throw new IOException(text);
+            Exception? thrown=null;try{Refuse();}catch(IOException error){thrown=error;}
+            var failure=new SetupOperationException(UninstallPhase.FullUninstall,thrown!);
+            var detail=SetupFailureDetail.From(failure);
+            Require(SetupElevation.Code(failure)=="INSTALL_FAILED"&&detail.Sites is {Length:>0} sites&&sites[0].Contains("Refuse",StringComparison.Ordinal)&&sites.All(site=>site.Contains("+IL_",StringComparison.Ordinal)));
+            var encoded=System.Text.Encoding.UTF8.GetString(FullInstallDiagnostics.Encode(new string('a',32),failure,123));
+            Require(encoded.Contains("Refuse",StringComparison.Ordinal)&&!encoded.Contains("UNLISTED",StringComparison.Ordinal)&&!encoded.Contains("hidden",StringComparison.Ordinal));
+            return Task.CompletedTask;
+        });
         await check("non-native exceptions retain only stage and HRESULT",()=>
         {
             var failure=new SetupOperationException(UninstallPhase.RemoveService,new IOException("private detail"));
