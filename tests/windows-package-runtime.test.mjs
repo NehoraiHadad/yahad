@@ -11,7 +11,7 @@ import { once } from 'node:events';
 
 const prepared = process.env.YAHAD_PREPARED_WINDOWS_CORE;
 test('offline packaged Node, production modules and private CLR run actual mock app with empty PATH',
-  { skip: process.platform !== 'win32' || !prepared, timeout: 75000 }, async t => {
+  { skip: process.platform !== 'win32' || !prepared, timeout: 120000 }, async t => {
     const app = join(prepared, 'app');
     assert.equal(process.execPath.toLowerCase(), resolve(prepared, 'runtime/node/node.exe').toLowerCase());
     const { DATABASE_SCHEMA } = await import(pathToFileURL(join(app, 'src/database-schema.ts')));
@@ -74,7 +74,9 @@ for (const [name, url] of ${JSON.stringify(imports.map(name => [name, pathToFile
       let output = '', error = '';
       child.stdout.on('data', chunk => output = (output + chunk).slice(-8192));
       child.stderr.on('data', chunk => error = (error + chunk).slice(-8192));
-      const started = Date.now(), deadline = started + 20000;
+      // Measured cold packaged startup reached 24.9s. Keep this fixture bounded
+      // independently of stop/cleanup rather than retaining its old 20s cutoff.
+      const started = Date.now(), deadline = started + 30000;
       while (!output.includes('Yachad listening')) {
         assert.equal(child.exitCode, null, 'packaged mock app startup failed: ' + error);
         assert.ok(Date.now() < deadline, 'startup deadline; output=' + output + '; stderr=' + error);
