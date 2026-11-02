@@ -12,8 +12,8 @@ namespace Yahad.Service;
 internal static class LanProxyPaths
 {
     internal const string ServiceName = "Yahad.FirstInstall.Lan";
-    internal static string State => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), ServiceName);
-    internal static string Binaries => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), ServiceName);
+    internal static string State => Path.Combine(MachineFolders.Required(Environment.SpecialFolder.CommonApplicationData), ServiceName);
+    internal static string Binaries => Path.Combine(MachineFolders.Required(Environment.SpecialFolder.ProgramFiles), ServiceName);
     internal static string Receipt => Path.Combine(State, "proxy.json");
     internal static string Config => Path.Combine(State, "Caddyfile");
     internal static string Data => Path.Combine(State, "data");

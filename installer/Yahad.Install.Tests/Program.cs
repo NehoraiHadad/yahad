@@ -30,8 +30,10 @@ if(args is ["--lan-only"])
 }
 if(args is ["--environment",var environmentOutput])
 {
-    var names=new[]{"NODE_OPTIONS","NODE_PATH","DOTNET_STARTUP_HOOKS","CORECLR_ENABLE_PROFILING","COR_ENABLE_PROFILING","OPENSSL_CONF","ESBUILD_BINARY_PATH","PATH","TEMP","SystemRoot"};
-    File.WriteAllText(environmentOutput,JsonSerializer.Serialize(names.ToDictionary(n=>n,n=>Environment.GetEnvironmentVariable(n))));return 0;
+    var names=new[]{"NODE_OPTIONS","NODE_PATH","DOTNET_STARTUP_HOOKS","CORECLR_ENABLE_PROFILING","COR_ENABLE_PROFILING","OPENSSL_CONF","ESBUILD_BINARY_PATH","PATH","TEMP","SystemRoot","SystemDrive"};
+    var observed=names.ToDictionary(n=>n,n=>Environment.GetEnvironmentVariable(n));
+    observed["CommonApplicationData"]=Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);observed["ProgramFiles"]=Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+    File.WriteAllText(environmentOutput,JsonSerializer.Serialize(observed));return 0;
 }
 if (args is ["--wait"]) { await Task.Delay(Timeout.Infinite); return 0; }
 if (args is ["--exit", var requestedCode]) return int.Parse(requestedCode);
@@ -178,19 +180,24 @@ await Check("retain exact process exit status after early exit", async () =>
 });
 await Check("native job child environment omits host hooks and search variables",async()=>
 {
-    var names=new[]{"NODE_OPTIONS","NODE_PATH","DOTNET_STARTUP_HOOKS","CORECLR_ENABLE_PROFILING","COR_ENABLE_PROFILING","OPENSSL_CONF","ESBUILD_BINARY_PATH","SystemRoot"};
+    var names=new[]{"NODE_OPTIONS","NODE_PATH","DOTNET_STARTUP_HOOKS","CORECLR_ENABLE_PROFILING","COR_ENABLE_PROFILING","OPENSSL_CONF","ESBUILD_BINARY_PATH","SystemRoot","SystemDrive"};
     var previous=names.ToDictionary(n=>n,n=>Environment.GetEnvironmentVariable(n));
+    var machineData=Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);var machinePrograms=Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+    Assert(Path.IsPathFullyQualified(machineData)&&Path.IsPathFullyQualified(machinePrograms));
     try
     {
-        foreach(var name in names)Environment.SetEnvironmentVariable(name,"Z:\\host-injection");
+        foreach(var name in names)Environment.SetEnvironmentVariable(name,name=="SystemDrive"?"Z:":"Z:\\host-injection");
         var output=Path.Combine(root,"clean-environment.json");
         using var job=FixtureJob(Environment.ProcessPath!,["--environment",output],root);
         using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(10));
         Assert(await job.WaitAsync(deadline.Token)==0);
         var observed=JsonSerializer.Deserialize<Dictionary<string,string?>>(File.ReadAllText(output))!;
-        foreach(var name in names.Where(n=>n!="SystemRoot"))Assert(observed[name] is null);
+        foreach(var name in names.Where(n=>n is not("SystemRoot" or "SystemDrive")))Assert(observed[name] is null);
         Assert(string.IsNullOrEmpty(observed["PATH"]));Assert(observed["TEMP"]==root);
         Assert(observed["SystemRoot"]!=Environment.GetEnvironmentVariable("SystemRoot"));
+        // Machine folders resolve from the API-derived drive, never "" or the injected one.
+        Assert(observed["SystemDrive"]==observed["SystemRoot"]![..2]);
+        Assert(observed["CommonApplicationData"]==machineData);Assert(observed["ProgramFiles"]==machinePrograms);
     }
     finally{foreach(var item in previous)Environment.SetEnvironmentVariable(item.Key,item.Value);}
 });

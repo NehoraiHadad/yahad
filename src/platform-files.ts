@@ -28,8 +28,9 @@ function readPosix(path: string, bootstrap: boolean): Buffer | undefined {
 
 function helperEnvironment(): NodeJS.ProcessEnv {
   // Do not inherit DOTNET_STARTUP_HOOKS, profiler variables or arbitrary PATH entries.
+  // SystemDrive is required: the helper resolves ProgramData through it.
   const systemRoot = process.env.SystemRoot || 'C:\\Windows';
-  return { SystemRoot: systemRoot, PATH: win32.join(systemRoot, 'System32'), TEMP: process.env.TEMP,
+  return { SystemRoot: systemRoot, SystemDrive: win32.parse(systemRoot).root.slice(0, 2), PATH: win32.join(systemRoot, 'System32'), TEMP: process.env.TEMP,
     TMP: process.env.TMP, LOCALAPPDATA: process.env.LOCALAPPDATA, DOTNET_EnableDiagnostics: '0' };
 }
 

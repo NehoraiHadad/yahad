@@ -15,9 +15,13 @@ public static class LaunchEnvironment
         var length = GetWindowsDirectoryW(windows,(uint)windows.Capacity);
         if (length == 0 || length >= windows.Capacity) throw new Win32Exception();
         // OS path comes from the Windows API, never a spoofed host SystemRoot.
+        // SystemDrive is the Windows directory's drive; machine known folders
+        // (ProgramData, Program Files) expand it and resolve to "" without it.
+        var system = windows.ToString();
+        if (system.Length < 3 || !char.IsAsciiLetter(system[0]) || system[1] != ':' || system[2] != '\\') throw new IOException("WINDOWS_DRIVE_REQUIRED");
         return new(StringComparer.OrdinalIgnoreCase)
         {
-            ["SystemRoot"]=windows.ToString(), ["WINDIR"]=windows.ToString(), ["PATH"]="",
+            ["SystemRoot"]=system, ["WINDIR"]=system, ["SystemDrive"]=system[..2], ["PATH"]="",
             ["TEMP"]=privateTemporaryDirectory, ["TMP"]=privateTemporaryDirectory,
             ["APPDATA"]=privateTemporaryDirectory, ["LOCALAPPDATA"]=privateTemporaryDirectory
         };

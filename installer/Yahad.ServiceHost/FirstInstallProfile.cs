@@ -10,8 +10,8 @@ internal sealed record FreshDataAuthorization(string InstallationId,string DataI
 internal static class FirstInstallProfile
 {
     internal const string Product="Yahad.FirstInstall";
-    internal static string StateRoot=>Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),Product);
-    internal static string BinaryRoot=>Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),Product);
+    internal static string StateRoot=>Path.Combine(MachineFolders.Required(Environment.SpecialFolder.CommonApplicationData),Product);
+    internal static string BinaryRoot=>Path.Combine(MachineFolders.Required(Environment.SpecialFolder.ProgramFiles),Product);
     internal static string ReceiptPath=>Path.Combine(StateRoot,"installation.json");
     internal static FirstInstallReceipt ReadReceipt()
     {

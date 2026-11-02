@@ -10,8 +10,8 @@ internal static class InstalledUpdaterLayout
     internal const string StateProduct="Yahad.FirstInstall",BinaryProduct="Yahad.FirstInstall";
     internal const string RuntimeServiceName="Yahad.Acceptance",AuthorityServiceName="Yahad.Acceptance.Authority";
     internal const string AnchorFile="update-authority.json";
-    internal static string StateRoot=>Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),StateProduct);
-    internal static string BinaryRoot=>Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),BinaryProduct);
+    internal static string StateRoot=>Path.Combine(MachineFolders.Required(Environment.SpecialFolder.CommonApplicationData),StateProduct);
+    internal static string BinaryRoot=>Path.Combine(MachineFolders.Required(Environment.SpecialFolder.ProgramFiles),BinaryProduct);
     internal static string AnchorPath=>Path.Combine(StateRoot,AnchorFile);
     internal static string DescriptorPath=>Path.Combine(StateRoot,"bootstrap.json");
     internal static string RuntimeExecutable=>Path.Combine(BinaryRoot,"host","Yahad.ServiceHost.exe");
