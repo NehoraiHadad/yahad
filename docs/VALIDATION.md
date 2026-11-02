@@ -1,67 +1,48 @@
-# בדיקות ותוצאות — 26 באוקטובר 2026
+# Validation and release limits
 
-זהו רישום של בדיקות שבוצעו בפועל, ושל גבולות האימות. חיבור חשבון אמיתי לא נוצר; ה־Pi והטאבלט הפיזיים לא היו זמינים. צילומי מסך הם ממערכת רצה עם נתונים סינתטיים, ולא הדמיות עיצוב.
+Use [development commands](DEVELOPMENT.md) to reproduce checks. Results belong to
+an exact commit, environment and artifact. Historical counts in evidence reports
+do not prove that a later installer works.
 
-## בדיקות אוטומטיות
+The native installer is a **development candidate**. Authority startup progressed
+on ASUS, but Runtime startup failed. Commit
+`76548f5ef93c2537fc005ade237c5d3c3d53e1d9` adds bounded startup diagnostics;
+it is not a confirmed Runtime fix. Clean installation and native update acceptance
+are still required before presenting the package as ready.
 
-**25 בדיקות Node/TypeScript עברו, ללא כשל או בדיקה מדולגת, ובנוסף 7 בדיקות Python למנגנון העדכון.** גם setup CLI נבדק כתהליך נפרד ויצר חשבונות ומפתח אמיתיים עם נתוני בדיקה.
+The subsequent local attempt with that build stopped during readiness: Authority
+ran, Runtime stopped and no application listener remained. Investigation found
+that readiness reused the 20-second lifecycle/stop budget despite the separate
+bounded startup budget. The source now uses startup's budget; overall cancellation
+still caps authorization + launch + readiness, and stop/cleanup limits are unchanged.
+A 150ms-readiness/2000ms-start/50ms-stop regression failed before the change and
+passed afterward. The packaged mock app reached health through its actual native
+job, data-lease and ready channel in about 25 seconds, then stopped and cleaned up.
+Eight existing startup-observation cases also passed. This demonstrates a budget
+defect; it does not prove it was the only cause of the installed failure. The
+updated host has **not** been installed or verified under the real service accounts.
 
-הפקודות המלאות והתוצאות נשמרות ב־`evidence/`. הבדיקות אינן מתקשרות לחשבון WhatsApp אמיתי. הבדיקות של Baileys משתמשות בספרייה המותקנת וב־transport מוזרק, ומבדילות בין מיפוי/אחסון לבין פרוטוקול חי.
+Subsequent test teardown change `4775332` owns jobs, awaits pending starts,
+cleans validated fixture roots and releases the shared Store compiler cache.
+Fifteen focused cases passed, including actual Node launch-race and synthetic
+Store startup. One symbolic-link case was blocked by Windows error 1314
+(missing privilege); it did not pass. No system privilege change was used.
 
-| תחום | מה מכוסה |
-| --- | --- |
-| אימות | סיסמאות מומלחות, עוגיות HttpOnly, תפוגת session וחוסר פעילות, rate limit |
-| ניהול/ילדה | API מוגן להורה, QR, grants ואיפוס סיסמה אינם נגישים לילדה |
-| משפחות | שתי משפחות עם אותו JID ואותו message ID; הודעות נפרדות, media URL ישיר נדחה במשפחה האחרת, אין שינוי ילד זר |
-| קבוצות | דחייה ב־history/search/send/media/edit/delete/reaction/typing/read לקבוצה שאינה מאושרת |
-| סינון | media download אינו נקרא לקבוצה לא מאושרת; תוכן כזה אינו נשמר; raw של ציטוט/preview חיצוני נוקה |
-| realtime | SSE משדר רק invalidation של קבוצה מותרת באותה משפחה; logout סוגר סשן וזרם |
-| שליחה | client id יציב, מענה מאותה קבוצה בלבד, edit/delete ownership, תגובות |
-| חתימה | רק הורה מגדיר, אין גישה משפחתית צולבת, השרת מצרף ושומר בעריכה, הודעת ההורה מהטלפון אינה ניתנת לעריכת הילדה |
-| מדיה | multipart אמיתי, sniff MIME, גודל, מסמך לא בטוח כ־attachment, WebP, Opus conversion, Range מאומת |
-| ביטול | מחיקת media/messages/key, דחיית URL קודם, הורדה שהייתה בתהליך אינה משחזרת תוכן; הרשאה של ילד שני נשמרת |
-| אחסון | ciphertext אינו מכיל markers של טקסט/auth, קריאה מחדש מ־SQLite עובדת |
-| Baileys | Buffer auth roundtrip, Signal key insert/delete, AppState proto, QR/restart/logout עם socket מוזרק |
-| מיפוי מדיה אמיתי | content של sendMessage, captions, JPEG thumbnail בזיכרון ומשך Opus שנמדד בפועל |
-| רשת/לוגים | דחיית media URLs חיצוניים/נתיבי SSRF בסיסיים, console של dependency אינו מדפיס secret markers |
-| גיבוי | הצפנה, שינוי בית/סיסמה שגויה נדחים, restore של הודעה/media/auth, ביטול sessions, file permissions, lock ו־retention |
+Earlier independent Linux regression on `e4f17ca` passed application tests,
+typecheck/build and Python deployment tests. Root-only and Windows-only cases
+were explicitly skipped. That is source/platform evidence, not acceptance of
+the current Windows executable.
 
-TypeScript ו־build production הורצו. גם תחביר סקריפטי Bash וניתוח קובצי systemd נבדקו בסביבת הפיתוח; זה אינו אימות הפעלה על Pi. סריקת `npm audit` בוצעה מול registry בתאריך זה והחזירה אפס פגיעויות ידועות בחבילות שננעלו באותו רגע. זו אינה הוכחה להעדר חולשות בקוד או בפרוטוקול.
+Before Windows release, validate the exact final package: clean install/uninstall,
+service/file/IPC isolation, health, app and updater replacement, Notify refusing
+automatic application, interruption/recovery and schema compatibility. Preserve
+unknown send outcomes without resend and later user data during rollback.
 
-## בדיקות דפדפן שבוצעו
+Live WhatsApp, another device over LAN, certificate trust, microphone recording,
+reboot/sleep recovery and root-only scenarios have not all been verified here.
+Document unperformed cases. Unsigned installer distribution was chosen explicitly;
+integrity, privacy, test and [license](DISTRIBUTION-LICENSE-REVIEW.md) requirements remain.
 
-הדפדפן המרוחק הציג את שרת הפיתוח הפנימי. ממדי היישום הוגדרו באמצעות iframe מאותו מקור במעטפת QA: **1024×768 CSS pixels לטאבלט, 390×844 לנייד**. זהו viewport אמיתי עבור CSS/media queries של המסמך הפנימי, לא מכשיר פיזי ולא בדיקת touch hardware או מקלדת מסך.
-
-נבדקו פתיחת קבוצות בעברית, רשימת קבוצות מותרות בלבד, תצוגת תמונה/MP4/PDF/מדבקה וקול מקומי, כתיבה ושליחה עם עברית ארוכה, שורות חדשות וטקסט אנגלי/מספרים, קבלת תשובה מהמתאם המדומה, תפריט פעולות ותגובה, חיפוש, מראה אישי/כהה, הגדרות הורה ומצב ההקלטה. פרטי ההרצה הידנית נרשמים ב־`evidence/browser-checks.md`.
-
-הבדיקה החזותית מצאה ותיקנה שימוש ב־crypto.randomUUID בדפדפן HTTP שאינו secure context, ושדה כתיבה שלא חזר לגובהו לאחר שליחת הודעה ארוכה. מימשנו UUID באמצעות crypto.getRandomValues והחזרת גובה textarea אחרי שליחה. נמצא ותוקן גם זיהוי Opus Ogg שכלל פרמטר MIME, כדי שהקלטה תוצג כהודעה קולית ולא כמסמך.
-
-**הקלטה פיזית לא אומתה:** כתובת ה־preview שסופקה הייתה HTTP ב־terminal.local, ולכן אין בה secure context למיקרופון. לחיצה על כפתור ההקלטה אכן הציגה הסבר על HTTPS/localhost, בלי לטעון שהתחילה הקלטה. המרת קול קיימת ואומתה בשרת, וקול דוגמה נטען לנגן; הענקת/דחיית הרשאת מיקרופון, הקלטה דרך MediaRecorder וקליטה ממיקרופון אמיתי עדיין דורשות HTTPS ומכשיר/דפדפן נגיש.
-
-## לא בוצע
-
-- זיהוי ישיר מרחוק של מפרט Pi פיזי, התקנת חבילות עליו, bootstrap/systemd/Caddy עליו, reboot/crash recovery פיזי או מדידת ביצועים בחומרה שלו.
-- התקנת CA מקומי בטאבלט, אימות אמון TLS בדפדפן שלו, הקלטה ממיקרופון, touch/מקלדת מסך/שינה או בדיקות iPad/Safari.
-- קישור QR לחשבון אמיתי, שליחה או קבלה אמיתיות, receipt/typing מול משתתפים חיים, עריכה/מחיקה מול WhatsApp, ניתוק רשת/reboot ודיוק השלמת היסטוריה של חשבון אמיתי.
-- אימות מה נשאר/משוחזר בספריית WhatsApp לאחר הפסקה אמיתית. רק מנגנוני השמירה וה־reconnect אומתו ב־transport של בדיקה.
-- בדיקת 14 יום, עומס ממושך, חיתוך מתח/שחיקת SD, ביקורת אבטחה חיצונית או יכולת מסחרית של מתאם לא רשמי.
-
-לא הוצא כסף, לא נרכשה חומרה, לא פורסם אתר, לא נפתחו פורטים בראוטר בבניית הגרסה הראשונית לא נכתב ל־GitHub של המשתמש; בהמשך הוא אישר העלאת המקור לריפו שסיפק (`NehoraiHadad/yahad`).
-
-## מגבלות מוצר מכוונות
-
-אין שיחות קול/וידאו, סקרים, סטטוסים, הצגת תוכן חד־פעמי, אימות זהות נפרד ב־WhatsApp, forwarding ליעד חיצוני, או push notifications. voice/sticker signature אינה משלוח אטומי. היסטוריה תמיד עשויה להיות חלקית. cap של חיפוש הוא 2,000 הודעות. מגבלת מדיה אינה מגבלת מסד טקסט כולל; יש לעקוב אחרי דיסק. הרשאות קיימות מגיבוי ישן דורשות סקירה לפני חידוש גישה. יכולות Baileys חשופות לפי המימוש וה־API הנוכחי, אך תמיכה בפועל בחשבון חייבת להיבדק לאחר אישור.
-
-## אימות תוספת 0.2.0 — 26 באוקטובר 2026
-
-- מדדי משפחה נבדקו מול משפחה שנייה, קטגוריות EIO/ENOSPC/readonly/SQLITE, snapshots מוצפנים וטעינה מחדש, חיתוך ל־168 שעות, opt-out, מחיקה בזמן flush וכשל שמירה בלי הפלת היישום.
-- API אבחון/ייצוא/מחיקה ועדכונים: session, הורה/ילדה, CSRF, operator המורכב מ־familyId+userId, ניסיון לשלוח repository דרך הדפדפן, בקשה כפולה וחסימת הורה ממשפחה אחרת.
-- בדיקות Python השתמשו בחתימות Ed25519/OpenSSL אמיתיות, ZIP אמיתי, שינוי חתימה/תוכן, path traversal, סינון כתובות והסרת Authorization בהפניה. בדיקות lifecycle יצרו תיקיות ו־symlinks זמניים אמיתיים, אך **הזריקו** מערכת הפעלה/רשת/npm/health כדי לבדוק סדר גיבוי, הצלחה, כשל גיבוי, rollback והתאוששות. לא הופעלו systemctl/runuser אמיתיים ולא נוצרו חשבונות מערכת.
-- נוצרה חבילת release חתומה אמיתית באמצעות scripts/release.mjs עם מפתח בדיקה מקומי בלבד. החבילה חולצה לספריית בדיקה, הותקנו 176 תלויות production באמצעות npm ci --omit=dev --ignore-scripts והורץ scripts/update-smoke.ts שהחזיר SMOKE_OK: שרת אמיתי עם נתונים זמניים, readiness, SQLite FULL ו־import לספריית Baileys. זו סביבת הפיתוח ולא ARM/Pi. המפתח הפרטי לבדיקה אינו בחבילת המקור.
-- נצפו בדפדפן כניסות שני הפאנלים ב־parent UI ב־viewport טאבלט 1024×768. רענון הדפדפן נחסם לאחר מכן על ידי מדיניות סביבת הדפדפן, ולכן פתיחת הפאנלים, responsive של תוכנם וכפתורי העדכון לא אומתו חזותית במלואם ולא צולם צילום חדש שלהם. בדיקות ה־API והבנייה בוצעו בנפרד. בדיקות הדפדפן הישנות המפורטות לעיל מתייחסות לממשק הצ׳אט/ניהול של הגרסה הקודמת, ואינן ראיה חזותית לתוספת החדשה.
-
-טרם בוצע: חיבור Releases אמיתי, התקנת updater/timer על Pi, בדיקת rollback מול WhatsApp חי, מעבר גרסה על ARM, בדיקת מיקרופון בטאבלט או הסקת ביצועי כרטיס הזיכרון של המשתמש.
-
-## מצב ה־Pi לפי פלט המשתמש
-
-המשתמש העלה את מערכת ההפעלה ושלח פלט של Pi4 ModelB Rev1.4, ‏3.7GiB RAM (דגם כ־4GB), ‏aarch64/64bit, ‏Debian13.7 Trixie, מחיצת SD של29GB ו־21GB פנויים. זה מאמת את התאמת מסלול ARM64 שבמדריך; האפליקציה, Node24, TLS, האבחון והעדכונים טרם הותקנו/נבדקו על המכשיר.
+Raw logs, screenshots and generated manifests belong in ignored local output or
+scoped PR attachments. Commit reusable tests and concise findings. Earlier tracked
+output remains recoverable from Git history.

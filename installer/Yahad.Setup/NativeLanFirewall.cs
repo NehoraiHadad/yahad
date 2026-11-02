@@ -77,15 +77,6 @@ internal static class NativeLanFirewall
     {
         // A private IPv4 is not proof of a home network (VPNs use them too).
         // Read the selected adapter's actual Windows category; never reclassify it.
-        dynamic manager=Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("DCB00C01-570F-4A9B-8D69-199FDBA5723B"))??throw new IOException("LAN_NETWORK_PROFILE_UNAVAILABLE"))!;
-        try
-        {
-            foreach(dynamic network in manager.GetNetworks(1))
-                foreach(dynamic connection in network.GetNetworkConnections())
-                    if(string.Equals(((Guid)connection.GetAdapterId()).ToString("D"),selectedAdapter.Trim('{','}'),StringComparison.OrdinalIgnoreCase))
-                    {if((int)network.GetCategory()!=1)throw new IOException("LAN_PRIVATE_PROFILE_REQUIRED");return;}
-            throw new IOException("NETWORK_SELECTION_CHANGED");
-        }
-        finally{Marshal.FinalReleaseComObject(manager);}
+        NativeNetworkProfile.RequirePrivateCategory(NativeNetworkProfile.ReadCategory(selectedAdapter));
     }
 }

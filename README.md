@@ -1,61 +1,59 @@
-# יחד / Yachad
+# יחד / Yahad
 
-מרחב שיחות משפחתי בעברית: ההורה מקשר חשבון, יוצר חשבונות ילדים ובוחר אילו קבוצות יוצגו. ההורה נשאר השולח ב־WhatsApp. זהו חיבור לא רשמי; הוא עשוי להישבר או לגרום להגבלת החשבון.
+ממשק משפחתי ל־WhatsApp, עם חשבון הורה, הרשאות לילדים ושמירת מידע מקומית מוצפנת.
+זהו פרויקט קוד פתוח: אפשר לעבוד ישירות מהמקור ולבנות בעצמכם. קובץ התקנה מוכן הוא אפשרות נוספת.
 
-## התקנה
+## Start from source
 
-[המדריך הקצר להתקנה ולעדכונים](docs/INSTALL.md) הוא נקודת ההתחלה למחשב חדש או קיים. ההכנה יוצרת שירות ברקע, פותחת קישור פרטי ליצירת ההורה בדפדפן ומסיימת עם עדכונים אוטומטיים לאחר בדיקת גיבוי ותקינות. הוספת ילדים ואיפוס הסיסמה שלהם נעשים במסך ההורה.
-
-גרסה 0.4.0 פורסמה. פרסום אינו הוכחה להתקנה חיה על Pi או Windows; בדיקות מדומות אינן מחליפות בדיקת קבלה במחשב היעד. לעדכון משפחה קיימת משתמשים במנגנון העדכונים, לא מפעילים מחדש את המתקין.
-
-- Linux: מערכת 64-bit עם systemd, Node 24, npm, Python 3, OpenSSL, ffmpeg ו־Caddy.
-- Windows: מתאם PowerShell מעל WSL2/Ubuntu עם systemd; אפשר להתחיל בבדיקת הכנה `-CheckOnly` שמסבירה מה חסר בלי להתקין; אותה אפליקציה ואותו updater. זו אינה התקנת שירות Win32 מקורי. נדרשת בדיקת רשת מקומית ותעודת HTTPS במחשב היעד.
-- מצב הדוגמה נפרד מנתוני WhatsApp חיים. אין להחליף CONNECTOR באותו מאגר נתונים.
-
-## חשבונות ומכשירים
-
-1. פותחים את הקישור הפרטי שהמתקין מציג ויוצרים חשבון הורה. הקישור מוגבל בזמן ולא נשמר באחסון הדפדפן.
-2. מוסיפים ילד או ילדה. בוחרים שם אחד (בעברית או באנגלית) ומשפט סודי נפרד עם אישור. אותו שם מופיע באפליקציה ומשמש לכניסה. אפשר להדביק ממנהל סיסמאות.
-3. מאשרים קבוצות עבור החשבון שנוצר. חשבון חדש מתחיל ללא אף קבוצה מאושרת.
-4. פותחים בטאבלט את הכתובת המוצגת ונכנסים עם חשבון הילד. הסיסמה אינה מוצגת במסך ההעברה.
-
-לאחר רענון של קישור הכנה שטרם הושלם, חוזרים לקישור המקורי מהמתקין. אם פג, מפעילים שוב את המתקין המקומי כדי לקבל קישור חדש. משפחה קיימת לעולם אינה נפתחת מחדש להרשמה ציבורית.
-
-## עדכונים ואחסון
-
-גרסאות יציבות מגיעות מהמאגר הקבוע `NehoraiHadad/yahad` דרך HTTPS מאומת. התקנה חדשה משתמשת באמון ב־GitHub וב־TLS; hash וגודל מוודאים עקביות קבצים ואינם חתימת מפרסם עצמאית. מדיניות חתימות קיימת נשמרת. אין צורך בטוקן GitHub למאגר הציבורי.
-
-ה־UI מציג מצב פעיל בנפרד מכפתור שינוי. ההורה שהוגדר כאחראי יכול לבחור עדכון אוטומטי או הודעה בלבד, לבדוק גרסה ולהתקין כעת. בקשה ממתינה אינה מוצגת כשינוי שהוחל.
-
-SQLite, היסטוריה ומדיה מוצפנת נשמרים במחשב השרת. תוכן הקבוצות המוכרות במשפחה נשמר עבור ההורה גם ללא אישור לילדים. כל ילד מקבל גישה רק לקבוצות שאושרו לו; ביטול אישור חוסם אותו מיד אך אינו מוחק את העותק של ההורה. הסרת קבוצה מחשבון המשפחה או ניתוק עם מחיקת שיחות מוחקים את העותקים הפעילים המקומיים; עותקים שכבר הורדו או נשמרו בגיבוי אינם נמחקים מרחוק. הודעות שלא נקלטו או שנמחקו בגרסאות קודמות אינן משוחזרות אוטומטית. היסטוריית WhatsApp יכולה להיות חלקית; בקשת שחזור אינה הוכחה שהודעות התקבלו. הדפדפן אינו מאגר ההיסטוריה המתמשך.
-
-לפני עדכון נשמר גיבוי מוצפן מקומי, ואחרי ההפעלה נבדקות גרסה וסכמת מסד הנתונים. קיימת חזרה לגרסה קודמת כשמתאים, ללא הורדת סכמת מסד אוטומטית. נשמרים עד 7 גיבויים ועד 7 ימים; אובדן מחשב/כרטיס עלול לאבד גם אותם. העברה החוצה מומלצת אך אינה תנאי להתקנה הביתית. [גיבוי ושחזור](docs/BACKUP.md).
-
-## פיתוח ובדיקות
+Install Git and **Node.js 24.x with npm**, then:
 
 ```sh
+git clone https://github.com/NehoraiHadad/yahad.git
+cd yahad
 npm ci --ignore-scripts
 npm run typecheck
-npm test
 npm run build
-npm run dev
 ```
 
-`npm run dev` מפעיל סביבת QA חד־פעמית עם משפחה, הודעות ומדיה מדומים בלבד; אין להשתמש בה כשירות אמיתי. `QA_FIRST_RUN=1 npm run dev` מפעיל מאגר ריק נפרד בפורט 4174 לבדיקת ההכנה. אין לייבא מידע אמיתי לסביבת QA.
+On Windows, also build the private file-permission helper before running the
+application or Store tests; see [development setup](docs/DEVELOPMENT.md).
+A source build does not register Windows services or change firewall rules.
 
-בדיקות Python דורשות Linux; בדיקות בעלות והרשאות מורצות כ־root רק במערכת בדיקה ובנתיבים זמניים. בדיקות מתאם Windows נמצאות ב־`tests/install-windows.Tests.ps1`, עם mocks לכל שינוי שירות/משימה; הרצתן דורשת PowerShell ואינה בדיקת Windows/WSL אמיתית.
+`npm run dev` starts a **disposable mock family** on port 4173. It replaces its
+previous QA data and creates automatic test sessions. The preview currently binds
+all interfaces: use an isolated development environment. It refuses real WhatsApp.
+For a normal service, use the [installation guide](docs/INSTALL.md); never expose
+the QA preview as a family service.
 
-## מבנה קוד
+## Windows installer status
 
-| תחום | מיקום |
+The native Windows installer and updater are under active development. Build tools
+are included, but isolated tests do not establish successful installation on a
+family computer. Runtime startup on the ASUS test machine is still being diagnosed.
+See [validation status](docs/VALIDATION.md).
+
+To build a standalone installer, follow [the Windows build guide](installer/README.md).
+It records source identities and payload hashes and bundles its runtimes; end users
+do not need developer SDKs.
+
+The current distribution is unsigned; Windows can show an unknown publisher.
+Installer signing is separate from updater trust and integrity checks. Building an
+unsigned installer does not disable those checks. Third-party binary redistribution
+still requires the [license review](docs/DISTRIBUTION-LICENSE-REVIEW.md).
+
+## Project map
+
+| Directory | Purpose |
 | --- | --- |
-| API, סשנים והרשאות | `src/server.ts` |
-| שירות שיחות ואישור קבוצות | `src/service.ts` |
-| SQLite והצפנה | `src/store.ts` |
-| חיבור אמיתי / מדומה | `src/connectors/` |
-| ממשק ומשפחות | `web/` |
-| מנגנון עדכון משותף | `deploy/updater.py` |
-| התאמת מערכת הפעלה והתקנה | `deploy/install.py`, `deploy/install-windows.ps1` |
-| בדיקות וראיות סינתטיות | `tests/`, `evidence/` |
+| `src/` | Server, connector, encrypted storage and application behavior |
+| `web/` | Parent and child interface |
+| `installer/` | Windows installer, service hosts, updater and package builders |
+| `deploy/` | Self-hosted deployment and existing Linux updater |
+| `scripts/` | Development, backup and release tools |
+| `tests/`, `fixtures/` | Automated tests and synthetic source fixtures |
+| `docs/` | Guides and architecture references |
+| `landing/` | Separate landing page and static publication |
+| `evidence/` | Written historical validation reports |
 
-[פרטיות וגבולות המוצר](docs/ARCHITECTURE.md) · [החיבור ל־WhatsApp](docs/CONNECTOR.md) · [תפעול](docs/OPERATIONS.md)
+[Development and tests](docs/DEVELOPMENT.md) · [Documentation index](docs/README.md) ·
+[Contributing](CONTRIBUTING.md) · [Architecture](docs/ARCHITECTURE.md) · [License](LICENSE)

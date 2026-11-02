@@ -122,9 +122,13 @@ export class Store {
     parent: { name: string; password: string },
     child?: { name: string; password: string },
     firstRun = false,
+    initialIdentity?: { familyId: string; parentUserId: string },
   ) {
-    const fid = randomUUID(),
-      pid = randomUUID(),
+    if (initialIdentity && (!firstRun || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(initialIdentity.familyId) ||
+        !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(initialIdentity.parentUserId) || initialIdentity.familyId === initialIdentity.parentUserId))
+      throw new Error('Invalid initial identity');
+    const fid = (initialIdentity?.familyId ?? randomUUID()) as ReturnType<typeof randomUUID>,
+      pid = (initialIdentity?.parentUserId ?? randomUUID()) as ReturnType<typeof randomUUID>,
       cid = randomUUID();
     const ph = await passwordHash(parent.password),
       ch = child ? await passwordHash(child.password) : undefined;

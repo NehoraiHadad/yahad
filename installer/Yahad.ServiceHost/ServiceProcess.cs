@@ -19,14 +19,20 @@ internal interface IChildControl:IDisposable
     Task StopAsync(CancellationToken cancellation);
 }
 internal interface IChildControlFactory {IChildControl Create();}
+internal interface IUpdateIdleSession
+{
+    Task<bool> PrepareUpdateAsync(string id,CancellationToken cancellation);
+    Task CancelUpdateAsync(string id,CancellationToken cancellation);
+}
 
 internal sealed class LocalChildControlFactory:IChildControlFactory
 {
     public IChildControl Create()=>new LocalChildControl();
-    private sealed class LocalChildControl:IChildControl
+    private sealed class LocalChildControl:IChildControl,IUpdateIdleSession
     {
         private readonly string name="Yahad."+Guid.NewGuid().ToString("N");
         private readonly NamedPipeServerStream pipe;
+        private readonly SemaphoreSlim commands=new(1,1);
         internal LocalChildControl(){pipe=LocalControlPipe.Create(name);}
         public string Endpoint=>@"\\.\pipe\"+name;
         public async Task<ChildReady> ReadyAsync(int expectedRootPid,CancellationToken cancellation)
@@ -44,7 +50,62 @@ internal sealed class LocalChildControlFactory:IChildControlFactory
             return new(peer,json.RootElement.GetProperty("type").GetString()??"");
         }
         public async Task StopAsync(CancellationToken cancellation)
-        {await pipe.WriteAsync("{\"type\":\"stop\"}\n"u8.ToArray(),cancellation);await pipe.FlushAsync(cancellation);}
+        {await commands.WaitAsync(cancellation);try{await pipe.WriteAsync("{\"type\":\"stop\"}\n"u8.ToArray(),cancellation);await pipe.FlushAsync(cancellation);}finally{commands.Release();}}
+        public async Task<bool> PrepareUpdateAsync(string id,CancellationToken cancellation)
+        {
+            if(!Guid.TryParseExact(id,"N",out var parsed)||parsed.ToString("N")!=id)throw new IOException("SERVICE_UPDATE_ID");
+            using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancellation);deadline.CancelAfter(TimeSpan.FromSeconds(5));
+            await commands.WaitAsync(deadline.Token);
+            try
+            {
+                await SendAsync("prepare-update",id,deadline.Token);
+                // Once a command was written, retain ownership of its bounded
+                // response even if the caller revokes. Cancelling halfway through
+                // a frame cannot be treated as a fresh framing boundary.
+                using var responseDeadline=new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                using var frame=new MemoryStream();var one=new byte[1];
+                while(frame.Length<1024)
+                {
+                    if(await pipe.ReadAsync(one,responseDeadline.Token)!=1)throw new IOException("SERVICE_UPDATE_EOF");
+                    if(one[0]==10)
+                    {
+                        var reply=NativeJson.Read<JsonElement>(frame.ToArray());
+                        if(reply.EnumerateObject().Count()!=2||reply.GetProperty("id").GetString()!=id)throw new IOException("SERVICE_UPDATE_REPLY");
+                        var idle=reply.GetProperty("type").GetString() switch{"update-idle"=>true,"update-busy"=>false,_=>throw new IOException("SERVICE_UPDATE_REPLY")};
+                        cancellation.ThrowIfCancellationRequested();return idle;
+                    }
+                    frame.WriteByte(one[0]);
+                }
+                throw new IOException("SERVICE_UPDATE_FRAME");
+            }
+            finally{commands.Release();}
+        }
+        public async Task CancelUpdateAsync(string id,CancellationToken cancellation)
+        {
+            if(!Guid.TryParseExact(id,"N",out var parsed)||parsed.ToString("N")!=id)throw new IOException("SERVICE_UPDATE_ID");
+            using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancellation);deadline.CancelAfter(TimeSpan.FromSeconds(5));
+            await commands.WaitAsync(deadline.Token);
+            try
+            {
+                await SendAsync("cancel-update",id,deadline.Token);
+                // A prepare response may have arrived after its caller timed out.
+                // Drain only that same operation, then require an explicit cancel
+                // acknowledgement. A successful write alone cannot prove idle.
+                for(var attempt=0;attempt<2;attempt++)
+                {
+                    using var frame=new MemoryStream();var one=new byte[1];var ended=false;
+                    while(frame.Length<1024){if(await pipe.ReadAsync(one,deadline.Token)!=1)throw new IOException("SERVICE_UPDATE_EOF");if(one[0]==10){ended=true;break;}frame.WriteByte(one[0]);}
+                    if(!ended)throw new IOException("SERVICE_UPDATE_FRAME");var reply=NativeJson.Read<JsonElement>(frame.ToArray());
+                    if(reply.EnumerateObject().Count()!=2||reply.GetProperty("id").GetString()!=id)throw new IOException("SERVICE_UPDATE_REPLY");
+                    var type=reply.GetProperty("type").GetString();if(type=="update-cancelled")return;
+                    if(attempt!=0||type is not("update-idle" or "update-busy"))throw new IOException("SERVICE_UPDATE_CANCEL_UNCONFIRMED");
+                }
+                throw new IOException("SERVICE_UPDATE_CANCEL_UNCONFIRMED");
+            }
+            finally{commands.Release();}
+        }
+        private async Task SendAsync(string type,string id,CancellationToken cancellation)
+        {await pipe.WriteAsync(JsonSerializer.SerializeToUtf8Bytes(new{type,id}),cancellation);await pipe.WriteAsync(new byte[]{10},cancellation);await pipe.FlushAsync(cancellation);}
         public void Dispose()=>pipe.Dispose();
         [DllImport("kernel32.dll",SetLastError=true)][return:MarshalAs(UnmanagedType.Bool)]
         private static extern bool GetNamedPipeClientProcessId(Microsoft.Win32.SafeHandles.SafePipeHandle pipe,out uint pid);
@@ -54,7 +115,7 @@ internal sealed class LocalChildControlFactory:IChildControlFactory
 internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildControlFactory channels,JobProcessFaultInjection? fault=null):IPrivateAppLauncher
 {
     private static readonly HashSet<string> Allowed=new(StringComparer.Ordinal)
-    {"HOST","PORT","APP_ORIGIN","APP_ADDITIONAL_ORIGINS","COOKIE_SECURE","DATA_DIR","MASTER_KEY_FILE","CONNECTOR","ALLOW_REAL_WHATSAPP","DIAGNOSTICS_ENABLED","SETUP_CAPABILITY_FILE"};
+    {"HOST","PORT","APP_ORIGIN","APP_ADDITIONAL_ORIGINS","COOKIE_SECURE","DATA_DIR","MASTER_KEY_FILE","CONNECTOR","ALLOW_REAL_WHATSAPP","DIAGNOSTICS_ENABLED","SETUP_CAPABILITY_FILE","YAHAD_NATIVE_PROBATION_NONCE","YAHAD_NATIVE_PROBATION_ACTIVATION","YAHAD_NATIVE_PROBATION_OPERATION"};
     public Task<IContainedAppSession> StartAsync(AppRelease release,CancellationToken cancellation)
     {
         cancellation.ThrowIfCancellationRequested();
@@ -120,10 +181,12 @@ internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildCont
         }
         public void Dispose(){pin?.Dispose();if(File.Exists(path))File.Delete(path);Directory.Delete(directory,false);}
     }
-    private sealed class Session(JobProcess job,IChildControl channel,FileStream pinned,LaunchLease? handoff,Exception? startFailure=null):IContainedAppSession
+    private sealed class Session(JobProcess job,IChildControl channel,FileStream pinned,LaunchLease? handoff,Exception? startFailure=null):IContainedAppSession,IUpdateIdleSession
     {
         internal JobProcess Job=>job;internal IChildControl Channel=>channel;internal Exception? StartFailure=>startFailure;
         public Task RequestGracefulStopAsync(CancellationToken cancellation)=>channel.StopAsync(cancellation);
+        public Task<bool> PrepareUpdateAsync(string id,CancellationToken cancellation)=>channel is IUpdateIdleSession idle?idle.PrepareUpdateAsync(id,cancellation):Task.FromResult(false);
+        public Task CancelUpdateAsync(string id,CancellationToken cancellation)=>channel is IUpdateIdleSession idle?idle.CancelUpdateAsync(id,cancellation):Task.CompletedTask;
         public Task<int> WaitForRootExitAsync(CancellationToken cancellation)=>job.WaitAsync(cancellation);
         public Task WaitForTreeEmptyAsync(CancellationToken cancellation)=>job.WaitForTreeEmptyAsync(cancellation);
         public Task TerminateAndWaitForTreeEmptyAsync(CancellationToken cancellation)=>job.TerminateAndWaitForTreeEmptyAsync(cancellation);

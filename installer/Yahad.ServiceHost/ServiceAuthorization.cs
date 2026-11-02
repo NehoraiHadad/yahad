@@ -46,7 +46,7 @@ internal sealed class InstalledStartAuthorizer(IServiceTokenReader tokens,IInsta
 }
 internal sealed class WindowsInstallationReader:IInstallationReader
 {
-    internal static string DescriptorPath=>Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),ServiceDefinition.Name,"bootstrap.json");
+    internal static string DescriptorPath=>InstalledUpdaterLayout.DescriptorPath;
     public InstallationBinding Read()
     {
         // Existing owner-only bootstrap capability policy: admin/System owner,
@@ -64,6 +64,16 @@ internal sealed class WindowsInstallationReader:IInstallationReader
         var id=value.GetProperty("installationId").GetString()!;var digest=value.GetProperty("activationReceiptDigest").GetString()!;
         if(!Guid.TryParseExact(id,"N",out _)||!System.Text.RegularExpressions.Regex.IsMatch(digest,"^[a-f0-9]{64}$"))throw new IOException("BOOTSTRAP_IDENTITY");
         return new(id,digest);
+    }
+}
+internal static class WindowsInstalledRuntimeProfile
+{
+    // Discovery is intentionally separate from Program activation. The legacy
+    // first-install entry remains unchanged until the combined installer gates.
+    internal static bool UpdaterAnchorPresent()
+    {
+        var tokens=new WindowsServiceTokenReader();ServiceIdentityPolicy.Require(tokens.Read(),tokens.ExpectedServiceSid());
+        return InstalledUpdaterLayout.AnchorPresent();
     }
 }
 internal sealed class WindowsServiceTokenReader:IServiceTokenReader

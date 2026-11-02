@@ -87,10 +87,9 @@ These are code gaps, not an excuse to request broad host approval early.
 
 ## ASUSHADAD installation/check/uninstall proposal
 
-The machine selection is authorized; the changes below are **not** authorized.
-`installer/windows/asus-host-acceptance.json` is the single current proposal.
-Only after the remaining code and exact package/hash inventory are populated and
-reviewed should one action-specific request name that manifest and artifact.
+Historical milestone: the obsolete ASUS-specific proposal has been removed.
+Before real execution, review the exact current package/hash inventory and obtain
+action-specific approval. See [current validation limits](VALIDATION.md).
 
 1. Repeat exact collision checks immediately before execution. Abort if either
    acceptance service or either target tree already exists. Never adopt/reset an

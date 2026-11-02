@@ -3,7 +3,7 @@ namespace Yahad.Setup;
 
 internal sealed record OwnerProcess(string Sid,int ProcessId,long Created,string ImageSha256);
 internal sealed record SetupProgress(string Phase,int Percent,string? Code=null);
-internal sealed record SetupResult(bool Ok,string Code,string? Url=null,string? SetupToken=null,bool DataPreserved=true,LanSetupResult? Lan=null);
+internal sealed record SetupResult(bool Ok,string Code,string? Url=null,string? SetupToken=null,bool DataPreserved=true,LanSetupResult? Lan=null,SetupFailureDetail? Failure=null,string? ReceiptSha256=null,string? FullProfileInstallationId=null);
 // Four concrete operations are injected only by the executable composition or
 // tests. No JSON/CLI caller can supply paths, accounts, grants or operations.
 internal interface ISetupHostOperations
@@ -34,6 +34,7 @@ internal sealed class InstallFlow(ISetupHostOperations host)
         if(!result.Ok)return result;
         if(!Uri.TryCreate(result.Url,UriKind.Absolute,out var address)||address.Scheme!="http"||address.Host!="127.0.0.1"||address.UserInfo!=""||address.Query!=""||address.Fragment!=""||address.AbsolutePath!="/"||address.Port is <1024 or >65535)throw new IOException("INSTALL_BROWSER_URL");
         if(result.SetupToken is not null&&!System.Text.RegularExpressions.Regex.IsMatch(result.SetupToken,"^[A-Za-z0-9_-]{43}$"))throw new IOException("INSTALL_SETUP_TOKEN");
+        if(result.FullProfileInstallationId is {} installation&&(!Guid.TryParseExact(installation,"N",out var id)||id.ToString("N")!=installation))throw new IOException("INSTALL_STATE_INVALID");
         progress(new("ready",100));return result;
     }
 }

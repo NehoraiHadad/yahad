@@ -120,11 +120,11 @@ require repair; a different version requires an upgrade flow. Interrupted reinst
 can resume from its durable phase. Automatic startup is enabled after committed
 state, immediately before starting the service.
 
-`installer/windows/asus_fresh_test_preflight.ps1` is a read-only gate for this
-specific approved host test: it refuses any existing product root, service or
-process, even an apparently empty root. This stronger fresh-test restriction
-prevents reconnecting any pre-existing linked family or WhatsApp auth store.
-It is not a product restriction on reinstalling a legitimate existing family.
+The former host-specific preflight script has been removed. Fresh-install
+acceptance must verify that its exact product roots, services and processes are
+absent, including apparently empty roots. Abort on existing state rather than
+reconnect a linked family or WhatsApp auth store. This is an acceptance restriction,
+not a product rule for legitimate reinstalls.
 No account is linked, no QR is scanned and no family setup is completed by the
 automated acceptance check.
 

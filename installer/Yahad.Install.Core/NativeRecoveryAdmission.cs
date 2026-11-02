@@ -67,8 +67,8 @@ internal static class NativeRecoveryAdmission
                 }
             }
             if(!new[]{"data/app.sqlite","identity/master-key","policy/update-policy","policy/update-pin"}.All(names.Contains)||
-                requireOriginalPlaintext&&!names.SetEquals(Files(candidate).Where(n=>n!="data/process.lock"))||
-                !Enumerable.Range(0,manifest.Files.Length).Select(i=>$"{i:D5}.bin").Append("receipt.json").ToHashSet(StringComparer.Ordinal).SetEquals(Files(backup)))throw new IOException("RECOVERY_ADMISSION_CLOSURE");
+                requireOriginalPlaintext&&!names.SetEquals(Files(candidate,files).Where(n=>n!="data/process.lock"))||
+                !Enumerable.Range(0,manifest.Files.Length).Select(i=>$"{i:D5}.bin").Append("receipt.json").ToHashSet(StringComparer.Ordinal).SetEquals(Files(backup,files)))throw new IOException("RECOVERY_ADMISSION_CLOSURE");
             var journal=Path.Combine(catalog,"restore-"+operationId);retained.Add(files?.PinDirectory(journal)??WindowsFileBoundary.PinPrivateDirectory(journal));
             if(!string.Equals(candidate,Path.Combine(journal,"completed"),StringComparison.OrdinalIgnoreCase))throw new IOException("RECOVERY_ADMISSION_SELECTION");
             var paths=Directory.GetFiles(journal,"*.json").Order(StringComparer.Ordinal).ToArray();
@@ -95,11 +95,11 @@ internal static class NativeRecoveryAdmission
     }
     private static void Member(string name)
     {if(name.Length is <1 or >200||name.Contains('\\')||name.Split('/').Any(p=>p is "" or "." or ".."||p.IndexOfAny(Path.GetInvalidFileNameChars())>=0))throw new IOException("RECOVERY_ADMISSION_PATH");}
-    private static string[] Files(string root)
+    private static string[] Files(string root,InstalledStateFiles? files)
     {
-        var files=new List<string>();
+        var names=new List<string>();var visited=0;
         void Walk(string path,int depth)
-        {if(depth>64)throw new IOException("RECOVERY_ADMISSION_DEPTH");using var pin=WindowsFileBoundary.PinPrivateDirectory(path);foreach(var entry in Directory.EnumerateFileSystemEntries(path)){if((File.GetAttributes(entry)&FileAttributes.ReparsePoint)!=0)throw new IOException("RECOVERY_ADMISSION_REPARSE");if(Directory.Exists(entry))Walk(entry,depth+1);else{files.Add(Path.GetRelativePath(root,entry).Replace('\\','/'));if(files.Count>10001)throw new IOException("RECOVERY_ADMISSION_COUNT");}}}
-        Walk(root,0);return files.ToArray();
+        {if(depth>64)throw new IOException("RECOVERY_ADMISSION_DEPTH");using var pin=files?.PinDirectory(path)??WindowsFileBoundary.PinPrivateDirectory(path);foreach(var entry in Directory.EnumerateFileSystemEntries(path)){if(++visited>100000)throw new IOException("RECOVERY_ADMISSION_TREE_BOUND");if((File.GetAttributes(entry)&FileAttributes.ReparsePoint)!=0)throw new IOException("RECOVERY_ADMISSION_REPARSE");if(Directory.Exists(entry))Walk(entry,depth+1);else{names.Add(Path.GetRelativePath(root,entry).Replace('\\','/'));if(names.Count>10001)throw new IOException("RECOVERY_ADMISSION_COUNT");}}}
+        Walk(root,0);return names.ToArray();
     }
 }

@@ -8,10 +8,11 @@ namespace Yahad.Setup;
 public partial class MainWindow:Window
 {
     private bool running,completed;private readonly bool uninstall;private SetupResult? result;private readonly UninstallChoice choice=new();
-    internal MainWindow(bool uninstall=false,IReadOnlyList<LanChoice>? lanChoices=null)
+    internal MainWindow(bool uninstall=false,IReadOnlyList<LanChoice>? lanChoices=null,bool? existingAccess=null,bool? fullSystemProfile=null,bool? existingUpdate=null)
     {
-        InitializeComponent();this.uninstall=uninstall;Closing+=OnClosing;InitializeLan(lanChoices);
-        if(!uninstall&&(System.IO.File.Exists(InstallLocations.InstallerImage)||PendingRemoval()))RemovalEntry.Visibility=Visibility.Visible;
+        InitializeComponent();VersionBadge.Text=ApplicationRelease.Version+" · Windows";this.uninstall=uninstall;Closing+=OnClosing;InitializeLan(lanChoices,existingAccess??(lanChoices is null&&HasExistingAccess()));
+        InitializeUpdate(fullSystemProfile??InstallPackage.EmbeddedFullProfile(),existingUpdate??HasExistingUpdateInstallation());
+        if(!uninstall&&(existingAccess??(System.IO.File.Exists(InstallLocations.InstallerImage)||PendingRemoval()))||!uninstall&&fullUpdateProfile&&existingUpdateProfile)RemovalEntry.Visibility=Visibility.Visible;
         if(uninstall)
         {
             Title="יחד | הסרה";Eyebrow.Text="הסרת יחד";Heading.Text="מסירים את יחד.\nמה עושים עם הנתונים?";
@@ -50,39 +51,51 @@ public partial class MainWindow:Window
     private async void Start_Click(object sender,RoutedEventArgs e)
     {
         if(running)return;if(completed){if(!uninstall&&result?.Url is not null)OpenBrowser(result);else Close();return;}
-        var mode=uninstall?choice.Confirmed():UninstallMode.KeepData;var network=SelectedLanRequest();
+        var mode=uninstall?choice.Confirmed():UninstallMode.KeepData;var network=SelectedLanRequest();var update=SelectedUpdateRequest();UpdatePanel.IsEnabled=false;
         running=true;Primary.IsEnabled=false;Secondary.IsEnabled=false;UninstallChoices.IsEnabled=false;LanPanel.IsEnabled=false;ProgressBar.Visibility=Visibility.Visible;ProgressBar.IsIndeterminate=true;
         Notice.Background=new SolidColorBrush(Color.FromRgb(234,241,234));Status.Text="ממתינים לאישור של Windows.";
         Heading.Text=uninstall?(mode==UninstallMode.DeleteData?"מסירים את יחד\nואת הנתונים.":"מסירים את התוכנה.\nהנתונים יישמרו."):"מתקינים את יחד.\nעוד רגע בבית.";
         Description.Text=uninstall?"הפעולה תתחיל לאחר אישור Windows. אל תכבו את המחשב במהלכה.":"מכינים את הרכיבים, מפעילים את השירות ובודקים שיחד זמינה.";
         try
         {
-            result=await SetupElevation.RunAsync(uninstall,p=>Dispatcher.Invoke(()=>ShowProgress(p)),CancellationToken.None,mode,network);
-            if(!result.Ok){Failure(result.Code);return;}
+            result=await SetupElevation.RunAsync(uninstall,p=>Dispatcher.Invoke(()=>ShowProgress(p)),CancellationToken.None,mode,network,update:update);
+            if(!result.Ok){Failure(result.Code,result.Failure);return;}
             completed=true;ProgressBar.IsIndeterminate=false;ProgressBar.Value=100;
             Heading.Text=uninstall?(result.DataPreserved?"יחד הוסרה.\nהנתונים נשמרו.":"יחד והנתונים\nהוסרו מהמחשב."):"הכול מוכן.\nממשיכים ליחד.";
             Description.Text=uninstall?(result.DataPreserved?"השירות וקובצי התוכנה הוסרו. אפשר להתקין מחדש ולהמשיך עם הנתונים השמורים.":"תיקיות התוכנה והנתונים הוסרו, כולל המפתחות והגיבויים שבתיקיית יחד. גיבויים שייצאתם למיקום אחר וקובצי הורדה נשארו במקומם."):"השירות פועל ברקע. ההגדרה המשפחתית נפתחת כעת בדפדפן.";
             UninstallChoices.Visibility=Visibility.Collapsed;Primary.Content=uninstall?"סיום":"פתיחת יחד";
             NoticeText.Text=uninstall?(result.DataPreserved?"נבחרה שמירת נתונים. הנתונים המקומיים לא נמחקו.":"המחיקה המקומית הושלמה. לא בוצע שינוי במכשירים אחרים או ברשת."):"אפשר לסגור את המתקין. השירות ימשיך לפעול במחשב.";
             ShowLanResult(result.Lan);
+            UpdatePanel.Visibility=Visibility.Collapsed;
+            if(uninstall&&result.FullProfileInstallationId is {} removedInstallation)OwnerShortcuts.TryRemove(removedInstallation);
+            if(!uninstall&&result.FullProfileInstallationId is {} installation)
+            {if(!OwnerShortcuts.TryCreate(installation))NoticeText.Text+=" לא נוצרו קיצורי העדכון והשחזור; אפשר להפעיל את כלי האישור מתפריט ההגדרות של יחד.";}
             if(uninstall)ShortcutCleanup.TryRemove(result.Url);
             else try{OpenBrowser(result);}catch{Status.Text="הדפדפן לא נפתח. אפשר לנסות שוב בלחיצה על פתיחת יחד.";}
         }
-        catch(Exception error){Failure(SetupElevation.Code(error));}
-        finally{running=false;Primary.IsEnabled=true;Secondary.IsEnabled=true;UninstallChoices.IsEnabled=true;LanPanel.IsEnabled=true;if(uninstall&&!completed)Primary.IsEnabled=choice.CanBegin;else if(!completed)UpdateLanUi();}
+        catch(Exception error){Failure(SetupElevation.Code(error),SetupFailureDetail.From(error));}
+        finally{UpdatePanel.IsEnabled=true;running=false;Primary.IsEnabled=true;Secondary.IsEnabled=true;UninstallChoices.IsEnabled=true;LanPanel.IsEnabled=true;if(uninstall&&!completed)Primary.IsEnabled=choice.CanBegin;else if(!completed)UpdateLanUi();}
     }
     private void ShowProgress(SetupProgress p)
     {
-        ProgressBar.IsIndeterminate=p.Phase is not("extracting" or "deleting_data" or "ready" or "removed");ProgressBar.Value=p.Percent;
-        Status.Text=p.Phase switch{"checking"=>"בודקים מקום פנוי והרשאות.","extracting"=>"מכינים את הרכיבים של יחד.","installing_service"=>"מתקינים את שירות Windows.","starting_server"=>"מפעילים את יחד ומוודאים שהיא זמינה.","stopping_server"=>"סוגרים את יחד לפני ההסרה.","deleting_data"=>"מוחקים את הנתונים המקומיים שבחרתם להסיר.","ready"=>"יחד זמינה לשימוש","removed"=>"ההסרה הושלמה",_=>"מתקדמים בהתקנה."};
+        ProgressBar.IsIndeterminate=p.Phase is not("extracting" or "installing_service" or "cleaning_installation" or "deleting_data" or "ready" or "removed");ProgressBar.Value=p.Percent;
+        Status.Text=p.Phase switch{"checking"=>"בודקים מקום פנוי והרשאות.","extracting"=>"מכינים את הרכיבים של יחד.","installing_service"=>"מתקינים את שירות Windows.","cleaning_installation"=>"מסיימים את ההתקנה.","starting_server"=>"מפעילים את יחד ומוודאים שהיא זמינה.","stopping_server"=>"סוגרים את יחד לפני ההסרה.","deleting_data"=>"מוחקים את הנתונים המקומיים שבחרתם להסיר.","ready"=>"יחד זמינה לשימוש","removed"=>"ההסרה הושלמה",_=>"מתקדמים בהתקנה."};
     }
-    private void Failure(string code)
+    private void Failure(string code,SetupFailureDetail? detail=null)
     {
         ProgressBar.IsIndeterminate=false;Heading.Text=uninstall?"ההסרה נעצרה.":"נעצרנו כאן.\nההתקנה לא הושלמה.";Notice.Background=new SolidColorBrush(Color.FromRgb(249,237,224));
         Description.Text=code switch
         {
+            "INSTALL_TIMEOUT"=>"שלב ההתקנה חרג מהזמן המותר. ההתקנה לא הושלמה; הקבצים שנוצרו נשמרו לבדיקה לפני המשך.",
+            "INSTALL_STAGING_CHANGED"=>"קובצי ההכנה אינם תואמים. ההתקנה נעצרה כדי לשמור על הנתונים.",
+            "UPDATE_CONSENT_ALREADY_CAPTURED"=>"הבחירה בעדכונים כבר נשמרה בניסיון הקודם. בהמשך ההתקנה היא תישמר; אפשר לשנות אותה בהגדרות של יחד אחרי ההתקנה.",
+            "UPDATE_INSTALL_INCOMPLETE_REPAIR_FIRST"=>"ההתקנה הקודמת נקטעה לפני השלמתה. הפעלו שוב את אותו קובץ מתקין ובחרו התקנה כדי להשלים אותה בבטחה; לאחר מכן אפשר להסיר. לא מחקנו נתונים.",
+            "UPDATE_CONSENT_REQUIRED"=>"יש לבחור איך לקבל עדכונים ולאשר את מנגנון העדכון לפני ההתקנה.",
+            "UPDATE_LEGACY_PROFILE_REQUIRES_REMOVAL"=>"במחשב קיימת התקנה ישנה ללא מנגנון העדכון החדש. לא שינינו את הנתונים. יש להשלים את מסלול המעבר המוסבר במדריך לפני התקנת החבילה הזו.",
+            "UPDATE_MUST_FINISH_BEFORE_INSTALLER"=>"יחד באמצע עדכון או שחזור. יש להשלים אותו בכלי השחזור של יחד לפני שינוי ההתקנה.",
+            "INSTALL_RUNTIME_NOT_AUTHENTICATED" or "INSTALL_READINESS_BINDING"=>"שירות הרקע נפתח, אבל לא אומת שיחד עצמו פועל בגרסה הנכונה. ההתקנה אינה מדווחת הצלחה ויש לבדוק את האבחון.",
             "LAN_CONSENT_REQUIRED"=>"בחרו חיבור ביתי ואשרו במפורש את פתיחת הגישה לפני ניסיון נוסף.",
-            "LAN_PRIVATE_PROFILE_REQUIRED"=>"החיבור שנבחר אינו מוגדר ב־Windows כרשת Private. ההתקנה לא שינתה את סיווג הרשת. בחרו חיבור ביתי מתאים ונסו שוב.",
+            "LAN_PRIVATE_PROFILE_REQUIRED"=>"החיבור שנבחר אינו מוגדר ב-Windows כרשת ביתית פרטית. רק אם זו הרשת הביתית שלכם, אפשר לאשר ב-Windows שזו רשת פרטית. המתקין אינו משנה את סוג הרשת.",
             "NETWORK_SELECTION_CHANGED"=>"כתובת הרשת או המתאם השתנו. בחרו מחדש את החיבור הביתי; לא תיבחר רשת אחרת אוטומטית.",
             "LAN_CA_CHANGED" or "LAN_CA_STORAGE_DAMAGED"=>"חומר התעודות אינו תואם להתקנה. הוא נשמר ולא הוחלף אוטומטית. נדרש תיקון מקומי לפני חידוש הגישה.",
             "LAN_FIREWALL_CHANGED" or "LAN_FIREWALL_DUPLICATE" or "LAN_FIREWALL_REPAIR_REQUIRED"=>"כללי חומת האש אינם תואמים להגדרה של יחד. ההתקנה לא מחליפה כללים לא מוכרים. הגישה דורשת תיקון ואישור מחדש.",
@@ -97,7 +110,7 @@ public partial class MainWindow:Window
             "UNINSTALL_INCOMPLETE"=>"יש ניסיון הסרה שלא הושלם. המשיכו אותו לפני התקנה חוזרת.",
             _=>uninstall&&choice.Mode==UninstallMode.DeleteData?"המחיקה לא הושלמה. ייתכן שחלק מהנתונים כבר הוסרו. אפשר להמשיך באותה בחירה; אין לבצע התקנה חדשה עד לסיום.":"הפעולה לא הושלמה. שמרו את קוד התקלה ונסו שוב או פנו לעזרה."
         };
-        NoticeText.Text="קוד תקלה: "+code;Status.Text="הפעולה טרם הושלמה";Primary.Content=uninstall&&choice.Mode==UninstallMode.DeleteData?"המשך המחיקה":"ניסיון נוסף";
+        NoticeText.Text="קוד תקלה: "+code+(detail?.Display()??"");Status.Text="הפעולה טרם הושלמה";Primary.Content=uninstall&&choice.Mode==UninstallMode.DeleteData?"המשך המחיקה":"ניסיון נוסף";
     }
     private static void OpenBrowser(SetupResult result)
     {

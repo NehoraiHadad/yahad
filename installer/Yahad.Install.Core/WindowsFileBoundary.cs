@@ -8,6 +8,16 @@ namespace Yahad.Install;
 
 public enum SecretRole { MasterKey, SetupCapability }
 
+// Fixed diagnostic categories only; no installation values cross elevation.
+internal enum ReceiptRecoveryCheck
+{
+    ReceiptOwnerOrDacl, ReceiptAce, BinaryOwnerOrDacl, BinaryAce, BinaryPrincipal,
+    StateShape, StateAuthority, StateDigests, ManifestShape, ReceiptIdentity,
+    HostRecord, HostDigest, SetupDigest, PostWriteIdentity, ContentUnchanged
+}
+internal sealed class ReceiptRecoveryRefusal(ReceiptRecoveryCheck check):IOException("UNINSTALL_RECEIPT_RECOVERY_REFUSED")
+{internal ReceiptRecoveryCheck Check{get;}=Enum.IsDefined(check)?check:throw new ArgumentOutOfRangeException(nameof(check));}
+
 /// <summary>Windows app file boundary. Never changes an existing ACL to make a check pass.</summary>
 public static class WindowsFileBoundary
 {
@@ -72,6 +82,93 @@ public static class WindowsFileBoundary
                 if(!ace.SecurityIdentifier.Value.StartsWith("S-1-5-80-",StringComparison.Ordinal)||(ace.AccessMask&~0x1200a9)!=0)throw new IOException("INSTALL_METADATA_ACCESS");
             }
     }
+    internal static void ValidatePreparingInstallAcl(RawSecurityDescriptor acl,bool directory)
+    {
+        ValidateInstallerMetadataAcl(acl);
+        if(directory&&(acl.ControlFlags&ControlFlags.DiscretionaryAclProtected)==0)throw new IOException("UPDATE_PREPARING_ACCESS");
+        foreach(GenericAce raw in acl.DiscretionaryAcl!)
+            if(raw is CommonAce ace&&ace.AceQualifier==AceQualifier.AccessAllowed&&ace.AccessMask!=0&&ace.SecurityIdentifier.Value is not("S-1-5-18" or "S-1-5-32-544"))throw new IOException("UPDATE_PREPARING_ACCESS");
+    }
+    internal static IDisposable PinPreparingInstallMember(string path,bool directory)
+    {var pin=Pin(path,directory,false);try{ValidatePreparingInstallAcl(Security(pin.Leaf),directory);return pin;}catch{pin.Dispose();throw;}}
+    internal static void DeletePreparingInstallMember(string path,bool directory,long size=0,string? sha256=null)
+    {
+        using var pin=Pin(path,directory,!directory,true);ValidatePreparingInstallAcl(Security(pin.Leaf),directory);
+        if(!directory)
+        {
+            using var content=new FileStream(pin.Leaf,FileAccess.Read);
+            if(content.Length!=size||sha256 is null||Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(content))!=sha256)throw new IOException("UPDATE_PREPARING_FILE_CHANGED");
+            byte disposition=1;if(!SetFileInformationByHandle(pin.Leaf,4,ref disposition,1))throw new Win32Exception();
+        }
+        else{byte disposition=1;if(!SetFileInformationByHandle(pin.Leaf,4,ref disposition,1))throw new Win32Exception();}
+    }
+    internal static PrivateReadLease OpenInstallerDiagnostic(string path,SecurityIdentifier owner)
+    {
+        var pin=Pin(path,false,true);try{ValidateInstallerDiagnosticAcl(Security(pin.Leaf),owner);return new(pin);}catch{pin.Dispose();throw;}
+    }
+    // Comparison only: this is the exact inherited ACL left by the old receipt
+    // writer before protection failed. SYSTEM/Administrators inherited Modify,
+    // not FullControl. FileSecurity shows six effective ACEs; the native handle
+    // descriptor additionally retains seven exact InheritOnly propagation ACEs.
+    // Neither representation is removal authority.
+    internal static PrivateReadLease OpenInterruptedReceiptForComparison(string path)
+    {
+        var pin=Pin(path,false,true);try{ValidateInterruptedReceiptAcl(Security(pin.Leaf));return new(pin);}catch{pin.Dispose();throw;}
+    }
+    internal static void ValidateInterruptedReceiptAcl(RawSecurityDescriptor acl)
+    {
+        var expected=new HashSet<(string Sid,int Mask,AceFlags Flags)>
+        {
+            ("S-1-5-18",0x1301bf,AceFlags.None),("S-1-5-32-544",0x1301bf,AceFlags.None),("S-1-5-32-545",0x1200a9,AceFlags.None),
+            ("S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464",0x1f01ff,AceFlags.None),
+            ("S-1-15-2-1",0x1200a9,AceFlags.None),("S-1-15-2-2",0x1200a9,AceFlags.None)
+        };
+        if(acl.DiscretionaryAcl?.Count==13)
+        {
+            var propagation=AceFlags.ObjectInherit|AceFlags.ContainerInherit|AceFlags.InheritOnly;
+            expected.UnionWith(new[]{
+                ("S-1-3-0",0x10000000,propagation),("S-1-5-18",0x10000000,propagation),("S-1-5-32-544",0x10000000,propagation),
+                ("S-1-5-32-545",unchecked((int)0xa0000000),propagation),
+                ("S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464",0x10000000,AceFlags.ContainerInherit|AceFlags.InheritOnly),
+                ("S-1-15-2-1",unchecked((int)0xa0000000),propagation),("S-1-15-2-2",unchecked((int)0xa0000000),propagation)
+            });
+        }
+        if(acl.Owner?.Value!="S-1-5-32-544"||acl.DiscretionaryAcl is null||acl.DiscretionaryAcl.Count!=expected.Count||(acl.ControlFlags&ControlFlags.DiscretionaryAclProtected)==0)throw new ReceiptRecoveryRefusal(ReceiptRecoveryCheck.ReceiptOwnerOrDacl);
+        foreach(GenericAce raw in acl.DiscretionaryAcl)
+        {
+            if(raw is not CommonAce ace||ace.IsCallback||ace.AceQualifier!=AceQualifier.AccessAllowed||!expected.Remove((ace.SecurityIdentifier.Value,ace.AccessMask,ace.AceFlags)))throw new ReceiptRecoveryRefusal(ReceiptRecoveryCheck.ReceiptAce);
+        }
+    }
+    internal static PrivateReadLease OpenInstallerBinaryForComparison(string path,SecurityIdentifier service,SecurityIdentifier owner)
+    {
+        var pin=Pin(path,false,true);try{ValidateInstallerBinaryAcl(Security(pin.Leaf),service,owner);return new(pin);}catch{pin.Dispose();throw;}
+    }
+    internal static void ValidateInstallerBinaryAcl(RawSecurityDescriptor acl,SecurityIdentifier service,SecurityIdentifier owner)
+    {
+        if(acl.Owner?.Value is not("S-1-5-18" or "S-1-5-32-544")||acl.DiscretionaryAcl is null)throw new ReceiptRecoveryRefusal(ReceiptRecoveryCheck.BinaryOwnerOrDacl);
+        foreach(GenericAce raw in acl.DiscretionaryAcl)
+        {
+            if(raw is not CommonAce ace||ace.IsCallback)throw new ReceiptRecoveryRefusal(ReceiptRecoveryCheck.BinaryAce);
+            if(ace.AceQualifier==AceQualifier.AccessDenied)continue;
+            if(ace.AceQualifier!=AceQualifier.AccessAllowed)throw new ReceiptRecoveryRefusal(ReceiptRecoveryCheck.BinaryAce);
+            if(ace.SecurityIdentifier.Value is "S-1-5-18" or "S-1-5-32-544")continue;
+            if((ace.SecurityIdentifier!=service&&ace.SecurityIdentifier!=owner)||(ace.AccessMask&~0x1200a9)!=0)throw new ReceiptRecoveryRefusal(ReceiptRecoveryCheck.BinaryPrincipal);
+        }
+    }
+    internal static void ValidateInstallerDiagnosticAcl(RawSecurityDescriptor acl,SecurityIdentifier owner)
+    {
+        var admins=new SecurityIdentifier("S-1-5-32-544");var system=new SecurityIdentifier("S-1-5-18");
+        if((acl.Owner!=admins&&acl.Owner!=system)||acl.DiscretionaryAcl is null||(acl.ControlFlags&ControlFlags.DiscretionaryAclProtected)==0)throw new IOException("UNINSTALL_DIAGNOSTIC_CHANGED");
+        foreach(GenericAce raw in acl.DiscretionaryAcl)
+        {
+            if(raw is not CommonAce ace||ace.IsCallback||ace.AceQualifier!=AceQualifier.AccessAllowed)throw new IOException("UNINSTALL_DIAGNOSTIC_CHANGED");
+            if(ace.SecurityIdentifier==admins||ace.SecurityIdentifier==system)continue;
+            // The old full-installer writer emitted this exact read/execute
+            // owner ACE on JSON diagnostics. It grants no mutation authority.
+            var legacyRead=ace.AccessMask==0x1200a9&&ace.AceFlags==AceFlags.None;
+            if(ace.SecurityIdentifier!=owner||((ace.AccessMask&~0x120089)!=0&&!legacyRead))throw new IOException("UNINSTALL_DIAGNOSTIC_CHANGED");
+        }
+    }
     internal static IDisposable PinSingleServiceDirectory(string path,bool immutable)
     {var pin=Pin(path,true,false);try{ValidateAcl(Security(pin.Leaf),ApplicationSid(),immutable);return pin;}catch{pin.Dispose();throw;}}
     internal static IDisposable PinInstallerRemovalRoot(string path,SecurityIdentifier application)
@@ -110,14 +207,61 @@ public static class WindowsFileBoundary
     }
     internal static IDisposable PinInstalledRoleDirectory(string path,InstalledFileRoles roles,InstalledFileRole role)
     {var pinned=Pin(path,true,false);try{roles.Validate(Security(pinned.Leaf),role);return pinned;}catch{pinned.Dispose();throw;}}
+    internal static bool HasExactInstalledRoleAccess(string path,bool directory,InstalledFileRoles roles,InstalledFileRole role,string expected)
+    {
+        using var pin=Pin(path,directory,!directory);var actual=Security(pin.Leaf);
+        var wanted=new RawSecurityDescriptor(expected);
+        try{roles.Validate(actual,role,directory);}catch(IOException){return false;}
+        return SameRoleAccess(actual,wanted);
+    }
+    internal static bool SameRoleAccess(RawSecurityDescriptor actual,RawSecurityDescriptor wanted)
+    {
+        if((actual.ControlFlags&ControlFlags.DiscretionaryAclProtected)!=(wanted.ControlFlags&ControlFlags.DiscretionaryAclProtected)||actual.DiscretionaryAcl is null||wanted.DiscretionaryAcl is null)return false;
+        static HashSet<(AceFlags,AceQualifier,int,string)> Entries(RawAcl acl)
+        {
+            var result=new HashSet<(AceFlags,AceQualifier,int,string)>();
+            foreach(GenericAce raw in acl)
+            {
+                if(raw is not CommonAce ace||ace.IsCallback||!result.Add((ace.AceFlags,ace.AceQualifier,ace.AccessMask,ace.SecurityIdentifier.Value)))return [];
+            }
+            return result;
+        }
+        var observed=Entries(actual.DiscretionaryAcl);var expected=Entries(wanted.DiscretionaryAcl);
+        return observed.Count==actual.DiscretionaryAcl.Count&&expected.Count==wanted.DiscretionaryAcl.Count&&observed.SetEquals(expected);
+    }
+    // Installer-owned full-profile reads/deletion. This does not relax the
+    // ordinary role boundary. Only the fixed live Owner closure/Setup image
+    // may carry the explicitly selected original Owner's additional RX ACE.
+    internal static void ValidateInstallerRoleAcl(RawSecurityDescriptor descriptor,InstalledFileRoles roles,InstalledFileRole role,bool directory,SecurityIdentifier? readonlyOwner=null,bool seed=false)
+    {
+        if(seed){if(directory||readonlyOwner is not null)throw new IOException("UPDATE_SEED_KIND");ValidateInitialSeedAcl(descriptor,roles.Runtime);return;}
+        if(readonlyOwner is null){roles.Validate(descriptor,role,directory);return;}
+        if(role is not(InstalledFileRole.Control or InstalledFileRole.Anchor)||!readonlyOwner.IsAccountSid()||!readonlyOwner.Value.StartsWith("S-1-5-21-",StringComparison.Ordinal))throw new IOException("UPDATE_OWNER_CLOSURE_ACCESS");
+        var copy=new RawSecurityDescriptor(descriptor.GetSddlForm(AccessControlSections.Owner|AccessControlSections.Access));
+        if(copy.DiscretionaryAcl is null)throw new IOException("UPDATE_OWNER_CLOSURE_ACCESS");var found=false;
+        for(var i=copy.DiscretionaryAcl.Count-1;i>=0;i--)
+            if(copy.DiscretionaryAcl[i] is CommonAce ace&&ace.SecurityIdentifier==readonlyOwner)
+            {if(ace.IsCallback||ace.AceQualifier!=AceQualifier.AccessAllowed||(ace.AccessMask&~0x1200a9)!=0)throw new IOException("UPDATE_OWNER_CLOSURE_ACCESS");found=true;copy.DiscretionaryAcl.RemoveAce(i);}
+        if(!found)throw new IOException("UPDATE_OWNER_CLOSURE_ACCESS");roles.Validate(copy,role,directory);
+    }
+    internal static PrivateReadLease OpenInstallerRoleRead(string path,InstalledFileRoles roles,InstalledFileRole role,SecurityIdentifier? readonlyOwner=null,bool seed=false,bool administrativeOwner=false)
+    {var pin=Pin(path,false,true);try{var acl=Security(pin.Leaf);if(administrativeOwner&&acl.Owner?.Value is not("S-1-5-18" or "S-1-5-32-544"))throw new IOException("UPDATE_INSTALL_METADATA_OWNER");ValidateInstallerRoleAcl(acl,roles,role,false,readonlyOwner,seed);return new(pin);}catch{pin.Dispose();throw;}}
+    internal static IDisposable PinInstallerRoleDirectory(string path,InstalledFileRoles roles,InstalledFileRole role,SecurityIdentifier? readonlyOwner=null)
+    {var pin=Pin(path,true,false);try{ValidateInstallerRoleAcl(Security(pin.Leaf),roles,role,true,readonlyOwner);return pin;}catch{pin.Dispose();throw;}}
+    internal static void DeleteInstallerRoleMember(string path,bool directory,InstalledFileRoles roles,InstalledFileRole role,SecurityIdentifier? readonlyOwner=null,bool seed=false,bool administrativeOwner=false)
+    {
+        using var pin=Pin(path,directory,false,true);var acl=Security(pin.Leaf);if(administrativeOwner&&acl.Owner?.Value is not("S-1-5-18" or "S-1-5-32-544"))throw new IOException("UPDATE_INSTALL_METADATA_OWNER");ValidateInstallerRoleAcl(acl,roles,role,directory,readonlyOwner,seed);
+        byte disposition=1;if(!SetFileInformationByHandle(pin.Leaf,4,ref disposition,1))throw new Win32Exception();
+    }
     internal static FileStream CreateInstalledRoleFile(string path,InstalledFileRoles roles,InstalledFileRole role,InstalledFileRole parentRole)
     {
         // Applied at creation only; never repairs an existing file's ACL.
         using var parent=PinInstalledRoleDirectory(Path.GetDirectoryName(path)!,roles,parentRole);
-        var current=ApplicationSid();if(current!=roles.Authority&&current!=roles.Runtime)throw new IOException("INSTALLED_CREATOR_ROLE");
-        var runtime=role==InstalledFileRole.Recovery?"":$"(A;;{(role is InstalledFileRole.Data or InstalledFileRole.Lease?"0x1301bf":"0x1200a9")};;;{roles.Runtime.Value})";
-        var authority=role is InstalledFileRole.Data or InstalledFileRole.MasterKey?"0x1200a9":"0x1301bf";
-        var sddl=$"O:{current.Value}D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;{authority};;;{roles.Authority.Value}){runtime}";
+        var current=ApplicationSid();if(!roles.IsUpdater(current)&&current!=roles.Runtime)throw new IOException("INSTALLED_CREATOR_ROLE");
+        var runtime=InstalledFileRoles.RuntimeMask(role)==0?"":$"(A;;0x{InstalledFileRoles.RuntimeMask(role):x};;;{roles.Runtime.Value})";
+        var authority=$"0x{roles.UpdaterMask(role):x}";
+        var updater=string.Concat(roles.UpdaterActors.Select(sid=>$"(A;;{authority};;;{sid.Value})"));
+        var sddl=$"O:{current.Value}D:P(A;;FA;;;SY)(A;;FA;;;BA){updater}{runtime}";
         var acl=new RawSecurityDescriptor(sddl);roles.Validate(acl,role,false);var bytes=new byte[acl.BinaryLength];acl.GetBinaryForm(bytes,0);
         var descriptor=GCHandle.Alloc(bytes,GCHandleType.Pinned);var attributes=new CreationSecurity{Length=Marshal.SizeOf<CreationSecurity>(),Descriptor=descriptor.AddrOfPinnedObject()};
         var pointer=Marshal.AllocHGlobal(attributes.Length);
@@ -142,6 +286,28 @@ public static class WindowsFileBoundary
         try { ValidateAcl(Security(pinned.Leaf), ApplicationSid(), false); return new(pinned); }
         catch { pinned.Dispose(); throw; }
     }
+    // Only the Authority-created, generated private SQLite probe scope may bypass
+    // installed-role autodiscovery. It still uses no-follow native handles and
+    // exact private ACL validation, never an environment/CLI trust switch.
+    private static void OwnedPrivateProbePath(string root,string path)
+    {
+        var canonical=CanonicalLocalPath(Path.GetFullPath(root));var child=CanonicalLocalPath(Path.GetFullPath(path));
+        if(!child.Equals(canonical,StringComparison.OrdinalIgnoreCase)&&!child.StartsWith(canonical+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))throw new IOException("RECOVERY_PROBE_SCOPE");
+        if(!Path.GetFileName(canonical).StartsWith("yahad-fixture-",StringComparison.Ordinal)||!Guid.TryParseExact(Path.GetFileName(canonical)[14..],"N",out _))throw new IOException("RECOVERY_PROBE_SCOPE");
+        using var pinned=Pin(canonical,true,false);ValidateAcl(Security(pinned.Leaf),ApplicationSid(),false);
+    }
+    internal static PrivateReadLease OpenOwnedPrivateProbeRead(string root,string path)
+    {
+        OwnedPrivateProbePath(root,path);var pinned=Pin(path,false,true);
+        try{ValidateAcl(Security(pinned.Leaf),ApplicationSid(),false);return new(pinned);}catch{pinned.Dispose();throw;}
+    }
+    internal static IDisposable PinOwnedPrivateProbeDirectory(string root,string path)
+    {
+        OwnedPrivateProbePath(root,path);var pinned=Pin(path,true,false);
+        try{ValidateAcl(Security(pinned.Leaf),ApplicationSid(),false);return pinned;}catch{pinned.Dispose();throw;}
+    }
+    internal static DataLease AcquireOwnedPrivateProbeLease(string root)
+    {OwnedPrivateProbePath(root,root);return AcquireDataLeaseFor(root,ApplicationSid(),null);}
     internal static PrivateReadLease OpenInstalledRead(string path)
     {
         var pinned=Pin(path,false,true);
@@ -165,6 +331,14 @@ public static class WindowsFileBoundary
             var bytes=new byte[(int)length];var offset=0;
             while(offset<bytes.Length){var count=Read(offset,bytes.AsSpan(offset));if(count==0)throw new IOException("RECOVERY_SHORT_READ");offset+=count;}
             return bytes;
+        }
+        internal string Sha256(long maximum)
+        {
+            var length=Length;if(length<1||length>maximum)throw new IOException("RECOVERY_FILE_BOUND");
+            using var hash=System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+            var buffer=new byte[1048576];long offset=0;
+            while(offset<length){var count=Read(offset,buffer.AsSpan(0,(int)Math.Min(buffer.Length,length-offset)));if(count==0)throw new IOException("RECOVERY_SHORT_READ");hash.AppendData(buffer.AsSpan(0,count));offset+=count;}
+            if(Length!=length)throw new IOException("RECOVERY_FILE_CHANGED");return Convert.ToHexStringLower(hash.GetHashAndReset());
         }
         public void Dispose()=>pinned.Dispose();
     }
@@ -361,6 +535,79 @@ public static class WindowsFileBoundary
         private readonly PinnedPath pinned; private readonly SafeFileHandle gate;
         private readonly RemoteGate? remote;
         internal DataLease(PinnedPath pinned, SafeFileHandle gate, RemoteGate? remote) { this.pinned = pinned; this.gate = gate; this.remote = remote; }
+        // Metadata-only inspection of THIS retained exclusive gate. A normal
+        // contents read would conflict with our own FILE_SHARE_NONE handle.
+        // Bind both its canonical parent and single-link file identity; never
+        // exempt another file merely because it is named process.lock.
+        internal bool TryValidateHeldGate(string path,Action<RawSecurityDescriptor> validate)
+        {
+            CanonicalLocalPath(path);
+            if(!Path.GetFileName(path).Equals("process.lock",StringComparison.OrdinalIgnoreCase))return false;
+            if(gate.IsClosed||gate.IsInvalid)throw new IOException("NATIVE_LEASE_CLOSED");
+            using var parent=Pin(Path.GetDirectoryName(path)!,true,false);
+            if(!Native.GetFileInformationByHandle(pinned.Leaf,out var heldParent)||!Native.GetFileInformationByHandle(parent.Leaf,out var candidateParent))throw new Win32Exception();
+            if(heldParent.Volume!=candidateParent.Volume||heldParent.IndexHigh!=candidateParent.IndexHigh||heldParent.IndexLow!=candidateParent.IndexLow)return false;
+            using var candidate=Pin(path,false,false);CheckKind(gate,false);
+            if(!Native.GetFileInformationByHandle(gate,out var held)||!Native.GetFileInformationByHandle(candidate.Leaf,out var actual))throw new Win32Exception();
+            if(held.Volume!=actual.Volume||held.IndexHigh!=actual.IndexHigh||held.IndexLow!=actual.IndexLow)throw new IOException("NATIVE_LEASE_FILE_BINDING");
+            validate(Security(gate));return true;
+        }
+        internal DataLease DuplicateForDirectory(string directory)
+        {
+            if(gate.IsClosed||gate.IsInvalid)throw new IOException("NATIVE_LEASE_CLOSED");
+            using var expected=Pin(directory,true,false);
+            if(!Native.GetFileInformationByHandle(pinned.Leaf,out var actual)||!Native.GetFileInformationByHandle(expected.Leaf,out var wanted))throw new Win32Exception();
+            if(actual.Volume!=wanted.Volume||actual.IndexHigh!=wanted.IndexHigh||actual.IndexLow!=wanted.IndexLow)throw new IOException("NATIVE_LEASE_DIRECTORY_BINDING");
+            var duplicates=new PinnedPath();SafeFileHandle? gateCopy=null;
+            SafeFileHandle Copy(SafeFileHandle original)
+            {
+                var added=false;try{original.DangerousAddRef(ref added);if(!Native.DuplicateHandle(Native.GetCurrentProcess(),original.DangerousGetHandle(),Native.GetCurrentProcess(),out var copied,0,false,2))throw new Win32Exception();return new(copied,true);}
+                finally{if(added)original.DangerousRelease();}
+            }
+            try{foreach(var handle in pinned.Handles)duplicates.Handles.Add(Copy(handle));gateCopy=Copy(gate);return new(duplicates,gateCopy,null);}
+            catch{gateCopy?.Dispose();duplicates.Dispose();throw;}
+        }
+        internal NativeDataLeaseTransfer DuplicateNativeHandlesForProcess(SafeProcessHandle target)
+        {
+            if(gate.IsClosed||gate.IsInvalid)throw new IOException("NATIVE_LEASE_CLOSED");
+            var receiver=NativeCustodyTransfer.RequireTarget(target);
+            var handles=NativeCustodyTransfer.DuplicateTo(target,pinned.Handles.Cast<SafeHandle>().Append(gate).ToArray());
+            return new(receiver.Pid,receiver.Created,handles[..^1],handles[^1]);
+        }
+        // Readonly witness: no ownership transfers and these numbers must never
+        // be adopted directly. The actual owner retains this lease; observers
+        // duplicate from its pinned process before normal kernel validation.
+        internal NativeDataLeaseTransfer BorrowNativeWitness()
+        {
+            if(gate.IsClosed||gate.IsInvalid)throw new IOException("NATIVE_LEASE_CLOSED");var self=NativeCustodyTransfer.CurrentIdentity();
+            return new(self.Pid,self.Created,pinned.Handles.Select(h=>unchecked((ulong)h.DangerousGetHandle().ToInt64())).ToArray(),unchecked((ulong)gate.DangerousGetHandle().ToInt64()));
+        }
+        internal static DataLease AdoptTransferred(string directory,NativeDataLeaseTransfer transfer)
+        {
+            NativeCustodyTransfer.RequireReceiver(transfer.TargetPid,transfer.TargetCreated);
+            if(transfer.Ancestors is null||transfer.Ancestors.Length is <1 or >128||transfer.Ancestors.Append(transfer.Gate).Distinct().Count()!=transfer.Ancestors.Length+1)throw new IOException("CUSTODY_LEASE_HANDLES");
+            var owned=new PinnedPath();SafeFileHandle? gate=null;
+            try
+            {
+                foreach(var value in transfer.Ancestors)owned.Handles.Add(new(NativeCustodyTransfer.Pointer(value),true));
+                gate=new(NativeCustodyTransfer.Pointer(transfer.Gate),true);
+                using var expected=Pin(directory,true,false);
+                if(expected.Handles.Count!=owned.Handles.Count)throw new IOException("CUSTODY_LEASE_ANCESTORS");
+                void Same(SafeFileHandle first,SafeFileHandle second)
+                {
+                    if(!Native.GetFileInformationByHandle(first,out var a)||!Native.GetFileInformationByHandle(second,out var b))throw new Win32Exception();
+                    if(a.Volume!=b.Volume||a.IndexHigh!=b.IndexHigh||a.IndexLow!=b.IndexLow)throw new IOException("CUSTODY_LEASE_FILE_BINDING");
+                }
+                for(var i=0;i<owned.Handles.Count;i++){CheckKind(owned.Handles[i],true);Same(owned.Handles[i],expected.Handles[i]);}
+                CheckKind(gate,false);var installed=InstalledProcessState.ForPath(directory)??throw new IOException("CUSTODY_INSTALLED_LEASE_ONLY");
+                installed.Roles!.Validate(Security(gate),InstalledFileRole.Lease,false);
+                using(var lockFile=Pin(Path.Combine(directory,"process.lock"),false,false))Same(gate,lockFile.Leaf);
+                using(var contender=Native.CreateFileW(Extended(Path.Combine(directory,"process.lock")),GenericRead|0x40000000,0,IntPtr.Zero,3,0x00200000,IntPtr.Zero))
+                {if(!contender.IsInvalid||Marshal.GetLastPInvokeError()!=32)throw new IOException("CUSTODY_LEASE_NOT_EXCLUSIVE");}
+                return new(owned,gate,null);
+            }
+            catch{gate?.Dispose();owned.Dispose();throw;}
+        }
         internal ulong DuplicateTo(SafeProcessHandle child)
         {
             if(gate.IsClosed||child.IsInvalid||child.IsClosed)throw new IOException("NATIVE_HANDOFF_CLOSED");

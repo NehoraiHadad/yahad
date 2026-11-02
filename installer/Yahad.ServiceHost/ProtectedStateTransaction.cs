@@ -1,17 +1,20 @@
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Yahad.Install;
 
 namespace Yahad.Service;
 
 internal sealed record ProtectedOperation(int Format,string Kind,string InstallationId,long ExpectedEpoch,string ExpectedActivationDigest,
     string ReleaseDigest,string DataId,int MinimumSchema,int MaximumSchema,string MasterKeyDigest,string PolicyDigest,string PinDigest,
-    InstalledWeb Web,InstalledRecovery? Recovery,long ExpiresUnix,string Nonce);
+    InstalledWeb Web,InstalledRecovery? Recovery,long ExpiresUnix,string Nonce,[property:JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)]InstalledMigration? Migration=null);
 // Returned by an authenticated boundary, never deserialized from request fields.
 internal sealed record VerifiedOperationOwner(string Subject,string InstallationId,string OperationDigest,string Scope,long ApprovedUnix,long ValidUntilUnix);
 internal interface IOwnerOperationAuthentication
 {Task<VerifiedOperationOwner> AuthenticateAsync(string operationDigest,string requiredScope,CancellationToken cancellation);
  void RequireCurrent(VerifiedOperationOwner owner){} }
+internal interface IFullSystemSelectionAuthentication:IOwnerOperationAuthentication
+{void RequireSelection(ProtectedOperation operation,InstalledActivation current);}
 internal sealed class UnconfiguredOwnerOperationAuthentication:IOwnerOperationAuthentication
 {public Task<VerifiedOperationOwner> AuthenticateAsync(string digest,string scope,CancellationToken cancellation)=>throw new UnauthorizedAccessException("OWNER_CHANNEL_UNCONFIGURED");}
 internal sealed record ProtectedPending(int Format,ProtectedOperation Operation,VerifiedOperationOwner Owner,Dictionary<string,string> Before,Dictionary<string,string> After);
@@ -26,13 +29,16 @@ internal sealed class ProtectedStateTransactionWriter
     private static readonly string[] Records=["owner-intent.json","web.json","activation.json","epoch.json","bootstrap.json"];
     private readonly string root,installation;private readonly Func<CancellationToken,Task> requireEmpty;private readonly InstalledStateFiles files;private readonly IOwnerOperationAuthentication authentication;
     private readonly Func<DateTimeOffset> clock;private readonly IChildControlFactory channels;
+    private Func<string,WindowsFileBoundary.DataLease>? commitInspectionLeaseProvider;
+    internal void UseCommitDataLease(Func<string,WindowsFileBoundary.DataLease> provider)
+    {ArgumentNullException.ThrowIfNull(provider);if(commitInspectionLeaseProvider is not null)throw new IOException("STATE_COMMIT_LEASE_ALREADY_SET");commitInspectionLeaseProvider=provider;}
     internal ProtectedStateTransactionWriter(string syntheticRoot,string installationId,JobProcess retainedAppJob,
         IOwnerOperationAuthentication authentication,IChildControlFactory channels,Func<DateTimeOffset> clock)
             :this(InstalledStateFiles.Private(syntheticRoot),installationId,retainedAppJob.WaitForTreeEmptyAsync,authentication,channels,clock){}
     internal ProtectedStateTransactionWriter(InstalledStateFiles files,string installationId,Func<CancellationToken,Task> requireEmpty,
         IOwnerOperationAuthentication authentication,IChildControlFactory channels,Func<DateTimeOffset> clock)
     {this.files=files;root=files.Root;files.ValidateRoot();InstalledActivationResolver.Id(installationId);installation=installationId;this.requireEmpty=requireEmpty;this.authentication=authentication;this.clock=clock;this.channels=channels;}
-    internal async Task<InstallationBinding> CommitAsync(ProtectedOperation operation,Action<string>? fault=null,CancellationToken cancellation=default)
+    internal async Task<InstallationBinding> CommitAsync(ProtectedOperation operation,Action<string>? fault=null,CancellationToken cancellation=default,Func<string,WindowsFileBoundary.DataLease>? commitInspectionLease=null)
     {
         files.ValidateRoot();var authority=Authority();
         try
@@ -41,11 +47,11 @@ internal sealed class ProtectedStateTransactionWriter
             var owner=await Authorize(operation,false,cancellation);var nonce=NoncePath(operation.Nonce);
             if(Path.Exists(nonce))throw new IOException("STATE_NONCE_REPLAY");
             var before=ReadSnapshot();ValidateBefore(operation,before);var after=Build(operation,owner);
-            await Publish(new(1,operation,owner,before,after),false,authority,fault,cancellation);authority=null;
+            await Publish(new(1,operation,owner,before,after),false,authority,fault,cancellation,commitInspectionLease:commitInspectionLease??commitInspectionLeaseProvider);authority=null;
             return Binding(after);
         }
         catch(ProbeOwnershipException owned){if(authority is not null){owned.Retain(authority);authority=null;}throw;}
-        finally{authority?.Dispose();}
+        finally{authority?.Dispose();commitInspectionLeaseProvider=null;}
     }
     internal async Task<InstallationBinding> ResumeAsync(ProtectedOperation operation,Action<string>? fault=null,CancellationToken cancellation=default)
     {
@@ -63,12 +69,12 @@ internal sealed class ProtectedStateTransactionWriter
             if(!Same(pending.After,Build(operation,pending.Owner)))throw new IOException("STATE_PENDING_CONTENT");
             ValidateVisible(pending);await requireEmpty(cancellation);
             if(promoted&&!MoveFileExW(@"\\?\"+partial,@"\\?\"+pendingPath,8))throw new IOException("STATE_PENDING_PROMOTION");
-            await Publish(pending,true,authority,fault,cancellation,verified);authority=null;return Binding(pending.After);
+            await Publish(pending,true,authority,fault,cancellation,verified,commitInspectionLeaseProvider);authority=null;return Binding(pending.After);
         }
         catch(ProbeOwnershipException owned){if(authority is not null){owned.Retain(authority);authority=null;}throw;}
-        finally{authority?.Dispose();}
+        finally{authority?.Dispose();commitInspectionLeaseProvider=null;}
     }
-    private async Task Publish(ProtectedPending pending,bool resume,IDisposable authority,Action<string>? fault,CancellationToken cancellation,VerifiedOperationOwner? reauthenticated=null)
+    private async Task Publish(ProtectedPending pending,bool resume,IDisposable authority,Action<string>? fault,CancellationToken cancellation,VerifiedOperationOwner? reauthenticated=null,Func<string,WindowsFileBoundary.DataLease>? commitInspectionLease=null)
     {
         var op=pending.Operation;var bytes=JsonSerializer.SerializeToUtf8Bytes(pending);var pendingDigest=Hash(bytes);
         var receipt=Path.Combine(root,".authority","commit-"+op.Nonce+".json");
@@ -81,7 +87,7 @@ internal sealed class ProtectedStateTransactionWriter
         }
         await requireEmpty(cancellation);
         var candidate=Build(op,pending.Owner,true);var binding=Binding(candidate);
-        using var verified=await new InstalledActivationResolver(root,new CandidateFiles(root,candidate),channels,clock,stateFiles:files)
+        using var verified=await new InstalledActivationResolver(root,new CandidateFiles(root,candidate),channels,clock,stateFiles:files,commitInspectionLease:commitInspectionLease)
             .InspectCommitCandidateAsync(binding,resume?pendingDigest:null,cancellation);
         await requireEmpty(cancellation);ValidateVisible(pending);CheckWindow(op,reauthenticated??pending.Owner,resume);
         if(alreadyCommitted){ValidateVisible(pending,true);File.Delete(Path.Combine(root,"pending.json"));authority.Dispose();return;}
@@ -103,8 +109,17 @@ internal sealed class ProtectedStateTransactionWriter
     }
     private async Task<VerifiedOperationOwner> Authorize(ProtectedOperation op,bool resume,CancellationToken cancellation)
     {
-        if(op.Format!=1||op.InstallationId!=installation||op.ExpectedEpoch<0||op.ExpectedEpoch==long.MaxValue||op.Kind is not("install" or "activate" or "recover")||
+        if(op.Format!=1||op.InstallationId!=installation||op.ExpectedEpoch<0||op.ExpectedEpoch==long.MaxValue||op.Kind is not("install" or "activate" or "recover" or "migrate")||
             (op.Kind=="install")!=(op.ExpectedEpoch==0)||(op.Kind=="recover"&&op.Recovery is null)||(op.Kind=="install"&&op.Recovery is not null)||op.Web.InstallationId!=installation)throw new IOException("STATE_OPERATION_BINDING");
+        if(op.Kind=="migrate")
+        {
+            var migration=op.Migration??throw new IOException("STATE_MIGRATION_EVIDENCE_REQUIRED");var p=migration.Plan;p.Validate();
+            if(p.OperationId!=op.Nonce||p.InstallationId!=installation||p.PayloadDigest!=op.ReleaseDigest||p.NewDataId!=op.DataId||p.TargetSchema!=op.MinimumSchema||p.TargetSchema!=op.MaximumSchema||
+                p.MasterKeyDigest!=op.MasterKeyDigest||p.PolicyDigest!=op.PolicyDigest||p.PinDigest!=op.PinDigest||op.Recovery!=new InstalledRecovery(p.SourceDataId,p.BackupId,p.CloneOperationId,p.BackupReceiptDigest,migration.SourceRestoreOperationId))throw new IOException("STATE_MIGRATION_BINDING");
+        }
+        else if(op.Kind is("install" or "recover")&&op.Migration is not null)throw new IOException("STATE_UNEXPECTED_MIGRATION");
+        if(op.Recovery?.SourceRestoreOperationId is {} sourceRestore)
+        {InstalledActivationResolver.Id(sourceRestore);if(sourceRestore==op.Recovery.OperationId)throw new IOException("STATE_RECOVERY_SOURCE_ALIAS");}
         InstalledActivationResolver.Id(op.Nonce);InstalledActivationResolver.Id(op.DataId);
         foreach(var digest in new[]{op.ReleaseDigest,op.MasterKeyDigest,op.PolicyDigest,op.PinDigest})InstalledActivationResolver.Digest(digest);
         if(op.ExpectedEpoch==0){if(op.ExpectedActivationDigest!="")throw new IOException("STATE_INSTALL_ANCHOR");}else InstalledActivationResolver.Digest(op.ExpectedActivationDigest);
@@ -119,9 +134,9 @@ internal sealed class ProtectedStateTransactionWriter
     {
         var result=new Dictionary<string,string>(StringComparer.Ordinal);string Put<T>(string name,T value){var b=JsonSerializer.SerializeToUtf8Bytes(value);result.Add(name,Convert.ToBase64String(b));return Hash(b);}
         var epoch=op.ExpectedEpoch+1;
-        var ownerDigest=Put("owner-intent.json",new InstalledOwnerIntent(1,installation,epoch,op.Nonce,op.ReleaseDigest,op.DataId,op.Recovery is null?"activate":"recover",owner.Subject,owner.ApprovedUnix,null));
+        var ownerDigest=Put("owner-intent.json",new InstalledOwnerIntent(1,installation,epoch,op.Nonce,op.ReleaseDigest,op.DataId,op.Migration is not null?"migrate":op.Recovery is null?"activate":"recover",owner.Subject,owner.ApprovedUnix,null));
         var web=Put("web.json",op.Web);
-        var head=Put("activation.json",new InstalledActivation(1,installation,epoch,op.ReleaseDigest,op.DataId,op.MinimumSchema,op.MaximumSchema,op.MasterKeyDigest,op.PolicyDigest,op.PinDigest,ownerDigest,web,inspection&&op.Kind=="recover"?"recovered":"committed",op.Recovery));
+        var head=Put("activation.json",new InstalledActivation(1,installation,epoch,op.ReleaseDigest,op.DataId,op.MinimumSchema,op.MaximumSchema,op.MasterKeyDigest,op.PolicyDigest,op.PinDigest,ownerDigest,web,inspection&&op.Kind=="migrate"?"migrated":inspection&&op.Kind=="recover"?"recovered":"committed",op.Recovery,op.Migration));
         Put("epoch.json",new InstalledEpoch(1,installation,epoch,head));
         Put("bootstrap.json",new{schema=1,service=ServiceDefinition.Name,installationId=installation,activationReceiptDigest=head});return result;
     }
@@ -130,7 +145,11 @@ internal sealed class ProtectedStateTransactionWriter
         if(op.ExpectedEpoch==0){if(before.Count!=0||Directory.EnumerateFiles(Path.Combine(root,".authority"),"commit-*.json").Any())throw new IOException("STATE_CAS");return;}
         if(before.Count!=5||!Records.All(before.ContainsKey))throw new IOException("STATE_BEFORE_MEMBERS");
         byte[] Get(string name)=>Convert.FromBase64String(before[name]);
-        var head=NativeJson.Read<InstalledActivation>(Get("activation.json"));if(op.Kind=="activate"&&op.Recovery!=head.Recovery)throw new IOException("STATE_RECOVERY_SELECTION_CHANGE");var epoch=NativeJson.Read<InstalledEpoch>(Get("epoch.json"));var bootstrap=WindowsInstallationReader.Parse(Get("bootstrap.json"));
+        var head=NativeJson.Read<InstalledActivation>(Get("activation.json"));if(op.Kind=="activate"&&(op.Recovery!=head.Recovery||op.Migration!=head.Migration))
+        {if(authentication is not IFullSystemSelectionAuthentication full)throw new IOException("STATE_RECOVERY_SELECTION_CHANGE");full.RequireSelection(op,head);}
+        if(op.Kind=="recover"&&(op.Recovery!.SourceDataId!=(head.Recovery?.SourceDataId??head.DataId)||op.Recovery.SourceRestoreOperationId!=head.Recovery?.OperationId))throw new IOException("STATE_RECOVERY_SOURCE_BINDING");
+        if(op.Kind=="migrate"&&(op.Migration!.Plan.SourceDataId!=(head.Recovery?.SourceDataId??head.DataId)||op.Migration.SourceRestoreOperationId!=head.Recovery?.OperationId||op.MasterKeyDigest!=head.MasterKeyDigest||op.PolicyDigest!=head.PolicyDigest||op.PinDigest!=head.PinDigest||op.Migration.Plan.SourceSchema<head.MinimumSchema||op.Migration.Plan.SourceSchema>head.MaximumSchema))throw new IOException("STATE_MIGRATION_SOURCE");
+        var epoch=NativeJson.Read<InstalledEpoch>(Get("epoch.json"));var bootstrap=WindowsInstallationReader.Parse(Get("bootstrap.json"));
         if(Hash(Get("activation.json"))!=op.ExpectedActivationDigest||head.InstallationId!=installation||head.Epoch!=op.ExpectedEpoch||epoch!=new InstalledEpoch(1,installation,op.ExpectedEpoch,op.ExpectedActivationDigest)||
             bootstrap!=new InstallationBinding(installation,op.ExpectedActivationDigest)||Hash(Get("owner-intent.json"))!=head.OwnerIntentDigest||Hash(Get("web.json"))!=head.WebDigest)throw new IOException("STATE_CAS");
     }

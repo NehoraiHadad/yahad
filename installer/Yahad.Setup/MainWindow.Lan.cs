@@ -8,12 +8,31 @@ namespace Yahad.Setup;
 public partial class MainWindow
 {
     private sealed record LanDisplay(LanChoice Choice, string Label);
-    private void InitializeLan(IReadOnlyList<LanChoice>? choices=null)
+    private bool existingNetworkAccess;
+    private static bool HasExistingAccess()
+    {
+        // Presence only through public parent directories. Never read protected
+        // installation records or CA contents to populate the unelevated UI.
+        try
+        {
+            var root=LanProxyPaths.State;
+            var binaries=InstallLocations.Binaries;var removal=InstallLocations.RemovalStateFile;
+            return Directory.EnumerateFileSystemEntries(Path.GetDirectoryName(binaries)!,Path.GetFileName(binaries),SearchOption.TopDirectoryOnly).Any()||
+                Directory.EnumerateFileSystemEntries(Path.GetDirectoryName(removal)!,Path.GetFileName(removal),SearchOption.TopDirectoryOnly).Any()||
+                Directory.EnumerateFileSystemEntries(Path.GetDirectoryName(root)!,Path.GetFileName(root),SearchOption.TopDirectoryOnly).Any();
+        }
+        catch{return true;} // Unknown existing state must not be called local-only.
+    }
+    private void InitializeLan(IReadOnlyList<LanChoice>? choices=null,bool existingAccess=false)
     {
         if(uninstall){LanPanel.Visibility=Visibility.Collapsed;return;}
         try{LanAddress.ItemsSource=(choices??LanSetupRequest.Choices()).Select(c=>new LanDisplay(c,c.DisplayName+" · "+c.Address)).ToArray();}
         catch{LanAddress.ItemsSource=Array.Empty<LanDisplay>();}
         LanProgram.Text=LanProxyPaths.Caddy;
+        existingNetworkAccess=existingAccess;
+        KeepLan.Content=existingAccess?"להשאיר את אפשרויות הגישה הקיימות":"רק במחשב הזה";
+        LanKeepHint.Text=existingAccess?"הגישה שכבר הוגדרה תישמר. הבחירה הזאת אינה מכבה גישה קיימת מהטלפון.":"יחד תהיה זמינה במחשב הזה בלבד. אפשר להוסיף גישה מהטלפון בהמשך.";
+        DisableLan.Visibility=DisableLanHint.Visibility=existingAccess?Visibility.Visible:Visibility.Collapsed;
         UpdateLanUi();
     }
     private void LanAddressChanged(object sender,SelectionChangedEventArgs e)
@@ -24,7 +43,7 @@ public partial class MainWindow
     {
         if(uninstall||running||completed)return;
         var home=HomeLan.IsChecked==true;LanSelection.Visibility=home?Visibility.Visible:Visibility.Collapsed;
-        Primary.IsEnabled=!home||(LanAddress.SelectedItem is LanDisplay&&LanConsent.IsChecked==true);
+        Primary.IsEnabled=UpdateChoiceReady()&&(!home||(LanAddress.SelectedItem is LanDisplay&&LanConsent.IsChecked==true));
     }
     private LanSetupRequest? SelectedLanRequest()
     {
@@ -35,7 +54,12 @@ public partial class MainWindow
             var request=new LanSetupRequest(LanSetupAction.Enable,selected.Choice.AdapterId,selected.Choice.Address,true,LanHttpHelp.IsChecked==true);
             request.Require();return request;
         }
-        return DisableLan.IsChecked==true?new(LanSetupAction.Disable):null;
+        if(DisableLan.IsChecked==true)
+        {
+            if(!existingNetworkAccess)throw new IOException("LAN_EXISTING_CONFIGURATION_REQUIRED");
+            return new(LanSetupAction.Disable);
+        }
+        return null;
     }
     private void ShowLanResult(LanSetupResult? lan)
     {

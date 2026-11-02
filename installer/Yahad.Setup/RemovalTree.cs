@@ -3,6 +3,20 @@ using Yahad.Install;
 namespace Yahad.Setup;
 internal sealed record RemovalTree(string Root,string[] Files,string[] Directories)
 {
+    internal static bool DirectoryPresent(string path)=>DirectoryPresent(()=>File.GetAttributes(path));
+    // A missing directory permits partial-install/removal recovery. Access
+    // denial, an unexpected file or a link never means "no data to lease".
+    internal static bool DirectoryPresent(Func<FileAttributes> observe)
+    {
+        try
+        {
+            var attributes=observe();
+            if((attributes&FileAttributes.Directory)==0||(attributes&FileAttributes.ReparsePoint)!=0)throw new IOException("UNINSTALL_DIRECTORY_CHANGED");
+            return true;
+        }
+        catch(FileNotFoundException){return false;}
+        catch(DirectoryNotFoundException){return false;}
+    }
     internal static RemovalTree Inspect(string root,Action<string,bool> validate)
     {
         root=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(root));var files=new List<string>();var directories=new List<string>();var count=0;

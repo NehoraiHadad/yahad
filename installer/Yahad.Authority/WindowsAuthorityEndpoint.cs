@@ -31,9 +31,20 @@ internal static class WindowsAuthorityEndpoint
         await stream.WaitForConnectionAsync(cancellation);
         await AuthorityEndpointConnection.ServeNativeConnectedAsync(stream,handle,composition.Router,role,cancellation);
     }
-    internal static async Task<EndpointReply> SendOwnerAsync(string installation,AuthorityFrame frame,CancellationToken cancellation)
+    internal static Task<EndpointReply> SendOwnerAsync(string installation,AuthorityFrame frame,CancellationToken cancellation)
+        =>SendAsync(installation,AuthorityEndpointRole.Owner,frame,cancellation);
+    internal static Task<EndpointReply> SendRuntimeAsync(string installation,AuthorityFrame frame,CancellationToken cancellation)
     {
-        var name=@"\\.\pipe\"+Name(installation,AuthorityEndpointRole.Owner);
+        var runtime=(SecurityIdentifier)new NTAccount(ServiceDefinition.Account).Translate(typeof(SecurityIdentifier));
+        ServiceIdentityPolicy.Require(new WindowsServiceTokenReader().Read(),runtime.Value);
+        return SendAsync(installation,AuthorityEndpointRole.Runtime,frame,cancellation);
+    }
+    private static async Task<EndpointReply> SendAsync(string installation,AuthorityEndpointRole role,AuthorityFrame frame,CancellationToken cancellation)
+    {
+        var name=@"\\.\pipe\"+Name(installation,role);
+        var authority=(SecurityIdentifier)new NTAccount("NT SERVICE",WindowsFixedRuntimeService.AuthorityName).Translate(typeof(SecurityIdentifier));
+        var actor=WindowsIdentity.GetCurrent().User??throw new UnauthorizedAccessException("OWNER_CLIENT_IDENTITY");
+        InstalledProcessObjectAccess.PublishClientPeerAccess(actor.Value,authority.Value);
         // Exact individual data rights; identification SQOS, never delegation.
         using var handle=CreateFileW(name,0x00100083,0,IntPtr.Zero,3,0x40110000,IntPtr.Zero);
         if(handle.IsInvalid)throw new Win32Exception();
@@ -67,7 +78,7 @@ internal static class WindowsAuthorityServiceIdentity
         try
         {
             if(!QueryServiceConfigW(service,memory,size,out _))throw new Win32Exception();var config=Marshal.PtrToStructure<ServiceConfig>(memory);
-            var expected=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),ServiceDefinition.Name,"bootstrap","authority","Yahad.Authority.exe");
+            var expected=InstalledUpdaterLayout.AuthorityExecutable;
             return config.Type==16&&Marshal.PtrToStringUni(config.Account)==@"NT SERVICE\Yahad.Acceptance.Authority"&&Marshal.PtrToStringUni(config.Image)=="\""+expected+"\" --service";
         }
         finally{Marshal.FreeHGlobal(memory);}
@@ -79,7 +90,7 @@ internal static class WindowsAuthorityServiceIdentity
         {
             RequireAlive(process);var image=new System.Text.StringBuilder(32768);var size=(uint)image.Capacity;
             if(!QueryFullProcessImageNameW(process,0,image,ref size))throw new Win32Exception();
-            var expected=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),ServiceDefinition.Name,"bootstrap","authority","Yahad.Authority.exe");
+            var expected=InstalledUpdaterLayout.AuthorityExecutable;
             if(!string.Equals(image.ToString(),expected,StringComparison.OrdinalIgnoreCase))throw new UnauthorizedAccessException("OWNER_SERVER_IMAGE");
             if(!OpenProcessToken(process,8,out var token))throw new Win32Exception();
             using(token)using(var identity=new WindowsIdentity(token.DangerousGetHandle()))

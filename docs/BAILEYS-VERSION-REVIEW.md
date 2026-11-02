@@ -21,7 +21,7 @@ Correction to the initial assessment: the disabled automatic vote handler does n
 
 Issue #2342 reports manual decryption with creator LID/voter PN in an rc.9 direct chat; it closed stale, not as proof of an upstream fix. Open PR #2870 (latest observed 3332d58) instead describes deviceless creator and voter in the same chat addressing mode, and documents additional stanza/retry markers. These observations are not a universal addressing rule. The receiver tests explicit PN/PN, LID/LID and mixed synthetic contexts and uses only actual provider-observed identities, letting authentication decide. It does not invent aliases from numeric equality.
 
-The isolated research probe under evidence/message-support-audit/poll-helper-contract.test.ts passed five cases. It additionally demonstrates why upstream updateMessageWithPollUpdate alone is insufficient: it drops withdrawal tombstones, has no stale-event timestamp guard, does not merge PN/LID aliases and the aggregator can expose unknown hashes. The product has explicit guards for these behaviors.
+The synthetic helper contract is maintained in `tests/baileys-poll-helper-contract.test.ts` and runs with the normal test glob. It demonstrates why upstream updateMessageWithPollUpdate alone is insufficient: it drops withdrawal tombstones, has no stale-event timestamp guard, does not merge PN/LID aliases and the aggregator can expose unknown hashes. The product has explicit guards for these behaviors.
 
 Synthetic test fixtures use only official pinned crypto primitives with the published helper derivation. That is a test oracle/contract probe, not a production encryptor or proof of wire compatibility. There was no WhatsApp connection, real auth access, family-data read, dependency install or fork adoption.
 

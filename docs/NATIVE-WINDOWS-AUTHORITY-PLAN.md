@@ -218,11 +218,7 @@ the current restriction, do not open even local pipe listeners or exercise real
 cross-account impersonation; those are VM gates. Compilation or simulated token
 tests cannot prove service-token, ACL or local owner-channel authentication.
 
-The companion manifest `installer/windows/authority-vm-acceptance.json` is the
-only proposed real-machine test for this milestone. It intentionally has null
-new-artifact/VM identities and `executionEligible:false`: those binaries do not
-exist yet, and the old b1ea1bd host cannot stand in for them. After implementation,
-freeze every executable/dependency hash and the manifest hash; identify a clean
-disposable Windows 11 x64 VM, snapshot and two existing test-user SIDs. Then ask
-for approval of that one concrete manifest. No VM has been identified through
-current access. This plan needs no host-change approval now and authorizes none.
+Historical proposal: the obsolete machine-specific JSON has been removed.
+Use exact current package/source hashes, test identities and an isolation/recovery
+plan when requesting real acceptance. This document grants no machine authority;
+[current validation limits](VALIDATION.md) still apply.

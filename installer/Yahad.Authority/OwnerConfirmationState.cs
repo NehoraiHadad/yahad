@@ -9,7 +9,14 @@ internal sealed class OwnerConfirmationState
     private readonly Func<DateTimeOffset> clock;private int answered;
     internal OwnerConfirmationState(OperationConfirmation snapshot,string expectedInstallation,Func<DateTimeOffset> clock)
     {
-        if(snapshot.Format!=1||snapshot.InstallationId!=expectedInstallation||snapshot.Scope is not("activate" or "recover" or "delegate"))throw new IOException("OWNER_VIEW_BINDING");
+        if(snapshot.Format!=1||snapshot.InstallationId!=expectedInstallation||snapshot.Scope is not("activate" or "recover" or "delegate" or "delegate-system" or "activate-system" or "reconcile-system"))throw new IOException("OWNER_VIEW_BINDING");
+        if(snapshot.Scope=="delegate-system")
+        {
+            var consent=snapshot.SystemConsent??throw new IOException("OWNER_SYSTEM_CONSENT_REQUIRED");
+            if(consent.Format!=1||consent.Profile!=FullSystemUpdatePolicy.Profile||consent.ConsentVersion!=2||consent.Repository!=NativeCandidateIntake.Repository||consent.Trust!="https-github-unsigned"||!consent.Scopes.SequenceEqual(FullSystemUpdatePolicy.RequiredScopes))throw new IOException("OWNER_SYSTEM_CONSENT_SCOPE");
+            Yahad.Service.InstalledActivationResolver.Id(consent.EnrollmentId);Yahad.Service.InstalledActivationResolver.Id(consent.GrantId);Yahad.Service.InstalledActivationResolver.Digest(consent.PolicyDigest);
+        }
+        else if(snapshot.SystemConsent is not null)throw new IOException("OWNER_UNEXPECTED_SYSTEM_CONSENT");
         Yahad.Service.InstalledActivationResolver.Id(snapshot.RequestId);Yahad.Service.InstalledActivationResolver.Id(snapshot.Challenge);Yahad.Service.InstalledActivationResolver.Digest(snapshot.Digest);
         if(snapshot.ExpiresUnix<=clock().ToUnixTimeSeconds())throw new IOException("OWNER_VIEW_EXPIRED");Snapshot=snapshot;this.clock=clock;
     }

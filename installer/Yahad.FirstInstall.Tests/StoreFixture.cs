@@ -5,6 +5,10 @@ using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using Yahad.Service;
 using Yahad.Install;
+internal sealed class FixturePreparationException(bool quiescenceConfirmed,Exception cause):IOException("SYNTHETIC_STORE_PREPARATION_FAILED",cause)
+{
+    internal bool QuiescenceConfirmed{get;}=quiescenceConfirmed;
+}
 internal sealed class PrivateControlFiles:IInstalledControlFiles
 {public byte[] Read(string path,int bound,ICollection<IDisposable> held){var file=WindowsFileBoundary.OpenPrivateRead(path);held.Add(file);return file.Small(bound);}}
 internal sealed class FileControl(ProductionFixture fixture):IChildControlFactory
@@ -31,23 +35,33 @@ internal sealed class FileControl(ProductionFixture fixture):IChildControlFactor
 }
 internal sealed class ProductionFixture:IDisposable
 {
+    private readonly OwnedFixtureDirectory owned;
+    private readonly FixtureProcesses processes=new();
+    private bool disposed,modulesReleased;
+    private bool cleanupAttempted;private Exception? cleanupFailure;
     internal readonly string Root,Dataset,OriginalDataId=Guid.NewGuid().ToString("N"),InstallationId=Guid.NewGuid().ToString("N"),Payload,Node,Repo;
     internal string DataId,Phase="committed";internal long AnchorEpoch=1;internal string? AnchorDigest,OwnerRelease;internal long? Expiry;
     internal int Schema {get;}
     internal InstalledRecovery? Recovery;internal DateTimeOffset Now=DateTimeOffset.UtcNow;internal readonly FileControl Control;
     internal string Data=>Recovery is null?Path.Combine(Dataset,"data"):Path.Combine(Dataset,"restore-"+Recovery.OperationId,"completed","data");
     internal string Policy=>Path.Combine(Dataset,"update-policy");private string release="";
-    private ProductionFixture(string repo)
+    private readonly StoreFixtureModules modules;
+    private ProductionFixture(string repo,StoreFixtureModules modules)
     {
-        Repo=repo;Schema=ReadSourceSchema(repo);Root=SafeDirectory.CreatePrivateSession(Path.GetTempPath());Directory.CreateDirectory(Path.Combine(Root,"datasets"));
+        this.modules=modules;Repo=repo;Schema=ReadSourceSchema(repo);owned=OwnedFixtureDirectory.Create(Path.GetTempPath());Root=owned.Root;
+        modules.AcquireUser();
+        try{
+        Directory.CreateDirectory(Path.Combine(Root,"datasets"));
         var source=SafeDirectory.CreatePrivateSession(Path.Combine(Root,"datasets"));Dataset=Path.Combine(Root,"datasets",OriginalDataId);
         if(!Path.GetFullPath(source).StartsWith(Root+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)||!Path.GetFullPath(Dataset).StartsWith(Root+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))throw new IOException("TEST_MOVE_SCOPE");Directory.Move(source,Dataset);
         DataId=OriginalDataId;Payload=Path.Combine(Root,"payload-stage");Directory.CreateDirectory(Payload);Node=Path.Combine(Payload,"runtime/node/node.exe");Directory.CreateDirectory(Path.GetDirectoryName(Node)!);Control=new(this);
         Directory.CreateDirectory(Path.Combine(Root,"temporary"));Directory.CreateDirectory(Data);File.WriteAllText(Path.Combine(Dataset,"master-key"),Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)));File.WriteAllText(Policy,"synthetic-policy");File.WriteAllText(Path.Combine(Dataset,"update-pin"),"synthetic-pin");
+        }catch(Exception failure){modules.ReleaseUser();try{owned.Cleanup(()=>true);}catch(Exception cleanup){throw new AggregateException(failure,cleanup);}throw;}
     }
     internal static async Task<ProductionFixture> Create(string node,string repo,string helper)
     {
-        var f=new ProductionFixture(repo);
+        var f=new ProductionFixture(repo,await StoreFixtureModules.Prepare(node,repo));
+        try{
         // Node/CreateProcess cannot spawn this non-namespaced native image at
         // MAX_PATH. Diagnose the fixture location before copying or starting it.
         if(Path.Combine(f.Root,"payloads",new string('a',64),"app/native/Yahad.Platform.exe").Length>=260)
@@ -66,9 +80,38 @@ internal sealed class ProductionFixture:IDisposable
         f.release=Hash(manifest);File.WriteAllBytes(Path.Combine(f.Payload,"bundle.json"),manifest);Directory.CreateDirectory(Path.Combine(f.Root,"payloads"));var target=Path.Combine(f.Root,"payloads",f.release);Directory.Move(f.Payload,target);
         f.actualPayload=target;
         await f.Seed(node);f.Publish();return f;
+        }catch(Exception failure){f.processes.Retain(failure);try{f.Dispose();}catch(Exception cleanup){throw new AggregateException(failure,cleanup);}throw;}
     }
     private string? actualPayload;internal string Package=>actualPayload??Payload;
     internal string PathOf(string name)=>Path.Combine(Root,name);
+    private static readonly List<ProbeOwnershipException> pendingSchemaProbes=[];
+    internal async Task<int> ReadQuiescentSchema(string node,JobProcessFaultInjection? fault=null)
+    {
+        fault=processes.Observe(fault);
+        // Call only after the seed job or admitted child has been observed
+        // empty. The lease and no-write pin make the immutable read explicit.
+        IDisposable? lease=WindowsFileBoundary.AcquireDataLease(Data);WindowsFileBoundary.PrivateReadLease? pin=null;
+        try
+        {
+            var database=Path.Combine(Data,"app.sqlite");var sidecars=new[]{database+"-wal",database+"-shm",database+"-journal"};
+            if(sidecars.Any(Path.Exists))throw new IOException("SEEDED_STORE_SIDECAR");
+            pin=WindowsFileBoundary.OpenPrivateRead(database);var before=pin.Sha256(134217728);
+            var observed=await FrozenAdmissionSchema.ReadAsync(node,database,PathOf("temporary"),default,fault);
+            if(sidecars.Any(Path.Exists)||pin.Sha256(134217728)!=before)throw new IOException("SEEDED_STORE_CHANGED_DURING_READBACK");
+            return observed;
+        }
+        catch(ProbeOwnershipException owned)
+        {
+            owned.Retain(lease);lease=null;if(pin is not null){owned.Retain(pin);pin=null;}
+            // Keep ownership rooted even after the runner records a failure.
+            lock(pendingSchemaProbes)pendingSchemaProbes.Add(owned);
+            owned.AfterCleanup(()=>{lock(pendingSchemaProbes)pendingSchemaProbes.Remove(owned);});
+            try{using var bound=new CancellationTokenSource(TimeSpan.FromSeconds(5));await owned.RetryCleanupAsync(bound.Token);}
+            catch{throw new FixturePreparationException(false,owned);}
+            throw new FixturePreparationException(owned.QuiescenceConfirmed&&owned.CleanupComplete,owned);
+        }
+        finally{pin?.Dispose();lease?.Dispose();}
+    }
     internal void ClearSignals()
     {
         foreach(var name in new[]{"native-ready","native-stop","native-closed","native-exit"})if(File.Exists(Path.Combine(Data,name)))File.Delete(Path.Combine(Data,name));
@@ -86,13 +129,49 @@ internal sealed class ProductionFixture:IDisposable
         Write("epoch.json",new InstalledEpoch(1,InstallationId,AnchorEpoch,AnchorDigest??head));
     }
     internal InstallationBinding Binding=>new(InstallationId,Hash(File.ReadAllBytes(PathOf("activation.json"))));
-    internal InstalledActivationResolver CreateResolver(JobProcessFaultInjection? fault=null)=>new(Root,new PrivateControlFiles(),Control,()=>Now,fault,connectorProfile:RuntimeConnectorProfile.Synthetic);
+    internal FixtureProcesses.FixtureResolver CreateResolver(JobProcessFaultInjection? fault=null,FreshDataAuthorization? fresh=null,JobProcessFaultInjection? startFault=null,InstalledStateFiles? stateFiles=null)
+        =>processes.Resolver(new(Root,new PrivateControlFiles(),Control,()=>Now,processes.Observe(fault),stateFiles:stateFiles,fresh:fresh,startFault:startFault,connectorProfile:RuntimeConnectorProfile.Synthetic,processFactory:spec=>CreateLauncher(spec,startFault)));
+    internal IPrivateAppLauncher CreateLauncher(VerifiedProcessSpec spec,JobProcessFaultInjection? fault=null)
+        =>processes.Launcher(new ServiceProcessLauncher(spec,Control,processes.Observe(fault)));
+    internal void RetainFailure(Exception failure)=>processes.Retain(failure);
+    internal FixtureProcesses.JobOwner StartJob(string image,IEnumerable<string> arguments,string directory,IReadOnlyDictionary<string,string> environment)
+        =>processes.StartJob(image,arguments,directory,environment);
     internal Task<AuthorizedServiceStart> Resolve(CancellationToken cancellation=default)=>CreateResolver().ResolveAsync(Binding,cancellation);
     private async Task Seed(string node)
     {
-        var config=ConfigScript();var script="import fs from 'node:fs';try{const{Store}=await import("+JsonSerializer.Serialize(new Uri(Path.Combine(Repo,"src/store.ts")).AbsoluteUri)+");"+config+"const s=new Store(config);s.close();}catch(e){fs.writeFileSync("+JsonSerializer.Serialize(Path.Combine(Root,"seed-error.json"))+",JSON.stringify({name:e.name,message:e.message}));process.exit(1)}";
-        using var job=JobProcess.Start(node,["--import",new Uri(Path.Combine(Repo,"node_modules/tsx/dist/loader.mjs")).AbsoluteUri,"--input-type=module","-e",script],Repo,LaunchEnvironment.Clean(Root));using var bound=new CancellationTokenSource(TimeSpan.FromSeconds(30));if(await job.WaitAsync(bound.Token)!=0)throw new IOException("REAL_STORE_SEED_FAILED "+(File.Exists(Path.Combine(Root,"seed-error.json"))?File.ReadAllText(Path.Combine(Root,"seed-error.json")):"loader or import failure"));await job.WaitForTreeEmptyAsync(bound.Token);
+        var marker=JsonSerializer.Serialize(Path.Combine(Root,"seed-state.json"));
+        var mark="const mark=phase=>fs.writeFileSync("+marker+",JSON.stringify({phase,resources:process.getActiveResourcesInfo()}));";
+        try{modules.RequireUnchanged();}catch(Exception failure){throw new FixturePreparationException(true,failure);}
+        var config=ConfigScript();var script="import fs from 'node:fs';"+mark+"mark('script-entered');try{const{Store}=await import("+JsonSerializer.Serialize(modules.StoreUri)+");mark('store-imported');"+config+"const s=new Store(config);s.close();mark('store-closed');}catch(e){fs.writeFileSync("+JsonSerializer.Serialize(Path.Combine(Root,"seed-error.json"))+",JSON.stringify({name:e.name,message:e.message}));process.exit(1)}";
+        // Fixture preparation is outside the lifecycle/grant deadlines under
+        // test. Use the admitted child's private cache/temp, not a second cold
+        // cache in Root, and bound slow dependency preparation separately.
+        FixtureProcesses.JobOwner seed;
+        try{seed=processes.StartJob(node,["--input-type=module","-e",script],Repo,LaunchEnvironment.Clean(PathOf("temporary")));}
+        catch(JobStartQuiescenceUnconfirmedException failure){throw await StopPreparation(failure.OwnedProcess,failure);}
+        catch(Exception failure){throw new FixturePreparationException(true,failure);}
+        using var seedOwner=seed;var job=seed.Process;using var bound=new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        try
+        {
+            if(await job.WaitAsync(bound.Token)!=0)throw new IOException("REAL_STORE_SEED_FAILED "+(File.Exists(Path.Combine(Root,"seed-error.json"))?File.ReadAllText(Path.Combine(Root,"seed-error.json")):"loader or import failure"));
+            await job.WaitForTreeEmptyAsync(bound.Token);
+        }
+        catch(Exception failure)
+        {
+            var stopped=await StopPreparation(job,failure);
+            try{Console.Error.WriteLine("FIXTURE_SEED_STATE "+(File.Exists(Path.Combine(Root,"seed-state.json"))?File.ReadAllText(Path.Combine(Root,"seed-state.json")):"script-not-entered"));}catch{}
+            BestEffortDiagnostic("FIXTURE_SEED_QUIESCENCE_CONFIRMED "+stopped.QuiescenceConfirmed);
+            throw stopped;
+        }
     }
+    internal static async Task<FixturePreparationException> StopPreparation(JobProcess job,Exception failure)
+    {
+        using var cleanup=new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        try{await job.TerminateAndWaitForTreeEmptyAsync(cleanup.Token);}
+        catch(Exception cleanupFailure){BestEffortDiagnostic("FIXTURE_SEED_CLEANUP_UNCONFIRMED "+cleanupFailure.GetType().Name);return new(false,failure);}
+        return new(true,failure);
+    }
+    private static void BestEffortDiagnostic(string message){try{Console.Error.WriteLine(message);}catch{}}
     private string ConfigScript()=>"const config={dataDir:"+JsonSerializer.Serialize(Path.Combine(Dataset,"data"))+",masterKey:Buffer.from(fs.readFileSync("+JsonSerializer.Serialize(Path.Combine(Dataset,"master-key"))+",'utf8').trim(),'base64'),connector:'mock',realAllowed:false,host:'127.0.0.1',port:32000,origin:'https://yahad.invalid',secureCookie:true,maxMedia:16777216,maxStorage:2147483648,childIdleMs:900000,sessionMs:43200000,diagnosticsEnabled:false};";
     private string Worker()=>"import fs from 'node:fs';import path from 'node:path';import{Store}from "+JsonSerializer.Serialize(new Uri(Path.Combine(Repo,"src/store.ts")).AbsoluteUri)+";import{createPlatformFiles}from "+JsonSerializer.Serialize(new Uri(Path.Combine(Repo,"src/platform-files.ts")).AbsoluteUri)+";"+"const data=process.env.DATA_DIR;const release=await createPlatformFiles('win32',path.resolve('native/Yahad.Platform.exe')).acquireDataLock(data);const config={dataDir:data,masterKey:Buffer.from(fs.readFileSync(process.env.MASTER_KEY_FILE,'utf8').trim(),'base64'),connector:'mock',realAllowed:false,host:'127.0.0.1',port:32000,origin:'https://yahad.invalid',secureCookie:true,maxMedia:16777216,maxStorage:2147483648,childIdleMs:900000,sessionMs:43200000,diagnosticsEnabled:false};if(fs.existsSync("+JsonSerializer.Serialize(Path.Combine(Root,"crash-before-store"))+"))process.exit(73);const store=new Store(config);store.db.exec('CREATE TABLE IF NOT EXISTS native_activation_probe(value INTEGER);INSERT INTO native_activation_probe VALUES(1)');fs.writeFileSync(path.join(data,'native-ready.partial'),JSON.stringify({pid:process.pid,PATH:process.env.PATH,clean:!process.env.NODE_OPTIONS&&!process.env.DOTNET_STARTUP_HOOKS}));fs.renameSync(path.join(data,'native-ready.partial'),path.join(data,'native-ready'));const wait=n=>new Promise(resolve=>{const timer=setInterval(()=>{if(fs.existsSync(path.join(data,n))){clearInterval(timer);resolve();}},10)});await wait('native-stop');store.close();await release();fs.writeFileSync(path.join(data,'native-closed'),'closed');await wait('native-exit');";
     internal void SelectPreparedPayload(string prepared)
@@ -124,5 +203,15 @@ internal sealed class ProductionFixture:IDisposable
         return schema;
     }
     private static void Copy(string source,string target){Directory.CreateDirectory(target);foreach(var file in Directory.GetFiles(source))File.Copy(file,Path.Combine(target,Path.GetFileName(file)));}
-    public void Dispose(){} // synthetic data stays private; never included in source or runtime artifacts
+    public void Dispose()
+    {
+        if(disposed)return;
+        if(cleanupAttempted)throw new IOException("FIXTURE_RETAINED_AFTER_CLEANUP_FAILURE",cleanupFailure);
+        cleanupAttempted=true;
+        try{
+        processes.CleanupAsync().GetAwaiter().GetResult();
+        if(!modulesReleased){modules.ReleaseUser();modulesReleased=true;}
+        owned.Cleanup(()=>processes.Confirmed);disposed=true;
+        }catch(Exception failure){cleanupFailure=failure;throw;}
+    }
 }

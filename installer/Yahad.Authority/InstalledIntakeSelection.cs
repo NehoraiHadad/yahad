@@ -8,7 +8,8 @@ namespace Yahad.Authority;
 internal sealed record IntakeReceipt(int Format,string InstallationId,string BundleDigest,string Version,string Channel,long PayloadBytes,int Schema,string PolicyDigest,string PinDigest);
 internal sealed record IntakePointer(int Format,string InstallationId,string ReceiptDigest);
 internal sealed record IntakeSelection(CatalogOperation Catalog,string Target,string HeadDigest,string ReceiptDigest);
-internal sealed record NativeUpdateMode(int Format,string InstallationId,string Mode,string? DelegationId,bool ModeControlAllowed);
+internal sealed record NativeUpdateMode(int Format,string InstallationId,string Mode,string? DelegationId,bool ModeControlAllowed,[property:System.Text.Json.Serialization.JsonIgnore(Condition=System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? GrantKind=null)
+{internal bool IsSystem=>Format==2&&GrantKind=="system";}
 internal sealed class InstalledIntakeSelection(InstalledStateFiles files,InstalledAuthorityAnchor anchor,Func<DateTimeOffset> clock)
 {
     private byte[] Read(string name,int max=16384)=>files.Read(files.PathOf(name),max);
@@ -39,7 +40,7 @@ internal sealed class InstalledIntakeSelection(InstalledStateFiles files,Install
         if(build.GetProperty("databaseSchema").GetInt32()!=receipt.Schema)throw new IOException("INTAKE_SCHEMA_BINDING");
         var currentManifest=NativeJson.Read<JsonElement>(Read("payloads/"+head.ReleaseDigest+"/bundle.json",16*1024*1024));
         var currentVersion=currentManifest.GetProperty("version").GetString()!;
-        if(!ValidVersion(receipt.Version)||!ValidVersion(currentVersion)||Version.Parse(receipt.Version)<Version.Parse(currentVersion))throw new IOException("INTAKE_DOWNGRADE_OR_VERSION");
+        if(!ValidVersion(receipt.Version)||!ValidVersion(currentVersion)||Version.Parse(receipt.Version)<=Version.Parse(currentVersion))throw new IOException("INTAKE_DOWNGRADE_OR_VERSION");
         var webBytes=Read("web.json");if(InstalledActivationResolver.Hash(webBytes)!=head.WebDigest)throw new IOException("INTAKE_WEB_BINDING");var web=NativeJson.Read<InstalledWeb>(webBytes);
         var op=new ProtectedOperation(1,"activate",anchor.InstallationId,head.Epoch,headDigest,receipt.BundleDigest,head.DataId,head.MinimumSchema,receipt.Schema,head.MasterKeyDigest,head.PolicyDigest,head.PinDigest,web,head.Recovery,clock().AddMinutes(10).ToUnixTimeSeconds(),Guid.NewGuid().ToString("N"));
         var facts=new OperationFacts(currentVersion,receipt.Version,receipt.Channel,web.Origin,total,receipt.PolicyDigest,receipt.PinDigest);
@@ -51,9 +52,16 @@ internal sealed class InstalledIntakeSelection(InstalledStateFiles files,Install
     {
         if(Directory.EnumerateFiles(files.PathOf("intake"),"mode.json.partial-*").Any())throw new IOException("INTAKE_MODE_RECONCILIATION_REQUIRED");
         var m=NativeJson.Read<NativeUpdateMode>(Read("intake/mode.json"));
-        if(m.Format!=1||m.InstallationId!=anchor.InstallationId||m.Mode is not("auto" or "notify")||(m.Mode=="auto")!=(m.DelegationId is not null))throw new IOException("INTAKE_MODE_UNCONFIGURED");if(m.DelegationId is not null)InstalledActivationResolver.Id(m.DelegationId);return m;
+        if(m.InstallationId!=anchor.InstallationId||m.Mode is not("auto" or "notify")||(m.Mode=="auto")!=(m.DelegationId is not null)||m.Format==1&&m.GrantKind is not null||m.Format==2&&(m.GrantKind!="system"||anchor.FullSystemPolicyDigest is null)||m.Format is not(1 or 2))throw new IOException("INTAKE_MODE_UNCONFIGURED");if(m.DelegationId is not null)InstalledActivationResolver.Id(m.DelegationId);return m;
     }
     internal RoutineDelegation DelegationTemplate()
-    {var d=NativeJson.Read<RoutineDelegation>(Read("intake/delegation-template.json"));if(d.Subject!=anchor.OwnerSid||d.InstallationId!=anchor.InstallationId||d.PolicyDigest!=anchor.IntakePolicyDigest||d.PinDigest!=anchor.IntakePinDigest)throw new IOException("INTAKE_DELEGATION_TEMPLATE");return d;}
+    {
+        var d=NativeJson.Read<RoutineDelegation>(Read("intake/delegation-template.json"));
+        if(d.Subject!=anchor.OwnerSid||d.InstallationId!=anchor.InstallationId||d.PolicyDigest!=anchor.IntakePolicyDigest||d.PinDigest!=anchor.IntakePinDigest)throw new IOException("INTAKE_DELEGATION_TEMPLATE");
+        // Every new, explicitly confirmed enrollment has its own append-only
+        // budget/revocation identity. Never reuse a revoked or consumed grant.
+        // All limits (including absolute expiry) remain exactly as provisioned.
+        return d with{Id=Guid.NewGuid().ToString("N")};
+    }
     private static bool ValidVersion(string value)=>System.Text.RegularExpressions.Regex.IsMatch(value,"^[0-9]{1,5}\\.[0-9]{1,5}\\.[0-9]{1,5}$");
 }

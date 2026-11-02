@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Yahad.Install;
 
 namespace Yahad.Service;
@@ -7,10 +8,14 @@ namespace Yahad.Service;
 // These records are capabilities from the sole installation/update authority,
 // read through admin/System-owned, application-read-only file handles. No UI
 // Boolean, document-selected public key, environment override or fallback trust.
-internal sealed record InstalledRecovery(string SourceDataId,string BackupId,string OperationId,string ReceiptDigest);
+internal sealed record InstalledRecovery(string SourceDataId,string BackupId,string OperationId,string ReceiptDigest,[property:JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)]string? SourceRestoreOperationId=null)
+{
+    internal string SourceDirectory(string root)
+    {InstalledActivationResolver.Id(SourceDataId);if(SourceRestoreOperationId is {} previous){InstalledActivationResolver.Id(previous);if(previous==OperationId)throw new IOException("INSTALLED_RECOVERY_SOURCE_ALIAS");return Path.Combine(root,"datasets",SourceDataId,"restore-"+previous,"completed","data");}return Path.Combine(root,"datasets",SourceDataId,"data");}
+}
 internal sealed record InstalledActivation(int Format,string InstallationId,long Epoch,string ReleaseDigest,string DataId,
     int MinimumSchema,int MaximumSchema,string MasterKeyDigest,string PolicyDigest,string PinDigest,string OwnerIntentDigest,
-    string WebDigest,string Phase,InstalledRecovery? Recovery);
+    string WebDigest,string Phase,InstalledRecovery? Recovery,[property:JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)]InstalledMigration? Migration=null);
 internal sealed record InstalledEpoch(int Format,string InstallationId,long Epoch,string ActivationDigest);
 internal sealed record InstalledOwnerIntent(int Format,string InstallationId,long Epoch,string Nonce,string ReleaseDigest,
     string DataId,string Operation,string Subject,long ApprovedUnix,long? ExpiresUnix);
@@ -31,9 +36,11 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
     private readonly string root;private readonly IInstalledControlFiles control;private readonly IChildControlFactory channels;
     private readonly RuntimeConnectorProfile connectorProfile;private readonly FreshDataAuthorization? fresh;private readonly bool committerUnconfigured;private readonly InstalledStateFiles files;
     private readonly Func<DateTimeOffset> clock;private readonly JobProcessFaultInjection? probeFault,startFault;
+    private readonly Func<string,WindowsFileBoundary.DataLease>? commitInspectionLease;
+    private readonly Func<VerifiedProcessSpec,IPrivateAppLauncher>? processFactory;
     internal InstalledActivationResolver():this(StateRoot,new AdminInstalledControlFiles(),new LocalChildControlFactory(),()=>DateTimeOffset.UtcNow){committerUnconfigured=true;}
-    internal InstalledActivationResolver(string root,IInstalledControlFiles control,IChildControlFactory channels,Func<DateTimeOffset> clock,JobProcessFaultInjection? probeFault=null,InstalledStateFiles? stateFiles=null,FreshDataAuthorization? fresh=null,JobProcessFaultInjection? startFault=null,RuntimeConnectorProfile connectorProfile=RuntimeConnectorProfile.Production)
-    {this.connectorProfile=connectorProfile;this.startFault=startFault;this.fresh=fresh;this.root=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(root));this.control=control;this.channels=channels;this.clock=clock;this.probeFault=probeFault;files=stateFiles??InstalledStateFiles.Private(root);}
+    internal InstalledActivationResolver(string root,IInstalledControlFiles control,IChildControlFactory channels,Func<DateTimeOffset> clock,JobProcessFaultInjection? probeFault=null,InstalledStateFiles? stateFiles=null,FreshDataAuthorization? fresh=null,JobProcessFaultInjection? startFault=null,RuntimeConnectorProfile connectorProfile=RuntimeConnectorProfile.Production,Func<string,WindowsFileBoundary.DataLease>? commitInspectionLease=null,Func<VerifiedProcessSpec,IPrivateAppLauncher>? processFactory=null)
+    {this.processFactory=processFactory;this.commitInspectionLease=commitInspectionLease;this.connectorProfile=connectorProfile;this.startFault=startFault;this.fresh=fresh;this.root=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(root));this.control=control;this.channels=channels;this.clock=clock;this.probeFault=probeFault;files=stateFiles??InstalledStateFiles.Private(root);}
     public Task<AuthorizedServiceStart> ResolveAsync(InstallationBinding binding,CancellationToken cancellation)=>ResolveCore(binding,false,null,cancellation);
     internal Task<AuthorizedServiceStart> InspectCommitCandidateAsync(InstallationBinding binding,string? pendingDigest,CancellationToken cancellation)
         =>ResolveCore(binding,true,pendingDigest,cancellation);
@@ -60,21 +67,30 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
             var ownerBytes=Protected("owner-intent.json");if(Hash(ownerBytes)!=head.OwnerIntentDigest)throw new IOException("INSTALLED_OWNER_ANCHOR");
             var owner=NativeJson.Read<InstalledOwnerIntent>(ownerBytes);Id(owner.Nonce);
             if(owner.Format!=1||owner.InstallationId!=binding.InstallationId||owner.Epoch!=head.Epoch||owner.ReleaseDigest!=head.ReleaseDigest||owner.DataId!=head.DataId||
-                owner.Operation!=(head.Recovery is not null?"recover":"activate")||string.IsNullOrWhiteSpace(owner.Subject)||owner.Subject.Length>128||owner.ApprovedUnix<=0)throw new IOException("INSTALLED_OWNER_SCOPE");
+                owner.Operation!=(head.Migration is not null?"migrate":head.Recovery is not null?"recover":"activate")||string.IsNullOrWhiteSpace(owner.Subject)||owner.Subject.Length>128||owner.ApprovedUnix<=0)throw new IOException("INSTALLED_OWNER_SCOPE");
             reservation.Owner=owner;reservation.CheckOwner();
             var webBytes=Protected("web.json");if(Hash(webBytes)!=head.WebDigest)throw new IOException("INSTALLED_WEB_ANCHOR");
             var web=NativeJson.Read<InstalledWeb>(webBytes);
-            if(web.Format!=1||web.InstallationId!=binding.InstallationId||web.Port is <1024 or >65535||!Uri.TryCreate(web.Origin,UriKind.Absolute,out var origin)||(origin.Scheme!="https"&&!(files.IsSingleService&&origin.Scheme=="http"&&origin.Host=="127.0.0.1"&&origin.Port==web.Port))||origin.UserInfo!=""||origin.Query!=""||origin.Fragment!=""||origin.AbsolutePath!="/")throw new IOException("INSTALLED_WEB_CONFIGURATION");
-            if(head.Phase is not("committed" or "recovered")||head.Phase=="recovered"&&head.Recovery is null)throw new IOException("INSTALLED_INCOMPLETE_ACTIVATION");
+            if(web.Format!=1||web.InstallationId!=binding.InstallationId||web.Port is <1024 or >65535||!Uri.TryCreate(web.Origin,UriKind.Absolute,out var origin)||origin.UserInfo!=""||origin.Query!=""||origin.Fragment!=""||origin.AbsolutePath!="/")throw new IOException("INSTALLED_WEB_CONFIGURATION");
+            if(origin.Scheme!="https")
+            {
+                // Only the exact local Owner bootstrap of an explicitly pinned
+                // full profile. This never admits HTTP on a LAN/public address
+                // or treats absent/malformed/inaccessible enrollment as legacy.
+                var local=origin.Scheme=="http"&&origin.Host=="127.0.0.1"&&origin.Port==web.Port;
+                if(!local||!files.IsSingleService&&(files.Roles is null||!InstalledUpdaterLayout.AllowsOwnerLoopback(Protected(InstalledUpdaterLayout.AnchorFile,4096),binding.InstallationId)))throw new IOException("INSTALLED_WEB_CONFIGURATION");
+            }
+            if(head.Phase is not("committed" or "recovered" or "migrated")||head.Phase=="recovered"&&head.Recovery is null||head.Migration is not null&&head.Recovery is null||head.Phase=="migrated"&&head.Migration is null)throw new IOException("INSTALLED_INCOMPLETE_ACTIVATION");
             var selected=Path.Combine(root,"datasets",head.DataId);var key=Path.Combine(selected,"master-key");var policy=Path.Combine(selected,"update-policy");var pins=Path.Combine(selected,"update-pin");
             if(head.Recovery is { } recovery)
             {
                 Id(recovery.SourceDataId);Id(recovery.BackupId);Id(recovery.OperationId);Digest(recovery.ReceiptDigest);
+                if(recovery.SourceRestoreOperationId is {} sourceRestore){Id(sourceRestore);if(sourceRestore==recovery.OperationId)throw new IOException("INSTALLED_RECOVERY_SOURCE_ALIAS");}
                 selected=Path.Combine(root,"datasets",recovery.SourceDataId,"restore-"+recovery.OperationId,"completed");
                 key=Path.Combine(selected,"identity","master-key");policy=Path.Combine(selected,"policy","update-policy");pins=Path.Combine(selected,"policy","update-pin");
             }
             reservation.Data=Path.Combine(selected,"data");reservation.Hold(files.PinDirectory(selected));
-            reservation.Lease=files.Lease(reservation.Data);reservation.Hold(reservation.Lease);
+            reservation.Lease=commitInspection&&commitInspectionLease is not null?commitInspectionLease(reservation.Data):files.Lease(reservation.Data);reservation.Hold(reservation.Lease);
             if(!files.IsSingleService)reservation.CheckWal();
             if(reservation.PinDigest(key)!=head.MasterKeyDigest||reservation.PinDigest(policy)!=head.PolicyDigest||reservation.PinDigest(pins)!=head.PinDigest)throw new IOException("INSTALLED_DATA_IDENTITY");
             var payload=Path.Combine(root,"payloads",head.ReleaseDigest);var payloadManifest=reservation.PinBytes(Path.Combine(payload,"bundle.json"),16*1024*1024);
@@ -98,17 +114,34 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
             if(schema<head.MinimumSchema||schema>head.MaximumSchema||schema>reservation.PayloadSchema||head.MaximumSchema!=reservation.PayloadSchema)throw new IOException("INSTALLED_SCHEMA_INCOMPATIBLE");
             if(head.Recovery is { } recovered)
             {
-                var source=Path.Combine(root,"datasets",recovered.SourceDataId,"data");
-                if(head.Phase=="recovered")
+                var source=recovered.SourceDirectory(root);
+                if(head.Migration is { } migration)
                 {
-                    var restoredSchema=NativeRecoveryAdmission.VerifyCompleted(Path.Combine(root,"datasets",recovered.SourceDataId),source,recovered.BackupId,recovered.OperationId,recovered.ReceiptDigest,
-                        selected,key,policy,pins,reservation.DataPins,files);
-                    if(restoredSchema!=schema)throw new IOException("INSTALLED_RECOVERY_SCHEMA");
-                    if(!commitInspection)throw new IOException("INSTALLED_RECOVERY_COMMIT_REQUIRED");
+                    var p=migration.Plan;p.Validate();
+                    if(p.InstallationId!=head.InstallationId||p.NewDataId!=head.DataId||p.SourceDataId!=recovered.SourceDataId||p.BackupId!=recovered.BackupId||p.CloneOperationId!=recovered.OperationId||p.BackupReceiptDigest!=recovered.ReceiptDigest||
+                        p.MasterKeyDigest!=head.MasterKeyDigest||p.PolicyDigest!=head.PolicyDigest||p.PinDigest!=head.PinDigest||migration.SourceRestoreOperationId!=recovered.SourceRestoreOperationId)throw new IOException("INSTALLED_MIGRATION_BINDING");
+                    var migrationSpec=NativeMigrationAdmission.SpecForInstalled(files,migration);
+                    if(head.Phase=="migrated")
+                    {
+                        if(!commitInspection||p.PayloadDigest!=head.ReleaseDigest)throw new IOException("INSTALLED_MIGRATION_COMMIT_REQUIRED");
+                        _=NativeMigrationAdmission.VerifyCompleted(files,migrationSpec,migration.ReceiptDigest);
+                    }
+                    var verified=NativeMigrationAdmission.VerifyCommittedEvidence(files,migrationSpec,migration.ReceiptDigest);
+                    if(verified.ObservedSchema<head.MinimumSchema||verified.ObservedSchema>head.MaximumSchema||schema<verified.ObservedSchema)throw new IOException("INSTALLED_MIGRATION_SCHEMA");
                 }
-                var baseline=NativeRecoveryAdmission.VerifyCommittedEvidence(Path.Combine(root,"datasets",recovered.SourceDataId),source,recovered.BackupId,recovered.OperationId,recovered.ReceiptDigest,
-                    selected,key,policy,pins,reservation.DataPins,files);
-                if(baseline<head.MinimumSchema||baseline>head.MaximumSchema||schema<baseline)throw new IOException("INSTALLED_RECOVERY_SCHEMA");
+                else
+                {
+                    if(head.Phase=="recovered")
+                    {
+                        var restoredSchema=NativeRecoveryAdmission.VerifyCompleted(Path.Combine(root,"datasets",recovered.SourceDataId),source,recovered.BackupId,recovered.OperationId,recovered.ReceiptDigest,
+                            selected,key,policy,pins,reservation.DataPins,files);
+                        if(restoredSchema!=schema)throw new IOException("INSTALLED_RECOVERY_SCHEMA");
+                        if(!commitInspection)throw new IOException("INSTALLED_RECOVERY_COMMIT_REQUIRED");
+                    }
+                    var baseline=NativeRecoveryAdmission.VerifyCommittedEvidence(Path.Combine(root,"datasets",recovered.SourceDataId),source,recovered.BackupId,recovered.OperationId,recovered.ReceiptDigest,
+                        selected,key,policy,pins,reservation.DataPins,files);
+                    if(baseline<head.MinimumSchema||baseline>head.MaximumSchema||schema<baseline)throw new IOException("INSTALLED_RECOVERY_SCHEMA");
+                }
             }
             // A DB left by an interrupted first attempt is admitted without
             // reset. Retire the pending grants while its validated file pins
@@ -124,7 +157,8 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
                 environment["APP_ADDITIONAL_ORIGINS"]=$"http://127.0.0.1:{web.Port}";
             var spec=new VerifiedProcessSpec(node,reservation.NodeDigest,["--import","tsx","src/main.ts"],Path.Combine(payload,"app"),temporary,
                 Path.Combine(payload,"runtime","ffmpeg","ffmpeg.exe"),environment,reservation.Lease,reservation.BeginMutableStart,files,reservation.ObserveHealthy);
-            return new(new(head.ReleaseDigest),new ServiceProcessLauncher(spec,channels,startFault),reservation,reservation);
+            var launcher=processFactory is null?new ServiceProcessLauncher(spec,channels,startFault):processFactory(spec)??throw new IOException("INSTALLED_PROCESS_FACTORY_NULL");
+            return new(new(head.ReleaseDigest),launcher,reservation,reservation);
         }
         catch(ProbeOwnershipException owned){owned.Retain(reservation);throw;}
         catch{reservation.Dispose();throw;}

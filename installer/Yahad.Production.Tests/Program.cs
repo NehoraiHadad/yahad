@@ -7,6 +7,30 @@ using System.Text.Json;
 using Yahad.Install;
 using Yahad.Service;
 
+if(args is ["--fixture-creation-cleanup-only",var fixtureRepo,var muxer])
+{
+    var scratch=OwnedFixtureDirectory.Create(Path.GetTempPath());var passed=0;var failed=0;
+    try
+    {
+        var badNode=Path.Combine(scratch.Root,"not-node.exe");File.WriteAllBytes(badNode,[1,2,3]);
+        var helperDirectory=Path.Combine(scratch.Root,"helper");Directory.CreateDirectory(helperDirectory);File.WriteAllText(Path.Combine(helperDirectory,"Yahad.Platform.exe"),"synthetic-not-executed");
+        foreach(var scenario in new[]{"constructor","copy","seed"})
+        {
+            string? captured=null;var refused=false;
+            try
+            {
+                using var unexpected=await ProductionFixture.Create(scenario=="seed"?muxer:badNode,fixtureRepo,scenario=="copy"?Path.Combine(scratch.Root,"missing-helper"):helperDirectory,
+                    path=>{captured=path;if(scenario=="constructor")throw new IOException("TEST_CONSTRUCTOR_FAILURE");});
+            }
+            catch(Exception error){refused=true;Console.WriteLine("EXPECTED "+scenario+" "+error.GetType().Name);}
+            if(refused&&captured is not null&&!Directory.Exists(captured)){passed++;Console.WriteLine("PASS "+scenario+" failure removes only owned fixture");}
+            else{failed++;Console.WriteLine("FAIL "+scenario+" left fixture or unexpectedly succeeded");}
+        }
+    }
+    finally{scratch.Cleanup(()=>true);}
+    Console.WriteLine(JsonSerializer.Serialize(new{suite="fixture-creation-failure-cleanup",passed,failed,realServices=false}));return failed==0?0:1;
+}
+
 if(args is ["--store-schema-only",var schemaRepo])
 {
     foreach(var expected in new[]{5,6,17})
@@ -23,12 +47,24 @@ var endpointOnly=args is ["--endpoint-only",..];if(endpointOnly)args=args[1..];b
 string? preparedPayload=null;
 if(args.Length==10&&args[^2]=="--prepared"){preparedPayload=args[^1];args=args[..^2];}
 if(args is not ["--node",var node,"--repo",var repo,"--helper",var helper,"--report",var report])throw new IOException("PRIVATE_INPUTS_REQUIRED");
-var results=new List<object>();var failures=0;
+var results=new List<object>();var failures=0;var blocked=0;var fixtureBlocked=false;ProductionFixture? fixtureOwner=null;
 void Assert(bool b,string reason="assertion failed"){if(!b)throw new Exception(reason);}
-async Task Check(string name,Func<Task> run){if(endpointOnly&&!endpointChecks)return;try{await run();results.Add(new{name,status="PASS"});Console.WriteLine("PASS "+name);}catch(Exception e){failures++;results.Add(new{name,status="FAIL",reason=e.GetType().Name});Console.WriteLine("FAIL "+name+" "+e);}}
+async Task Check(string name,Func<Task> run)
+{
+ if(endpointOnly&&!endpointChecks)return;
+ if(fixtureBlocked){blocked++;results.Add(new{name,status="BLOCKED",reason="prior fixture failure; no further heavy cases"});Console.WriteLine("BLOCKED "+name);return;}
+ try{await run();results.Add(new{name,status="PASS"});Console.WriteLine("PASS "+name);}
+ catch(Exception failure)
+ {
+  failures++;fixtureBlocked=true;results.Add(new{name,status="FAIL",reason=failure.GetType().Name});Console.WriteLine("FAIL "+name+" "+failure);
+  fixtureOwner?.RetainFailure(failure);throw new FixtureRunStopped();
+ }
+}
 async Task Reject(Func<Task> run,string? code=null)
 {try{await run();}catch(Exception e)when(e is IOException or Win32Exception or JsonException or CryptographicException or FormatException){if(code is not null&&e.Message!=code)throw new Exception("wrong refusal: "+e.Message);return;}throw new Exception("unexpected admission");}
-using var f=await ProductionFixture.Create(node,repo,helper);
+var f=await ProductionFixture.Create(node,repo,helper);
+fixtureOwner=f;
+try{
 await Check("production admin boundary rejects current-user fixture records",async()=>{await Reject(async()=>{using var grant=await new InstalledActivationResolver(f.Root,new AdminInstalledControlFiles(),f.Control,()=>f.Now).ResolveAsync(f.Binding,default);});});
 await Check("production resolver refuses absent protected activation state",async()=>{var binding=f.Binding;var bytes=File.ReadAllBytes(f.PathOf("activation.json"));File.Delete(f.PathOf("activation.json"));try{await Reject(async()=>{using var grant=await new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,connectorProfile:RuntimeConnectorProfile.Synthetic).ResolveAsync(binding,default);});}finally{File.WriteAllBytes(f.PathOf("activation.json"),bytes);}});
 await Check("stale bootstrap digest cannot select a different protected activation",async()=>
@@ -74,7 +110,7 @@ await Check("concrete production resolver launches real mutable Store through co
 await Check("child duplicate prevents a second writer even after host lease handle is closed",async()=>
 {
     f.Reset();f.ClearSignals();var lease=WindowsFileBoundary.AcquireDataLease(f.Data);var spec=f.RawSpec(lease);
-    var launcher=new ServiceProcessLauncher(spec,f.Control);IContainedAppSession? session=null;
+    var launcher=f.CreateLauncher(spec);IContainedAppSession? session=null;
     try
     {
         session=await launcher.StartAsync(new("lease-test"),default);using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(20));await launcher.WaitForHealthyAsync(session,deadline.Token);lease.Dispose();
@@ -95,7 +131,7 @@ await Check("callback failure after duplicating the data lease observes root dea
     f.Reset();using var lease=WindowsFileBoundary.AcquireDataLease(f.Data);System.Diagnostics.Process? witness=null;
     try
     {
-        await Reject(()=>{_ =JobProcess.Start(node,["-e","require('node:fs').writeFileSync(process.argv[1],'ran')",Path.Combine(f.Data,"native-ready")],f.Root,LaunchEnvironment.Clean(f.Root),(process,pid)=>
+        await Reject(()=>{_ =f.StartJob(node,["-e","require('node:fs').writeFileSync(process.argv[1],'ran')",Path.Combine(f.Data,"native-ready")],f.Root,LaunchEnvironment.Clean(f.Root),(process,pid)=>
         {witness=System.Diagnostics.Process.GetProcessById(pid);_ =witness.SafeHandle;_ =lease.DuplicateTo(process);throw new IOException("INJECTED_CALLBACK_FAILURE");});return Task.CompletedTask;},"INJECTED_CALLBACK_FAILURE");
         Assert(witness is not null&&witness.WaitForExit(0)&&!File.Exists(Path.Combine(f.Data,"native-ready")));
     }
@@ -104,13 +140,13 @@ await Check("callback failure after duplicating the data lease observes root dea
 await Check("failure before job assignment observes the separate suspended root and empty job",async()=>
 {
     f.Reset();var fault=new JobProcessFaultInjection{FailBeforeAssignment=true};
-    await Reject(()=>{_ =JobProcess.StartWithFault(node,["-e",""],f.Root,LaunchEnvironment.Clean(f.Root),null,fault);return Task.CompletedTask;},"INJECTED_BEFORE_ASSIGNMENT_FAILURE");
+    await Reject(()=>{_ =f.StartJob(node,["-e",""],f.Root,LaunchEnvironment.Clean(f.Root),null,fault);return Task.CompletedTask;},"INJECTED_BEFORE_ASSIGNMENT_FAILURE");
     Assert(fault.CreatedProcess is not null&&fault.RootExitObserved&&fault.TreeEmptyObserved);
 });
 await Check("controller releases a failed handoff reservation only after observed root and tree exit",async()=>
 {
     f.Reset();var fault=new JobProcessFaultInjection{FailAfterHandoff=true};var resource=new StartReservation(WindowsFileBoundary.AcquireDataLease(f.Data),fault);
-    var launcher=new ServiceProcessLauncher(f.RawSpec(resource.Lease),f.Control,fault);var reports=new List<ServiceReport>();
+    var launcher=f.CreateLauncher(f.RawSpec(resource.Lease),fault);var reports=new List<ServiceReport>();
     try
     {
         var result=await new ServiceController(new StartFailureAuthorization(launcher,resource)).RunAsync(reports.Add);
@@ -124,7 +160,7 @@ foreach(var missing in new[]{"root","tree"})
 await Check("unobserved "+missing+" after failed handoff retains session and reservation without STOPPED",async()=>
 {
     f.Reset();var fault=new JobProcessFaultInjection{FailAfterHandoff=true,RootObservationUnavailable=missing=="root",TreeObservationUnavailable=missing=="tree"};
-    var resource=new StartReservation(WindowsFileBoundary.AcquireDataLease(f.Data),fault);var launcher=new ServiceProcessLauncher(f.RawSpec(resource.Lease),f.Control,fault);var reports=new List<ServiceReport>();
+    var resource=new StartReservation(WindowsFileBoundary.AcquireDataLease(f.Data),fault);var launcher=f.CreateLauncher(f.RawSpec(resource.Lease),fault);var reports=new List<ServiceReport>();
     try
     {
         var result=await new ServiceController(new StartFailureAuthorization(launcher,resource)).RunAsync(reports.Add);
@@ -139,7 +175,7 @@ await Check("unobserved "+missing+" after failed handoff retains session and res
         // A separate explicit retry uses real OS observations. Clearing this
         // failure-only hook does not inject a successful exit observation.
         fault.RootObservationUnavailable=false;fault.TreeObservationUnavailable=false;
-        if(fault.FailedStartSession is { } session){using var bound=new CancellationTokenSource(TimeSpan.FromSeconds(5));await session.TerminateAndWaitForTreeEmptyAsync(bound.Token);await session.DisposeAsync();}
+        if(fault.FailedStartSession is { } session){using var bound=new CancellationTokenSource(TimeSpan.FromSeconds(5));await f.RetrySessionAsync(session,bound.Token);}
         Assert(fault.RootExitObserved&&fault.TreeEmptyObserved);resource.Dispose();
     }
     using var released=WindowsFileBoundary.AcquireDataLease(f.Data);
@@ -159,8 +195,8 @@ await Check("actual admission SQLite probe retains reservation when "+missing+" 
 await Check("actual recovery probe failure retains recovery lease and private scratch until observed retry",async()=>
 {
     f.Reset();f.ClearSignals();var fault=new JobProcessFaultInjection{FailAfterHandoff=true,TreeObservationUnavailable=true};
-    using var empty=JobProcess.Start(node,["-e",""],f.Root,LaunchEnvironment.Clean(f.Root));await empty.WaitAsync(default);await empty.WaitForTreeEmptyAsync(default);
-    var inspector=new NativeSqliteInspector(node,ProductionFixture.Hash(File.ReadAllBytes(node)),fault);var recovery=await NativeRecoveryFixture.OpenAsync(f.Dataset,empty,inspector);ProbeOwnershipException? owned=null;
+    using var empty=f.StartJob(node,["-e",""],f.Root,LaunchEnvironment.Clean(f.Root));await empty.WaitAsync(default);await empty.WaitForTreeEmptyAsync(default);
+    var inspector=new NativeSqliteInspector(node,ProductionFixture.Hash(File.ReadAllBytes(node)),fault);var recovery=await NativeRecoveryFixture.OpenAsync(f.Dataset,empty.Process,inspector);ProbeOwnershipException? owned=null;
     try
     {
         try{await recovery.BackupAsync();throw new Exception("unknown probe accepted");}catch(ProbeOwnershipException error){owned=error;}
@@ -179,9 +215,9 @@ await Check("actual recovery probe failure retains recovery lease and private sc
 NativeBackupResult? backup=null;NativeRestoreResult? restored=null;
 await Check("actual recovery output is verified but cannot start before protected commit",async()=>
 {
-    f.Reset();f.ClearSignals();using var empty=JobProcess.Start(node,["-e",""],f.Root,LaunchEnvironment.Clean(f.Root));await empty.WaitAsync(default);await empty.WaitForTreeEmptyAsync(default);
+    f.Reset();f.ClearSignals();using var empty=f.StartJob(node,["-e",""],f.Root,LaunchEnvironment.Clean(f.Root));await empty.WaitAsync(default);await empty.WaitForTreeEmptyAsync(default);
     using(var inspector=new NativeSqliteInspector(node,ProductionFixture.Hash(File.ReadAllBytes(node))))
-    using(var recovery=await NativeRecoveryFixture.OpenAsync(f.Dataset,empty,inspector))
+    using(var recovery=await NativeRecoveryFixture.OpenAsync(f.Dataset,empty.Process,inspector))
     {backup=await recovery.BackupAsync();restored=await recovery.RestoreToNewDirectoryAsync(backup.BackupId,f.Schema,f.Schema);}
     f.Recovery=new(f.OriginalDataId,backup.BackupId,restored.OperationId,backup.ReceiptDigest);f.DataId=Guid.NewGuid().ToString("N");f.Phase="recovered";f.Publish();
     await Reject(async()=>{using var grant=await f.Resolve();},"INSTALLED_RECOVERY_COMMIT_REQUIRED");Assert(restored.ObservedSchema==f.Schema);
@@ -216,7 +252,7 @@ await Check("protected committed recovery selection launches real Store and rest
         Assert(result.Failure==ServiceFailure.None&&f.Control.HeldAfterClose&&f.Binding==committedBinding,"restart "+pass+" failure="+result.Failure+" held="+f.Control.HeldAfterClose+" anchorSame="+(f.Binding==committedBinding)+" stopError="+f.Control.StopError);f.ClearSignals();
     }
 });
-using var writerJob=JobProcess.Start(node,["-e",""],f.Root,LaunchEnvironment.Clean(f.Root));await writerJob.WaitAsync(default);await writerJob.WaitForTreeEmptyAsync(default);
+using var writerJob=f.StartJob(node,["-e",""],f.Root,LaunchEnvironment.Clean(f.Root));await writerJob.WaitAsync(default);await writerJob.WaitForTreeEmptyAsync(default);
 void PrepareState(){f.Reset();File.WriteAllBytes(f.PathOf("bootstrap.json"),JsonSerializer.SerializeToUtf8Bytes(new{schema=1,service=ServiceDefinition.Name,installationId=f.InstallationId,activationReceiptDigest=f.Binding.ActivationReceiptDigest}));}
 ProtectedOperation Operation(string kind="activate")
 {
@@ -224,7 +260,7 @@ ProtectedOperation Operation(string kind="activate")
     return new(1,kind,f.InstallationId,head.Epoch,f.Binding.ActivationReceiptDigest,head.ReleaseDigest,head.DataId,head.MinimumSchema,head.MaximumSchema,head.MasterKeyDigest,head.PolicyDigest,head.PinDigest,web,null,f.Now.AddMinutes(2).ToUnixTimeSeconds(),Guid.NewGuid().ToString("N"));
 }
 async Task Denied(Func<Task> run){try{await run();}catch(Exception e)when(e is ServiceStartDenied or IOException or Win32Exception or UnauthorizedAccessException or JsonException or OperationCanceledException){return;}throw new Exception("transaction unexpectedly accepted");}
-ProtectedStateTransactionWriter Writer(IOwnerOperationAuthentication auth,JobProcess? job=null)=>new(f.Root,f.InstallationId,job??writerJob,auth,f.Control,()=>f.Now);
+ProtectedStateTransactionWriter Writer(IOwnerOperationAuthentication auth,JobProcess? job=null)=>new(f.Root,f.InstallationId,job??writerJob.Process,auth,f.Control,()=>f.Now);
 await Check("protected transaction publishes authenticated owner and coherent records consumed by actual resolver",async()=>
 {
     PrepareState();var op=Operation();var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);var binding=await Writer(auth).CommitAsync(op);
@@ -253,8 +289,8 @@ await Check("exclusive authority denies concurrent committer",async()=>
 await Check("actual busy app job blocks publication without a quiescence Boolean",async()=>
 {
     PrepareState();var op=Operation();var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);
-    using var busy=JobProcess.Start(node,["-e","setInterval(()=>{},1000)"],f.Root,LaunchEnvironment.Clean(f.Root));
-    try{using var bound=new CancellationTokenSource(150);await Denied(()=>Writer(auth,busy).CommitAsync(op,cancellation:bound.Token));Assert(!File.Exists(f.PathOf("pending.json")));}
+    using var busy=f.StartJob(node,["-e","setInterval(()=>{},1000)"],f.Root,LaunchEnvironment.Clean(f.Root));
+    try{using var bound=new CancellationTokenSource(150);await Denied(()=>Writer(auth,busy.Process).CommitAsync(op,cancellation:bound.Token));Assert(!File.Exists(f.PathOf("pending.json")));}
     finally{await busy.TerminateAndWaitForTreeEmptyAsync(default);}
 });
 await Check("actual selected-data lease blocks publication",async()=>
@@ -285,11 +321,14 @@ await Check("expired interrupted operation needs fresh authenticated reconciliat
 });
 await Check("install operation requires fresh control state and authenticated install scope",async()=>
 {
-    using var fresh=await ProductionFixture.Create(node,repo,helper);var head=NativeJson.Read<InstalledActivation>(File.ReadAllBytes(fresh.PathOf("activation.json")));var web=NativeJson.Read<InstalledWeb>(File.ReadAllBytes(fresh.PathOf("web.json")));
+    var fresh=await ProductionFixture.Create(node,repo,helper);Exception? freshFailure=null;try{var head=NativeJson.Read<InstalledActivation>(File.ReadAllBytes(fresh.PathOf("activation.json")));var web=NativeJson.Read<InstalledWeb>(File.ReadAllBytes(fresh.PathOf("web.json")));
     var op=new ProtectedOperation(1,"install",fresh.InstallationId,0,"",head.ReleaseDigest,head.DataId,fresh.Schema,fresh.Schema,head.MasterKeyDigest,head.PolicyDigest,head.PinDigest,web,null,fresh.Now.AddMinutes(2).ToUnixTimeSeconds(),Guid.NewGuid().ToString("N"));
     foreach(var name in new[]{"activation.json","epoch.json","owner-intent.json","web.json","bootstrap.json"})File.Delete(fresh.PathOf(name));
-    var auth=new ApprovedOperations(fresh.InstallationId,()=>fresh.Now);auth.Approve(op);await new ProtectedStateTransactionWriter(fresh.Root,fresh.InstallationId,writerJob,auth,fresh.Control,()=>fresh.Now).CommitAsync(op);
+    var auth=new ApprovedOperations(fresh.InstallationId,()=>fresh.Now);auth.Approve(op);await new ProtectedStateTransactionWriter(fresh.Root,fresh.InstallationId,writerJob.Process,auth,fresh.Control,()=>fresh.Now).CommitAsync(op);
     using var grant=await fresh.Resolve();Assert(NativeJson.Read<InstalledEpoch>(File.ReadAllBytes(fresh.PathOf("epoch.json"))).Epoch==1);
+    }catch(Exception failure){freshFailure=failure;fresh.RetainFailure(failure);}
+    try{fresh.Dispose();}catch(Exception cleanup){if(freshFailure is not null)throw new AggregateException(freshFailure,cleanup);throw;}
+    if(freshFailure is not null)System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(freshFailure).Throw();
 });
 await Check("install cannot reset an authority root with existing committed history",async()=>
 {
@@ -334,7 +373,7 @@ await Check("unconfigured authentication boundary cannot publish protected state
 await Check("recovery commit is bound to actual backup receipt and verified restored plaintext",async()=>
 {
     PrepareState();var op=Operation("recover");NativeBackupResult b;NativeRestoreResult restoredCandidate;
-    using(var inspector=new NativeSqliteInspector(node,ProductionFixture.Hash(File.ReadAllBytes(node))))using(var recovery=await NativeRecoveryFixture.OpenAsync(f.Dataset,writerJob,inspector))
+    using(var inspector=new NativeSqliteInspector(node,ProductionFixture.Hash(File.ReadAllBytes(node))))using(var recovery=await NativeRecoveryFixture.OpenAsync(f.Dataset,writerJob.Process,inspector))
     {b=await recovery.BackupAsync();restoredCandidate=await recovery.RestoreToNewDirectoryAsync(b.BackupId,f.Schema,f.Schema);}
     op=op with{DataId=Guid.NewGuid().ToString("N"),Recovery=new(f.OriginalDataId,b.BackupId,restoredCandidate.OperationId,b.ReceiptDigest)};
     var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);await Writer(auth).CommitAsync(op);using var grant=await f.Resolve();
@@ -414,7 +453,7 @@ foreach(var mismatch in new[]{"downgrade","channel","policy","pins","key","origi
 await Check("routine delegated update retains actual committed recovery selection without authorizing another restore",async()=>
 {
  PrepareState();NativeBackupResult saved;NativeRestoreResult recovered;
- using(var inspector=new NativeSqliteInspector(node,ProductionFixture.Hash(File.ReadAllBytes(node))))using(var recovery=await NativeRecoveryFixture.OpenAsync(f.Dataset,writerJob,inspector))
+ using(var inspector=new NativeSqliteInspector(node,ProductionFixture.Hash(File.ReadAllBytes(node))))using(var recovery=await NativeRecoveryFixture.OpenAsync(f.Dataset,writerJob.Process,inspector))
  {saved=await recovery.BackupAsync();recovered=await recovery.RestoreToNewDirectoryAsync(saved.BackupId,f.Schema,f.Schema);}
  f.ResetRecovery(saved,recovered);f.Phase="committed";f.Publish();File.WriteAllBytes(f.PathOf("bootstrap.json"),JsonSerializer.SerializeToUtf8Bytes(new{schema=1,service=ServiceDefinition.Name,installationId=f.InstallationId,activationReceiptDigest=f.Binding.ActivationReceiptDigest}));
  f.ClearSignals();var controller=new ServiceController(new DirectAuthorization(f));var result=await controller.RunAsync(r=>{if(r.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);});Assert(result.Failure==ServiceFailure.None,"recovered routine startup failure="+result.Failure+" stop="+f.Control.StopError);
@@ -480,8 +519,8 @@ await Check("shared typed job accounting reads active at 40 and ignores nonzero 
  Assert(System.Runtime.InteropServices.Marshal.OffsetOf<JobAccounting>(nameof(JobAccounting.ActiveProcesses)).ToInt32()==40);
  Assert(new JobAccounting{TotalProcesses=17,ActiveProcesses=0}.TreeEmpty);
  Assert(!new JobAccounting{TotalProcesses=17,ActiveProcesses=1}.TreeEmpty);
- using var job=JobProcess.Start(node,["-e",""],f.Root,LaunchEnvironment.Clean(f.Root));await job.WaitAsync(default);await job.WaitForTreeEmptyAsync(default);
- var actual=job.ObserveAccounting();Assert(actual.TotalProcesses>0&&actual.ActiveProcesses==0&&actual.TreeEmpty);
+ using var job=f.StartJob(node,["-e",""],f.Root,LaunchEnvironment.Clean(f.Root));await job.WaitAsync(default);await job.WaitForTreeEmptyAsync(default);
+ var actual=job.Process.ObserveAccounting();Assert(actual.TotalProcesses>0&&actual.ActiveProcesses==0&&actual.TreeEmpty);
 });
 ProtectedOperation? selectedHealthOperation=null;
 AuthorityCoordinator HealthCoordinator(RuntimeHealthCoordinator health)
@@ -496,7 +535,7 @@ AuthorityCoordinator HealthCoordinator(RuntimeHealthCoordinator health)
 IServiceStartAuthorizer InstalledHealth(InstallationBinding binding)=>new InstalledBindingStartAuthorizer(f.CreateResolver(),binding);
 await Check("commit remains awaiting runtime until actual admitted Store health and holds its lease",async()=>
 {
- var health=new RuntimeHealthCoordinator(InstalledHealth,TimeSpan.FromSeconds(10),TimeSpan.FromSeconds(5));var c=HealthCoordinator(health);f.ClearSignals();
+ var health=new RuntimeHealthCoordinator(InstalledHealth);var c=HealthCoordinator(health);f.ClearSignals();
  await c.CommitAsync();Assert(c.Phase=="awaiting_runtime");await c.StartRuntimeAsync();
  try{Assert(c.Phase=="healthy");await Denied(()=>{using var lease=WindowsFileBoundary.AcquireDataLease(f.Data);return Task.CompletedTask;});}
  finally{await c.StopRuntimeAsync();}
@@ -532,7 +571,7 @@ await Check("late admission after timeout remains owned and explicitly releases 
 });
 await Check("interrupted commit reconciliation still awaits real new-runtime health",async()=>
 {
- var health=new RuntimeHealthCoordinator(InstalledHealth,TimeSpan.FromSeconds(10),TimeSpan.FromSeconds(5));var c=HealthCoordinator(health);
+ var health=new RuntimeHealthCoordinator(InstalledHealth);var c=HealthCoordinator(health);
  var selected=selectedHealthOperation??throw new Exception("no selected operation");
  // Use the same concrete operation and ledger as the coordinator; simulate interrupted publication.
  await Denied(()=>Writer(Ledger()).CommitAsync(selected,p=>{if(p=="record-web.json")throw new IOException("interrupt");}));
@@ -573,7 +612,7 @@ InstalledAuthorityComposition Composition(bool reset=true,Func<CancellationToken
  InstalledAuthorityComposition? composition=null;
  RuntimeAuthorityGate EmptyGate(){var kernel=new FakeRuntimeKernel{Empty=true};var gate=new RuntimeAuthorityGate(kernel);gate.Admit(kernel.Generation);kernel.Exit=true;return gate;}
  composition=InstalledAuthorityComposition.PrivateFixture(f.Root,ProductionFixture.Hash(bytes),RuntimeSid,node,anchor.ProbeSha256!,(_,_)=>projectedRoles++,EmptyGate,quiesce??(_=>Task.CompletedTask),f.Control,
-  b=>{f.ClearSignals();return new InstalledBindingStartAuthorizer(new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,connectorProfile:RuntimeConnectorProfile.Synthetic,stateFiles:composition!.Files),b);},()=>f.Now);
+  b=>{f.ClearSignals();return new InstalledBindingStartAuthorizer(f.CreateResolver(stateFiles:composition!.Files),b);},()=>f.Now,prepareUpdate:(_,_)=>Task.FromResult(true)); // Synthetic worker has no user interaction.
  return composition;
 }
 byte[] Frame(string id,string method,object body)=>JsonSerializer.SerializeToUtf8Bytes(new AuthorityFrame(1,id,method,JsonSerializer.SerializeToElement(body)));
@@ -581,12 +620,19 @@ Task<EndpointReply> Request(AuthorityEndpointRouter router,string action,string?
 {id??=Guid.NewGuid().ToString("N");return router.DispatchAsync(AuthorityEndpointRole.Runtime,runtimePeer,Frame(id,"request",new AuthorityRequest(1,id,action,target,mode)));}
 Task<EndpointReply> Observe(AuthorityEndpointRouter router,bool owner=false)=>router.DispatchAsync(owner?AuthorityEndpointRole.Owner:AuthorityEndpointRole.Runtime,owner?ownerPeer:runtimePeer,Frame(Guid.NewGuid().ToString("N"),owner?"confirmation":"status",new{}));
 Task<EndpointReply> AnswerView(AuthorityEndpointRouter router,OwnerConfirmationState view,bool approve)=>view.AnswerAsync(approve,(frame,c)=>router.DispatchAsync(AuthorityEndpointRole.Owner,ownerPeer,JsonSerializer.SerializeToUtf8Bytes(frame),c));
+async Task WaitPositiveRouter(AuthorityEndpointRouter router,string label)
+{
+ var elapsed=System.Diagnostics.Stopwatch.StartNew();
+ try{await router.Execution!.WaitAsync(TimeSpan.FromMinutes(2));}
+ catch(TimeoutException){Console.WriteLine("POSITIVE_ROUTER_TIMEOUT "+label+" phase="+router.Phase+" seconds="+elapsed.Elapsed.TotalSeconds.ToString("F3",System.Globalization.CultureInfo.InvariantCulture));throw;}
+ Console.WriteLine("POSITIVE_ROUTER_COMPLETED "+label+" phase="+router.Phase+" seconds="+elapsed.Elapsed.TotalSeconds.ToString("F3",System.Globalization.CultureInfo.InvariantCulture));
+}
 await Check("complete composition routes exact intake through one owner view to actual Store health",async()=>
 {
  var c=Composition();var available=await Request(c.Router,"check");Assert(available.Phase=="available"&&available.Target!.Version=="0.5.3");
  await Request(c.Router,"install",available.Target!.Fingerprint);var pending=await Observe(c.Router,true);Assert(pending.Phase=="awaiting_local_approval"&&pending.Confirmation is not null);
  var view=new OwnerConfirmationState(pending.Confirmation!,f.InstallationId,()=>f.Now);var count=Directory.GetFiles(f.PathOf("owner-ledger"),"challenge-*.json").Length;
- await AnswerView(c.Router,view,true);try{await c.Router.Execution!.WaitAsync(TimeSpan.FromSeconds(20));Assert(c.Router.Phase=="healthy");Assert(Directory.GetFiles(f.PathOf("owner-ledger"),"challenge-*.json").Length==count);Assert(projectedRoles>20);await Denied(()=>{using var blocked=WindowsFileBoundary.AcquireDataLease(f.Data);return Task.CompletedTask;});}
+ await AnswerView(c.Router,view,true);try{await WaitPositiveRouter(c.Router,"composition");Assert(c.Router.Phase=="healthy");Assert(Directory.GetFiles(f.PathOf("owner-ledger"),"challenge-*.json").Length==count);Assert(projectedRoles>20);await Denied(()=>{using var blocked=WindowsFileBoundary.AcquireDataLease(f.Data);return Task.CompletedTask;});}
  finally{await c.Router.StopAsync();}Assert(c.Router.Phase=="stopped");
 });
 await Check("router rejects wrong endpoint role wrong owner and client authority fields",async()=>
@@ -626,15 +672,22 @@ await Check("cancelled confirmation is durable and restart does not infer unfini
 await Check("automatic mode uses one bounded owner approval for two actual routine launches",async()=>
 {
  var c=Composition();var d=Policy() with{MaximumPayloadBytes=2147483648};File.WriteAllBytes(f.PathOf("intake/delegation-template.json"),JsonSerializer.SerializeToUtf8Bytes(d));
- await Request(c.Router,"set_mode",mode:"auto");var snapshot=(await Observe(c.Router,true)).Confirmation!;Assert(snapshot.Scope=="delegate");await AnswerView(c.Router,new(snapshot,f.InstallationId,()=>f.Now),true);
+ await Request(c.Router,"set_mode",mode:"auto");var snapshot=(await Observe(c.Router,true)).Confirmation!;Assert(snapshot.Scope=="delegate");await AnswerView(c.Router,new(snapshot,f.InstallationId,()=>f.Now),true);d=snapshot.Delegation!;
  var challenges=Directory.GetFiles(f.PathOf("owner-ledger"),"challenge-*.json").Length;
+ async Task Apply(string label)
+ {
+  var elapsed=System.Diagnostics.Stopwatch.StartNew();await Request(c.Router,"check");
+  try{await c.Router.Execution!.WaitAsync(TimeSpan.FromMinutes(2));}
+  catch(TimeoutException){Console.WriteLine("SYNTHETIC_UPDATE_TIMEOUT "+label+" phase="+c.Router.Phase+" seconds="+elapsed.Elapsed.TotalSeconds.ToString("F3",System.Globalization.CultureInfo.InvariantCulture));throw;}
+  Console.WriteLine("SYNTHETIC_UPDATE_COMPLETED "+label+" phase="+c.Router.Phase+" seconds="+elapsed.Elapsed.TotalSeconds.ToString("F3",System.Globalization.CultureInfo.InvariantCulture));Assert(c.Router.Phase=="healthy");
+ }
  try
  {
-  await Request(c.Router,"check");await c.Router.Execution!.WaitAsync(TimeSpan.FromSeconds(20));Assert(c.Router.Phase=="healthy");
-  StageCandidate("0.5.4");await Request(c.Router,"check");await c.Router.Execution!.WaitAsync(TimeSpan.FromSeconds(20));Assert(c.Router.Phase=="healthy");
+  await Apply("first");
+  StageCandidate("0.5.4");await Apply("second");
   Assert(challenges==Directory.GetFiles(f.PathOf("owner-ledger"),"challenge-*.json").Length);
  }finally{await c.Router.StopAsync();}
- StageCandidate("0.5.5");await Denied(()=>Request(c.Router,"check"));Assert(Directory.GetFiles(f.PathOf("owner-ledger"),"usage-"+d.Id+"-*.json").Length==2);
+ StageCandidate("0.5.5");var exhausted=await Request(c.Router,"check");Assert(exhausted.State=="approval_required"&&exhausted.Phase=="available"&&exhausted.Delegation?.RemainingOperations==0);Assert(Directory.GetFiles(f.PathOf("owner-ledger"),"usage-"+d.Id+"-*.json").Length==2);
 });
 await Check("intake rejects corrupt receipt and inconsistent schema policy payload",async()=>
 {
@@ -680,7 +733,7 @@ await Check("cancelled replacement keeps the actual running generation owned for
 {
  var c=Composition();
  async Task Install()
- {await Request(c.Router,"install",(await Observe(c.Router)).Target!.Fingerprint);var snapshot=(await Observe(c.Router,true)).Confirmation!;await AnswerView(c.Router,new(snapshot,f.InstallationId,()=>f.Now),true);await c.Router.Execution!.WaitAsync(TimeSpan.FromSeconds(20));Assert(c.Router.Phase=="healthy");}
+ {await Request(c.Router,"install",(await Observe(c.Router)).Target!.Fingerprint);var snapshot=(await Observe(c.Router,true)).Confirmation!;await AnswerView(c.Router,new(snapshot,f.InstallationId,()=>f.Now),true);await WaitPositiveRouter(c.Router,"cancelled-replacement");Assert(c.Router.Phase=="healthy");}
  await Install();try
  {
   StageCandidate("0.5.4");var id=Guid.NewGuid().ToString("N");await Request(c.Router,"install",(await Observe(c.Router)).Target!.Fingerprint,id:id);
@@ -699,22 +752,24 @@ if(preparedPayload is not null)await Check("exact rebuilt full payload passes in
     Console.WriteLine("FULL_ADMISSION_SECONDS "+timer.Elapsed.TotalSeconds.ToString("F3",System.Globalization.CultureInfo.InvariantCulture)+" CHECKPOINTS "+reports.Count(r=>r.State==ServiceState.StartPending));
     Assert(reports.Count(r=>r.State==ServiceState.StartPending)>3);
 });
-File.WriteAllText(report,JsonSerializer.Serialize(new{kind="concrete-installed-adapters-synthetic-inputs",passed=results.Count-failures,failed=failures,
+}catch(FixtureRunStopped){}
+finally{try{f.Dispose();}catch(Exception cleanup){failures++;results.Add(new{name="final fixture teardown",status="FAIL",reason=cleanup.GetType().Name});Console.WriteLine("FAIL final fixture teardown "+cleanup);}}
+File.WriteAllText(report,JsonSerializer.Serialize(new{kind="concrete-installed-adapters-synthetic-inputs",passed=results.Count-failures-blocked,failed=failures,blocked,aborted=fixtureBlocked,
     productionEntryWired=true,productionAuthorityEntryEnabled=false,endpointOnly,actualAdminProvisioningTested=false,actualStoreWrites=true,actualReceiptProducer=true,scmInvoked=false,networkListenersOpened=false,
     productionTrustOrOwnerStateCreated=false,fullRebuiltPayloadInspected=preparedPayload is not null,fixtureRoot=f.Root,tests=results},new JsonSerializerOptions{WriteIndented=true}));
-Console.WriteLine($"{results.Count-failures} passed; {failures} failed. No SCM or network listeners.");return failures==0?0:1;
+Console.WriteLine($"{results.Count-failures-blocked} passed; {failures} failed; {blocked} blocked. No SCM or network listeners.");return failures==0&&blocked==0?0:1;
 
 internal sealed class PrivateControlFiles:IInstalledControlFiles
 {public byte[] Read(string path,int bound,ICollection<IDisposable> held){var file=WindowsFileBoundary.OpenPrivateRead(path);held.Add(file);return file.Small(bound);}}
 internal sealed class DirectAuthorization(ProductionFixture fixture):IServiceStartAuthorizer,IObservedAdmission
 {
-    private readonly InstalledActivationResolver resolver=fixture.CreateResolver();public TimeSpan AdmissionBudget=>resolver.AdmissionBudget;
+    private readonly FixtureProcesses.FixtureResolver resolver=fixture.CreateResolver();public TimeSpan AdmissionBudget=>resolver.AdmissionBudget;
     public event Action? ObservedWork{add=>resolver.ObservedWork+=value;remove=>resolver.ObservedWork-=value;}
     public Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)=>Task.Run(()=>resolver.ResolveAsync(fixture.Binding,cancellation),cancellation);
 }
 internal sealed class VerificationOnlyAuthorization(ProductionFixture fixture):IServiceStartAuthorizer,IObservedAdmission
 {
-    private readonly InstalledActivationResolver resolver=fixture.CreateResolver();public TimeSpan AdmissionBudget=>resolver.AdmissionBudget;
+    private readonly FixtureProcesses.FixtureResolver resolver=fixture.CreateResolver();public TimeSpan AdmissionBudget=>resolver.AdmissionBudget;
     public event Action? ObservedWork{add=>resolver.ObservedWork+=value;remove=>resolver.ObservedWork-=value;}
     public async Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)
     {var actual=await Task.Run(()=>resolver.ResolveAsync(fixture.Binding,cancellation),cancellation);return new(actual.Release,new NoNetworkLauncher(),actual.Recovery,actual);}
@@ -737,8 +792,11 @@ internal sealed class FileControl(ProductionFixture fixture):IChildControlFactor
 {
     internal int Creates;internal bool HeldAfterClose;internal string? StopError;
     public IChildControl Create(){Creates++;HeldAfterClose=false;StopError=null;return new Channel(this,fixture);}
-    private sealed class Channel(FileControl owner,ProductionFixture fixture):IChildControl
+    private sealed class Channel(FileControl owner,ProductionFixture fixture):IChildControl,IUpdateIdleSession
     {
+        // Synthetic file-controlled Store worker, not installed/browser idle acceptance.
+        public Task<bool> PrepareUpdateAsync(string id,CancellationToken cancellation){cancellation.ThrowIfCancellationRequested();return Task.FromResult(true);}
+        public Task CancelUpdateAsync(string id,CancellationToken cancellation){cancellation.ThrowIfCancellationRequested();return Task.CompletedTask;}
         public string Endpoint=>"synthetic-control-no-network-listener";
         private async Task Wait(string name,CancellationToken cancellation)
         {while(!File.Exists(Path.Combine(fixture.Data,name)))await Task.Delay(10,cancellation);}
@@ -751,23 +809,33 @@ internal sealed class FileControl(ProductionFixture fixture):IChildControlFactor
 }
 internal sealed class ProductionFixture:IDisposable
 {
+    private readonly OwnedFixtureDirectory owned;
+    private readonly FixtureProcesses processes=new();
+    private bool disposed;
+    private bool cleanupAttempted;private Exception? cleanupFailure;
     internal readonly string Root,Dataset,OriginalDataId=Guid.NewGuid().ToString("N"),InstallationId=Guid.NewGuid().ToString("N"),Payload,Node,Repo;
     internal string DataId,Phase="committed";internal long AnchorEpoch=1;internal string? AnchorDigest,OwnerRelease;internal long? Expiry;
     internal int Schema {get;}
     internal InstalledRecovery? Recovery;internal DateTimeOffset Now=DateTimeOffset.UtcNow;internal readonly FileControl Control;
     internal string Data=>Recovery is null?Path.Combine(Dataset,"data"):Path.Combine(Dataset,"restore-"+Recovery.OperationId,"completed","data");
     internal string Policy=>Path.Combine(Dataset,"update-policy");private string release="";
-    private ProductionFixture(string repo)
+    private ProductionFixture(string repo,Action<string>? allocated=null)
     {
-        Repo=repo;Schema=ReadSourceSchema(repo);Root=SafeDirectory.CreatePrivateSession(Path.GetTempPath());Directory.CreateDirectory(Path.Combine(Root,"datasets"));
+        Repo=repo;Schema=ReadSourceSchema(repo);owned=OwnedFixtureDirectory.Create(Path.GetTempPath());Root=owned.Root;
+        try{
+        allocated?.Invoke(Root);
+        Directory.CreateDirectory(Path.Combine(Root,"datasets"));
         var source=SafeDirectory.CreatePrivateSession(Path.Combine(Root,"datasets"));Dataset=Path.Combine(Root,"datasets",OriginalDataId);
         if(!Path.GetFullPath(source).StartsWith(Root+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)||!Path.GetFullPath(Dataset).StartsWith(Root+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))throw new IOException("TEST_MOVE_SCOPE");Directory.Move(source,Dataset);
         DataId=OriginalDataId;Payload=Path.Combine(Root,"payload-stage");Directory.CreateDirectory(Payload);Node=Path.Combine(Payload,"runtime/node/node.exe");Directory.CreateDirectory(Path.GetDirectoryName(Node)!);Control=new(this);
         Directory.CreateDirectory(Path.Combine(Root,"temporary"));Directory.CreateDirectory(Data);File.WriteAllText(Path.Combine(Dataset,"master-key"),Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)));File.WriteAllText(Policy,"synthetic-policy");File.WriteAllText(Path.Combine(Dataset,"update-pin"),"synthetic-pin");
+        }catch(Exception failure){try{owned.Cleanup(()=>true);}catch(Exception cleanup){throw new AggregateException(failure,cleanup);}throw;}
     }
-    internal static async Task<ProductionFixture> Create(string node,string repo,string helper)
+    internal static async Task<ProductionFixture> Create(string node,string repo,string helper,Action<string>? allocated=null)
     {
-        var f=new ProductionFixture(repo);File.Copy(node,f.Node);Copy(helper,Path.Combine(f.Payload,"app/native"));
+        var f=new ProductionFixture(repo,allocated);
+        try{
+        File.Copy(node,f.Node);Copy(helper,Path.Combine(f.Payload,"app/native"));
         void Put(string name,string text){var p=Path.Combine(f.Payload,name);Directory.CreateDirectory(Path.GetDirectoryName(p)!);File.WriteAllText(p,text);}
         Put("runtime/ffmpeg/ffmpeg.exe","synthetic-ffmpeg-not-executed");Put("runtime/caddy/caddy.exe","synthetic-caddy-not-executed");
         Put("app/package.json","{\"type\":\"module\"}");Put("app/node_modules/tsx/package.json","{\"type\":\"module\",\"exports\":\"./index.mjs\"}");
@@ -780,6 +848,7 @@ internal sealed class ProductionFixture:IDisposable
         f.release=Hash(manifest);File.WriteAllBytes(Path.Combine(f.Payload,"bundle.json"),manifest);Directory.CreateDirectory(Path.Combine(f.Root,"payloads"));var target=Path.Combine(f.Root,"payloads",f.release);Directory.Move(f.Payload,target);
         f.actualPayload=target;
         await f.Seed(node);f.Publish();return f;
+        }catch(Exception failure){f.processes.Retain(failure);try{f.Dispose();}catch(Exception cleanup){throw new AggregateException(failure,cleanup);}throw;}
     }
     private string? actualPayload;internal string Package=>actualPayload??Payload;
     internal string PathOf(string name)=>Path.Combine(Root,name);
@@ -795,12 +864,21 @@ internal sealed class ProductionFixture:IDisposable
         Write("epoch.json",new InstalledEpoch(1,InstallationId,AnchorEpoch,AnchorDigest??head));
     }
     internal InstallationBinding Binding=>new(InstallationId,Hash(File.ReadAllBytes(PathOf("activation.json"))));
-    internal InstalledActivationResolver CreateResolver(JobProcessFaultInjection? fault=null)=>new(Root,new PrivateControlFiles(),Control,()=>Now,fault);
+    internal FixtureProcesses.FixtureResolver CreateResolver(JobProcessFaultInjection? fault=null,InstalledStateFiles? stateFiles=null)
+        =>processes.Resolver(new(Root,new PrivateControlFiles(),Control,()=>Now,processes.Observe(fault),stateFiles:stateFiles,processFactory:spec=>CreateLauncher(spec)));
+    internal IPrivateAppLauncher CreateLauncher(VerifiedProcessSpec spec,JobProcessFaultInjection? fault=null)
+        =>processes.Launcher(new ServiceProcessLauncher(spec,Control,processes.Observe(fault)));
+    internal void RetainFailure(Exception failure)=>processes.Retain(failure);
+    internal Task RetrySessionAsync(IContainedAppSession inner,CancellationToken cancellation)=>processes.RetrySessionAsync(inner,cancellation);
+    internal FixtureProcesses.JobOwner StartJob(string image,IEnumerable<string> arguments,string directory,IReadOnlyDictionary<string,string> environment,
+        Action<Microsoft.Win32.SafeHandles.SafeProcessHandle,int>? beforeResume=null,JobProcessFaultInjection? fault=null)
+        =>processes.StartJob(image,arguments,directory,environment,beforeResume,fault);
     internal Task<AuthorizedServiceStart> Resolve(CancellationToken cancellation=default)=>CreateResolver().ResolveAsync(Binding,cancellation);
     private async Task Seed(string node)
     {
         var config=ConfigScript();var script="import fs from 'node:fs';try{const{Store}=await import("+JsonSerializer.Serialize(new Uri(Path.Combine(Repo,"src/store.ts")).AbsoluteUri)+");"+config+"const s=new Store(config);s.close();}catch(e){fs.writeFileSync("+JsonSerializer.Serialize(Path.Combine(Root,"seed-error.json"))+",JSON.stringify({name:e.name,message:e.message}));process.exit(1)}";
-        using var job=JobProcess.Start(node,["--import",new Uri(Path.Combine(Repo,"node_modules/tsx/dist/loader.mjs")).AbsoluteUri,"--input-type=module","-e",script],Repo,LaunchEnvironment.Clean(Root));using var bound=new CancellationTokenSource(TimeSpan.FromSeconds(30));if(await job.WaitAsync(bound.Token)!=0)throw new IOException("REAL_STORE_SEED_FAILED "+(File.Exists(Path.Combine(Root,"seed-error.json"))?File.ReadAllText(Path.Combine(Root,"seed-error.json")):"loader or import failure"));await job.WaitForTreeEmptyAsync(bound.Token);
+        using var seedOwner=processes.StartJob(node,["--import",new Uri(Path.Combine(Repo,"node_modules/tsx/dist/loader.mjs")).AbsoluteUri,"--input-type=module","-e",script],Repo,LaunchEnvironment.Clean(Root));var job=seedOwner.Process;
+        using var bound=new CancellationTokenSource(TimeSpan.FromSeconds(30));if(await job.WaitAsync(bound.Token)!=0)throw new IOException("REAL_STORE_SEED_FAILED "+(File.Exists(Path.Combine(Root,"seed-error.json"))?File.ReadAllText(Path.Combine(Root,"seed-error.json")):"loader or import failure"));await job.WaitForTreeEmptyAsync(bound.Token);
     }
     private string ConfigScript()=>"const config={dataDir:"+JsonSerializer.Serialize(Path.Combine(Dataset,"data"))+",masterKey:Buffer.from(fs.readFileSync("+JsonSerializer.Serialize(Path.Combine(Dataset,"master-key"))+",'utf8').trim(),'base64'),connector:'mock',realAllowed:false,host:'127.0.0.1',port:32000,origin:'https://yahad.invalid',secureCookie:true,maxMedia:16777216,maxStorage:2147483648,childIdleMs:900000,sessionMs:43200000,diagnosticsEnabled:false};";
     private string Worker()=>"import fs from 'node:fs';import path from 'node:path';import{Store}from "+JsonSerializer.Serialize(new Uri(Path.Combine(Repo,"src/store.ts")).AbsoluteUri)+";import{createPlatformFiles}from "+JsonSerializer.Serialize(new Uri(Path.Combine(Repo,"src/platform-files.ts")).AbsoluteUri)+";"+"const data=process.env.DATA_DIR;const release=await createPlatformFiles('win32',path.resolve('native/Yahad.Platform.exe')).acquireDataLock(data);const config={dataDir:data,masterKey:Buffer.from(fs.readFileSync(process.env.MASTER_KEY_FILE,'utf8').trim(),'base64'),connector:'mock',realAllowed:false,host:'127.0.0.1',port:32000,origin:'https://yahad.invalid',secureCookie:true,maxMedia:16777216,maxStorage:2147483648,childIdleMs:900000,sessionMs:43200000,diagnosticsEnabled:false};const store=new Store(config);store.db.exec('CREATE TABLE IF NOT EXISTS native_activation_probe(value INTEGER);INSERT INTO native_activation_probe VALUES(1)');fs.writeFileSync(path.join(data,'native-ready.partial'),JSON.stringify({pid:process.pid,PATH:process.env.PATH,clean:!process.env.NODE_OPTIONS&&!process.env.DOTNET_STARTUP_HOOKS}));fs.renameSync(path.join(data,'native-ready.partial'),path.join(data,'native-ready'));const wait=n=>new Promise(resolve=>{const timer=setInterval(()=>{if(fs.existsSync(path.join(data,n))){clearInterval(timer);resolve();}},10)});await wait('native-stop');store.close();await release();fs.writeFileSync(path.join(data,'native-closed'),'closed');await wait('native-exit');";
@@ -830,7 +908,15 @@ internal sealed class ProductionFixture:IDisposable
         return schema;
     }
     private static void Copy(string source,string target){Directory.CreateDirectory(target);foreach(var file in Directory.GetFiles(source))File.Copy(file,Path.Combine(target,Path.GetFileName(file)));}
-    public void Dispose(){} // synthetic data stays private; never included in source or runtime artifacts
+    public void Dispose()
+    {
+        if(disposed)return;
+        if(cleanupAttempted)throw new IOException("FIXTURE_RETAINED_AFTER_CLEANUP_FAILURE",cleanupFailure);
+        cleanupAttempted=true;
+        try{
+        processes.CleanupAsync().GetAwaiter().GetResult();owned.Cleanup(()=>processes.Confirmed);disposed=true;
+        }catch(Exception failure){cleanupFailure=failure;throw;}
+    }
 }
 
 internal sealed class StartFailureAuthorization(IPrivateAppLauncher launcher,StartReservation resource):IServiceStartAuthorizer,IAppRecoveryBarrier
@@ -846,7 +932,7 @@ internal sealed class StartReservation(WindowsFileBoundary.DataLease lease,JobPr
 
 internal sealed class ProbeAuthorization(ProductionFixture fixture,JobProcessFaultInjection fault):IServiceStartAuthorizer,IObservedAdmission
 {
-    private readonly InstalledActivationResolver resolver=fixture.CreateResolver(fault);public TimeSpan AdmissionBudget=>resolver.AdmissionBudget;
+    private readonly FixtureProcesses.FixtureResolver resolver=fixture.CreateResolver(fault);public TimeSpan AdmissionBudget=>resolver.AdmissionBudget;
     public event Action? ObservedWork{add=>resolver.ObservedWork+=value;remove=>resolver.ObservedWork-=value;}
     public Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)=>Task.Run(()=>resolver.ResolveAsync(fixture.Binding,cancellation),cancellation);
 }

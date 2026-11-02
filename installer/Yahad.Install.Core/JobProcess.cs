@@ -32,6 +32,7 @@ public sealed class JobProcess : IDisposable
     private readonly JobProcessFaultInjection? fault;
     public int ProcessId { get; }
     internal JobAccounting ObserveAccounting()=>JobAccounting.Read(job);
+    internal RetainedRuntimeQuiescence AcquireRecoveryQuiescence()=>RetainedRuntimeQuiescence.FromRetainedHostAndJob(process,job,ProcessId);
     private JobProcess(SafeFileHandle job, SafeProcessHandle process, int id,JobProcessFaultInjection? fault)
     { this.job = job; this.process = process; ProcessId = id;this.fault=fault; }
 

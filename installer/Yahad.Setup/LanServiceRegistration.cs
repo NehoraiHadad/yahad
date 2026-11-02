@@ -95,6 +95,13 @@ internal sealed class LanServiceRegistration : IDisposable
         RequireOwned(); var state = Status();
         LanProxyPolicy.RequireConfirmedStopped(state.State, state.Pid, state.Win32, state.Specific);
     }
+    internal void RequireConfigurationStop()
+    {RequireOwned();var state=Status();RequireConfigurationStop(state.State,state.Pid,state.Win32,state.Specific);}
+    internal static void RequireConfigurationStop(uint state,uint pid,uint win32,uint specific)
+    {
+        if(win32==1077)NativeServiceInstall.RequireConfigurationStop(state,win32,specific,pid);
+        else LanProxyPolicy.RequireConfirmedStopped(state,pid,win32,specific);
+    }
     internal void EnableAutomaticStart()
     {
         RequireOwned();
