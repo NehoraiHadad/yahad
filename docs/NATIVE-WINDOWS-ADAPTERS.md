@@ -95,9 +95,9 @@ compiled but not exercised under actual service accounts. The private catalog's
 version/channel/intake facts are synthetic trusted inputs, not verified public
 release intake. Developer package signatures cannot substitute for that step.
 
-After those pieces are built, freeze all new hashes into the one blocked
-`installer/windows/authority-vm-acceptance.json` proposal. Identify a disposable
-Windows VM/snapshot and test SIDs, then obtain approval for that exact manifest.
+The obsolete machine-proposal JSON has been removed. Freeze exact current
+artifact hashes, test identities and recovery plan, then obtain approval for the
+chosen isolated test environment.
 No VM or prior approval is assumed. Actual ACL/token/identification, SCM and
 cross-account/nested-job behavior, native confirmation, clean installation,
 reboot/power-loss recovery, full dependency-bundle rebuild and HTTPS/LAN handoff

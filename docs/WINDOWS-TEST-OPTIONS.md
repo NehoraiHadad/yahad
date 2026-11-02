@@ -53,10 +53,7 @@ that product, changing hypervisor/BIOS/boot features or rebooting ASUSHADAD,
 creating a VM, configuring networking and any cost/licensing transaction each
 need explicit scoped authorization. None is selected or performed here.
 
-The existing `authority-vm-acceptance.json` remains execution-ineligible and
-unapproved. Complete the missing production channel/window/SCM/intake composition
-first, then freeze its new executable/dependency hashes plus the guest ID,
-snapshot and test-user SIDs into that single manifest. The currently rebuilt
-disabled health-adapter binary is not a substitute for those positive acceptance
-artifacts. No host modification or blanket-permission request is necessary to
-continue safe source implementation.
+Historical proposal: the obsolete machine-specific JSON has been removed.
+Use exact current package/source hashes, test identities and an isolation/recovery
+plan when requesting real acceptance. This document grants no machine authority;
+[current validation limits](VALIDATION.md) still apply.
