@@ -17,8 +17,9 @@ $previous = @{}
 foreach ($name in $names) { $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 try {
     if ($PSVersionTable.PSVersion.Major -lt 7 -or !$IsWindows) { throw 'Windows x64 and PowerShell 7 required' }
-    $dotnetExe = (Get-Command $DotNet -CommandType Application -ErrorAction Stop).Source
-    $pythonExe = (Get-Command $Python -CommandType Application -ErrorAction Stop).Source
+    # PATH may hold several matches; use the first, as the shell would.
+    $dotnetExe = (Get-Command $DotNet -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $pythonExe = (Get-Command $Python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     $nodeRoot = (Resolve-Path -LiteralPath $NodeDirectory).Path
     $nodeExe = Join-Path $nodeRoot 'node.exe'
     $npmCli = Join-Path $nodeRoot 'node_modules/npm/bin/npm-cli.js'
