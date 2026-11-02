@@ -109,7 +109,8 @@ test('actual mock app starts without development tools on PATH, excludes another
     // A different port ensures a missing data lock cannot pass through a bind failure.
     const concurrent = start(await freePort()); concurrent.stdout!.resume(); concurrent.stderr!.resume();
     const concurrentDeadline = setTimeout(() => concurrent.kill(), 20000);
-    try { assert.equal((await once(concurrent, 'exit'))[0], 1); }
+    // 11 is the fixed data-lock stage code: the refusal is the held lock.
+    try { assert.equal((await once(concurrent, 'exit'))[0], 11); }
     finally { clearTimeout(concurrentDeadline); if (concurrent.exitCode === null) concurrent.kill(); }
     child.send({ type: 'yahad.shutdown' });
     assert.equal((await exited)[0], 0);

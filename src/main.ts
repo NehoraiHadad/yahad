@@ -23,15 +23,22 @@ process.on('unhandledRejection', () => {
   process.stderr.write('Unhandled operation failed. Restarting without logging payload.\n');
   process.exit(1);
 });
+// The native host keeps only the exit code, never output, so a refused startup
+// exits with the fixed code of the step that refused it.
+const startupExit = { config: 10, dataLock: 11, app: 12, listen: 13, control: 14 } as const;
+let stage: keyof typeof startupExit = 'config';
 try {
   const config = loadConfig();
+  stage = 'dataLock';
   const release = await acquireDataLock(config.dataDir);
+  stage = 'app';
   const updateIdle = process.platform === 'win32' && process.env.YAHAD_NATIVE_PIPE ? new UpdateIdleFence(config.dataDir) : undefined;
   const windowsUpdates = updateIdle ? createWindowsUpdateTransport() : undefined;
   const binding = nativeProbationBinding(process.env), probation = binding ? new NativeEffectsGate(binding) : undefined;
   const { app, service } = await createApp(config, { updateIdle, windowsUpdates, ...(probation ? { boot: false, effectsReady: () => probation.released } : {}),
     firstOwner: readFirstOwnerIdentity(process.env.SETUP_CAPABILITY_FILE || platformFiles.setupCapabilityPath()),
     bootstrap: readBootstrap(process.env.SETUP_CAPABILITY_FILE || platformFiles.setupCapabilityPath()) });
+  stage = 'listen';
   if (!probation) {
     await app.listen({ host: config.host, port: config.port });
     process.stdout.write(`Yachad listening (${config.connector}) on port ${config.port}\n`);
@@ -39,6 +46,7 @@ try {
     await app.ready(); const health = await app.inject({ url: '/health/ready' });
     if (health.statusCode !== 200) throw new Error('NATIVE_PROBATION_HEALTH_REFUSED');
   }
+  stage = 'control';
   const stop = installRuntimeShutdown(() => app.close(), release);
   installNativeControl(stop, updateIdle, probation ? { gate: probation, start: async signal => {
     signal.throwIfAborted(); await app.listen({ host: config.host, port: config.port }); signal.throwIfAborted();
@@ -52,5 +60,5 @@ try {
   process.stderr.write(
     'Startup failed. Check local configuration, file permissions, and port availability. No secrets logged.\n',
   );
-  process.exit(1);
+  process.exit(startupExit[stage]);
 }
