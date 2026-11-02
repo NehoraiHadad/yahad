@@ -6,6 +6,8 @@ namespace Yahad.Owner;
 // never invokes it. Private tests exercise its state model without opening UI.
 internal static class OwnerWindowFactory
 {
+    internal static RecoveryWindow Recovery(string installation)
+        =>new(installation,(frame,cancellation)=>WindowsAuthorityEndpoint.SendOwnerAsync(installation,frame,cancellation));
     internal static async Task<ApprovalWindow> ReadAsync(string installation,CancellationToken cancellation)
     {
         var frame=new AuthorityFrame(1,Guid.NewGuid().ToString("N"),"confirmation",System.Text.Json.JsonSerializer.SerializeToElement(new{}));

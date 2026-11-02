@@ -26,7 +26,7 @@ internal static class LanWebConfiguration
             web.InstallationId!=state.InstallationId||web.Port!=state.Port||
             !Uri.TryCreate(web.Origin,UriKind.Absolute,out var origin)||origin.UserInfo!=""||origin.AbsolutePath!="/"||origin.Query!=""||origin.Fragment!=""||
             !(origin.Scheme=="http"&&origin.Host=="127.0.0.1"&&origin.Port==state.Port||origin.Scheme=="https"&&origin.Port==443&&NetworkPlan.IsPrivateLanV4(origin.Host))||
-            activation.InstallationId!=state.InstallationId||activation.ReleaseDigest!=state.PayloadDigest||activation.DataId!=state.DataId||activation.Phase!="committed"||activation.Recovery is not null||
+            activation.InstallationId!=state.InstallationId||activation.ReleaseDigest!=state.PayloadDigest||activation.DataId!=state.DataId||activation.Phase!="committed"||activation.Recovery!=state.CurrentRecovery||activation.Migration!=state.CurrentMigration||
             activation.WebDigest!=Hash(snapshot.Web)||epoch.InstallationId!=state.InstallationId||epoch.Epoch!=activation.Epoch||epoch.ActivationDigest!=Hash(snapshot.Activation)||
             bootstrap.GetProperty("installationId").GetString()!=state.InstallationId||bootstrap.GetProperty("activationReceiptDigest").GetString()!=Hash(snapshot.Activation))
             throw new IOException("LAN_APP_CONFIGURATION_CHANGED");
@@ -44,5 +44,10 @@ internal static class LanWebConfiguration
         if(journal.Format!=1||journal.InstallationId!=state.InstallationId)throw new IOException("LAN_JOURNAL_CHANGED");
         Require(journal.Before,state);Require(journal.After,state);var before=Parts(journal.Before);var after=Parts(journal.After);
         for(var i=0;i<Names.Length;i++){var current=Hash(read(Names[i]));if(current!=Hash(before[i])&&current!=Hash(after[i]))throw new IOException("LAN_JOURNAL_CHANGED");}
+    }
+    internal static void RequireInstallerPartial(LanWebJournal journal,string name,byte[] partial)
+    {
+        var index=Array.IndexOf(Names,name);if(index<0||partial.Length>131072)throw new IOException("LAN_JOURNAL_CHANGED");
+        if(!Parts(journal.Before)[index].AsSpan().StartsWith(partial)&&!Parts(journal.After)[index].AsSpan().StartsWith(partial))throw new IOException("LAN_JOURNAL_CHANGED");
     }
 }

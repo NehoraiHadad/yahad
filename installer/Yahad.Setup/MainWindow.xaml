@@ -5,7 +5,7 @@
    <DockPanel LastChildFill="False"><StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
     <Viewbox Width="35" Height="35" Margin="0,0,0,0"><Canvas Width="32" Height="32"><Path Data="M27,15 C27,23 20,28 12,26 L4,29 L6,21 C1,11 7,3 16,3 C23,3 27,8 27,15Z" Stroke="#157C69" StrokeThickness="2"/><Path Data="M16,21 L10,15 C6,10 12,7 16,12 C20,7 26,10 22,15Z" Fill="#157C69"/></Canvas></Viewbox>
     <TextBlock Text="יחד" FontSize="29" FontWeight="SemiBold" Margin="10,0,0,0"/></StackPanel>
-    <Border DockPanel.Dock="Left" Background="#EAEDE6" CornerRadius="18" Padding="12,6" VerticalAlignment="Center"><TextBlock Text="0.5.3 · Windows" FontSize="12" FlowDirection="LeftToRight" Foreground="#53645F"/></Border>
+    <Border DockPanel.Dock="Left" Background="#EAEDE6" CornerRadius="18" Padding="12,6" VerticalAlignment="Center"><TextBlock x:Name="VersionBadge" FontSize="12" FlowDirection="LeftToRight" Foreground="#53645F"/></Border>
    </DockPanel>
    <ScrollViewer x:Name="ContentScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,28,0,14"><StackPanel>
     <TextBlock x:Name="Eyebrow" Text="מתחילים בבית, ביחד" FontSize="13" Foreground="#157C69" FontWeight="SemiBold"/>
@@ -19,25 +19,46 @@
     </StackPanel></Border>
     <Button x:Name="RemovalEntry" Visibility="Collapsed" Content="אפשרויות הסרה להתקנה הקיימת" Click="RemovalOptions_Click" Background="Transparent" Foreground="#157C69" HorizontalAlignment="Right" Margin="0,8,0,0" FontSize="13"/>
     <StackPanel x:Name="LanPanel" Margin="0,18,0,0">
-     <TextBlock Text="איפה משתמשים ביחד?" FontSize="18" FontWeight="SemiBold"/>
-     <RadioButton x:Name="KeepLan" GroupName="LanMode" IsChecked="True" Checked="LanChanged" Content="ללא שינוי בגישה לרשת" Margin="0,12,0,0"/>
-     <TextBlock Text="בהתקנה חדשה: שימוש במחשב הזה בלבד. בהתקנה קיימת: הגדרות הגישה נשמרות." FontSize="12" Foreground="#5C716B" Margin="22,5,0,8"/>
-     <RadioButton x:Name="HomeLan" GroupName="LanMode" Checked="LanChanged" Content="גם בטלפונים ובטאבלטים ברשת הביתית" Margin="0,5,0,8"/>
+     <TextBlock Text="איפה תרצו להשתמש ביחד?" FontSize="18" FontWeight="SemiBold"/>
+     <RadioButton x:Name="KeepLan" GroupName="LanMode" IsChecked="True" Checked="LanChanged" Content="רק במחשב הזה" Margin="0,12,0,0"/>
+     <TextBlock x:Name="LanKeepHint" Text="יחד תהיה זמינה במחשב הזה בלבד. אפשר להוסיף גישה מהטלפון בהמשך." FontSize="12" TextWrapping="Wrap" Foreground="#5C716B" Margin="22,5,0,8"/>
+     <RadioButton x:Name="HomeLan" GroupName="LanMode" Checked="LanChanged" Content="גם בטלפון ובטאבלט שמחוברים לרשת הביתית" Margin="0,5,0,8"/>
      <StackPanel x:Name="LanSelection" Visibility="Collapsed" Margin="20,0,0,12">
-      <TextBlock Text="בחרו במפורש את החיבור הביתי. כתובת פרטית יכולה להיות גם של VPN; אין בחירה אוטומטית." FontSize="13" TextWrapping="Wrap"/>
-      <ComboBox x:Name="LanAddress" DisplayMemberPath="Label" SelectionChanged="LanAddressChanged" MinHeight="36" Margin="0,9,0,9" AutomationProperties.Name="החיבור לרשת הביתית"/>
+      <TextBlock Text="בחרו את החיבור הביתי של המחשב, למשל Wi-Fi, ולא חיבור לעבודה או חיבור מרוחק. המספר שלידו הוא כתובת המחשב בתוך הרשת." FontSize="13" TextWrapping="Wrap"/>
+      <ComboBox x:Name="LanAddress" DisplayMemberPath="Label" SelectionChanged="LanAddressChanged" MinHeight="36" Margin="0,9,0,9" AutomationProperties.Name="החיבור של המחשב לרשת הביתית"/>
       <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
        <CheckBox x:Name="LanHttpHelp" IsChecked="True" Checked="LanChanged" Unchecked="LanChanged" VerticalAlignment="Top" AutomationProperties.LabeledBy="{Binding ElementName=LanHelpLabel}"/>
-       <TextBlock x:Name="LanHelpLabel" Grid.Column="1" Text="דף עזרה מקומי והורדת תעודה ציבורית (HTTP, פורט 80)" TextWrapping="Wrap" Margin="8,0,0,0"/>
+       <TextBlock x:Name="LanHelpLabel" Grid.Column="1" Text="להוסיף דף עזרה להגדרת הטלפון (מומלץ)" TextWrapping="Wrap" Margin="8,0,0,0"/>
       </Grid>
-      <TextBlock x:Name="LanProgram" FontSize="11" FlowDirection="LeftToRight" TextWrapping="Wrap" Margin="0,10,0,6"/>
+      <TextBlock Text="המחשב צריך להישאר דלוק כדי שיחד תעבוד בטלפון. בפעם הראשונה נדרשת הגדרה קצרה בכל טלפון או טאבלט; ההוראות יופיעו בסיום." FontSize="12" TextWrapping="Wrap" Foreground="#5C716B" Margin="0,9,0,10"/>
       <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
        <CheckBox x:Name="LanConsent" Checked="LanChanged" Unchecked="LanChanged" VerticalAlignment="Top" AutomationProperties.LabeledBy="{Binding ElementName=LanConsentLabel}"/>
-       <TextBlock x:Name="LanConsentLabel" Grid.Column="1" Text="אני מאשר/ת לאפשר לתוכנית Caddy המוצגת למעלה חיבורים נכנסים ב־TCP 443, וב־80 אם נבחר דף עזרה, רק בפרופיל Private ומהתת־רשת המקומית. לא תיפתח גישה בנתב או לאינטרנט." TextWrapping="Wrap" FontSize="13" Margin="8,0,0,0"/>
+       <TextBlock x:Name="LanConsentLabel" Grid.Column="1" Text="אני מאשר/ת לאפשר למכשירים ברשת הביתית לפתוח את יחד במחשב הזה. Windows יוסיף הרשאת חיבור לרכיב של יחד בלבד. ההתקנה אינה פותחת גישה מהאינטרנט." TextWrapping="Wrap" FontSize="13" Margin="8,0,0,0"/>
       </Grid>
-      <TextBlock Text="HTTPS מקומי ללא חשבון או דומיין. יש לאשר את התעודה בכל מכשיר, לאחר השוואה מול מסך המחשב הזה. המחשב צריך להישאר פועל; שינוי כתובת הרשת דורש תיקון כאן." FontSize="12" TextWrapping="Wrap" Foreground="#5C716B" Margin="0,9,0,0"/>
+      <Expander x:Name="LanTechnicalDetails" Header="פרטים טכניים על הרשאת החיבור" IsExpanded="False" Margin="0,10,0,0">
+       <StackPanel Margin="4,8,4,0">
+        <TextBlock Text="רכיב החיבור Caddy יקבל גישה נכנסת ב-TCP 443 בכתובת שנבחרה, ברשת ש-Windows מגדיר כפרטית וממחשבים באותה רשת מקומית בלבד. אם נבחר דף העזרה, ייפתח עבורו גם TCP 80; דף זה אינו מציג חשבונות או נתוני משפחה." FontSize="12" TextWrapping="Wrap"/>
+        <TextBlock x:Name="LanProgram" FontSize="11" FlowDirection="LeftToRight" TextWrapping="Wrap" Margin="0,8,0,6"/>
+        <TextBlock Text="אין לבחור חיבור VPN או רשת ארגונית. אין שינוי בנתב, אין פתיחת גישה מהאינטרנט ואין הוספת אמון בתעודות ל-Windows. ההגדרה בכל מכשיר נוסף מתבצעת בנפרד." FontSize="12" TextWrapping="Wrap"/>
+       </StackPanel>
+      </Expander>
      </StackPanel>
-     <RadioButton x:Name="DisableLan" GroupName="LanMode" Checked="LanChanged" Content="כיבוי הגישה הביתית והסרת כללי חומת האש של יחד" Margin="0,4,0,0"/>
+     <RadioButton x:Name="DisableLan" GroupName="LanMode" Checked="LanChanged" Content="לבטל גישה קיימת מהטלפון ומהטאבלט" Visibility="Collapsed" Margin="0,4,0,0"/>
+     <TextBlock x:Name="DisableLanHint" Text="מיועד למי שכבר הפעיל גישה ביתית. יחד תמשיך לעבוד במחשב הזה, והנתונים יישארו." Visibility="Collapsed" FontSize="12" TextWrapping="Wrap" Foreground="#5C716B" Margin="22,5,0,8"/>
+    </StackPanel>
+    <StackPanel x:Name="UpdatePanel" Visibility="Collapsed" Margin="0,18,0,0">
+     <TextBlock Text="איך יחד יישאר מעודכן?" FontSize="18" FontWeight="SemiBold"/>
+     <TextBlock x:Name="UpdateExplanation" Text="יחד יבדוק אם יש גרסה חדשה ויוריד אותה ברקע. אפשר לשנות את הבחירה בהגדרות של יחד." FontSize="13" TextWrapping="Wrap" Margin="0,7,0,10"/>
+     <StackPanel x:Name="UpdateChoices">
+      <RadioButton x:Name="AutomaticUpdates" GroupName="UpdateMode" IsChecked="True" Content="לעדכן אוטומטית כשלא משתמשים ביחד" Margin="0,3,0,0"/>
+      <TextBlock Text="יחד ימתין לסיום שימוש, הקלטה או שליחת הודעה, ישמור גיבוי ויבדוק שהגרסה החדשה עובדת. ייתכן ניתוק קצר בזמן העדכון." FontSize="12" TextWrapping="Wrap" Foreground="#5C716B" Margin="22,5,0,9"/>
+      <RadioButton x:Name="NotifyUpdates" GroupName="UpdateMode" Content="להודיע לי ולחכות לאישור לפני העדכון" Margin="0,3,0,8"/>
+      <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+       <CheckBox x:Name="UpdateConsent" Checked="UpdateChanged" Unchecked="UpdateChanged" VerticalAlignment="Top" AutomationProperties.LabeledBy="{Binding ElementName=UpdateConsentLabel}"/>
+       <TextBlock x:Name="UpdateConsentLabel" Grid.Column="1" Text="אני מאשר/ת למנגנון העדכון להתקין גרסאות מהמאגר הרשמי של יחד לפי הבחירה שלי. העדכון עשוי לכלול גם רכיבי רקע ושינוי באופן שמירת הנתונים." TextWrapping="Wrap" FontSize="13" Margin="8,0,0,0"/>
+      </Grid>
+      <TextBlock Text="זו גרסה לא חתומה של פרויקט קוד פתוח. Windows עשוי להציג מפרסם לא מוכר. ההורדות נבדקות מול המקור הקבוע ב־GitHub; אין כאן חתימה עצמאית של המפרסם." FontSize="12" Foreground="#5C716B" TextWrapping="Wrap" Margin="0,9,0,0"/>
+     </StackPanel>
     </StackPanel>
     <Border x:Name="LanResultPanel" Visibility="Collapsed" Background="White" BorderBrush="#DFE7E0" BorderThickness="1" CornerRadius="14" Padding="18" Margin="0,16,0,0">
      <StackPanel><TextBlock Text="הצטרפות ממכשיר נוסף בבית" FontSize="18" FontWeight="SemiBold"/>
@@ -63,7 +84,7 @@
      </Border>
      <TextBlock Text="התיקייה המושפעת: C:\ProgramData\Yahad.FirstInstall" FontSize="12" Foreground="#5C716B" Margin="2,12,2,0"/>
     </StackPanel>
-    <Border x:Name="Notice" Background="#EAF1EA" CornerRadius="13" Padding="16" Margin="0,16,0,0"><TextBlock x:Name="NoticeText" Text="Windows יבקש אישור כדי להתקין את השירות. הוא יפעל ברקע גם לאחר סגירת המתקין, ויופעל עם המחשב." FontSize="13" Foreground="#46665B" LineHeight="22"/></Border>
+    <Border x:Name="Notice" Background="#EAF1EA" CornerRadius="13" Padding="16" Margin="0,16,0,0"><TextBlock x:Name="NoticeText" Text="Windows יבקש אישור מנהל כדי להתקין את יחד. לאחר ההתקנה יחד תפעל ברקע ותופעל עם המחשב." FontSize="13" Foreground="#46665B" LineHeight="22"/></Border>
     <ProgressBar x:Name="ProgressBar" Visibility="Collapsed" Height="7" Maximum="100" Foreground="#157C69" Background="#DFE7E0" BorderThickness="0" Margin="0,18,0,0" AutomationProperties.Name="התקדמות ההתקנה"/>
     <TextBlock x:Name="Status" FontSize="13" Foreground="#5C716B" Margin="0,12,0,0" AutomationProperties.LiveSetting="Polite"/>
    </StackPanel></ScrollViewer>

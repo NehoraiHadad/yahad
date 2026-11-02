@@ -15,10 +15,18 @@ export type LocalUpdateRequest = {
 };
 
 const activePhases = new Set(['awaiting_runtime','starting_runtime','quiescing_runtime','awaiting_local_approval','checking', 'downloading', 'verifying', 'building', 'preparing',
-  'stopping', 'backing_up', 'activating', 'checking_health', 'rolling_back']);
+  'stopping', 'backing_up', 'activating', 'checking_health', 'rolling_back', 'waiting_for_idle',
+  'updating_components', 'restarting_updater', 'preparing_data', 'releasing_effects', 'recovering']);
 const repairPhases = new Set(['recovery_required', 'rollback_pending_health']);
-const failedPhases = new Set(['failed', 'rolled_back', 'incompatible', 'recovery_required', 'rollback_pending_health']);
+const failedPhases = new Set(['failed', 'rolled_back', 'incompatible', 'recovery_required', 'rollback_pending_health', 'previous_restored']);
 export const updatePhases: Record<string, string> = {
+  waiting_for_idle: 'העדכון ממתין לסיום הפעילות',
+  updating_components: 'מעדכנים את יחד',
+  restarting_updater: 'ממשיכים את העדכון',
+  preparing_data: 'מכינים את המידע לגרסה החדשה',
+  releasing_effects: 'מסיימים את בדיקות התקינות',
+  recovering: 'בודקים כיצד להמשיך בבטחה',
+  previous_restored: 'העדכון לא הושלם — הגרסה הקודמת פעילה',
   awaiting_runtime: 'הגרסה מוכנה וממתינים להפעלת היישום',
   starting_runtime: 'מפעילים ובודקים את היישום',
   quiescing_runtime: 'ממתינים לסיום בטוח של התהליכים',
@@ -35,8 +43,21 @@ export const updatePhases: Record<string, string> = {
   rollback_pending_health: 'החזרה לגרסה הקודמת עדיין לא אושרה כתקינה',
 };
 
+const fullPhaseDetails: Partial<Record<ConfiguredUpdate['phase'], string>> = {
+  waiting_for_idle: 'אפשר להמשיך בפעילות. העדכון יתחיל כשיחד תהיה פנויה, בלי להפריע להקלטה או לשליחה שכבר החלה.',
+  updating_components: 'העדכון מתקדם. ייתכן שיחד לא תהיה זמינה לזמן קצר; אין צורך לשלוח שוב את הבקשה.',
+  restarting_updater: 'המשך העדכון עשוי לכלול ניתוק קצר. נמתין לחיבור מחדש כדי להציג את התוצאה, בלי לשלוח שוב את הבקשה.',
+  preparing_data: 'מכינים את המידע לשימוש בגרסה החדשה. ממתינים לסיום הבדיקות לפני חזרה לפעילות.',
+  releasing_effects: 'הגרסה החדשה עוברת בדיקות אחרונות לפני חזרה מלאה לפעילות.',
+  recovering: 'בודקים את הפעולה שנקטעה ואת מצב המידע. ממתינים לתוצאה לפני ניסיון נוסף.',
+};
+
 /** Native authority supplies the one meaningful confirmation; legacy web workers keep theirs. */
 export function requiresWebUpdateConfirmation(data: ConfiguredUpdate) { return data.confirmation !== 'native'; }
+export function nativeNotifyAllowed(data: ConfiguredUpdate | null, unavailable: boolean, busy: boolean) {
+  return !!data && data.confirmation === 'native' && data.mode === 'auto' && data.modeControlAllowed &&
+    data.enabled && !data.stale && !unavailable && !busy;
+}
 
 export function sameUpdateTarget(a: UpdateTarget | null | undefined, b: UpdateTarget | null | undefined) {
   return !!a && !!b && a.version === b.version && a.fingerprint === b.fingerprint;
@@ -128,6 +149,11 @@ export function updateProgress(data: ConfiguredUpdate, local: LocalUpdateRequest
   if (data.queuedMode || data.lastModeRequest?.state === 'pending') return { kind: 'queued', active: true,
     title: 'ממתינים להחלת שינוי המצב', action: updateActionLabel('set_mode', data.queuedMode?.mode ?? data.lastModeRequest?.mode),
     detail: 'המצב הפעיל מוצג בנפרד ויתחלף רק לאחר אישור מהשירות. אין צורך ללחוץ שוב.' } as const;
+  if (data.phase === 'previous_restored') return { kind: 'failure', active: false,
+    title: updatePhases.previous_restored, action: undefined,
+    detail: 'הגרסה החדשה לא התקבלה. יחד חזרה לגרסה הקודמת וניתן להשתמש בה. אפשר לבדוק שוב בהמשך; אין צורך בתיקון ידני כדי להמשיך בפעילות.' } as const;
+  if (fullPhaseDetails[data.phase]) return { kind: 'running', active: true,
+    title: updatePhases[data.phase], action: undefined, detail: fullPhaseDetails[data.phase]! } as const;
   if (last?.state === 'running' || activePhases.has(data.phase)) return { kind: 'running', active: true,
     title: activePhases.has(data.phase) ? updatePhases[data.phase] : 'שירות העדכון מטפל בבקשה',
     action: last?.state === 'running' ? updateActionLabel(last.action, data.mode, last.target) : undefined,

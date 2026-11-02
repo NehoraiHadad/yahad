@@ -1,0 +1,9 @@
+# Runtime failure after Authority startup
+
+The actual ASUS install from `aedc3b7a1b796f9e8c930ae77208014e7e048cfc` failed FullStart with INSTALL_FAILED/HRESULT 0x80131620. Authority is running; Runtime stopped with 1067, and both recovery helpers were not started (1077). The preceding query-only token failure is no longer preventing Authority startup. This is not a successful installation.
+
+Scoped Application/Yahad events contained no Runtime failure because ServiceHost's outer catch only wrote stderr and ServiceController consumed its own failures. SCM event7034 at07:19:13 Asia/Jerusalem confirms the Runtime exit but does not establish its cause; no matching .NET/ApplicationError crash event was found. The protected installer diagnostic retained only the generic FullStart failure. Sanitized evidence is in `.local/delivery-aedc3b7/`.
+
+This change reuses the existing bounded Application/Yahad1001 encoder and adds a fixed Runtime role and finite refusal codes. The outer dispatch catch and the actual installed full-profile ServiceController report failures. A failed final status publication and unconfirmed quiescence also report; the latter still makes no STOPPED claim. Reporters are optional, best-effort, and absent in test compositions unless explicitly injected. No exception text, paths, arguments, credentials or user data are logged. No new event-source registration, ACL changes or service permissions are introduced.
+
+Identity/profile guards, startup deadlines, cleanup retries, ownership retention and failure verdicts remain unchanged. Independent actual-diff review found no actionable issue. The native cause remains UNKNOWN: this is diagnostic coverage, not a claimed fix for the Runtime exit. Pre-SCM composition work is a source timing risk, not proof of this failure's cause. No retry, removal or installation was performed while diagnosing.

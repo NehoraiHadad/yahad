@@ -9,15 +9,19 @@ internal static class InstalledProcessState
     {
         var sid=WindowsIdentity.GetCurrent().User??throw new IOException("INSTALLED_TOKEN");
         if(!sid.Value.StartsWith("S-1-5-80-",StringComparison.Ordinal))return null;
-        var root=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),"Yahad.Acceptance");
+        var root=InstalledUpdaterLayout.StateRoot;
         var full=Path.GetFullPath(path);if(!full.Equals(root,StringComparison.OrdinalIgnoreCase)&&!full.StartsWith(root+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))return null;
-        var a=(SecurityIdentifier)new NTAccount("NT SERVICE","Yahad.Acceptance.Authority").Translate(typeof(SecurityIdentifier));var r=(SecurityIdentifier)new NTAccount("NT SERVICE","Yahad.Acceptance").Translate(typeof(SecurityIdentifier));
-        if(sid!=a&&sid!=r)throw new IOException("INSTALLED_TOKEN_ROLE");var roles=new InstalledFileRoles(a,r);
-        using(var anchor=WindowsFileBoundary.OpenInstalledRoleRead(Path.Combine(root,"installation.json"),roles,InstalledFileRole.Anchor))
-        {
-            var document=NativeJson.Read<System.Text.Json.JsonElement>(anchor.Small(4096));
-            if(document.GetProperty("Format").GetInt32()!=1||document.GetProperty("RuntimeService").GetString()!="Yahad.Acceptance"||document.GetProperty("AuthorityService").GetString()!="Yahad.Acceptance.Authority"||!Guid.TryParseExact(document.GetProperty("InstallationId").GetString(),"N",out _))throw new IOException("INSTALLED_TOKEN_ANCHOR");
-        }
+        var r=(SecurityIdentifier)new NTAccount("NT SERVICE",InstalledUpdaterLayout.RuntimeServiceName).Translate(typeof(SecurityIdentifier));
+        SecurityIdentifier? a=null;
+        if(sid!=r){a=(SecurityIdentifier)new NTAccount("NT SERVICE",InstalledUpdaterLayout.AuthorityServiceName).Translate(typeof(SecurityIdentifier));if(sid!=a&&!UpdaterServicePrincipals.IsRecovery(sid))throw new IOException("INSTALLED_TOKEN_ROLE");}
+        // Legacy first-install data retains its existing single-service checks.
+        // Only genuine absence permits that branch; malformed/present/denied
+        // enrollment must never fall back to the Format-2 installation receipt.
+        if(!InstalledUpdaterLayout.AnchorPresent()){if(sid==r)return null;throw new IOException("INSTALLED_UPDATER_ANCHOR_REQUIRED");}
+        a??=(SecurityIdentifier)new NTAccount("NT SERVICE",InstalledUpdaterLayout.AuthorityServiceName).Translate(typeof(SecurityIdentifier));
+        var (roles,_)=InstalledUpdaterLayout.ReadRoles(a,r);
+        if(sid!=r&&!roles.IsUpdater(sid))throw new IOException("INSTALLED_TOKEN_ROLE");
+        if(UpdaterServicePrincipals.IsRecovery(sid))UpdaterServiceIdentity.Require(UpdaterServiceIdentity.FromUser(sid,a),Environment.ProcessId);
         return InstalledStateFiles.Installed(root,roles,"","");
     }
 }

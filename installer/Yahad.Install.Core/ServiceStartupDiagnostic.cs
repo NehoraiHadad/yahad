@@ -1,0 +1,57 @@
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text.Json;
+namespace Yahad.Install;
+
+internal enum StartupDiagnosticRole { Dispatch,Authority,RecoveryA,RecoveryB,Runtime }
+// Fixed local Application event only. No source-registration/registry writes,
+// exception text, paths, arguments, tokens or data. Logging cannot authorize
+// recovery or replace the original failure when the event log is unavailable.
+internal static class ServiceStartupDiagnostic
+{
+    internal static string Encode(StartupDiagnosticRole role,Exception error)
+    {
+        if(!Enum.IsDefined(role))throw new ArgumentOutOfRangeException(nameof(role));
+        var cause=error;int? native=null;
+        for(var depth=0;depth<8;depth++)
+        {if(cause is Win32Exception win32){native=win32.NativeErrorCode;break;}if(cause.InnerException is not{} inner)break;cause=inner;}
+        var sites=new StackTrace(error,false).GetFrames().Select(frame=>frame.GetMethod()).Where(method=>method?.DeclaringType?.Assembly.GetName().Name is "Yahad.Install.Core" or "Yahad.Authority" or "Yahad.ServiceHost")
+            .Select(method=>method!.DeclaringType!.FullName+"."+method.Name).Where(site=>site.Length<=512).Take(3).ToArray();
+        return JsonSerializer.Serialize(new{Format=1,Role=role.ToString(),SourceCommit=ApplicationRelease.SourceCommit,ProcessId=Environment.ProcessId,
+            Code=KnownCode(error.Message),HResult=error.HResult,NativeError=native,Sites=sites});
+    }
+    internal static string? KnownCode(string value)=>value switch
+    {
+        "INSTALLED_ROLE_BINDING" or "INSTALLED_ROLE_OWNER" or "INSTALLED_ROLE_ACE" or "INSTALLED_ROLE_ACCESS" or
+        "INSTALLED_TOKEN_ANCHOR" or "INSTALLED_TOKEN_ANCHOR_CHANGED" or "SERVICE_TOKEN_BOUND" or "SERVICE_TOKEN_USER" or
+        "HELPER_BOOT_SCM_ARGUMENTS" or "HELPER_BOOT_FULL_CONSENT_ANCHOR_REQUIRED" or "HELPER_BOOT_SELF_IMAGE" or "HELPER_BOOT_FIXED_CONFIGURATION" or "HELPER_BOOT_SCM_GENERATION" or
+        "AUTHORITY_ANCHOR_BOUND" or "AUTHORITY_ANCHOR_BINDING" or "AUTHORITY_PROBE_UNCONFIGURED" or "AUTHORITY_PROBE_IDENTITY" or "AUTHORITY_COMPOSITION_ANCHOR" or
+        "AUTHORITY_START_COMMITTED_BINDING" or "AUTHORITY_NATIVE_ROLES_REQUIRED" or "AUTHORITY_HOST_NOT_HEALTHY" or
+        "OWN_OBJECT_OPEN_PROCESS" or "OWN_OBJECT_OPEN_TOKEN" or "OWN_OBJECT_CURRENT_IDENTITY" or "OWN_OBJECT_MINIMAL_SERVICE_TOKEN" or
+        "OWN_OBJECT_SECURITY_OWNER" or "OWN_OBJECT_NULL_DACL" or "OWN_OBJECT_UNSUPPORTED_ACE" or "OWN_OBJECT_REQUIRED_ACCESS_DENIED" or
+        "OWN_OBJECT_WORLD_DACL" or "OWN_OBJECT_UNRELATED_WRITE_ACCESS" or "OWN_OBJECT_READ_SECURITY" or "OWN_OBJECT_WRITE_SECURITY" or
+        "OWN_OBJECT_PUBLICATION_UNCONFIRMED" or "CUSTODY_TARGET_ACCOUNT" or "NATIVE_REPARSE_KIND_OR_HARDLINK" or "NATIVE_LOCAL_PATH"=>value,
+        "MIGRATION_PROFILE_CREATE_DENIED" or "MIGRATION_PROFILE_CREATE_FAILED" or "MIGRATION_PROFILE_USER_SCOPE" or
+        "MIGRATION_PROFILE_USER_LOOKUP" or "MIGRATION_PROFILE_FOLDER_LOOKUP" or "MIGRATION_PROFILE_FOLDER_KIND" or
+        "MIGRATION_PROFILE_LOOPBACK_EXEMPT" or "MIGRATION_PROFILE_NETWORK_INSPECTION" or "MIGRATION_PROFILE_RUNTIME_IDENTITY" or
+        "MIGRATION_PROFILE_THREAD_QUERY" or "MIGRATION_PROFILE_DERIVE" or "RUNTIME_INSTALLATION_ANCHOR" or "RUNTIME_UPDATER_NOT_ENROLLED" or "RUNTIME_QUIESCENCE_UNCONFIRMED"=>value,
+        _=>null
+    };
+    internal static bool TryRecord(StartupDiagnosticRole role,Exception error)=>TryRecord(role,error,Write);
+    internal static bool TryRecord(StartupDiagnosticRole role,Exception error,Func<string,bool> write)
+    {try{return write(Encode(role,error));}catch{return false;}}
+    private static bool Write(string value)
+    {
+        // RegisterEventSource retrieves a handle; an unregistered fixed source
+        // falls back to Application. It does not create an event-source key.
+        // https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-registereventsourcew
+        var handle=RegisterEventSourceW(null,"Yahad");if(handle==IntPtr.Zero)return false;
+        try{return ReportEventW(handle,1,0,1001,IntPtr.Zero,1,0,[value],IntPtr.Zero);}
+        finally{_=DeregisterEventSource(handle);}
+    }
+    [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)]private static extern IntPtr RegisterEventSourceW(string? server,string source);
+    [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)]
+    [return:MarshalAs(UnmanagedType.Bool)]private static extern bool ReportEventW(IntPtr handle,ushort type,ushort category,uint id,IntPtr sid,ushort count,uint size,[MarshalAs(UnmanagedType.LPArray,ArraySubType=UnmanagedType.LPWStr)]string[] values,IntPtr data);
+    [DllImport("advapi32.dll")][return:MarshalAs(UnmanagedType.Bool)]private static extern bool DeregisterEventSource(IntPtr handle);
+}

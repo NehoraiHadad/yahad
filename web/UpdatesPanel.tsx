@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Clock3, Download, LoaderCircle, RefreshCw, TriangleAlert } from 'lucide-react';
 import { csrf } from './api';
-import { requiresWebUpdateConfirmation, availableUpdateTarget, sameUpdateTarget, createUpdatePoller, reconcileUpdateRequest, updateActionsDisabled, updateNeedsRepair, updatePhases, updateProgress, type ConfiguredUpdate,
+import { requiresWebUpdateConfirmation, nativeNotifyAllowed, availableUpdateTarget, sameUpdateTarget, createUpdatePoller, reconcileUpdateRequest, updateActionsDisabled, updateNeedsRepair, updatePhases, updateProgress, type ConfiguredUpdate,
   type LocalUpdateRequest, type UpdateAction, type UpdateStatus, type UpdateTarget } from './updateProgress';
 
 export class RejectedUpdateRequest extends Error {}
@@ -12,6 +12,21 @@ export class UpdateAccessError extends Error {
 }
 
 function expiredSession() { window.dispatchEvent(new Event('session-expired')); }
+export function NativeUpdateDeferral() {
+  const [sending, setSending] = useState(false), [message, setMessage] = useState('');
+  const postpone = async () => {
+    setSending(true); setMessage('');
+    try {
+      const response = await fetch('/api/parent/updates/defer', { method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: JSON.stringify({ hours: 1 }), signal: AbortSignal.timeout(15000) });
+      if (response.status === 401) expiredSession();
+      if (!response.ok) throw new Error();
+      setMessage('העדכון האוטומטי נדחה בשעה.');
+    } catch { setMessage('לא התקבל אישור לדחייה. בדקו את המצב לפני שליחת בקשה נוספת.'); }
+    finally { setSending(false); }
+  };
+  return <div><button type="button" className="outline-button" disabled={sending} onClick={() => void postpone()}>דחיית העדכון האוטומטי בשעה</button>{message && <p role="status">{message}</p>}</div>;
+}
 export async function readUpdateStatus(signal: AbortSignal): Promise<UpdateStatus> {
   const response = await fetch('/api/parent/updates', { credentials: 'same-origin', cache: 'no-store', signal });
   if (response.status === 401) expiredSession();
@@ -35,6 +50,8 @@ export async function submitUpdateRequest(action: UpdateAction, mode?: 'auto' | 
       // Only a definite client rejection is safe to present as "not accepted".
       if (response.status >= 400 && response.status < 500 && response.status !== 408) {
         const rejection = await response.json().catch(() => null);
+        if (rejection?.error === 'UPDATES_APPROVAL_REQUIRED')
+          throw new RejectedUpdateRequest('נדרש אישור מקומי חדש לעדכון. ההרשאה האוטומטית פגה, בוטלה או הגיעה למגבלה שלה. בחרו בעדכון ידני לאישור הגרסה המוצגת, או חדשו את ההרשאה בהגדרה המקומית.');
         if (rejection?.error === 'UPDATES_TARGET_CHANGED')
           throw new RejectedUpdateRequest('יעד העדכון השתנה או טרם אושר. לא נשלחה התקנה; בדקו שוב את הגרסה ובחרו מחדש לפני אישור.');
         throw new RejectedUpdateRequest('השרת לא אישר את הבקשה. רעננו את המצב ובדקו שהעדכונים זמינים ושהחשבון מורשה.');
@@ -60,6 +77,20 @@ export function UpdateProgressStatus({ data, local = null, reconnecting = false 
     {!unavailable && <p>{progress.detail}</p>}
     {unavailable && <p>אין כרגע אישור להתקדמות, להצלחה או לכשל חדש. ייתכן שזה ניתוק זמני בזמן הפעלה מחדש. ננסה לקבל דיווח מצב חדש בלבד — לא נשלח שוב בקשת עדכון.</p>}
     {data.updatedAt && <small>דיווח אחרון מהשירות: {new Date(data.updatedAt).toLocaleString('he-IL')}</small>}
+  </div>;
+}
+
+export function NativeDelegationStatus({data}:{data:ConfiguredUpdate}) {
+  if(data.confirmation!=='native'||data.mode!=='auto')return null;
+  if(data.profile==='full-system-v1')return <div className="diagnostics-notice" role="status">
+    <b>{data.systemGrant?.state==='active'?'עדכונים אוטומטיים מלאים פעילים':'נדרש אישור מקומי לעדכונים אוטומטיים מלאים'}</b>
+    <p>{data.systemGrant?.state==='active'?'האישור כולל את האפליקציה, מסד הנתונים ורכיבי העדכון, ונשאר פעיל עד שתכבו אותו. אין צורך באישור נוסף לכל עדכון תואם.':data.systemGrant?.state==='revoked'||data.systemGrant?.state==='disabled'?'האישור בוטל. עדכונים לא יותקנו אוטומטית עד לאישור ההורה במחשב הזה.':'מצב האישור אינו זמין כרגע. בדקו שוב לפני שליחת אישור נוסף; תוצאה לא ידועה אינה אישור לביצוע מחדש.'}</p>
+  </div>;
+  const d=data.delegation;
+  return <div className="diagnostics-notice" role="status">
+    <b>{d?.state==='active'?'הרשאת עדכון אוטומטי בתוקף':'העדכון האוטומטי ממתין להרשאה תקפה'}</b>
+    {d?.state==='active'?<p>נותרו {d.remainingOperations} עדכונים. תוקף האישור: {d.expiresUnix===null?'לא ידוע':new Date(d.expiresUnix*1000).toLocaleDateString('he-IL')}. עדכון מעבר למגבלות דורש אישור מקומי חדש.</p>:
+      <p>{d?.state==='expired'?'תוקף האישור פג.':d?.state==='exhausted'?'מכסת העדכונים שאושרה הסתיימה.':d?.state==='revoked'?'ההרשאה בוטלה.':'בודקים את מצב ההרשאה.'} אפשר לאשר עדכון ידני לגרסה המוצגת, או לחדש הרשאה בהגדרה המקומית. אין הרחבה אוטומטית של האישור.</p>}
   </div>;
 }
 
@@ -117,7 +148,8 @@ export function UpdatesPanel() {
   }
   async function request(action: UpdateAction, mode?: 'auto' | 'notify', target?: UpdateTarget) {
     const current = dataRef.current?.configured ? dataRef.current : null;
-    if (sending.current || updateActionsDisabled(current, localRef.current, reconnecting, busy) || !current) return;
+    const contraction=action==='set_mode'&&mode==='notify'&&nativeNotifyAllowed(current,reconnecting,busy);
+    if (sending.current || !current || !contraction&&updateActionsDisabled(current, localRef.current, reconnecting, busy)) return;
     if (action === 'install' && !sameUpdateTarget(target, availableUpdateTarget(current))) {
       setError('יעד העדכון השתנה. לא נשלחה התקנה; בדקו את הגרסה ופתחו אישור חדש.');
       setConfirm(null); return;
@@ -147,6 +179,8 @@ export function UpdatesPanel() {
   const pendingMode = configured?.queuedMode || configured?.lastModeRequest?.state === 'pending';
   const disabled = updateActionsDisabled(configured, local, reconnecting, busy);
   const repairRequired = configured ? updateNeedsRepair(configured) : false;
+  const automaticEffective = configured?.mode === 'auto' && (configured.confirmation !== 'native' || configured.delegation?.state === 'active');
+  const nativeModeUnknown = configured?.confirmation === 'native' && configured.mode === 'auto' && (!configured.delegation || configured.delegation.state === 'busy');
   return <section className="parent-card diagnostics-card">
     <button className="diagnostics-toggle" aria-expanded={open} onClick={() => { setOpen(!open); setConfirm(null); setChoice(null); if (!open && !accessDenied) { setRefreshing(true); poller.current?.refresh(); } }}>
       <Download size={20}/><span><b>עדכוני האפליקציה</b><small aria-live="polite">{accessDenied ? 'אין הרשאה לצפייה במצב העדכונים' : reconnecting || configured?.stale ? 'מצב עדכני אינו זמין — בודקים שוב' : progress?.title || 'גרסאות מ־GitHub, גיבוי ושליטה שלכם'}</small></span><span>{open ? 'סגירה' : 'פתיחה'}</span>
@@ -158,8 +192,18 @@ export function UpdatesPanel() {
       {data && !configured && !reconnecting && <p>מצב העדכונים אינו זמין לחשבון הזה. ייתכן שרכיב העדכון עוד לא הוגדר, שאין כרגע דיווח תקין או שהחשבון אינו מוגדר כאחראי לעדכונים. אפשר לרענן את המצב; אין כאן אישור שעדכון התחיל או הסתיים.</p>}
       {configured && <>
         <UpdateProgressStatus data={configured} local={local} reconnecting={reconnecting}/>
+        <NativeDelegationStatus data={configured}/>
+        {configured.confirmation === 'native' && <>
+          {configured.phase === 'available' && <p className="diagnostics-notice">העדכון יוחל כשאין עבודה פעילה. שמרו טיוטות וסגרו את חלונות יחד לאחר סיום הקלטות ושליחות. תוצאה לא ידועה של שליחה אינה נשלחת שוב.</p>}
+          {configured.error === 'storage' && <p role="alert">אין מספיק מקום פנוי להורדה ולגיבוי בטוחים. פנו מקום בכונן ובדקו שוב.</p>}
+          {configured.error === 'maintenance' && <p role="alert">נשארו קובצי עדכון מבדיקה קודמת. נדרש טיפול דרך כלי ההתקנה לפני הורדה נוספת; ההתקנה הנוכחית נשמרת.</p>}
+          {configured.mode === 'auto' && <NativeUpdateDeferral/>}
+          {!!configured.deferredUntil && configured.deferredUntil > Date.now() && <p role="status">העדכון האוטומטי מושהה עד {new Date(configured.deferredUntil).toLocaleString('he-IL')}.</p>}
+          {configured.lastUpdateAt && <p className="diagnostics-caption">עדכון מוצלח אחרון: {new Date(configured.lastUpdateAt).toLocaleString('he-IL')}</p>}
+        </>}
+        {(repairRequired||disabled)&&nativeNotifyAllowed(configured,reconnecting,busy)&&<button type="button" className="outline-button" onClick={()=>void request('set_mode','notify')}>ביטול ההרשאה האוטומטית ומעבר להודעה בלבד</button>}
         <p>גרסה נוכחית שדווחה: <span dir="ltr">{configured.currentVersion || 'טרם דווחה'}</span>{configured.latestVersion && <> · גרסה זמינה: <span dir="ltr">{configured.latestVersion}</span></>}</p>
-        <div className="update-mode-status"><b>מצב העדכונים שהוגדר</b><p>{repairRequired ? 'העדכון נעצר עד לבדיקה ותיקון, ללא קשר למצב האוטומטי שהוגדר' : !configured.enabled ? 'העדכונים מושהים בהגדרות השרת' : configured.mode === 'auto' ? 'עדכונים אוטומטיים פועלים' : 'הודעה על גרסה חדשה — ההתקנה לבחירתכם'}</p></div>
+        <div className="update-mode-status"><b>מצב העדכונים שהוגדר</b><p>{repairRequired ? 'העדכון נעצר עד לבדיקה ותיקון, ללא קשר למצב האוטומטי שהוגדר' : !configured.enabled ? 'העדכונים מושהים בהגדרות השרת' : nativeModeUnknown ? 'מצב ההרשאה האוטומטית עדיין לא ידוע' : automaticEffective ? 'עדכונים אוטומטיים פועלים' : 'הודעה על גרסה חדשה — ההתקנה לבחירתכם'}</p></div>
         <p>שירות העדכון שומר גיבוי מקומי מוצפן ובודק תקינות כחלק מההתקנה. השלבים כאן הם רק אלה שדווחו בפועל, ולא הבטחה שהעדכון יצליח. סגירת הדפדפן אינה מבטלת עדכון שכבר נקלט; השאירו את המחשב פועל. בפתיחה מחדש בודקים את המצב מהשירות.</p>
         {pendingMode && <p role="status" className="diagnostics-notice">השינוי שהתבקש: {(configured.queuedMode?.mode || configured.lastModeRequest?.mode) === 'auto' ? 'עדכונים אוטומטיים' : 'הודעה בלבד'}. המצב הפעיל למעלה יתעדכן לאחר שהשינוי יושלם. אין צורך ללחוץ שוב.</p>}
         {!configured.queuedMode && configured.lastModeRequest?.state === 'applied' && <p role="status">הבחירה האחרונה נשמרה והופעלה.</p>}

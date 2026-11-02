@@ -13,6 +13,14 @@ try
             version=System.Reflection.Assembly.GetExecutingAssembly().GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute),false).Cast<System.Reflection.AssemblyInformationalVersionAttribute>().Single().InformationalVersion });
         return 0;
     }
+    if(args is ["windows-updates"])
+    {
+        using var input=Console.OpenStandardInput();using var bounded=new MemoryStream();var buffer=new byte[1024];int n;
+        while((n=await input.ReadAsync(buffer))>0){if(bounded.Length+n>4096)throw new IOException();bounded.Write(buffer,0,n);}
+        using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var result=await Yahad.Authority.RuntimeUpdateBridge.ExecuteAsync(bounded.ToArray(),deadline.Token);
+        Reply(new{schema=1,ok=true,result});return 0;
+    }
     if (args is ["read-secret", var role, var path] && role is "master-key" or "setup-capability")
     {
         try

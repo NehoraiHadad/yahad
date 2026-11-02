@@ -1,36 +1,100 @@
-# Native easy-install feasibility slice
+# Windows native builds
 
-Current continuation: see [native app portability and dependency status](../docs/NATIVE-PORTABILITY.md). The feasibility-only results below describe the first increment.
+This directory contains the native installer, Windows service hosts, protected
+updater and their tests. The current package remains a development candidate:
+[Runtime installation acceptance is incomplete](../docs/VALIDATION.md).
+Building a package does not install it or prove native acceptance.
 
-Development only, isolated from the released installer and application. This is **not an installer for a family computer**. It does not register services, alter firewall/CA settings, open onboarding, or run the Yahad app. Production packages are deliberately refused.
+## Build code and run isolated tests
 
-Baseline: `v0.5.2`, commit `4c41d5ef80ea349d0f678ee9c572e4975a2d776d`, tree `f4dde9cc1dc2d2abd374929a436d425bbc2e9f63`.
-
-## Run as a developer
-
-Build prerequisite: .NET 10 SDK on Windows x64. The family-facing distribution will not require an SDK or separately installed .NET, Node or Python. Build caches, process-local settings and fixtures stay under `installer/.scratch`; no user NuGet configuration is read. The script restores its build-only environment variables when it returns or throws.
+Use Windows x64, .NET 10 SDK, Node 24 and PowerShell 7. Start with
+[application setup](../docs/DEVELOPMENT.md).
 
 ```powershell
 ./installer/build.ps1
-./installer/build.ps1 -Publish
-# Or -DotNet C:/path/to/private/dotnet.exe
-./installer/artifacts/Yahad.Setup/Yahad.Setup.exe
+./tests/windows-updater/run.ps1 -DotNet (Get-Command dotnet).Source
 ```
 
-`-Publish` produces self-contained, single-file Windows x64 executables. Native framework libraries extract into the process's temporary directory when needed; “single file” does not mean “no temporary extraction.” There is no npm installation on the destination machine. Current executables contain only the .NET fixture UI/host, **not Node, ffmpeg, Caddy or the app**.
+The original `build.ps1 -Publish` publishes the small fixture/slice executables
+and Platform helper. It does **not** create the complete app/updater installer.
+Do not distribute a slice executable as a full installer.
 
-The GUI's start button runs real fixture verification/staging. `--preview=consent`, `--preview=error`, and `--preview=ready` show labeled visual states without asserting a test happened. The window uses `asInvoker` and never requests elevation. Closing during work requests cancellation; resumption in the same window verifies the same package and journal. Cross-launch recovery UI is a later increment; the core recovery API is tested.
+## Standalone app + updater installer
 
-`Yahad.Host.Slice.exe --fixture-child C:/path/to/a/fixture/directory` starts only a waiting copy of itself in a Windows Job Object. Ctrl+C disposes the job. This is a native process containment spike, **not SCM service support**. The test harness also exercises grandchildren and unexpected death of the job owner.
+The tracked `installer/package.ps1` replaces machine-specific private build wrappers.
+It calls the existing Python package validators and native projects. It derives the
+version from package.json, requires clean committed source and new output, rebuilds
+web assets, publishes the four project components, assembles the full payload and
+embeds it in one self-contained Setup executable. It then runs **read-only**
+`--verify-package` and checks exact source/ZIP identities. It does not install,
+register services, change ACLs/firewall/trust or publish a release.
 
-## Implemented boundaries
+Required external inputs:
 
-- Exact manifest/ZIP membership, target/kind gates, bounded sizes and decompression, SHA-256 byte checks, duplicate/case/path/device/ADS/symlink rejection.
-- Private Windows DACL on creation, owner/ACL/reparse validation, exclusive operation file lock, flushed atomic journal replacement, new payload publication without overwrite.
-- Cancellation and interrupted-stage recovery. A published payload is revalidated before a resumed run can report readiness; changed bytes remain untouched. Abandoned staging directories remain for review.
-- Native suspended process creation, job assignment before execution, `KILL_ON_JOB_CLOSE`, shell-free argument quoting and deterministic handle disposal.
-- Pure private-LAN address planning with explicit adapter selection, and a temporary loopback bind probe. No security or network configuration mutations.
+1. Official Node **24.x Windows x64 ZIP**, extracted with its LICENSE and npm CLI.
+2. .NET 10 SDK with its LICENSE/ThirdPartyNotices; publishing restores the currently
+   pinned private runtime **10.0.14**. SDK/package downloads require network access
+   on the build machine.
+3. A populated npm cache. From this checkout run
+   `npm ci --ignore-scripts --cache C:/build-cache/npm` once with network available.
+   Application packaging subsequently uses production-only, offline restore and
+   refuses a missing cache entry rather than falling back to the network.
+4. FFmpeg/Caddy vendor inputs staged by the existing pinned-input verifier.
 
-The fixture directory is a user-owned test boundary, not an elevated security boundary. The private DACL means a restricted AppContainer/sandbox token cannot use it even when the same user owns the folder. Tests must run as an ordinary unrestricted user. Do not weaken the ACL to accommodate a sandbox. Production privileged path traversal needs handle-relative, no-follow operations and independent administrator-owned package validation before this code can be reused there.
+Exact vendor URLs, archive hashes, checksum-document hashes and selected member
+hashes are in [dependency-pins.json](windows/dependency-pins.json). Download those
+archives and checksum documents explicitly to a local build-input directory, then:
 
-See [architecture and delivery plan](../docs/NATIVE-INSTALLER-PLAN.md), [acceptance matrix](../docs/NATIVE-INSTALLER-ACCEPTANCE.md), and [validation evidence](../evidence/native-installer/validation.md).
+```powershell
+python -m installer.windows.dependencies stage --ffmpeg-archive C:/build-inputs/ffmpeg.zip --ffmpeg-checksums C:/build-inputs/ffmpeg-checksums.sha256 --caddy-archive C:/build-inputs/caddy.zip --caddy-checksums C:/build-inputs/caddy-checksums.txt --output .local/vendors
+```
+
+Use the exact files named by the pins, even if your local filenames differ.
+The verifier does not download or execute vendor inputs. Do not replace a pinned
+binary without reviewing pins, runtime behavior and licenses together.
+
+From a **clean committed checkout**, with npm development dependencies installed:
+
+```powershell
+$inputs = @{
+    NodeDirectory = 'C:/build-tools/node-v24.x.x-win-x64'
+    DotNet = 'C:/build-tools/dotnet/dotnet.exe'
+    Python = 'python'
+    NpmCache = 'C:/build-cache/npm'
+    PackageCache = 'C:/build-cache/nuget'
+    VendorDirectory = '.local/vendors'
+}
+./installer/package.ps1 @inputs -CheckOnly
+./installer/package.ps1 @inputs
+```
+
+Replace the example tool paths with your actual extracted tools. The Node directory
+must contain `node.exe`, `LICENSE` and `node_modules/npm/bin/npm-cli.js`; a path to
+node.exe alone is insufficient. The dotnet directory must include its legal files.
+
+Output: `.local/packages/<12-character-source-commit>/setup/Yahad.Setup.exe`,
+the project LICENSE, native/system manifests, package hashes and local step logs.
+The app helper is generated at `installer/artifacts/Yahad.Platform.Bundle/`, where
+the existing payload builder expects it. The script refuses a pre-existing package
+output or helper bundle to avoid mixing commits; use a clean build checkout.
+It does not copy old outputs into backup folders or silently overwrite them.
+
+The wrapper itself has syntax/preflight checks; its complete new entry point still
+requires a full packaging run. The underlying commands produced earlier candidates,
+but no current successful real installation is claimed.
+
+## Distribution and installation are separate
+
+An unsigned executable can show an unknown publisher in Windows. Keep the existing
+updater trust/integrity controls. Include project/component notices and complete
+the [distribution review](../docs/DISTRIBUTION-LICENSE-REVIEW.md); a generated inventory
+with `completeLicenseReview:false` does not establish redistribution clearance.
+
+Actual installation creates protected product folders, service identities and IPC
+boundaries and needs its own explicit scope. LAN/firewall/certificate choices,
+real WhatsApp, destructive uninstall and native update application are separate
+acceptance actions. The source build commands above perform none of them.
+
+Architecture references: [protected transactions](../docs/NATIVE-PROTECTED-TRANSACTIONS.md),
+[service host](../docs/NATIVE-SERVICE-HOST.md), [runtime health](../docs/NATIVE-RUNTIME-HEALTH.md),
+[uninstall](UNINSTALL.md).

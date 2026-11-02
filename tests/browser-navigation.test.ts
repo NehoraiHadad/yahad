@@ -36,6 +36,7 @@ test('actual App navigation restores history on popstate and clears stale errors
     { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   const entries: any[] = [null]; let position = 0, cursor = 0;
   const slots: any[] = [], handlers = new Map<string, () => void>();
+  const idleIdentities: Array<string | null> = [];
   const history = { get state() { return entries[position]; },
     pushState(s: unknown) { entries.splice(++position); entries[position] = s; },
     replaceState(s: unknown) { entries[position] = s; } };
@@ -44,6 +45,10 @@ test('actual App navigation restores history on popstate and clears stale errors
     useState(value: any) { const i = cursor++; if (!(i in slots)) slots[i] = value;
       return [slots[i], (v: any) => slots[i] = typeof v === 'function' ? v(slots[i]) : v]; },
     useCallback(fn: any) { return fn; },
+    useRef(value: any) { const i = cursor++; return slots[i] ||= { current: value }; },
+    // This fixture tests routing, not native update admission. Keep it pending:
+    // navigation must not manufacture a completed updater lease.
+    useUpdateIdleLease(identity: string | null) { idleIdentities.push(identity); return { ready: false }; },
     useEffect(fn: () => void) { if (fn.toString().includes('popstate')) fn(); },
     api: async () => ({ user: { id: 'synthetic-parent', role: 'parent' }, csrf: 'synthetic' }),
     setCsrf() {}, localStorage: { getItem() { return null; } },
@@ -61,4 +66,6 @@ test('actual App navigation restores history on popstate and clears stale errors
   position--; handlers.get('popstate')!(); assert.equal(render().route.mode, 'parent');
   position += 2; handlers.get('popstate')!(); assert.equal(render().route.group, 'synthetic');
   await render().refresh(); assert.equal(render().route.group, 'synthetic', 'reload retains route');
+  assert.equal(idleIdentities[0], null);
+  assert.ok(idleIdentities.includes('synthetic-parent'));
 });

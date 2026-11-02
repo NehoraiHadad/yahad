@@ -45,9 +45,13 @@ internal sealed class NativeServiceInstall:IDisposable
     {
         QueryServiceConfigW(service,IntPtr.Zero,0,out var size);if(size is <44 or >16384)throw new IOException("SERVICE_CONFIG_BOUND");var memory=Marshal.AllocHGlobal((int)size);
         try{if(!QueryServiceConfigW(service,memory,size,out _))throw new Win32Exception();var config=Marshal.PtrToStructure<Config>(memory);
-            if(config.Type!=16||!string.Equals(Marshal.PtrToStringUni(config.Account),"NT SERVICE\\"+InstallLocations.ServiceName,StringComparison.OrdinalIgnoreCase)||
-               Marshal.PtrToStringUni(config.Image)!="\""+InstallLocations.ServiceImage+"\" --service")throw new IOException("SERVICE_NOT_OWNED");}
+            RequireOwnedConfiguration(config.Type,Marshal.PtrToStringUni(config.Account),Marshal.PtrToStringUni(config.Image));}
         finally{Marshal.FreeHGlobal(memory);}
+    }
+    internal static void RequireOwnedConfiguration(uint type,string? account,string? image)
+    {
+        if(type!=16||!string.Equals(account,"NT SERVICE\\"+InstallLocations.ServiceName,StringComparison.OrdinalIgnoreCase)||
+           image!="\""+InstallLocations.ServiceImage+"\" --service")throw new IOException("SERVICE_NOT_OWNED");
     }
     internal void RequireStopped(){RequireOwned();if(Status().State!=1)throw new IOException("SERVICE_NOT_QUIESCENT");}
     internal void EnableAutomaticStart()
@@ -73,7 +77,27 @@ internal sealed class NativeServiceInstall:IDisposable
         while(Status().State!=1)await Task.Delay(200,deadline.Token);
         if(process is not null)await process.WaitForExitAsync(deadline.Token);
     }
-    internal void RequireCleanStop(){RequireOwned();var status=Status();if(status.State!=1||status.Win32!=0||status.Specific!=0)throw new IOException("UNINSTALL_QUIESCENCE_UNCONFIRMED");}
+    internal void RequireCleanStop(){RequireOwned();var status=Status();RequireCleanStop(status.State,status.Win32,status.Specific);}
+    internal static void RequireCleanStop(uint state,uint win32,uint specific)
+    {if(state!=1||win32!=0||specific!=0)throw new IOException("UNINSTALL_QUIESCENCE_UNCONFIRMED");}
+    internal void RequireRemovalStop(){RequireOwned();var status=Status();RequireRemovalStop(status.State,status.Win32,status.Specific,status.Pid);}
+    internal static void RequireRemovalStop(uint state,uint win32,uint specific,uint pid)
+    {
+        // 1077 means no start attempts SINCE THE LAST BOOT, not "never ran" or
+        // "previous cleanup succeeded". Removal still requires the authenticated
+        // original Owner, exact service/image and protected-tree/data-lease gates.
+        // Receipt repair deliberately retains the stricter RequireCleanStop.
+        if(state!=1||pid!=0||specific!=0||win32 is not(0 or 1077))throw new IOException("UNINSTALL_QUIESCENCE_UNCONFIRMED");
+    }
+    internal void RequireConfigurationStop()
+    {RequireOwned();var status=Status();RequireConfigurationStop(status.State,status.Win32,status.Specific,status.Pid);}
+    internal static void RequireConfigurationStop(uint state,uint win32,uint specific,uint pid)
+    {
+        // ERROR_SERVICE_NEVER_STARTED is the normal stopped state of a freshly
+        // created service. It is safe for configuration, not proof that an
+        // application previously running completed an uninstall shutdown.
+        if(state!=1||pid!=0||specific!=0||win32 is not(0 or 1077))throw new IOException("LAN_QUIESCENCE_UNCONFIRMED");
+    }
     internal static async Task WaitUntilRemovedAsync(CancellationToken cancellation)
     {
         var started=System.Diagnostics.Stopwatch.StartNew();
@@ -84,6 +108,7 @@ internal sealed class NativeServiceInstall:IDisposable
         }
     }
     internal void Delete(){RequireOwned();if(Status().State!=1)throw new IOException("SERVICE_NOT_QUIESCENT");if(!DeleteService(service))throw new Win32Exception();}
+    internal void DeleteForRemoval(){RequireRemovalStop();if(!DeleteService(service))throw new Win32Exception();}
     private StatusProcess Status(){if(!QueryServiceStatusEx(service,0,out var status,(uint)Marshal.SizeOf<StatusProcess>(),out _))throw new Win32Exception();return status;}
     public void Dispose(){service.Dispose();manager.Dispose();}
     [StructLayout(LayoutKind.Sequential)]private struct Privileges{public IntPtr Names;}

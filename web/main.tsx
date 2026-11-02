@@ -4,6 +4,7 @@ import { compareChatActivity } from './chatOrder';
 import { newClientId as newId } from './clientId';
 import { useVisibleChatRead } from './useVisibleChatRead';
 import { useUsageBudget } from './useUsageBudget';
+import { useUpdateIdleBlocker, useUpdateIdleLease } from './useUpdateIdleLease';
 import { UsageIndicator, UsageOverlay } from './UsageBudget';
 import './usage-budget.css';
 import { readRoute, writeRoute, type AppRoute } from './browserNavigation';
@@ -140,6 +141,10 @@ function App() {
     [loaded, setLoaded] = useState(false),
     [error, setError] = useState('');
   const [route, setRoute] = useState<AppRoute>({ mode: 'chat', group: null });
+  const updateIdle = useUpdateIdleLease(me?.user.id ?? null);
+  const admittedIdentity = useRef<string | null>(null);
+  if (!me) admittedIdentity.current = null;
+  else if (updateIdle.ready) admittedIdentity.current = me.user.id;
   const navigate = (next: AppRoute) => {
     if (!me) return;
     writeRoute(history, next, me.user.id);
@@ -187,6 +192,7 @@ function App() {
     return () => window.removeEventListener('session-expired', expire);
   }, [refresh]);
   const logout = useCallback(async () => {
+    await updateIdle.releaseIfSafe();
     const attempt = api('/logout', 'POST');
     localStorage.setItem('yachad-locked', '1');
     setMe(null);
@@ -196,7 +202,7 @@ function App() {
     } catch {
       setError('המכשיר ננעל מקומית. החיבור לשרת אינו זמין כרגע.');
     }
-  }, []);
+  }, [updateIdle.releaseIfSafe]);
   useEffect(() => {
     if (!me) return;
     let last = Date.now(),
@@ -243,8 +249,11 @@ function App() {
       </div>
     );
   if (!me) return <Login onLogin={refresh} />;
+  if (!updateIdle.ready && admittedIdentity.current !== me.user.id)
+    return <div className="splash" role="status"><MessageCircleHeart /><span>מתחברים…</span></div>;
   return (
-    <div className="app-shell">
+    <div className="app-shell" inert={!updateIdle.ready || undefined} aria-busy={!updateIdle.ready}>
+      <UpdateIdleRepair idle={updateIdle} />
       {error && (
         <ErrorToast message={error} onDismiss={() => setError('')} />
       )}
@@ -266,6 +275,40 @@ function App() {
       </div>
     </div>
   );
+}
+function UpdateIdleRepair({ idle }: { idle: ReturnType<typeof useUpdateIdleLease> }) {
+  const [expanded, setExpanded] = useState(false), [confirmed, setConfirmed] = useState<string | null>(null);
+  const snapshot = idle.otherLeases.map(lease => `${lease.id}:${lease.generation}`).join(',') + `|${idle.orphanRevision}`;
+  useEffect(() => { setConfirmed(null); }, [snapshot]);
+  if (!idle.otherLeases.length && !idle.orphanRevision) return null;
+  return <aside className="update-idle-repair" aria-label="סיום פעילות קודמת"
+    style={{ padding: '0.6rem 1rem', background: 'var(--surface, #fff)', maxHeight: '45dvh', overflow: 'auto', flexShrink: 0 }}>
+    <p style={{ margin: '0 0 0.4rem' }}>העדכון ממתין לבדיקת פעילות קודמת בחשבון הזה.</p>
+    <button type="button" className="text-button" disabled={idle.repairBusy}
+      onClick={() => { setExpanded(value => !value); setConfirmed(null); void idle.refreshPrevious(); }}>
+      {expanded ? 'סגירת הבדיקה' : 'כל החלונות האחרים כבר נסגרו?'}
+    </button>
+    {expanded && <div>
+      <p>לפני האישור, סגרו בכל המכשירים את החלונות האחרים של החשבון הזה בלבד.
+        האישור עשוי לאפשר עדכון כשהיישום פנוי, ואינו משחזר טיוטות או הקלטות שלא נשמרו.
+        אל תמשיכו אם נותר משהו לשחזור או אם צריך לברר תוצאה של שליחה קודמת.
+        אם אי אפשר לוודא שהחלונות האחרים נסגרו, אל תאשרו. הפעולה לא תשלח הודעות מחדש.</p>
+      <label style={{ display: 'flex', gap: '0.5rem', alignItems: 'start' }}>
+        <input type="checkbox" checked={confirmed === snapshot} disabled={idle.repairBusy}
+          onChange={event => setConfirmed(event.target.checked ? snapshot : null)} />
+        <span>סגרתי את כל החלונות האחרים של החשבון הזה.
+          לא נותרה פעילות קודמת, בחלון הזה או בחלונות שנסגרו, שדורשת שחזור טיוטה או הקלטה, או בירור של שליחה לא מוכרעת.</span>
+      </label>
+      {!idle.repairAllowed && !idle.repairBusy && <p>סיימו קודם את הטיוטה, ההקלטה, השליחה או העריכה הפתוחה בחלון הזה.</p>}
+      <button type="button" disabled={confirmed !== snapshot || !idle.repairAllowed}
+        onClick={() => { if (confirmed === snapshot) { setConfirmed(null); void idle.settlePrevious(true, idle.orphanRevision); } }}>
+        {idle.repairBusy ? 'בודקים…' : 'אישור סיום הפעילות הקודמת'}
+      </button>
+      <button type="button" className="text-button" disabled={idle.repairBusy}
+        onClick={() => { setConfirmed(null); void idle.refreshPrevious(); }}>בדיקה נוספת</button>
+      {idle.repairError && <p role="alert" className="error">{idle.repairError}</p>}
+    </div>}
+  </aside>;
 }
 function Login({ onLogin }: { onLogin: () => Promise<void> }) {
   const [setupDone, setSetupDone] = useState(false);
@@ -1056,6 +1099,7 @@ function Chat({
         {composerGroup && (
             <Composer
               key={composerGroup.id}
+              identity={me.user.id}
               group={composerGroup.id}
               messages={messages}
               caps={c}
@@ -1341,6 +1385,7 @@ function Message({
   );
 }
 function Composer({
+  identity,
   group,
   messages,
   caps,
@@ -1357,6 +1402,7 @@ function Composer({
   onError,
   onBusyChange,
 }: {
+  identity: string;
   group: string;
   messages: PublicMessage[];
   caps: Partial<Capabilities>;
@@ -1383,6 +1429,7 @@ function Composer({
     [file, setFile] = useState<File | null>(null),
     [sticker, setSticker] = useState(false),
     [recording, setRecording] = useState(false),
+    [recordPending, setRecordPending] = useState(false),
     [voice, setVoice] = useState<Blob | null>(null),
     [seconds, setSeconds] = useState(0),
     [preview, setPreview] = useState(''),
@@ -1404,6 +1451,8 @@ function Composer({
     copiedEdit = useRef(false),
     available = useRef(enabled && !suspended);
   available.current = enabled && !suspended && !sendUncertain;
+  const markUpdateUnsafe = useUpdateIdleBlocker(identity, !!text || !!file || !!voice || recording || recordPending || busy || sendUncertain ||
+    submitting.current || uncertain.current || !!reply || !!editing);
   const { burst, celebrate } = useChatCelebration(effects, flair, group);
   const path = '/groups/' + encodeURIComponent(group);
   useEffect(() => {
@@ -1478,6 +1527,7 @@ function Composer({
   const chooseSticker = async (mediaId: string) => {
     if (!available.current || busy || editing || !caps.sticker || !availableStickers.some(s => s.id === mediaId)) return;
     const controller = new AbortController();
+    markUpdateUnsafe();
     stickerRequest.current?.abort(); stickerRequest.current = controller;
     setEmojiOpen(false); setBusy(true); onBusyChange(true);
     try {
@@ -1494,6 +1544,7 @@ function Composer({
   };
   const checkSend = async () => {
     if (!uncertain.current || submitting.current || busy || !enabled || suspended) return;
+    markUpdateUnsafe();
     submitting.current = true; setBusy(true); onBusyChange(true);
     try {
       const result = await api<{ state: string }>(`${path}/outgoing/${encodeURIComponent(id.current)}`);
@@ -1508,6 +1559,7 @@ function Composer({
   const send = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (submitting.current || uncertain.current || busy || !available.current || recording || (!text.trim() && !file && !voice)) return;
+    markUpdateUnsafe();
     if (!editing) {
       const previous = lastAttempt.current, draft = { text, replyId: reply?.id, file, voice, sticker };
       // Every payload change gets a new identity after proven non-submission,
@@ -1553,7 +1605,7 @@ function Composer({
     setRecording(false);
   };
   const record = async () => {
-    if (!available.current || submitting.current || uncertain.current) return;
+    if (!available.current || submitting.current || uncertain.current || recordPending) return;
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
       onError('להקלטה צריך כתובת HTTPS שהמכשיר סומך עליה, או localhost.');
       return;
@@ -1562,6 +1614,7 @@ function Composer({
       onError('הדפדפן הזה אינו תומך בהקלטה.');
       return;
     }
+    markUpdateUnsafe(); setRecordPending(true);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       if (!mounted.current || !available.current || submitting.current || uncertain.current) {
@@ -1604,7 +1657,7 @@ function Composer({
           ? 'אין הרשאה למיקרופון. אפשר לאשר אותה בהגדרות הדפדפן ולנסות שוב.'
           : 'לא הצלחנו להפעיל את המיקרופון. בדקו שהוא פנוי וזמין.',
       );
-    }
+    } finally { if (mounted.current) setRecordPending(false); }
   };
   return (
     <div className="composer-wrap" hidden={suspended}>

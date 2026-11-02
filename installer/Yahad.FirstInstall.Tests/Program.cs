@@ -12,6 +12,121 @@ using Yahad.Install;
 using Yahad.Service;
 using Yahad.Setup;
 
+await using var storeCompilerLifetime=StoreFixtureModules.OwnInvocation();
+
+if(args is ["--fixture-native-launch-race",var fixtureNode])
+{
+    await FixtureProcessesTests.NativeLaunchRace(fixtureNode);
+    Console.WriteLine(JsonSerializer.Serialize(new{suite="fixture-owned-native-launch-race",passed=1,failed=0,realServices=false}));return 0;
+}
+
+if(args is ["--fixture-process-owner-only"])
+{
+    var passed=0;var failed=0;
+    async Task Observe(string name,Func<Task> run){try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);}}
+    await FixtureProcessesTests.RunAsync(Observe);await Observe("shared compiler root survives both users then disappears",StoreFixtureModules.TestSharedLifetime);
+    Console.WriteLine(JsonSerializer.Serialize(new{suite="fixture-process-and-cache-lifetime",passed,failed,realServices=false}));return failed==0?0:1;
+}
+
+if(args is ["--fixture-teardown-only"])
+{
+    var passed=0;var failed=0;await OwnedFixtureDirectoryTests.RunAsync(async(name,run)=>
+    {try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);}});
+    await FixtureProcessesTests.RunAsync(async(name,run)=>
+    {try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);}});
+    Console.WriteLine(JsonSerializer.Serialize(new{suite="fixture-teardown-owned-roots",passed,failed,realServices=false,globalSweep=false}));return failed==0?0:1;
+}
+
+if(args is ["--network-profile-readonly",var selectedProfileAdapter])
+{
+    try
+    {
+        var category=NativeNetworkProfile.ReadCategory(selectedProfileAdapter);
+        NativeNetworkProfile.RequirePrivateCategory(category);
+        Console.WriteLine(JsonSerializer.Serialize(new{suite="selected-network-profile-readonly",ok=true,category,networkChanged=false,servicesChanged=false}));return 0;
+    }
+    catch(Exception failure)
+    {Console.WriteLine(JsonSerializer.Serialize(new{suite="selected-network-profile-readonly",ok=false,reason=failure.GetType().Name,hresult=failure.HResult,networkChanged=false,servicesChanged=false}));return 1;}
+}
+
+if(args is ["--store-import-trace-only",var traceNode,var traceRepo,var traceOutput])
+    return await ImportTraceProbe.RunAsync(traceNode,traceRepo,traceOutput);
+if(args is ["--compiler-trace-only",var compilerNode,var compilerRepo,var compilerOutput])
+    return await ImportTraceProbe.RunAsync(compilerNode,compilerRepo,compilerOutput,true);
+if(args is ["--existing-link-guards-only",var hardFixture,var junctionFixture,var targetFixture,var linkOutput])
+    return ExistingLinkGuardsProbe.Run(hardFixture,junctionFixture,targetFixture,linkOutput);
+
+if(args is ["--store-seed-probe-only",var probeNode,var probeRepo,var probeHelper])
+{
+    try
+    {
+        var watch=System.Diagnostics.Stopwatch.StartNew();using var fixture=await ProductionFixture.Create(probeNode,probeRepo,probeHelper);
+        var observed=await fixture.ReadQuiescentSchema(probeNode);
+        if(observed!=fixture.Schema)throw new IOException("SEEDED_STORE_SCHEMA_MISMATCH");
+        Console.WriteLine(JsonSerializer.Serialize(new{suite="store-seed-probe",ok=true,elapsedMilliseconds=watch.ElapsedMilliseconds,schema=observed,databaseSchemaReadBack=true,realScmInvoked=false}));return 0;
+    }
+    catch(Exception failure){Console.WriteLine(JsonSerializer.Serialize(new{suite="store-seed-probe",ok=false,reason=failure.GetType().Name,quiescenceConfirmed=(failure as FixturePreparationException)?.QuiescenceConfirmed,realScmInvoked=false}));return 1;}
+}
+if(args is ["--legacy-removal-stop-only"])
+{
+    var passed=0;var failed=0;await LegacyRemovalStopTests.RunAsync(async(name,run)=>
+    {try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception failure){failed++;Console.WriteLine("FAIL "+name+" "+failure);}});
+    Console.WriteLine(JsonSerializer.Serialize(new{suite="legacy-removal-stop-synthetic",passed,failed,realScmInvoked=false,liveDataModified=false}));return failed==0?0:1;
+}
+if(args is ["--uninstall-recovery-only",var recoveryOutput])
+{
+    Directory.CreateDirectory(recoveryOutput);var failed=0;var observations=new List<object>();
+    async Task Observe(string name,Func<Task> run)
+    {
+        try{await run();observations.Add(new{name,status="PASS"});Console.WriteLine("PASS "+name);}
+        catch(Exception error){failed++;observations.Add(new{name,status="FAIL",reason=error.GetType().Name});Console.WriteLine("FAIL "+name+" "+error);}
+    }
+    await FailureDiagnosticTests.RunAsync(Observe);await ReceiptRecoveryTests.RunAsync(Observe);await LegacyRemovalStopTests.RunAsync(Observe);
+    await Observe("owned synthetic removal keeps external backup",()=>{RemovalTests.Complete();return Task.CompletedTask;});
+    await Observe("locked and hardlinked synthetic removal refuses",()=>{RemovalTests.LockedAndHardlink();return Task.CompletedTask;});
+    await Observe("interrupted synthetic purge retains same-choice intent",()=>{RemovalTests.Interrupted();return Task.CompletedTask;});
+    await Observe("repair-only RTL consent window renders without showing or requesting UAC",()=>ReceiptRecoveryTests.RenderAsync(recoveryOutput));
+    var report=JsonSerializer.Serialize(new{suite="uninstall-recovery-synthetic",passed=observations.Count-failed,failed,realScmInvoked=false,liveReceiptModified=false,uacRequested=false,cases=observations},new JsonSerializerOptions{WriteIndented=true});
+    File.WriteAllText(Path.Combine(recoveryOutput,"tests.json"),report);Console.WriteLine(report);return failed==0?0:1;
+}
+if(args is ["--failure-diagnostics-only"])
+{
+    var failed=0;
+    await FailureDiagnosticTests.RunAsync(async(name,run)=>
+    {
+        try{await run();Console.WriteLine("PASS "+name);}
+        catch(Exception failure){failed++;Console.WriteLine("FAIL "+name+" "+failure);}
+    });
+    return failed==0?0:1;
+}
+if(args is ["--full-installer-atomic-only"])
+{
+    FullInstallerAtomicTests.Run();Console.WriteLine(JsonSerializer.Serialize(new{suite="full-installer-atomic-private-files",passed=3,failed=0,nativeScmOperations=false,realFamilyData=false}));return 0;
+}
+if(args is ["--operator-binding-only",var operatorNode])
+{
+    await OperatorBindingTests.Run(operatorNode);Console.WriteLine(JsonSerializer.Serialize(new{suite="operator-binding-real-sqlite-synthetic",passed=6,failed=0,nativeScmOperations=false,realFamilyData=false}));return 0;
+}
+if(args is ["--full-installer-ui-only",var fullUiOutput])
+{
+    await FullInstallerUiTests.Run(fullUiOutput);Console.WriteLine(JsonSerializer.Serialize(new{suite="full-installer-ui-synthetic",passed=2,failed=0,nativeOperations=false}));return 0;
+}
+if(args is ["--startup-failure-only"])
+{
+    var passed=0;var failed=0;await ServiceStartupFailureTests.RunAsync(async(name,run)=>
+    {try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);}});
+    Console.WriteLine(JsonSerializer.Serialize(new{suite="service-startup-failure-pure",passed,failed,nativeOperations=false,eventLogWrites=false}));return failed==0?0:1;
+}
+if(args is ["--full-installer-only"])
+{
+    var passed=0;var failed=0;await FullInstallerIntegrationTests.Run(async(name,run)=>
+    {try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);}});
+    await ServiceStartupFailureTests.RunAsync(async(name,run)=>
+    {try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);}});
+    await PreparingCancellationTests.RunAsync(async(name,run)=>
+    {try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);}});
+    Console.WriteLine(JsonSerializer.Serialize(new{suite="full-installer-integration-pure",passed,failed,nativeOperations=false}));return failed==0?0:1;
+}
 if(args is ["--version-only",var versionRepo])
 {
     var observations=new List<object>();var failed=0;
@@ -58,15 +173,19 @@ if(args is ["--lan-runtime-only"])
     });
     Console.WriteLine(JsonSerializer.Serialize(new{suite="lan-runtime-pure",ok=failed==0,failed,nativeOperations=false,cases=observations}));return failed==0?0:1;
 }
-var storeOnly=args.Length==5&&args[0]=="--store-integration-only";
+var storeFirst=args.Length==5&&args[0]=="--store-first-start-only";
+var storeOnly=(args.Length==5&&args[0]=="--store-integration-only")||storeFirst;
 if(storeOnly)args=args.Skip(1).ToArray();
 if(args is not [var node,var repo,var helper,var output])throw new IOException("TEST_INPUTS_REQUIRED");
-Directory.CreateDirectory(output);var cases=new List<object>();int failures=0;
+Directory.CreateDirectory(output);var cases=new List<object>();int failures=0;int blockedStore=0;int storeCaseIndex=0;bool preparationBlocked=false;
 void Assert(bool condition,string code="assertion failed"){if(!condition)throw new Exception(code);}
 async Task Check(string name,Func<Task> run){try{await run();cases.Add(new{name,status="PASS"});Console.WriteLine("PASS "+name);}catch(Exception e){failures++;cases.Add(new{name,status="FAIL",reason=e.GetType().Name});Console.WriteLine("FAIL "+name+" "+e);}}
 async Task Refuse(Func<Task> run){try{await run();}catch(Exception e)when(e is IOException or UnauthorizedAccessException or OperationCanceledException or Win32Exception or JsonException){return;}throw new Exception("unexpected admission");}
 if(!storeOnly)
 {
+await FailureDiagnosticTests.RunAsync(Check);
+await LegacyRemovalStopTests.RunAsync(Check);
+await ReceiptRecoveryTests.RunAsync(Check);
 var owner=new OwnerProcess("S-1-5-21-1-2-3-1001",111,123,new string('a',64));
 await Check("single installer path performs prepare publish service readiness then browser handoff",async()=>
 {var ops=new FakeHost();var phases=new List<string>();var flow=new InstallFlow(ops);var result=await flow.RunAsync(owner,false,p=>phases.Add(p.Phase),default);Assert(result.Ok&&ops.Calls.SequenceEqual(new[]{"prepare","publish","ready"})&&phases.Last()=="ready"&&result.SetupToken!.Length==43);await Refuse(()=>flow.RunAsync(owner,false,_=>{},default));});
@@ -178,28 +297,63 @@ await Check("locked or hardlinked synthetic data fails before deletion",()=>
 await Check("interrupted synthetic purge retains outside intent and resumes exact remaining tree",()=>
 {RemovalTests.Interrupted();return Task.CompletedTask;});
 }
-async Task StoreCheck(string name,Func<ProductionFixture,Task> run)=>await Check(name,async()=>
-{using var fixture=await ProductionFixture.Create(node,repo,helper);await run(fixture);});
+async Task StoreCheck(string name,Func<ProductionFixture,Task> run)
+{
+ if(storeFirst&&storeCaseIndex++!=0)return;
+ if(preparationBlocked){blockedStore++;cases.Add(new{name,status="BLOCKED",reason="fixture preparation failed"});Console.WriteLine("BLOCKED "+name);return;}
+ await Check(name,async()=>
+ {
+  ProductionFixture fixture;
+  try{fixture=await ProductionFixture.Create(node,repo,helper);}
+  catch{preparationBlocked=true;throw;}
+  Exception? bodyFailure=null;
+  try{await run(fixture);}catch(Exception failure){bodyFailure=failure;fixture.RetainFailure(failure);}
+  try{fixture.Dispose();}catch(Exception cleanup){preparationBlocked=true;if(bodyFailure is not null)throw new AggregateException(bodyFailure,cleanup);throw;}
+  if(bodyFailure is not null)System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(bodyFailure).Throw();
+ });
+}
 await StoreCheck($"real Store first startup creates schema{ProductionFixture.ReadSourceSchema(repo)} only after one-use authorization",async(f)=>
 {
  File.WriteAllText(f.PathOf("worker-error.json"),"synthetic prior-attempt failure");f.ClearSignals();Assert(!File.Exists(f.PathOf("worker-error.json")),"stale worker diagnostic survived retry reset");
  var original=Path.Combine(f.Data,"app.sqlite");File.Move(original,f.PathOf("original-seeded.sqlite"));f.ClearSignals();var head=NativeJson.Read<InstalledActivation>(File.ReadAllBytes(f.PathOf("activation.json")));var consumed=0;
  var fresh=new FreshDataAuthorization(f.InstallationId,f.OriginalDataId,head.ReleaseDigest,()=>{if(++consumed!=1)throw new IOException("seed replay");});
- var resolver=new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,connectorProfile:RuntimeConnectorProfile.Synthetic,fresh:fresh);
+ var resolver=f.CreateResolver(fresh:fresh);
  var controller=new ServiceController(new ResolverStart(resolver,()=>f.Binding));var result=await controller.RunAsync(r=>{if(r.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);});
- Assert(result.Failure==ServiceFailure.None&&consumed==1&&File.Exists(original));var schema=await FrozenAdmissionSchema.ReadAsync(node,original,f.PathOf("temporary"),default);Assert(schema==f.Schema);
+ Assert(result.Failure==ServiceFailure.None&&consumed==1&&File.Exists(original),$"STORE_FIRST_START_RESULT:{result.Failure};quiescence={result.QuiescenceConfirmed};consumed={consumed};db={File.Exists(original)}");var schema=await f.ReadQuiescentSchema(node);Assert(schema==f.Schema);
  File.Move(original,f.PathOf("new-seeded.sqlite"));f.ClearSignals();await Refuse(()=>f.Resolve());File.Move(f.PathOf("new-seeded.sqlite"),original);
+});
+await StoreCheck("schema readback keeps data lease and no-write pin until failed probe cleanup is observed",async(f)=>
+{
+ var fault=new JobProcessFaultInjection{FailAfterHandoff=true,TreeObservationUnavailable=true};ProbeOwnershipException? owned=null;
+ try
+ {
+  try{await f.ReadQuiescentSchema(node,fault);throw new Exception("unknown readback accepted");}
+  catch(FixturePreparationException failure)when(!failure.QuiescenceConfirmed&&failure.InnerException is ProbeOwnershipException probe){owned=probe;}
+  Assert(owned is not null&&!owned.QuiescenceConfirmed&&!owned.CleanupComplete);
+  try{using var wrong=WindowsFileBoundary.AcquireDataLease(f.Data);throw new Exception("readback lease released");}catch(Win32Exception e)when(e.NativeErrorCode==32){}
+  try{using var wrong=new FileStream(Path.Combine(f.Data,"app.sqlite"),FileMode.Open,FileAccess.Write,FileShare.ReadWrite|FileShare.Delete);throw new Exception("readback write pin released");}catch(IOException e)when((e.HResult&0xffff)==32){}
+ }
+ finally
+ {
+  fault.TreeObservationUnavailable=false;
+  if(owned is not null)
+  {
+   try{using var bound=new CancellationTokenSource(TimeSpan.FromSeconds(5));await owned.RetryCleanupAsync(bound.Token);}
+   catch{throw new FixturePreparationException(false,owned);}
+  }
+ }
+ Assert(owned is not null&&owned.QuiescenceConfirmed&&owned.CleanupComplete);using var released=WindowsFileBoundary.AcquireDataLease(f.Data);
 });
 await StoreCheck("existing verified database retires a leftover initial grant without reinitializing",async(f)=>
 {
  f.ClearSignals();var head=NativeJson.Read<InstalledActivation>(File.ReadAllBytes(f.PathOf("activation.json")));var count=0;
- var resolver=new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,connectorProfile:RuntimeConnectorProfile.Synthetic,fresh:new(f.InstallationId,f.OriginalDataId,head.ReleaseDigest,()=>count++));
+ var resolver=f.CreateResolver(fresh:new(f.InstallationId,f.OriginalDataId,head.ReleaseDigest,()=>count++));
  var controller=new ServiceController(new ResolverStart(resolver,()=>f.Binding));var result=await controller.RunAsync(r=>{if(r.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);});Assert(result.Failure==ServiceFailure.None&&count==1);
 });
 await StoreCheck("missing database plus unrelated data refuses fresh initialization and keeps files",async(f)=>
 {
  f.ClearSignals();var db=Path.Combine(f.Data,"app.sqlite");File.Move(db,f.PathOf("held-db.sqlite"));var sentinel=Path.Combine(f.Data,"family-marker");File.WriteAllText(sentinel,"preserve");var count=0;var head=NativeJson.Read<InstalledActivation>(File.ReadAllBytes(f.PathOf("activation.json")));
- try{var resolver=new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,connectorProfile:RuntimeConnectorProfile.Synthetic,fresh:new(f.InstallationId,f.OriginalDataId,head.ReleaseDigest,()=>count++));await Refuse(()=>resolver.ResolveAsync(f.Binding,default));Assert(count==0&&File.ReadAllText(sentinel)=="preserve"&&!File.Exists(db));}
+ try{var resolver=f.CreateResolver(fresh:new(f.InstallationId,f.OriginalDataId,head.ReleaseDigest,()=>count++));await Refuse(()=>resolver.ResolveAsync(f.Binding,default));Assert(count==0&&File.ReadAllText(sentinel)=="preserve"&&!File.Exists(db));}
  finally{File.Delete(sentinel);File.Move(f.PathOf("held-db.sqlite"),db);}
 });
 // Exercise the same two-file authorization used by the production resolver.
@@ -223,14 +377,14 @@ foreach(var failure in new[]{"handoff","resume","early-crash"})await StoreCheck(
  if(failure=="handoff"){var original=fresh.Begin;fresh=fresh with{Begin=()=>{original?.Invoke();throw new IOException("INJECTED_BEFORE_DESCRIPTOR");}};}
  if(failure=="resume")fault=new(){FailResumeThread=true};
  if(failure=="early-crash")File.WriteAllText(f.PathOf("crash-before-store"),"synthetic");
- var resolver=new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,connectorProfile:RuntimeConnectorProfile.Synthetic,fresh:fresh,startFault:fault);
+ var resolver=f.CreateResolver(fresh:fresh,startFault:fault);
  var reports=new List<ServiceReport>();var controller=new ServiceController(new ResolverStart(resolver,()=>f.Binding),lifecycleDeadline:TimeSpan.FromSeconds(8));
  var failed=await controller.RunAsync(reports.Add);Assert(failed.Failure!=ServiceFailure.None&&failed.QuiescenceConfirmed&&!reports.Any(x=>x.State==ServiceState.Running));
  Assert(!File.Exists(db)&&!File.Exists(f.PathOf("initial-seed.json"))&&File.Exists(f.PathOf("initial-retry.json")));
  using(var observed=WindowsFileBoundary.AcquireDataLease(f.Data)){} // actual empty-job lease reacquisition, not a UI boolean
  if(failure=="early-crash")File.Delete(f.PathOf("crash-before-store"));
  f.ClearSignals();var retry=ReadInitialGrants(f,receipt);Assert(retry is not null);
- var next=new ServiceController(new ResolverStart(new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,connectorProfile:RuntimeConnectorProfile.Synthetic,fresh:retry),()=>f.Binding));
+ var next=new ServiceController(new ResolverStart(f.CreateResolver(fresh:retry),()=>f.Binding));
  var success=await next.RunAsync(report=>{if(report.State==ServiceState.Running)next.Control(ServiceDefinition.Stop);});
  Assert(success.Failure==ServiceFailure.None&&File.Exists(db)&&!File.Exists(f.PathOf("initial-retry.json")));
  // Once observed ready, deleting even every DB file cannot re-open first setup.
@@ -240,21 +394,21 @@ await StoreCheck("uncertain first-start cleanup retains both retry evidence and 
 {
  f.ClearSignals();var db=Path.Combine(f.Data,"app.sqlite");File.Move(db,f.PathOf("before-uncertain.sqlite"));var receipt=CreateInitialGrants(f);
  var fault=new JobProcessFaultInjection{FailAfterHandoff=true,TreeObservationUnavailable=true};
- var resolver=new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,connectorProfile:RuntimeConnectorProfile.Synthetic,fresh:ReadInitialGrants(f,receipt),startFault:fault);
+ var resolver=f.CreateResolver(fresh:ReadInitialGrants(f,receipt),startFault:fault);
  var reports=new List<ServiceReport>();var controller=new ServiceController(new ResolverStart(resolver,()=>f.Binding),lifecycleDeadline:TimeSpan.FromSeconds(2));
  var result=await controller.RunAsync(reports.Add);Assert(!result.QuiescenceConfirmed&&controller.CleanupReconciliationRequired&&!reports.Any(x=>x.State==ServiceState.Stopped)&&File.Exists(f.PathOf("initial-retry.json"))&&!File.Exists(db));
  try{using var wrong=WindowsFileBoundary.AcquireDataLease(f.Data);throw new Exception("early lease release");}catch(Win32Exception ex)when(ex.NativeErrorCode==32){}
  fault.TreeObservationUnavailable=false;await controller.RetryAdmissionCleanupAsync(default);Assert(!controller.CleanupReconciliationRequired);
  using(var observed=WindowsFileBoundary.AcquireDataLease(f.Data)){}
- var retry=new ServiceController(new ResolverStart(new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,connectorProfile:RuntimeConnectorProfile.Synthetic,fresh:ReadInitialGrants(f,receipt)),()=>f.Binding));
+ var retry=new ServiceController(new ResolverStart(f.CreateResolver(fresh:ReadInitialGrants(f,receipt)),()=>f.Binding));
  var recovered=await retry.RunAsync(report=>{if(report.State==ServiceState.Running)retry.Control(ServiceDefinition.Stop);});Assert(recovered.Failure==ServiceFailure.None&&!File.Exists(f.PathOf("initial-retry.json")));
 });
 await StoreCheck("verified DB from an interrupted attempt retires grants before retry and never resets data",async(f)=>
 {
- f.ClearSignals();var receipt=CreateInitialGrants(f);var schema=await FrozenAdmissionSchema.ReadAsync(node,Path.Combine(f.Data,"app.sqlite"),f.PathOf("temporary"),default);Assert(schema==f.Schema);
- var before=File.ReadAllBytes(Path.Combine(f.Data,"app.sqlite"));var grant=await new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,connectorProfile:RuntimeConnectorProfile.Synthetic,fresh:ReadInitialGrants(f,receipt)).ResolveAsync(f.Binding,default);
+ f.ClearSignals();var receipt=CreateInitialGrants(f);var schema=await f.ReadQuiescentSchema(node);Assert(schema==f.Schema);
+ var before=File.ReadAllBytes(Path.Combine(f.Data,"app.sqlite"));var grant=await f.CreateResolver(fresh:ReadInitialGrants(f,receipt)).ResolveAsync(f.Binding,default);
  try{await grant.Recovery.RequireStartAllowedAsync(grant.Release,default);Assert(File.Exists(f.PathOf("initial-retry.json")));}finally{grant.Dispose();}
- var controller=new ServiceController(new ResolverStart(new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,connectorProfile:RuntimeConnectorProfile.Synthetic,fresh:ReadInitialGrants(f,receipt)),()=>f.Binding));
+ var controller=new ServiceController(new ResolverStart(f.CreateResolver(fresh:ReadInitialGrants(f,receipt)),()=>f.Binding));
  var result=await controller.RunAsync(report=>{if(report.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);});Assert(result.Failure==ServiceFailure.None&&!File.Exists(f.PathOf("initial-seed.json"))&&!File.Exists(f.PathOf("initial-retry.json")));
 });
 await StoreCheck("inconsistent or corrupt initial grant state fails closed and creates no replacement",async(f)=>
@@ -265,7 +419,7 @@ await StoreCheck("inconsistent or corrupt initial grant state fails closed and c
 await StoreCheck("SQLite handles a crash-left WAL under actual exclusive lease without deleting live data",async(f)=>
 {
  f.ClearSignals();var signal=f.PathOf("wal-ready");var code="const fs=require('node:fs'),{DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(process.argv[1]);db.exec('PRAGMA journal_mode=WAL;CREATE TABLE IF NOT EXISTS first_install_wal(value INTEGER);INSERT INTO first_install_wal VALUES(73)');fs.writeFileSync(process.argv[2],'ready');setInterval(()=>{},1000)";
- using(var writer=JobProcess.Start(node,["-e",code,Path.Combine(f.Data,"app.sqlite"),signal],f.Root,LaunchEnvironment.Clean(f.Root)))
+ using(var writer=f.StartJob(node,["-e",code,Path.Combine(f.Data,"app.sqlite"),signal],f.Root,LaunchEnvironment.Clean(f.Root)))
  {using var limit=new CancellationTokenSource(TimeSpan.FromSeconds(15));while(!File.Exists(signal))await Task.Delay(20,limit.Token);await writer.TerminateAndWaitForTreeEmptyAsync(limit.Token);}
  Assert(File.Exists(Path.Combine(f.Data,"app.sqlite-wal")));using var lease=WindowsFileBoundary.AcquireDataLease(f.Data);var schema=await FirstInstallWal.ReconcileAsync(node,Path.Combine(f.Data,"app.sqlite"),f.PathOf("temporary"),default);Assert(schema==f.Schema&&!File.Exists(Path.Combine(f.Data,"app.sqlite-wal")));
 });
@@ -278,6 +432,7 @@ await Check("native RTL window renders at desktop and minimum size without showi
   foreach(var size in new[]{new Size(980,730),new Size(760,620)})foreach(var full in new[]{false,true})
   {
    var window=new MainWindow(true);var keep=(System.Windows.Controls.RadioButton)window.FindName("KeepOption");var remove=(System.Windows.Controls.RadioButton)window.FindName("DeleteOption");var input=(System.Windows.Controls.TextBox)window.FindName("ConfirmationInput");var primary=(System.Windows.Controls.Button)window.FindName("Primary");
+   Assert(((System.Windows.Controls.TextBlock)window.FindName("VersionBadge")).Text==ApplicationRelease.Version+" · Windows");
    Assert(keep.IsChecked==true&&primary.IsEnabled);if(full){remove.IsChecked=true;Assert(!primary.IsEnabled);input.Text="מחיקה";Assert(primary.IsEnabled);input.Text="";Assert(!primary.IsEnabled);}
    var root=(FrameworkElement)window.Content;root.Width=size.Width;root.Height=size.Height;root.Measure(size);root.Arrange(new Rect(size));root.UpdateLayout();var bitmap=new RenderTargetBitmap((int)size.Width,(int)size.Height,96,96,PixelFormats.Pbgra32);bitmap.Render(root);var png=new PngBitmapEncoder();png.Frames.Add(BitmapFrame.Create(bitmap));using var file=File.Create(Path.Combine(output,"uninstall-"+(full?"delete":"keep")+"-"+size.Width+".png"));png.Save(file);Assert(root.FlowDirection==FlowDirection.RightToLeft);
    if(full)
@@ -290,8 +445,8 @@ await Check("native RTL window renders at desktop and minimum size without showi
   }
   completed.SetResult();}catch(Exception e){completed.SetException(e);}});thread.SetApartmentState(ApartmentState.STA);thread.Start();await completed.Task;thread.Join();
 });
-File.WriteAllText(Path.Combine(output,"tests.json"),JsonSerializer.Serialize(new{kind=storeOnly?"first-install-synthetic-store-only":"first-install-synthetic-host-operations",passed=cases.Count-failures,failed=failures,nativeScmInvoked=false,hostAclProvisioned=false,setupCapabilityProvisioned=false,networkListenersOpened=false,offscreenUiOnly=!storeOnly,tests=cases},new JsonSerializerOptions{WriteIndented=true}));
-Console.WriteLine($"{cases.Count-failures} passed; {failures} failed. No native host installation, service, trust or listener.");return failures==0?0:1;
+File.WriteAllText(Path.Combine(output,"tests.json"),JsonSerializer.Serialize(new{kind=storeFirst?"first-install-synthetic-store-first-start":storeOnly?"first-install-synthetic-store-only":"first-install-synthetic-host-operations",passed=cases.Count-failures-blockedStore,failed=failures,blocked=blockedStore,nativeScmInvoked=false,hostAclProvisioned=false,setupCapabilityProvisioned=false,networkListenersOpened=false,offscreenUiOnly=!storeOnly,tests=cases},new JsonSerializerOptions{WriteIndented=true}));
+Console.WriteLine($"{cases.Count-failures-blockedStore} passed; {failures} failed; {blockedStore} blocked. No native host installation, service, trust or listener.");return failures==0&&blockedStore==0?0:1;
 
 (byte[] Zip,byte[] Manifest) Package(bool duplicate=false)
 {
@@ -310,7 +465,7 @@ internal sealed class FakeHost:ISetupHostOperations
  public async Task<SetupResult> StartAndObserveAsync(Action<SetupProgress> p,CancellationToken c){await Call("ready",c);return Result;}
  public async Task<SetupResult> UninstallAsync(OwnerProcess o,Action<SetupProgress> p,CancellationToken c,UninstallMode mode=UninstallMode.KeepData){LastRemoval=mode;await Call("uninstall",c);return new(true,"REMOVED",DataPreserved:mode==UninstallMode.KeepData);}
 }
-internal sealed class ResolverStart(InstalledActivationResolver resolver,Func<InstallationBinding> binding):IServiceStartAuthorizer,IObservedAdmission
+internal sealed class ResolverStart(FixtureProcesses.FixtureResolver resolver,Func<InstallationBinding> binding):IServiceStartAuthorizer,IObservedAdmission
 {
  public TimeSpan AdmissionBudget=>resolver.AdmissionBudget;public event Action? ObservedWork{add=>resolver.ObservedWork+=value;remove=>resolver.ObservedWork-=value;}
     public async Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)

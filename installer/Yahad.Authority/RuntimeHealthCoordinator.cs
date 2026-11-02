@@ -4,23 +4,25 @@ namespace Yahad.Authority;
 
 // Retains the existing controller and all of its ownership through failed/late
 // admission and cleanup. A committed record is never a health observation.
-internal sealed class RuntimeHealthCoordinator
+internal sealed class RuntimeHealthCoordinator:IAuthorityRuntimeLifecycle,IAuthorityRuntimeUpdatePreparation
 {
     private readonly Func<InstallationBinding,IServiceStartAuthorizer> authorizer;
     private readonly TimeSpan startup,stop,cleanup;
     private readonly SemaphoreSlim serial=new(1,1);
     private ServiceController? controller;private Task<ServiceRunResult>? execution;
     private bool started,stopRequested;private string phase="awaiting_runtime";
-    internal string Phase=>Volatile.Read(ref phase);
+    public string Phase=>Volatile.Read(ref phase);
     internal ServiceRunResult? LastResult=>execution is {IsCompletedSuccessfully:true}?execution.Result:null;
-    internal bool CleanupReconciliationRequired=>Phase=="recovery_required";
+    internal ServiceStartupObservation? LastStartupObservation=>controller?.StartupObservation;
+    internal ServiceRootExitObservation? LastRootExitObservation=>controller?.RootExitObservation;
+    public bool CleanupReconciliationRequired=>Phase=="recovery_required";
     internal bool OwnsRuntimeResources=>execution is {IsCompleted:false}||controller?.CleanupReconciliationRequired==true;
     internal RuntimeHealthCoordinator(Func<InstallationBinding,IServiceStartAuthorizer> authorizer,TimeSpan? startup=null,TimeSpan? stop=null,TimeSpan? cleanup=null)
     {
         this.authorizer=authorizer;this.startup=startup??TimeSpan.FromMinutes(5);this.stop=stop??TimeSpan.FromSeconds(20);this.cleanup=cleanup??TimeSpan.FromSeconds(30);
         if(this.startup<=TimeSpan.Zero||this.startup>TimeSpan.FromMinutes(5)||this.stop<=TimeSpan.Zero||this.stop>TimeSpan.FromSeconds(30)||this.cleanup<=TimeSpan.Zero||this.cleanup>TimeSpan.FromSeconds(30))throw new ArgumentOutOfRangeException();
     }
-    internal async Task StartCommittedAsync(InstallationBinding binding,AppRelease expected,CancellationToken cancellation=default)
+    public async Task StartCommittedAsync(InstallationBinding binding,AppRelease expected,CancellationToken cancellation=default)
     {
         await serial.WaitAsync(cancellation);
         try
@@ -55,7 +57,24 @@ internal sealed class RuntimeHealthCoordinator
         }
         catch{if(ReferenceEquals(owned,execution))phase="recovery_required";}
     }
-    internal async Task StopAsync(CancellationToken cancellation=default)
+    public async Task<bool> PrepareUpdateAsync(string id,CancellationToken cancellation)
+    {
+        InstalledActivationResolver.Id(id);await serial.WaitAsync(cancellation);
+        try
+        {
+            if(Phase!="healthy"||controller is null||execution is null||execution.IsCompleted)throw new IOException("RUNTIME_NOT_HEALTHY");
+            var result=await controller.PrepareUpdateAsync(id,cancellation);
+            if(Phase!="healthy"||execution.IsCompleted)throw new IOException("RUNTIME_IDLE_GENERATION_ENDED");return result;
+        }
+        finally{serial.Release();}
+    }
+    public async Task CancelUpdateAsync(string id,CancellationToken cancellation)
+    {
+        InstalledActivationResolver.Id(id);await serial.WaitAsync(cancellation);
+        try{if(Phase!="healthy"||controller is null||execution is null||execution.IsCompleted)throw new IOException("RUNTIME_NOT_HEALTHY");await controller.CancelUpdateAsync(id,cancellation);}
+        finally{serial.Release();}
+    }
+    public async Task StopAsync(CancellationToken cancellation=default)
     {
         await serial.WaitAsync(cancellation);
         try
@@ -67,7 +86,7 @@ internal sealed class RuntimeHealthCoordinator
         }
         finally{serial.Release();}
     }
-    internal async Task RetryCleanupAsync(CancellationToken cancellation=default)
+    public async Task RetryCleanupAsync(CancellationToken cancellation=default)
     {
         await serial.WaitAsync(cancellation);
         try{if(!started)throw new IOException("RUNTIME_NOT_STARTED");if(!await CleanAsync(cancellation)){phase="recovery_required";throw new IOException("RUNTIME_CLEANUP_UNCONFIRMED");}phase="failed";}

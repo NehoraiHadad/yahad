@@ -17,7 +17,7 @@ public sealed class ProbeOwnershipException:IOException
 internal static class SqliteProbeProcess
 {
     internal static async Task<int> ReadAsync(string node,string script,string database,string temporary,string output,
-        TimeSpan timeout,CancellationToken cancellation,JobProcessFaultInjection? fault=null)
+        TimeSpan timeout,CancellationToken cancellation,JobProcessFaultInjection? fault=null,string? ownedPrivateProbe=null)
     {
         Session? session=null;
         try
@@ -30,7 +30,7 @@ internal static class SqliteProbeProcess
             using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancellation);deadline.CancelAfter(timeout);
             if(await job.WaitAsync(deadline.Token)!=0)throw new IOException("SQLITE_PROBE_REFUSED");await job.WaitForTreeEmptyAsync(deadline.Token);session.Quiescent=true;
             int schema;
-            {using var file=WindowsFileBoundary.OpenPrivateRead(output);using var json=JsonDocument.Parse(file.Small(4096));
+            {using var file=ownedPrivateProbe is null?WindowsFileBoundary.OpenPrivateRead(output):WindowsFileBoundary.OpenOwnedPrivateProbeRead(ownedPrivateProbe,output);using var json=JsonDocument.Parse(file.Small(4096));
             schema=json.RootElement.GetProperty("schema").GetInt32();if(schema<1||schema>100000)throw new IOException("SQLITE_PROBE_SCHEMA");}
             await session.DisposeAsync();return schema;
         }

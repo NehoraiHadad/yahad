@@ -27,6 +27,39 @@ internal static class LanIntegrationTests
 
     internal static async Task RunAsync(Func<string, Func<Task>, Task> check)
     {
+        await check("LAN profile admits only Private and refuses Public, Domain and unknown categories",()=>
+        {
+            NativeNetworkProfile.RequirePrivateCategory(1);
+            foreach(var category in new[]{0,2,-1,3,int.MaxValue})Refuse(()=>NativeNetworkProfile.RequirePrivateCategory(category));
+            foreach(var adapter in new[]{"","fixture-home",Guid.Empty.ToString(),"{invalid}"})Refuse(()=>NativeNetworkProfile.ReadCategory(adapter));
+            Require(NativeNetworkProfile.RequireConsistentCategory([1,1])==1);
+            foreach(var categories in new int[][]{[],[1,0],[0,1],[1,2],[2,1]})Refuse(()=>NativeNetworkProfile.RequireConsistentCategory(categories));
+            Refuse(()=>NativeNetworkProfile.RequirePrivateCategory(NativeNetworkProfile.RequireConsistentCategory([0,0])));
+            return Task.CompletedTask;
+        });
+        await check("LAN configuration permits never-started owned service but refuses active, failed or ambiguous stop",()=>
+        {
+            NativeServiceInstall.RequireConfigurationStop(1,0,0,0);
+            NativeServiceInstall.RequireConfigurationStop(1,1077,0,0);
+            foreach(var state in new uint[]{0,2,3,4,5,6,7})Refuse(()=>NativeServiceInstall.RequireConfigurationStop(state,1077,0,0));
+            foreach(var error in new uint[]{5,1066,1067,1072})Refuse(()=>NativeServiceInstall.RequireConfigurationStop(1,error,0,0));
+            Refuse(()=>NativeServiceInstall.RequireConfigurationStop(1,1077,1,0));
+            Refuse(()=>NativeServiceInstall.RequireConfigurationStop(1,1077,0,123));
+            return Task.CompletedTask;
+        });
+        await check("new LAN service configuration accepts never-started while post-start cleanup guard stays strict",()=>
+        {
+            LanServiceRegistration.RequireConfigurationStop(1,0,1077,0);
+            LanServiceRegistration.RequireConfigurationStop(1,0,0,0);
+            LanServiceRegistration.RequireConfigurationStop(1,0,1066,(uint)ServiceFailure.ActivationUnavailable);
+            Refuse(()=>LanProxyPolicy.RequireConfirmedStopped(1,0,1077,0));
+            Refuse(()=>LanServiceRegistration.RequireConfigurationStop(4,0,1077,0));
+            Refuse(()=>LanServiceRegistration.RequireConfigurationStop(1,123,1077,0));
+            Refuse(()=>LanServiceRegistration.RequireConfigurationStop(1,0,1077,1));
+            Refuse(()=>LanServiceRegistration.RequireConfigurationStop(1,0,1067,0));
+            Refuse(()=>LanServiceRegistration.RequireConfigurationStop(1,0,1066,(uint)ServiceFailure.QuiescenceUnknown));
+            return Task.CompletedTask;
+        });
         await check("LAN request requires explicit consent, canonical private address and well-formed action", () =>
         {
             Enable().Require(); Enable(false).Require();
@@ -161,8 +194,10 @@ internal static class LanIntegrationTests
         });
         await check("LAN removal receipt alone preserves confirmed mode and identity after owner-record removal", () =>
         {
-            var plan = LanDeployment.Create(state.InstallationId, [new("fixture-home", "Synthetic home", "192.168.4.5")],
-                "fixture-home", "192.168.4.5", state.Port, LanProxyPaths.Caddy, LanProxyPaths.Data, LanProxyPaths.PublicJoin);
+            LanDeploymentPlan plan;
+            try{plan = LanDeployment.Create(state.InstallationId, [new("fixture-home", "Synthetic home", "192.168.4.5")],
+                "fixture-home", "192.168.4.5", state.Port, LanProxyPaths.Caddy, LanProxyPaths.Data, LanProxyPaths.PublicJoin);}
+            catch(InvalidDataException failure){throw new InvalidDataException("LAN_REMOVAL_FIXTURE_PATHS "+JsonSerializer.Serialize(new{caddy=LanProxyPaths.Caddy,data=LanProxyPaths.Data,publicJoin=LanProxyPaths.PublicJoin}),failure);}
             var owned = new LanOwnedState(1, state.InstallationId, state.OwnerSid, "S-1-5-80-9-8-7-6-5", "disabled",
                 "fixture-home", "192.168.4.5", state.Port, true, string.Join(':', Enumerable.Repeat("AB", 32)), plan.FirewallRules.ToArray(), []);
             foreach (var mode in new[] { UninstallMode.KeepData, UninstallMode.DeleteData })
@@ -286,7 +321,12 @@ internal static class LanIntegrationTests
                     var address = Control<ComboBox>("LanAddress"); var consent = Control<CheckBox>("LanConsent");
                     var primary = Control<Button>("Primary"); var home = Control<RadioButton>("HomeLan");
                     Require(Control<RadioButton>("KeepLan").IsChecked == true && address.SelectedIndex == -1 && primary.IsEnabled);
+                    Require((string)Control<RadioButton>("KeepLan").Content=="רק במחשב הזה");
+                    Require(Control<RadioButton>("DisableLan").Visibility==Visibility.Collapsed&&Control<TextBlock>("DisableLanHint").Visibility==Visibility.Collapsed);
+                    Require(!Control<Expander>("LanTechnicalDetails").IsExpanded);
                     Require(Invoke(window, "SelectedLanRequest") is null);
+                    Control<RadioButton>("DisableLan").IsChecked=true;Refuse(()=>Invoke(window,"SelectedLanRequest"));
+                    Control<RadioButton>("KeepLan").IsChecked=true;
                     Snapshot(window, size, output, "lan-default");
                     home.IsChecked = true;
                     Require(!primary.IsEnabled && address.SelectedIndex == -1);
@@ -295,6 +335,10 @@ internal static class LanIntegrationTests
                     consent.IsChecked = true; Require(primary.IsEnabled);
                     var request = (LanSetupRequest)Invoke(window, "SelectedLanRequest")!;
                     Require(request.Action == LanSetupAction.Enable && request.Address == "192.168.4.5" && request.FirewallConsent);
+                    Control<CheckBox>("LanHttpHelp").IsChecked=false;
+                    Require(((LanSetupRequest)Invoke(window,"SelectedLanRequest")!).HttpHelp==false);
+                    Control<CheckBox>("LanHttpHelp").IsChecked=true;
+                    Require(!Control<TextBlock>("LanConsentLabel").Text.Contains("TCP",StringComparison.Ordinal)&&Control<TextBlock>("LanConsentLabel").Text.Contains("אני מאשר",StringComparison.Ordinal));
                     address.SelectedIndex = 1; Require(!primary.IsEnabled && consent.IsChecked == false);
                     address.SelectedIndex = 0; consent.IsChecked = true;
                     Control<ScrollViewer>("ContentScroll").ScrollToEnd(); Snapshot(window, size, output, "lan-home-consent");
@@ -304,6 +348,14 @@ internal static class LanIntegrationTests
                     Require(Control<Border>("LanResultPanel").Visibility == Visibility.Visible && Control<StackPanel>("LanPanel").Visibility == Visibility.Collapsed);
                     Require(Control<TextBlock>("LanResultText").Text.Contains("https://192.168.4.5", StringComparison.Ordinal));
                     Control<ScrollViewer>("ContentScroll").ScrollToEnd(); Snapshot(window, size, output, "lan-result-host-only");
+
+                    var existing=new MainWindow(lanChoices:choices,existingAccess:true);
+                    Require((string)((RadioButton)existing.FindName("KeepLan")).Content=="להשאיר את אפשרויות הגישה הקיימות");
+                    Require(Invoke(existing,"SelectedLanRequest") is null);
+                    var disable=(RadioButton)existing.FindName("DisableLan");Require(disable.Visibility==Visibility.Visible);
+                    disable.IsChecked=true;Require(((LanSetupRequest)Invoke(existing,"SelectedLanRequest")!).Action==LanSetupAction.Disable);
+                    ((RadioButton)existing.FindName("KeepLan")).IsChecked=true;Require(Invoke(existing,"SelectedLanRequest") is null);
+                    ((ScrollViewer)existing.FindName("ContentScroll")).ScrollToEnd();Snapshot(existing,size,output,"lan-existing-access");
 
                     var removal = new MainWindow(uninstall: true, lanChoices: choices);
                     Require(((FrameworkElement)removal.FindName("LanPanel")).Visibility == Visibility.Collapsed);

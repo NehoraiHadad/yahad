@@ -35,3 +35,43 @@ locked/hardlinked files and offscreen WPF renders. It does **not** install/remov
 real service or exercise privileged uninstall on the working ASUS installation.
 The running installed 9fc810d image is unchanged and still has its previous behavior;
 these choices are available in the newly built installer, not silently patched in.
+
+The recovery installer reports a fixed operation stage and numeric Windows error
+or HRESULT instead of discarding these details. After validating the original
+owner and removal choice, it also tries to write
+`C:\Program Files\Yahad.FirstInstall.uninstall-diagnostic.json`. This file contains
+only an opaque installation binding, removal mode, UTC time, Setup source revision
+and sanitized error identifiers. It contains no exception messages, private paths,
+file lists, payloads, account identifiers or credentials. Administrators and SYSTEM
+can write it; the original owner can read it. Existing files must pass ownership,
+no-link, bounded-format and installation-binding checks before replacement or
+deletion. A logging failure never hides the original failure. Successful removal
+deletes its owned diagnostic file before deleting the pending removal receipt.
+The diagnostic file never authorizes removal or changes its fixed targets. A
+legacy `INSTALL_FAILED` without these details does not identify the failing call.
+
+`--repair-uninstall-receipt-ui` is a separate repair-only operation for the exact
+six-ACE inherited Program Files receipt left by the audit-privilege bug. It shows
+the fixed target and proposed descriptor and requires explicit consent plus the
+ordinary authenticated original-owner UAC exchange. Runtime repair requires
+separate approval for that one existing file. It never stops a service, removes
+data or writes a diagnostic file, and it returns before uninstall continuation.
+The ordinary uninstall reader has no relaxed-ACL fallback.
+
+Repair requires an independent, strictly protected in-tree state in `committed`,
+the original kernel-authenticated owner, the fixed owned service cleanly stopped,
+and matching installed host/Setup hashes. Every legacy field/member must match
+the protected state except the exact `removing_all_data` phase. The no-follow,
+single-link legacy lease remains held across comparison, ACL protection, strict
+re-read and unchanged-byte verification. Success displays the shared before/after
+SHA-256; a missing anchor, changed source/binary, wrong owner, unsupported ACL,
+different removal choice or interrupted/partial state refuses repair. ACL setters
+change only Owner and Access sections, preserving Group and audit policy.
+
+Store authorization fixtures prepare dependencies in the same private temporary
+directory used by the admitted child. Their separate preparation budget is 120
+seconds; product/lifecycle/grant/fault deadlines are unchanged. A preparation
+failure confirms exact job-tree cleanup with a fresh bounded token and blocks
+remaining Store cases instead of treating them as passed. These cases verify
+prepared-cache authorization behavior, not cold-start performance. Seed markers
+distinguish script entry (after the tsx preload), Store import and Store closure.

@@ -167,14 +167,66 @@ internal sealed class NativeSetupHost(InstallPackage package):ISetupHostOperatio
     {
         var s=state??throw new IOException("INSTALL_NOT_PREPARED");if(s.OwnerSid!=owner.Sid)throw new IOException("INSTALL_OWNER_CHANGED");
         var network=new NativeLanInstall(s);network.Preflight(request);
-        await service!.StopAsync(cancellation);service.RequireCleanStop();
+        await service!.StopAsync(cancellation);service.RequireConfigurationStop();
         await network.ConfigureAsync(request,progress,cancellation);
     }
+    public Task<SetupResult> RepairInterruptedReceiptAsync(OwnerProcess owner,Action<SetupProgress> progress,CancellationToken cancellation)=>Task.Run(()=>
+    {
+        var phase=UninstallPhase.ReadState;InstallerState? trusted=null;
+        try
+        {
+            NativeInstallFiles.RequireAdministrator();trusted=ReadState();
+            if(trusted.OwnerSid!=owner.Sid)throw new UnauthorizedAccessException("INSTALL_OWNER_CHANGED");
+            if(trusted.Phase!="committed")throw new IOException("UNINSTALL_RECEIPT_RECOVERY_REFUSED");
+            phase=UninstallPhase.InspectReceiptRecovery;progress(new("checking",10));
+            phase=UninstallPhase.InspectRecoveryService;
+            var sid=ServiceSid();
+            using var owned=NativeServiceInstall.OpenOwned();owned.RequireCleanStop();
+            phase=UninstallPhase.InspectRecoveryHost;
+            using var host=WindowsFileBoundary.OpenInstallerBinaryForComparison(InstallLocations.ServiceImage,new SecurityIdentifier(sid),new SecurityIdentifier(owner.Sid));
+            phase=UninstallPhase.InspectRecoverySetup;
+            using var setup=WindowsFileBoundary.OpenInstallerBinaryForComparison(InstallLocations.InstallerImage,new SecurityIdentifier(sid),new SecurityIdentifier(owner.Sid));
+            phase=UninstallPhase.InspectRecoveryHost;
+            var hostHash=host.Sha256(1073741824);var hostLength=host.Length;
+            phase=UninstallPhase.InspectRecoverySetup;
+            var setupHash=setup.Sha256(1073741824);
+            var proof=new ReceiptRecoveryEvidence(sid,true,hostHash,hostLength,setupHash);
+            // Ordinary reads remain strict. A receipt already protected needs
+            // no ACL write, and still must match all independent evidence.
+            phase=UninstallPhase.InspectRecoveryReceipt;
+            try
+            {
+                var existing=ReadState(InstallLocations.RemovalStateFile);
+                UninstallReceiptRecovery.Require(trusted,existing,owner,proof);
+                return new SetupResult(true,"UNINSTALL_RECEIPT_ALREADY_PROTECTED",DataPreserved:true);
+            }
+            catch(IOException failure)when(failure.Message=="INSTALL_METADATA_ACCESS"){}
+            using var legacy=WindowsFileBoundary.OpenInterruptedReceiptForComparison(InstallLocations.RemovalStateFile);
+            var original=legacy.Small(16777216);var originalHash=Hash(original);var afterHash=originalHash;
+            var candidate=NativeJson.Read<InstallerState>(original);
+            phase=UninstallPhase.CompareRecoveryState;
+            UninstallReceiptRecovery.Protect(trusted,candidate,owner,proof,
+                ()=>{cancellation.ThrowIfCancellationRequested();owned.RequireCleanStop();phase=UninstallPhase.ProtectRemovalReceipt;progress(new("protecting_receipt",60));NativeInstallFiles.ProtectInterruptedReceiptDacl(InstallLocations.RemovalStateFile,NativeInstallFiles.Descriptor(sid));},
+                ()=>{phase=UninstallPhase.VerifyReceiptRecovery;return ReadState(InstallLocations.RemovalStateFile);},
+                ()=>{afterHash=Hash(legacy.Small(16777216));if(afterHash!=originalHash)throw new ReceiptRecoveryRefusal(ReceiptRecoveryCheck.ContentUnchanged);});
+            return new SetupResult(true,"UNINSTALL_RECEIPT_REPAIRED",DataPreserved:true,ReceiptSha256:afterHash);
+        }
+        catch(Exception failure)when(failure is not OperationCanceledException)
+        {
+            var reported=new SetupOperationException(phase,failure);
+            throw reported;
+        }
+    },cancellation);
     public async Task<SetupResult> UninstallAsync(OwnerProcess owner,Action<SetupProgress> progress,CancellationToken cancellation,UninstallMode mode=UninstallMode.KeepData)
     {
+        var phase=UninstallPhase.ReadState;
+        var diagnosticAllowed=false;
+        try
+        {
         NativeInstallFiles.RequireAdministrator();UninstallChoice.Require(mode);
         var resumed=File.Exists(InstallLocations.RemovalStateFile);state=ReadState(resumed?InstallLocations.RemovalStateFile:null);
         if(state.OwnerSid!=owner.Sid)throw new UnauthorizedAccessException("INSTALL_OWNER_CHANGED");UninstallChoice.RequireSameIntent(state.Phase,mode);
+        diagnosticAllowed=true;
         if(state.Phase is not("committed" or "preparing" or "reinstalling" or "uninstalled" or "removing_keep_data" or "removing_all_data"))throw new IOException("INSTALL_REPAIR_REQUIRED");
         if(resumed&&!state.Phase.StartsWith("removing_",StringComparison.Ordinal))throw new IOException("UNINSTALL_INTENT_INVALID");
         var s=state;var sid=new SecurityIdentifier(s.ServiceSid);
@@ -183,6 +235,7 @@ internal sealed class NativeSetupHost(InstallPackage package):ISetupHostOperatio
         if(Directory.Exists(InstallLocations.Binaries))SafeDirectory.NoReparseAncestors(InstallLocations.Binaries);
         else if(s.Phase is "uninstalled" or "removing_all_data" or "removing_keep_data")NativeInstallFiles.NewDirectory(InstallLocations.Binaries,NativeInstallFiles.Descriptor(s.ServiceSid,ownerSid:s.OwnerSid));
         else throw new IOException("INSTALL_REPAIR_REQUIRED");
+        phase=UninstallPhase.ValidateBinaries;
         var allowed=s.Files.Where(f=>f.Path.StartsWith("host/",StringComparison.Ordinal)).ToDictionary(f=>Path.Combine(InstallLocations.Binaries,f.Path.Replace('/',Path.DirectorySeparatorChar)),f=>f.Sha256,StringComparer.OrdinalIgnoreCase);
         allowed[InstallLocations.InstallerImage]=s.SetupSha256;
         var directories=new List<string>();var actual=new List<string>();
@@ -198,45 +251,72 @@ internal sealed class NativeSetupHost(InstallPackage package):ISetupHostOperatio
             }
         }
         Walk(InstallLocations.Binaries);
+        phase=UninstallPhase.ValidateRegistration;
         using(var registration=Registry.LocalMachine.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\Yahad.FirstInstall"))
         {if(registration is not null&&registration.GetValue("InstallLocation") as string!=InstallLocations.Binaries)throw new IOException("UNINSTALL_REGISTRATION_CHANGED");}
+        phase=UninstallPhase.StopService;
         if(NativeServiceInstall.Exists())
-        {service=NativeServiceInstall.OpenOwned();progress(new("stopping_server",10));await service.StopAsync(cancellation);service.RequireCleanStop();}
+        {service=NativeServiceInstall.OpenOwned();progress(new("stopping_server",10));await service.StopAsync(cancellation);service.RequireRemovalStop();}
         else if(s.Phase is not("uninstalled" or "removing_all_data" or "removing_keep_data"))throw new IOException("INSTALL_REPAIR_REQUIRED");
         LanSetupResult? lanRemoval=null;
-        using var dataPin=Directory.Exists(InstallLocations.State)?WindowsFileBoundary.PinInstallerRemovalRoot(InstallLocations.State,sid):null;
+        phase=UninstallPhase.AcquireDataLease;
+        using var dataPin=RemovalTree.DirectoryPresent(InstallLocations.State)?WindowsFileBoundary.PinInstallerRemovalRoot(InstallLocations.State,sid):null;
         var data=Path.Combine(InstallLocations.State,"datasets",s.DataId,"data");
-        WindowsFileBoundary.DataLease? lease=Directory.Exists(data)?WindowsFileBoundary.AcquireInstallerDataLease(data,sid):null;
+        WindowsFileBoundary.DataLease? lease=RemovalTree.DirectoryPresent(data)?WindowsFileBoundary.AcquireInstallerDataLease(data,sid):null;
         try
         {
-            var tree=mode==UninstallMode.DeleteData&&Directory.Exists(InstallLocations.State)?RemovalTree.Inspect(InstallLocations.State,(path,directory)=>WindowsFileBoundary.ValidateRemovalMember(path,directory,sid)):null;
+            phase=UninstallPhase.InspectData;
+            var tree=mode==UninstallMode.DeleteData&&RemovalTree.DirectoryPresent(InstallLocations.State)?RemovalTree.Inspect(InstallLocations.State,(path,directory)=>WindowsFileBoundary.ValidateRemovalMember(path,directory,sid)):null;
+            // Do not turn a stopped SCM status (including 1077 after reboot)
+            // into permission to mutate data. Recheck while the existing root
+            // pin and actual exclusive data lease are retained, before intent.
+            service?.RequireRemovalStop();
             cancellation.ThrowIfCancellationRequested();state=s with{Phase=UninstallChoice.Phase(mode)};
             // The receipt stays beside both removable trees, including final binary cleanup.
             // A crash after partial data
             // removal cannot erase the owner/selection needed for an honest retry.
             var intent=Json(state);
-            if(File.Exists(InstallLocations.RemovalStateFile))NativeInstallFiles.ReplaceOwned(InstallLocations.RemovalStateFile,intent);else NativeInstallFiles.WriteNew(InstallLocations.RemovalStateFile,intent);
+            phase=UninstallPhase.WriteRemovalReceipt;
+            NativeInstallFiles.PublishProtectedFile(InstallLocations.RemovalStateFile,intent,NativeInstallFiles.Descriptor(s.ServiceSid));
+            phase=UninstallPhase.ProtectRemovalReceipt;
             NativeInstallFiles.SetOwnedFile(InstallLocations.RemovalStateFile,NativeInstallFiles.Descriptor(s.ServiceSid));
+            phase=UninstallPhase.SaveRemovalState;
             if(File.Exists(InstallLocations.StateFile))SaveState(state.Phase);
             // Record the owner's removal choice durably before any LAN CA or
             // proxy binaries can be deleted. A retry cannot switch modes.
+            phase=UninstallPhase.RemoveLan;
             lanRemoval=await new NativeLanInstall(s).UninstallAsync(mode,cancellation);
-            if(service is not null){service.Delete();service.Dispose();service=null;await NativeServiceInstall.WaitUntilRemovedAsync(cancellation);}
+            if(service is not null){phase=UninstallPhase.RemoveService;service.DeleteForRemoval();service.Dispose();service=null;phase=UninstallPhase.WaitForServiceRemoval;await NativeServiceInstall.WaitUntilRemovedAsync(cancellation);}
             lease?.Dispose();lease=null;
             if(mode==UninstallMode.DeleteData&&tree is not null)
-            {tree=RemovalTree.Inspect(InstallLocations.State,(path,directory)=>WindowsFileBoundary.ValidateRemovalMember(path,directory,sid,requireDeleteAccess:path!=InstallLocations.State));progress(new("deleting_data",25));tree.DeleteContents((path,directory)=>WindowsFileBoundary.DeleteRemovalMember(path,directory,sid),p=>progress(new("deleting_data",25+p*50/100)),cancellation);}
+            {phase=UninstallPhase.PreflightDataDeletion;tree=RemovalTree.Inspect(InstallLocations.State,(path,directory)=>WindowsFileBoundary.ValidateRemovalMember(path,directory,sid,requireDeleteAccess:path!=InstallLocations.State));progress(new("deleting_data",25));phase=UninstallPhase.DeleteData;tree.DeleteContents((path,directory)=>WindowsFileBoundary.DeleteRemovalMember(path,directory,sid),p=>progress(new("deleting_data",25+p*50/100)),cancellation);}
         }
         finally{lease?.Dispose();}
         // Root pin must be released only after service removal and all protected
         // children have gone. No authorized service can restart into this tree.
         dataPin?.Dispose();
-        if(mode==UninstallMode.DeleteData&&Directory.Exists(InstallLocations.State))WindowsFileBoundary.DeleteRemovalMember(InstallLocations.State,true,sid);
+        phase=UninstallPhase.DeleteDataRoot;
+        if(mode==UninstallMode.DeleteData&&RemovalTree.DirectoryPresent(InstallLocations.State))WindowsFileBoundary.DeleteRemovalMember(InstallLocations.State,true,sid);
+        phase=UninstallPhase.DeleteBinaries;
         foreach(var file in actual){cancellation.ThrowIfCancellationRequested();SafeDirectory.NoReparseAncestors(file);if(File.Exists(file)){if(Hash(File.ReadAllBytes(file))!=allowed[file])throw new IOException("UNINSTALL_UNOWNED_FILE_PRESERVED");File.Delete(file);}}
         foreach(var directory in directories.OrderByDescending(p=>p.Length))Directory.Delete(directory);
+        phase=UninstallPhase.RemoveRegistration;
         Registry.LocalMachine.DeleteSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\Yahad.FirstInstall",false);
-        if(mode==UninstallMode.KeepData)SaveState("uninstalled");
-        Directory.Delete(InstallLocations.Binaries);File.Delete(InstallLocations.RemovalStateFile);
-        progress(new("removed",100));return new(true,mode==UninstallMode.DeleteData?"REMOVED_ALL":"REMOVED","http://127.0.0.1:"+s.Port+"/",DataPreserved:mode==UninstallMode.KeepData,Lan:lanRemoval);
+        if(mode==UninstallMode.KeepData){phase=UninstallPhase.SavePreservedState;SaveState("uninstalled");}
+        phase=UninstallPhase.DeleteBinaries;
+        Directory.Delete(InstallLocations.Binaries);
+        phase=UninstallPhase.DeleteDiagnostic;
+        UninstallDiagnostics.DeleteOwned(s);
+        phase=UninstallPhase.DeleteReceipt;
+        UninstallDiagnostics.Complete(ref diagnosticAllowed,()=>File.Delete(InstallLocations.RemovalStateFile),()=>progress(new("removed",100)));
+        return new(true,mode==UninstallMode.DeleteData?"REMOVED_ALL":"REMOVED","http://127.0.0.1:"+s.Port+"/",DataPreserved:mode==UninstallMode.KeepData,Lan:lanRemoval);
+        }
+        catch(Exception failure)when(failure is not OperationCanceledException)
+        {
+            var reported=new SetupOperationException(phase,failure);
+            if(diagnosticAllowed&&state is not null)reported.DiagnosticRecorded=UninstallDiagnostics.TryRecord(state,mode,reported);
+            throw reported;
+        }
     }
     private void RequireExistingHost()
     {
