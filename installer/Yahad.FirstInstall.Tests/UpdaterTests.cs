@@ -357,9 +357,11 @@ internal static class UpdaterTests
             // Admitted by the DACL but not the account the service expects: no reply.
             var strict="yahad-updater-test-"+Guid.NewGuid().ToString("N");handled=0;using var over=CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
             var guarded=new UpdaterPipe(strict,new SecurityIdentifier(WellKnownSidType.LocalSystemSid,null),descriptor,Handle).RunAsync(over.Token);
-            try{await UpdaterClient.AskAsync(strict,_=>{},new(1,"status"),stop.Token);throw new Exception("PEER_NOT_REFUSED");}catch(IOException){}
+            try{await UpdaterClient.AskAsync(strict,_=>{},new(1,"status"),stop.Token);throw new Exception("PEER_NOT_REFUSED");}catch(UpdaterRefusal refusal)when(refusal.Message.StartsWith("EXCHANGE",StringComparison.Ordinal)){}
             Assert(handled==0,"an unexpected account reached the engine");
             await over.CancelAsync();try{await guarded;}catch(OperationCanceledException){}
+            // No server: a clean reason after the connect bound, and nothing listening is trusted.
+            await DenyAsync("PIPE_CONNECT:1460",()=>UpdaterClient.AskAsync("yahad-updater-test-"+Guid.NewGuid().ToString("N"),_=>throw new Exception("VERIFIED_NOTHING"),new(1,"status"),stop.Token));
         });
         await check("platform: replies carry exactly what the app's status schema reads, and a refusal for anything else",async()=>
         {
@@ -371,6 +373,7 @@ internal static class UpdaterTests
             Assert(result["operator"]!["familyId"]!.GetValue<string>()=="family"&&result["operator"]!["userId"]!.GetValue<string>()=="user"&&result["modeControlAllowed"]!.GetValue<bool>(),"operator");
             Assert(result["lastModeRequest"]!.AsObject().ContainsKey("error")&&result["lastRequest"]!.AsObject().ContainsKey("finishedAt")&&result["installTarget"]!["fingerprint"]!.GetValue<string>().Length==64,"nested fields");
             static bool Refused(JsonObject value)=>value["ok"]!.GetValue<bool>()==false&&value["code"]!.GetValue<string>()=="UPDATES_UNAVAILABLE";
+            static string ReasonOf(JsonObject value)=>value["reason"]!.GetValue<string>();
             var never=(Func<UpdaterRequest,CancellationToken,Task<UpdaterReply>>)((_,_)=>throw new Exception("ASKED"));
             string Submit(object command)=>JsonSerializer.Serialize(new{kind="submit",command});
             var id=Id();
@@ -379,10 +382,11 @@ internal static class UpdaterTests
                 var asked=false;var value=await UpdaterClient.HandleAsync(Encoding.UTF8.GetBytes(bad),Owner,(_,_)=>{asked=true;return Task.FromResult(new UpdaterReply(1,true));},default);
                 Assert(Refused(value)&&(bad.Contains("restart")||!asked),"accepted "+bad);
             }
-            Assert(Refused(await UpdaterClient.HandleAsync(input,()=>throw new IOException("NO_CAPABILITY"),never,default)),"status without an owner");
-            foreach(var failure in new Exception[]{new IOException("x"),new TimeoutException(),new Win32Exception(5),new UnauthorizedAccessException(),new OperationCanceledException()})
-                Assert(Refused(await UpdaterClient.HandleAsync(input,Owner,(_,_)=>throw failure,default)),failure.GetType().Name);
-            Assert(Refused(await UpdaterClient.HandleAsync(input,Owner,(_,_)=>Task.FromResult(new UpdaterReply(1,false,"NOT_AVAILABLE")),default)),"refused status");
+            var unowned=await UpdaterClient.HandleAsync(input,()=>throw new Win32Exception(5),never,default);Assert(Refused(unowned)&&ReasonOf(unowned)=="OWNER:5","status without an owner: "+unowned.ToJsonString());
+            foreach(var (failure,reason) in new (Exception,string)[]{(new IOException(@"C:\secret path"),"UPDATER"),(new TimeoutException(),"UPDATER:1460"),(new Win32Exception(5),"UPDATER:5"),(new UnauthorizedAccessException(),"UPDATER:5"),(new OperationCanceledException(),"UPDATER:1223"),(new EndOfStreamException(),"UPDATER:38"),(new UpdaterRefusal("SCM_SERVICE:5"),"SCM_SERVICE:5")})
+            {var value=await UpdaterClient.HandleAsync(input,Owner,(_,_)=>throw failure,default);Assert(Refused(value)&&ReasonOf(value)==reason,failure.GetType().Name+" gave "+value.ToJsonString());}
+            var unavailable=await UpdaterClient.HandleAsync(input,Owner,(_,_)=>Task.FromResult(new UpdaterReply(1,false,"NOT_AVAILABLE")),default);Assert(Refused(unavailable)&&ReasonOf(unavailable)=="UPDATER_NOT_AVAILABLE","refused status");
+            Assert(ReasonOf(await UpdaterClient.HandleAsync(Encoding.UTF8.GetBytes(Submit(new{id,action="check",familyId="other",userId="user"})),Owner,never,default))=="OPERATOR","operator reason");
             var fingerprint=new string('c',64);
             var commands=new (string Text,UpdaterRequest Expected)[]{(Submit(new{id,action="check",familyId="family",userId="user"}),new(1,"check",id)),(Submit(new{id,action="set_mode",mode="auto",familyId="family",userId="user"}),new(1,"set-mode",id,Mode:"auto")),
                 (Submit(new{id,action="install",target=new{version="9.9.9",fingerprint},familyId="family",userId="user"}),new(1,"install",id,"9.9.9",fingerprint))};
@@ -397,8 +401,12 @@ internal static class UpdaterTests
         {
             var image=InstalledLayout.UpdaterCommand("1.2.3");const uint running=4;
             UpdaterClient.RequireServer(77,new(running,77,"LocalSystem",image),"1.2.3");UpdaterClient.RequireServer(77,new(running,77,"localsystem",image),"1.2.3");
-            foreach(var (server,observed) in new (uint,UpdaterObservation)[]{(78,new(running,77,"LocalSystem",image)),(77,new(1,77,"LocalSystem",image)),(0,new(running,0,"LocalSystem",image)),(77,new(running,77,"NT SERVICE\\Yahad",image)),(77,new(running,77,"LocalSystem",InstalledLayout.UpdaterCommand("1.2.4"))),(77,new(running,77,"LocalSystem",image+" --extra")),(77,new(running,77,"LocalSystem",""))})
-                Deny("UPDATER_SERVER_IDENTITY",()=>UpdaterClient.RequireServer(server,observed,"1.2.3"));
+            foreach(var (server,observed,reason) in new (uint,UpdaterObservation,string)[]{(78,new(running,77,"LocalSystem",image),"SERVER_PROCESS"),(77,new(1,77,"LocalSystem",image),"SERVER_STATE"),(0,new(running,0,"LocalSystem",image),"SERVER_STATE"),(77,new(running,77,"NT SERVICE\\Yahad",image),"SERVER_ACCOUNT"),(77,new(running,77,"LocalSystem",InstalledLayout.UpdaterCommand("1.2.4")),"SERVER_IMAGE"),(77,new(running,77,"LocalSystem",image+" --extra"),"SERVER_IMAGE"),(77,new(running,77,"LocalSystem",""),"SERVER_IMAGE")})
+                Deny(reason,()=>UpdaterClient.RequireServer(server,observed,"1.2.3"));
+            // The SCM read itself, against a service every machine runs.
+            var scheduler=UpdaterClient.Observe("Schedule");
+            Assert(scheduler.State==running&&scheduler.ProcessId!=0&&string.Equals(scheduler.Account,"LocalSystem",StringComparison.OrdinalIgnoreCase)&&scheduler.Command.Contains("svchost",StringComparison.OrdinalIgnoreCase),"observed "+scheduler);
+            Deny("SCM_SERVICE:1060",()=>UpdaterClient.Observe("Yahad.No.Such.Service"));
             return Task.CompletedTask;
         });
         await check("updater: the Setup is started with its own directory and result, quoted, and nothing else",()=>

@@ -1,4 +1,4 @@
-import { submitWindowsUpdate, type WindowsUpdateTransport } from './windows-update-transport.js';
+import { submitWindowsUpdate, WindowsUpdateRefusal, type WindowsUpdateTransport } from './windows-update-transport.js';
 import { readFile, open, lstat, link, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -41,7 +41,7 @@ export async function updateStatus(config: Config, user: User, native?: WindowsU
     }
     const status = statusSchema.parse(raw);
     const operator = user.role === 'parent' && status.operator.familyId === user.familyId && status.operator.userId === user.id;
-    if (!operator) return { configured: false as const };
+    if (!operator) return { configured: false as const, ...native ? { reason: 'OPERATOR' } : {} };
     const { operator: _operator, ...visible } = status;
     let queuedMode: {id:string;mode:'notify'|'auto'} | null = null;
     let queuedRequest: {id:string;action:'check'|'install'|'set_mode';mode?:'notify'|'auto';target?:UpdateTarget;createdAt:number} | null = null;
@@ -61,7 +61,10 @@ export async function updateStatus(config: Config, user: User, native?: WindowsU
       }
     } catch {}
     return { configured: true as const, ...visible, queuedMode, queuedRequest, stale: Date.now() - status.updatedAt > 86400000 };
-  } catch { return { configured: false as const }; }
+  } catch (error) {
+    // Parent-only, and for support: where the native path stopped, nothing more.
+    return { configured: false as const, ...native ? { reason: error instanceof WindowsUpdateRefusal ? error.reason : 'STATUS_SCHEMA' } : {} };
+  }
 }
 export async function requestUpdate(config: Config, user: User, action: 'check' | 'install' | 'set_mode', mode?: 'notify'|'auto', target?: UpdateTarget, native?: WindowsUpdateTransport) {
   const status = await updateStatus(config, user, native);

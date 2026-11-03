@@ -5,14 +5,14 @@ import { readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createApp } from '../src/server.js';
 import { requestUpdate, updateStatus } from '../src/updates.js';
-import { createWindowsUpdateTransport, windowsUpdateResult, type WindowsUpdateTransport } from '../src/windows-update-transport.js';
+import { createWindowsUpdateTransport, windowsUpdateResult, WindowsUpdateRefusal, type WindowsUpdateTransport } from '../src/windows-update-transport.js';
 import type { Config } from '../src/config.js';
 import type { User } from '../src/store.js';
 import { privateFixtureDirectory } from './fixtures/private-directory.js';
 
 // The exact reply of `Yahad.Platform.exe windows-updates` when the Updater service
 // cannot be reached and verified (installer/Yahad.Platform/UpdaterClient.cs).
-const platformRefusal = JSON.stringify({ schema: 1, ok: false, code: 'UPDATES_UNAVAILABLE' });
+const platformRefusal = JSON.stringify({ schema: 1, ok: false, code: 'UPDATES_UNAVAILABLE', reason: 'SCM_SERVICE:5' });
 const platformTransport = (calls: string[]): WindowsUpdateTransport => ({
   status: async () => { calls.push('status'); return windowsUpdateResult(platformRefusal); },
   submit: async () => { calls.push('submit'); return windowsUpdateResult(platformRefusal); },
@@ -20,6 +20,10 @@ const platformTransport = (calls: string[]): WindowsUpdateTransport => ({
 
 test('the Platform windows-updates refusal never yields a result', () => {
   assert.throws(() => windowsUpdateResult(platformRefusal), /WINDOWS_UPDATES_REPLY/);
+  const reasonOf = (stdout: string) => { try { windowsUpdateResult(stdout); } catch (error) { return (error as WindowsUpdateRefusal).reason; } };
+  assert.equal(reasonOf(platformRefusal), 'SCM_SERVICE:5');
+  for (const stdout of ['not json', '{}', JSON.stringify({ schema: 1, ok: false, reason: 'C:\\secret path' }), JSON.stringify({ schema: 1, ok: false, reason: 'x'.repeat(100) }), JSON.stringify({ schema: 1, ok: false, reason: 7 })])
+    assert.equal(reasonOf(stdout), 'PLATFORM_REPLY', stdout);
   assert.throws(() => windowsUpdateResult(JSON.stringify({ schema: 2, ok: true, result: {} })), /WINDOWS_UPDATES_REPLY/);
   assert.deepEqual(windowsUpdateResult(JSON.stringify({ schema: 1, ok: true, result: { state: 'queued' } })), { state: 'queued' });
 });
@@ -32,6 +36,7 @@ test('the Windows transport runs only an absolute Platform helper on Windows and
   assert.throws(() => createWindowsUpdateTransport('Yahad.Platform.exe'), /WINDOWS_UPDATES_UNCONFIGURED/);
   const missing = createWindowsUpdateTransport(join(privateFixtureDirectory('yahad-no-platform-'), 'Yahad.Platform.exe'));
   await assert.rejects(missing.status(), /WINDOWS_UPDATES_UNAVAILABLE/);
+  assert.equal((await updateStatus({} as Config, { role: 'parent', familyId: 'f', id: 'u' } as User, missing) as { reason?: string }).reason, 'PLATFORM_HELPER');
 });
 
 test('Windows updates without a verified Updater: status is not configured and requests are refused without submitting', async () => {
@@ -51,7 +56,7 @@ test('Windows updates without a verified Updater: status is not configured and r
     const session = store.createSession(store.user(store.one('SELECT * FROM users WHERE id=?', family.parentId)));
     const headers = { origin: settings.origin, cookie: 'sid=' + session.sid, 'x-csrf-token': session.csrf };
     const status = await app.inject({ method: 'GET', url: '/api/parent/updates', headers });
-    assert.equal(status.statusCode, 200); assert.deepEqual(status.json(), { configured: false });
+    assert.equal(status.statusCode, 200); assert.deepEqual(status.json(), { configured: false, reason: 'SCM_SERVICE:5' });
     for (const payload of [{ action: 'check' }, { action: 'set_mode', mode: 'auto' }]) {
       const refused = await app.inject({ method: 'POST', url: '/api/parent/updates', payload, headers });
       assert.equal(refused.statusCode, 409); assert.equal(refused.json().error, 'UPDATES_UNAVAILABLE');
@@ -67,7 +72,8 @@ test('a configured Windows transport binds the exact target, submits once and ne
   const snapshot = { enabled: true, mode: 'notify', modeControlAllowed: true, phase: 'available', currentVersion: '0.6.0', latestVersion: '0.6.1',
     operator: { familyId: user.familyId, userId: user.id }, installTarget: target, checkedAt: Date.now(), updatedAt: Date.now(), error: null };
   const transport: WindowsUpdateTransport = { status: async () => snapshot, submit: async command => { calls.push(command); return { state: 'queued' }; } };
-  assert.equal((await updateStatus(config, { ...user, id: 'other-parent' }, transport)).configured, false);
+  assert.deepEqual(await updateStatus(config, { ...user, id: 'other-parent' }, transport), { configured: false, reason: 'OPERATOR' });
+  assert.deepEqual(await updateStatus(config, user, { ...transport, status: async () => ({ ...snapshot, phase: 'unknown' }) }), { configured: false, reason: 'STATUS_SCHEMA' });
   assert.equal(await requestUpdate(config, user, 'install', undefined, { ...target, fingerprint: 'b'.repeat(64) }, transport), 'target_changed');
   assert.equal(calls.length, 0);
   assert.equal(await requestUpdate(config, user, 'install', undefined, target, transport), 'queued');

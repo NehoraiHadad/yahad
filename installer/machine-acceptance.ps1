@@ -132,7 +132,7 @@ function RequireNoRepairTask { if (RepairTaskOf) { throw 'The Yahad\Repair task 
 # What the parent's own browser does: the live app -> Platform -> pipe -> Updater path.
 function UpdatesStatus {
     $status = Invoke-RestMethod -Uri "$origin/api/parent/updates" -WebSession $parentSession -TimeoutSec 30
-    if ($status.configured -ne $true) { throw 'Updates are not configured through the app; the Platform refused or could not verify the Updater' }
+    if ($status.configured -ne $true) { throw "Updates are not configured through the app; reason $($status.reason)" }
     return $status
 }
 function UpdatesRequest($Body) {
