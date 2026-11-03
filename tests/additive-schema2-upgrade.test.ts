@@ -46,3 +46,17 @@ test('existing schema2 gains unread and throttle tables without changing credent
     } finally { await upgraded.app.close(); }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+// An update only swaps the release and starts it; the Store migrates an older
+// database when it opens it and must refuse one written by a newer release.
+test('Store refuses a database newer than this release instead of opening it', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'yahad-newer-schema-'));
+  const config: Config = { dataDir: dir, masterKey: randomBytes(32), connector: 'mock', realAllowed: false,
+    host: '127.0.0.1', port: 3000, origin: 'http://localhost:3000', secureCookie: false,
+    maxMedia: 1048576, maxStorage: 64*1048576, childIdleMs: 900000, sessionMs: 3600000, diagnosticsEnabled: false };
+  try {
+    const seed = new Store(config);
+    seed.db.exec(`UPDATE schema_version SET version=${DATABASE_SCHEMA + 1}`); seed.close();
+    assert.throws(() => new Store(config), /Unsupported database schema/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

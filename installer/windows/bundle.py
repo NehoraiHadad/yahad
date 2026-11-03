@@ -13,8 +13,8 @@ from . import pe, dependencies
 
 class BundleError(ValueError): pass
 
-# One self-contained ESM file per fixed process entry; no source tree, loader or node_modules.
-SERVER = ('app/server/main.mjs', 'app/server/native-supervisor.mjs')
+# One self-contained ESM file for the single process entry; no source tree, loader or node_modules.
+SERVER = ('app/server/main.mjs',)
 APP_ROOTS = ('app/server/', 'app/native/', 'app/dist/', 'app/fixtures/', 'app/deploy/')
 BASE_REQUIRED = ('app/package.json', *SERVER, 'app/dist/index.html', 'runtime/node/node.exe',
     'app/native/Yahad.Platform.exe', 'app/native/Yahad.Platform.runtimeconfig.json',
@@ -128,7 +128,7 @@ def validate(prepared, profile='full'):
     if total > MAX_BYTES: raise BundleError('Payload size')
     records = [{'path':name,'size':path.stat().st_size,'sha256':digest(path)} for name,path in sorted(files.items())]
     return {'schema':1,'kind':'windows-runtime-candidate','target':'win-x64','profile':profile,
-        'version':package['version'],'authority':'application-updater','machineAcceptance':'not-performed',
+        'version':package['version'],'machineAcceptance':'not-performed',
         'familyInstallationReady':False,'launch':{'node':'runtime/node/node.exe','entry':'app/server/main.mjs',
         'helper':'app/native/Yahad.Platform.exe','ffmpeg':'runtime/ffmpeg/ffmpeg.exe' if profile == 'full' else None,
         'caddy':'runtime/caddy/caddy.exe' if profile == 'full' else None},

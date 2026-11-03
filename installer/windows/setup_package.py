@@ -132,7 +132,7 @@ def _source_identity(repo):
     source = git('rev-parse', 'HEAD').decode('ascii').strip()
     if not re.fullmatch('[a-f0-9]{40}', source): raise PackageError('Source commit required')
     packager = _unlinked(Path(__file__), file=True)
-    if packager != repo/'installer/windows/full_system_package.py' or git('show', 'HEAD:installer/windows/full_system_package.py') != packager.read_bytes():
+    if packager != repo/'installer/windows/setup_package.py' or git('show', 'HEAD:installer/windows/setup_package.py') != packager.read_bytes():
         raise PackageError('Executing packager must match committed source')
     tracked = git('ls-files', '-z', '--', 'src', 'package.json', 'package-lock.json').decode('utf-8').split('\0')
     return source_release_version(repo), source, [name for name in tracked if name]
@@ -152,7 +152,7 @@ def source_schema(repo):
 def validate_payload_source(repo, prepared, manifest, version, source, tracked):
     repo, prepared = Path(repo), Path(prepared)
     if (type(manifest.get('schema')) is not int or manifest['schema']!=1 or manifest.get('version')!=version or manifest.get('profile')!='full' or manifest.get('target')!='win-x64' or
-            manifest.get('kind')!='windows-runtime-candidate' or manifest.get('authority')!='application-updater'):
+            manifest.get('kind')!='windows-runtime-candidate'):
         raise PackageError('Application identity differs')
     records = {r['path']:r for r in manifest.get('files', [])}; _closed_names(records)
     # The payload runs the bundle only: no source tree, lockfile or node_modules ships.

@@ -239,7 +239,7 @@ internal sealed class NativeRuntimeService:IDisposable
     internal async Task StopAsync(CancellationToken cancellation)
     {
         RequireOwned();using var process=await StopSettledAsync(cancellation);await WaitForExitAsync(process,cancellation);
-        var stopped=Status();if(stopped.State!=1||stopped.Pid!=0||stopped.Specific!=0||stopped.Win32 is not(0 or 1077))throw new IOException("UNINSTALL_QUIESCENCE_UNCONFIRMED");
+        var stopped=Status();RequireStopped(stopped.State,stopped.Pid);
     }
     // The SCM refuses STOP (1052/1061) unless the current state accepts it, as
     // with a START_PENDING service that does not. STOP is sent only when
@@ -293,10 +293,14 @@ internal sealed class NativeRuntimeService:IDisposable
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancellation);deadline.CancelAfter(TimeSpan.FromSeconds(60));
         await process.WaitForExitAsync(deadline.Token);
     }
-    internal static void RequireRemovalStopped(uint state,uint pid)
+    // The SCM's exit code says how the last run ended (a failed start leaves 1066),
+    // not whether it is over, and it stays until the next start, so repair must not
+    // read it. Stopped with no process means the host and its kill-on-close job are
+    // gone; a survivor would still hold the data lease that any next user must take.
+    internal static void RequireStopped(uint state,uint pid)
     {if(state!=1||pid!=0)throw new IOException("UNINSTALL_QUIESCENCE_UNCONFIRMED");}
     internal void RequireFencedStoppedForRemoval()
-    {RequireRemovalFence();var observed=Status();RequireRemovalStopped(observed.State,observed.Pid);}
+    {RequireRemovalFence();var observed=Status();RequireStopped(observed.State,observed.Pid);}
     private void RequireRemovalFence()
     {
         RequireOwned();RequireStartType(Disabled);

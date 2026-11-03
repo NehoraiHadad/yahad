@@ -84,12 +84,6 @@ internal sealed class LanServiceRegistration : IDisposable
         }
         finally { Marshal.FreeHGlobal(memory); }
     }
-    internal void RequireStopped() { RequireOwned(); if (Status().State != 1) throw new IOException("LAN_SERVICE_NOT_QUIESCENT"); }
-    internal void RequireCleanStop()
-    {
-        RequireOwned(); var state = Status();
-        if (state.State != 1 || state.Pid != 0 || state.Win32 != 0 || state.Specific != 0) throw new IOException("LAN_QUIESCENCE_UNCONFIRMED");
-    }
     internal void RequireConfirmedStop()
     {
         RequireOwned(); var state = Status();

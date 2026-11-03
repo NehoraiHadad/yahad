@@ -42,8 +42,6 @@ internal static class FailureDiagnosticTests
             NativeInstallFiles.SetOwnedFile(path,$"O:{sid}D:P(A;;FA;;;{sid})(A;;FA;;;SY)(A;;FA;;;BA)");
             var acl=new FileInfo(path).GetAccessControl();
             Require(acl.AreAccessRulesProtected&&acl.GetOwner(typeof(SecurityIdentifier))?.Value==sid);
-            NativeInstallFiles.SetOwnedDirectory(root,$"O:{sid}D:P(A;OICI;FA;;;{sid})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)");
-            Require(new DirectoryInfo(root).GetAccessControl().AreAccessRulesProtected);
             return Task.CompletedTask;
         });
         await check("protected diagnostic creation replacement and failed-publication cleanup use only synthetic owned files",()=>
@@ -110,18 +108,6 @@ internal static class FailureDiagnosticTests
             var refused=false;try{copy.RequireSameInstallation(state with{InstallationId=Guid.NewGuid().ToString("N")});}catch(IOException){refused=true;}Require(refused);
             Require(copy.Mode=="DeleteData"&&copy.Phase=="ProtectRemovalReceipt"&&copy.NativeError==87);
             Require(InstallLocations.RemovalDiagnosticFile==InstallLocations.Binaries+".uninstall-diagnostic.json");
-            return Task.CompletedTask;
-        });
-        await check("lost final progress cannot recreate diagnostic after successful receipt cleanup",()=>
-        {
-            var allowed=true;var removed=false;var writes=0;
-            try{UninstallDiagnostics.Complete(ref allowed,()=>removed=true,()=>throw new IOException("synthetic lost result pipe"));}
-            catch(IOException){if(allowed)writes++;}
-            Require(removed&&!allowed&&writes==0);
-            allowed=true;var notified=false;
-            try{UninstallDiagnostics.Complete(ref allowed,()=>throw new IOException("synthetic receipt locked"),()=>notified=true);}
-            catch(IOException){if(allowed)writes++;}
-            Require(allowed&&!notified&&writes==1);
             return Task.CompletedTask;
         });
         await check("native error codes survive operation context without changing established failure meanings",()=>

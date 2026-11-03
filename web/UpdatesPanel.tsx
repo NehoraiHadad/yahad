@@ -12,21 +12,6 @@ export class UpdateAccessError extends Error {
 }
 
 function expiredSession() { window.dispatchEvent(new Event('session-expired')); }
-export function NativeUpdateDeferral() {
-  const [sending, setSending] = useState(false), [message, setMessage] = useState('');
-  const postpone = async () => {
-    setSending(true); setMessage('');
-    try {
-      const response = await fetch('/api/parent/updates/defer', { method: 'POST', credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: JSON.stringify({ hours: 1 }), signal: AbortSignal.timeout(15000) });
-      if (response.status === 401) expiredSession();
-      if (!response.ok) throw new Error();
-      setMessage('העדכון האוטומטי נדחה בשעה.');
-    } catch { setMessage('לא התקבל אישור לדחייה. בדקו את המצב לפני שליחת בקשה נוספת.'); }
-    finally { setSending(false); }
-  };
-  return <div><button type="button" className="outline-button" disabled={sending} onClick={() => void postpone()}>דחיית העדכון האוטומטי בשעה</button>{message && <p role="status">{message}</p>}</div>;
-}
 export async function readUpdateStatus(signal: AbortSignal): Promise<UpdateStatus> {
   const response = await fetch('/api/parent/updates', { credentials: 'same-origin', cache: 'no-store', signal });
   if (response.status === 401) expiredSession();
@@ -173,14 +158,6 @@ export function UpdatesPanel() {
       {data && !configured && !reconnecting && <p>מצב העדכונים אינו זמין לחשבון הזה. ייתכן שרכיב העדכון עוד לא הוגדר, שאין כרגע דיווח תקין או שהחשבון אינו מוגדר כאחראי לעדכונים. אפשר לרענן את המצב; אין כאן אישור שעדכון התחיל או הסתיים.</p>}
       {configured && <>
         <UpdateProgressStatus data={configured} local={local} reconnecting={reconnecting}/>
-        {configured.platform === 'windows' && <>
-          {configured.phase === 'available' && <p className="diagnostics-notice">העדכון יוחל כשאין עבודה פעילה. שמרו טיוטות וסגרו את חלונות יחד לאחר סיום הקלטות ושליחות. תוצאה לא ידועה של שליחה אינה נשלחת שוב.</p>}
-          {configured.error === 'storage' && <p role="alert">אין מספיק מקום פנוי להורדה ולגיבוי בטוחים. פנו מקום בכונן ובדקו שוב.</p>}
-          {configured.error === 'maintenance' && <p role="alert">נשארו קובצי עדכון מבדיקה קודמת. נדרש טיפול דרך כלי ההתקנה לפני הורדה נוספת; ההתקנה הנוכחית נשמרת.</p>}
-          {configured.mode === 'auto' && <NativeUpdateDeferral/>}
-          {!!configured.deferredUntil && configured.deferredUntil > Date.now() && <p role="status">העדכון האוטומטי מושהה עד {new Date(configured.deferredUntil).toLocaleString('he-IL')}.</p>}
-          {configured.lastUpdateAt && <p className="diagnostics-caption">עדכון מוצלח אחרון: {new Date(configured.lastUpdateAt).toLocaleString('he-IL')}</p>}
-        </>}
         <p>גרסה נוכחית שדווחה: <span dir="ltr">{configured.currentVersion || 'טרם דווחה'}</span>{configured.latestVersion && <> · גרסה זמינה: <span dir="ltr">{configured.latestVersion}</span></>}</p>
         <div className="update-mode-status"><b>מצב העדכונים שהוגדר</b><p>{repairRequired ? 'העדכון נעצר עד לבדיקה ותיקון, ללא קשר למצב האוטומטי שהוגדר' : !configured.enabled ? 'העדכונים מושהים בהגדרות השרת' : configured.mode === 'auto' ? 'עדכונים אוטומטיים פועלים' : 'הודעה על גרסה חדשה — ההתקנה לבחירתכם'}</p></div>
         <p>שירות העדכון שומר גיבוי מקומי מוצפן ובודק תקינות כחלק מההתקנה. השלבים כאן הם רק אלה שדווחו בפועל, ולא הבטחה שהעדכון יצליח. סגירת הדפדפן אינה מבטלת עדכון שכבר נקלט; השאירו את המחשב פועל. בפתיחה מחדש בודקים את המצב מהשירות.</p>

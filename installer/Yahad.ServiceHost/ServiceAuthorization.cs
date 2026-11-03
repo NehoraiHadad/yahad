@@ -2,7 +2,6 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
-using System.Text.Json;
 using Yahad.Install;
 
 namespace Yahad.Service;
@@ -13,11 +12,6 @@ internal interface IInstallationReader {InstallationBinding Read();}
 internal sealed record InstallationBinding(string InstallationId,string ActivationReceiptDigest);
 internal interface IInstalledActivationResolver
 {Task<AuthorizedServiceStart> ResolveAsync(InstallationBinding binding,CancellationToken cancellation);}
-internal sealed class UnconfiguredActivationResolver:IInstalledActivationResolver
-{
-    public Task<AuthorizedServiceStart> ResolveAsync(InstallationBinding binding,CancellationToken cancellation)
-        =>throw new ServiceStartDenied(ServiceFailure.ActivationUnavailable);
-}
 internal static class ServiceIdentityPolicy
 {
     internal static void Require(ServiceTokenObservation token,string expected)
@@ -42,38 +36,6 @@ internal sealed class InstalledStartAuthorizer(IServiceTokenReader tokens,IInsta
         InstallationBinding binding;
         try{binding=installation.Read();}catch{throw new ServiceStartDenied(ServiceFailure.BootstrapUnavailable);}
         return activation.ResolveAsync(binding,cancellation);
-    }
-}
-internal sealed class WindowsInstallationReader:IInstallationReader
-{
-    internal static string DescriptorPath=>InstalledUpdaterLayout.DescriptorPath;
-    public InstallationBinding Read()
-    {
-        // Existing owner-only bootstrap capability policy: admin/System owner,
-        // private DACL, application read-only, no-follow and single-link handle.
-        using var pinned=WindowsFileBoundary.OpenSecret(DescriptorPath,SecretRole.SetupCapability);
-        return Parse(pinned.Read());
-    }
-    internal static InstallationBinding Parse(byte[] bytes)
-    {
-        if(bytes.Length is <1 or >1024)throw new IOException("BOOTSTRAP_BOUND");
-        using var document=JsonDocument.Parse(bytes);var value=document.RootElement;
-        var properties=value.EnumerateObject().Select(p=>p.Name).ToArray();
-        if(properties.Length!=4||properties.Distinct(StringComparer.Ordinal).Count()!=4||!properties.ToHashSet(StringComparer.Ordinal).SetEquals(new[]{"schema","service","installationId","activationReceiptDigest"})||
-            value.GetProperty("schema").GetInt32()!=1||value.GetProperty("service").GetString()!=ServiceDefinition.Name)throw new IOException("BOOTSTRAP_SCHEMA");
-        var id=value.GetProperty("installationId").GetString()!;var digest=value.GetProperty("activationReceiptDigest").GetString()!;
-        if(!Guid.TryParseExact(id,"N",out _)||!System.Text.RegularExpressions.Regex.IsMatch(digest,"^[a-f0-9]{64}$"))throw new IOException("BOOTSTRAP_IDENTITY");
-        return new(id,digest);
-    }
-}
-internal static class WindowsInstalledRuntimeProfile
-{
-    // Discovery is intentionally separate from Program activation. The legacy
-    // first-install entry remains unchanged until the combined installer gates.
-    internal static bool UpdaterAnchorPresent()
-    {
-        var tokens=new WindowsServiceTokenReader();ServiceIdentityPolicy.Require(tokens.Read(),tokens.ExpectedServiceSid());
-        return InstalledUpdaterLayout.AnchorPresent();
     }
 }
 internal sealed class WindowsServiceTokenReader:IServiceTokenReader

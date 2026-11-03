@@ -3,7 +3,7 @@ using System.Windows;
 namespace Yahad.Setup;
 public partial class MainWindow
 {
-    private bool fullUpdateProfile,existingUpdateProfile;
+    private bool existingUpdateProfile;
     internal static bool HasExistingUpdateInstallation()
     {
         // Presence through public parents only. A preserved computer-only
@@ -16,23 +16,23 @@ public partial class MainWindow
     }
     internal static bool HasExistingUpdateInstallation(Func<string,bool> present)
         =>new[]{InstallLocations.State,InstallLocations.Binaries,InstallLocations.RemovalStateFile}.Any(present);
-    private void InitializeUpdate(bool full,bool existing)
+    private void InitializeUpdate(bool existing)
     {
-        fullUpdateProfile=full;existingUpdateProfile=existing;
-        UpdatePanel.Visibility=!uninstall&&full?Visibility.Visible:Visibility.Collapsed;
-        if(full&&existing)
+        existingUpdateProfile=existing;
+        UpdatePanel.Visibility=!uninstall?Visibility.Visible:Visibility.Collapsed;
+        if(existing)
         {
             UpdateChoices.Visibility=Visibility.Collapsed;
             UpdateExplanation.Text="בהתקנה קיימת נשמרים אישור העדכון והבחירה הקיימים. אפשר לשנות אותם בהגדרות של יחד. אם זו התקנה ישנה ללא המנגנון, המתקין יסביר איזה צעד נדרש.";
         }
         UpdateLanUi();
     }
-    private bool UpdateChoiceReady()=>!fullUpdateProfile||existingUpdateProfile||UpdateConsent.IsChecked==true;
+    private bool UpdateChoiceReady()=>existingUpdateProfile||UpdateConsent.IsChecked==true;
     private void UpdateChanged(object sender,RoutedEventArgs e)
     {if(UpdatePanel is not null&&Primary is not null&&LanPanel is not null)UpdateLanUi();}
     private UpdateSetupChoice? SelectedUpdateRequest()
     {
-        if(uninstall||!fullUpdateProfile||existingUpdateProfile)return null;
+        if(uninstall||existingUpdateProfile)return null;
         if(UpdateConsent.IsChecked!=true)throw new IOException("UPDATE_CONSENT_REQUIRED");
         return new(2,true,AutomaticUpdates.IsChecked==true,DateTimeOffset.UtcNow.ToUnixTimeSeconds());
     }

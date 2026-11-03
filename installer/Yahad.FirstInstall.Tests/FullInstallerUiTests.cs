@@ -17,7 +17,7 @@ internal static class FullInstallerUiTests
                 Directory.CreateDirectory(output);
                 foreach(var existing in new[]{false,true})
                 {
-                    var window=new MainWindow(false,[],false,true,existing);var primary=(Button)window.FindName("Primary");var consent=(CheckBox)window.FindName("UpdateConsent");
+                    var window=new MainWindow(false,[],false,existing);var primary=(Button)window.FindName("Primary");var consent=(CheckBox)window.FindName("UpdateConsent");
                     var choices=(StackPanel)window.FindName("UpdateChoices");
                     if(existing){if(choices.Visibility!=Visibility.Collapsed||!primary.IsEnabled)throw new Exception("PRESERVED_CONSENT_UI");}
                     else

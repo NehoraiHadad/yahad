@@ -1,5 +1,5 @@
-// Windows payload server build. Bundles each fixed entry into one self-contained
-// ESM file so the family machine extracts, ACL-copies and hashes three files
+// Windows payload server build. Bundles the fixed server entry into one self-contained
+// ESM file so the family machine extracts, ACL-copies and hashes one file
 // instead of src/ plus a production node_modules tree and a runtime TS loader.
 // Linux remains source-based and does not use this script.
 //
@@ -18,9 +18,9 @@ import { fileURLToPath } from 'node:url';
 const args = process.argv.slice(2), option = name => { const at = args.indexOf(name); return at >= 0 ? args[at + 1] : undefined; };
 const payload = option('--payload'), root = resolve(option('--root') ?? join(dirname(fileURLToPath(import.meta.url)), '..'));
 if (!payload || args.length !== (option('--root') ? 4 : 2)) throw new Error('Use: node scripts/build-server.mjs --payload NEW_DIR [--root CHECKOUT]');
-// Entry → output stem. The supervisor is a separate process with a fixed
-// payload path, so it is never split into shared chunks.
-const ENTRIES = { 'src/main.ts': 'main', 'src/native-supervisor.ts': 'native-supervisor' };
+// Entry → output stem. The service host launches it at a fixed payload path,
+// so it is never split into shared chunks.
+const ENTRIES = { 'src/main.ts': 'main' };
 // Optional packages, left unresolved and never shipped, each allowed only through the
 // import kind its caller guards. Baileys reaches its media helpers through
 // `import(...).catch()`: link previews are disabled, image/video thumbnails come
@@ -77,9 +77,8 @@ for (const input of Object.keys(result.metafile.inputs)) {
 }
 for (const source of Object.keys(ENTRIES)) if (!sources.has(source)) fail('entry not bundled ' + source);
 
-// Optional packages are tolerated only in the server and only behind their guarded
-// import kind, so startup never needs them. The supervisor runs with Node builtins
-// alone.
+// Optional packages are tolerated only behind their guarded import kind, so
+// startup never needs them.
 const outputs = [], noticesByOutput = [];
 for (const [path, output] of Object.entries(result.metafile.outputs)) {
   if (path.endsWith('.LEGAL.txt')) continue;
@@ -87,7 +86,7 @@ for (const [path, output] of Object.entries(result.metafile.outputs)) {
   if (ENTRIES[entry] !== stem) fail('unexpected output ' + path);
   for (const item of output.imports) {
     if (!item.external) fail('internal chunk import ' + item.path);
-    if (isBuiltin(item.path) || stem === 'main' && OPTIONAL[item.path] === item.kind) continue;
+    if (isBuiltin(item.path) || OPTIONAL[item.path] === item.kind) continue;
     fail(`${stem} imports ${item.kind} ${item.path}`);
   }
   const contents = built(path);

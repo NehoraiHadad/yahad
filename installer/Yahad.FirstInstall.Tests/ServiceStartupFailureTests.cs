@@ -43,15 +43,15 @@ internal static class ServiceStartupFailureTests
         });
         await check("Runtime diagnostic permits only a fixed refusal code without private exception text",()=>
         {
-            using var known=JsonDocument.Parse(ServiceStartupDiagnostic.Encode(StartupDiagnosticRole.Runtime,new IOException("RUNTIME_UPDATER_NOT_ENROLLED",new Win32Exception(5))));
-            Require(known.RootElement.GetProperty("Role").GetString()=="Runtime"&&known.RootElement.GetProperty("Code").GetString()=="RUNTIME_UPDATER_NOT_ENROLLED"&&known.RootElement.GetProperty("NativeError").GetInt32()==5);
+            using var known=JsonDocument.Parse(ServiceStartupDiagnostic.Encode(StartupDiagnosticRole.Runtime,new IOException("SERVICE_CHILD_EOF",new Win32Exception(5))));
+            Require(known.RootElement.GetProperty("Role").GetString()=="Runtime"&&known.RootElement.GetProperty("Code").GetString()=="SERVICE_CHILD_EOF"&&known.RootElement.GetProperty("NativeError").GetInt32()==5);
             var privateText="private-profile-path-and-token";var encoded=ServiceStartupDiagnostic.Encode(StartupDiagnosticRole.Runtime,new IOException(privateText));
             using var hidden=JsonDocument.Parse(encoded);Require(hidden.RootElement.GetProperty("Code").ValueKind==JsonValueKind.Null&&!encoded.Contains(privateText));return Task.CompletedTask;
         });
-        await check("removal observation requires stopped zero PID without pretending a successful service exit",()=>
+        await check("stop observation requires only stopped with zero PID, so a failed last run can still be repaired",()=>
         {
-            NativeRuntimeService.RequireRemovalStopped(1,0);
-            foreach(var status in new[]{(1u,123u),(2u,0u),(3u,123u),(4u,0u),(4u,123u)})Refuse(()=>NativeRuntimeService.RequireRemovalStopped(status.Item1,status.Item2));
+            NativeRuntimeService.RequireStopped(1,0);
+            foreach(var status in new[]{(1u,123u),(2u,0u),(3u,123u),(4u,0u),(4u,123u)})Refuse(()=>NativeRuntimeService.RequireStopped(status.Item1,status.Item2));
             return Task.CompletedTask;
         });
         await check("retained lease validates only its exact gate metadata while excluding another writer",()=>
@@ -94,13 +94,13 @@ internal static class ServiceStartupFailureTests
         });
         await check("startup diagnostic retains exact public refusal and inner native number",()=>
         {
-            var encoded=ServiceStartupDiagnostic.Encode(StartupDiagnosticRole.Runtime,new IOException("OWN_OBJECT_OPEN_TOKEN",new Win32Exception(5)));
-            using var json=JsonDocument.Parse(encoded);var root=json.RootElement;Require(root.GetProperty("Code").GetString()=="OWN_OBJECT_OPEN_TOKEN"&&root.GetProperty("NativeError").GetInt32()==5&&root.GetProperty("Role").GetString()=="Runtime");
+            var encoded=ServiceStartupDiagnostic.Encode(StartupDiagnosticRole.Runtime,new IOException("SERVICE_CHILD_PEER",new Win32Exception(5)));
+            using var json=JsonDocument.Parse(encoded);var root=json.RootElement;Require(root.GetProperty("Code").GetString()=="SERVICE_CHILD_PEER"&&root.GetProperty("NativeError").GetInt32()==5&&root.GetProperty("Role").GetString()=="Runtime");
             Require(root.GetProperty("SourceCommit").GetString()==ApplicationRelease.SourceCommit);return Task.CompletedTask;
         });
         await check("unavailable diagnostics cannot mask startup failure or invoke another writer",()=>
         {
-            var calls=0;Require(!ServiceStartupDiagnostic.TryRecord(StartupDiagnosticRole.Runtime,new IOException("INSTALLED_ROLE_ACCESS"),_=>{calls++;throw new UnauthorizedAccessException();}));Require(calls==1);
+            var calls=0;Require(!ServiceStartupDiagnostic.TryRecord(StartupDiagnosticRole.Runtime,new IOException("INSTALLED_LAUNCH_CHANGED"),_=>{calls++;throw new UnauthorizedAccessException();}));Require(calls==1);
             Require(!ServiceStartupDiagnostic.TryRecord((StartupDiagnosticRole)99,new IOException(),_=>{calls++;return true;}));Require(calls==1);return Task.CompletedTask;
         });
     }

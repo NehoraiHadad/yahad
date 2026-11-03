@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-from installer.windows import full_system_package as full
+from installer.windows import setup_package as full
 
 
 VERSION, SOURCE = '0.6.0', 'a'*40
@@ -27,28 +27,26 @@ def image(imported='kernel32.dll'):
     return bytes(data)
 
 
-class FullSystemPackageTests(unittest.TestCase):
+class SetupPackageTests(unittest.TestCase):
     def setUp(self):
         self.temporary=tempfile.TemporaryDirectory(prefix='yahad-full-package-test-');self.addCleanup(self.temporary.cleanup)
         self.root=Path(self.temporary.name);self.repo=self.root/'repo';self.prepared=self.root/'payload';self.repo.mkdir();self.prepared.mkdir()
-        self.tracked=['package.json','package-lock.json','src/database-schema.ts','src/db.ts','src/main.ts','src/native-supervisor.ts']
+        self.tracked=['package.json','package-lock.json','src/database-schema.ts','src/db.ts','src/main.ts']
         source={
             'package.json':json.dumps({'version':VERSION}),
             'package-lock.json':json.dumps({'version':VERSION,'packages':{'':{'version':VERSION},'node_modules/fastify':{'version':'5.12.7'},'node_modules/vite':{'version':'7.3.7','dev':True}}}),
             'src/database-schema.ts':'export const DATABASE_SCHEMA = 6;\nexport const DATABASE_MIGRATIONS_FROM = [1, 2] as const;\n',
             'src/db.ts':"import type { DatabaseSync } from 'node:sqlite';\nexport function migrate() {}\n",
             'src/main.ts':"import { migrate } from './db.js';\n",
-            'src/native-supervisor.ts':"import { fork } from 'node:child_process';\n",
         }
         for name,value in source.items():self.put(self.repo,name,value)
         self.put(self.prepared,'app/package.json',source['package.json'])
         for name in full.bundle.SERVER:self.put(self.prepared,name,'// bundled '+name+'\n')
         self.server=dict(format='yahad-server-bundle',schema=1,sources={name:hashlib.sha256(source[name].encode()).hexdigest() for name in source if name.startswith('src/')},
             packages=[dict(path='node_modules/fastify',name='fastify',version='5.12.7',noticeFiles=[])],outputs=[
-            self.output('main',['src/main.ts','src/db.ts','src/database-schema.ts'],['node_modules/fastify']),
-            self.output('native-supervisor',['src/native-supervisor.ts'],[])])
+            self.output('main',['src/main.ts','src/db.ts','src/database-schema.ts'],['node_modules/fastify'])])
         self.build=dict(appSourceCommit=SOURCE,helperSourceCommit=SOURCE,packagerSourceCommit=SOURCE,databaseSchema=6,databaseMigrationsFrom=[1,2])
-        self.save_build();self.manifest=dict(schema=1,kind='windows-runtime-candidate',profile='full',target='win-x64',version=VERSION,authority='application-updater',files=[])
+        self.save_build();self.manifest=dict(schema=1,kind='windows-runtime-candidate',profile='full',target='win-x64',version=VERSION,files=[])
         self.refresh_records()
 
     def put(self,root,name,value):
@@ -102,7 +100,7 @@ class FullSystemPackageTests(unittest.TestCase):
             with self.assertRaisesRegex(full.PackageError,'schema'):self.source()
 
     def test_shipped_server_bytes_are_pinned_by_the_bundle_record(self):
-        self.put(self.prepared,'app/server/native-supervisor.mjs','// replaced\n');self.refresh_records()
+        self.put(self.prepared,'app/server/main.mjs','// replaced\n');self.refresh_records()
         with self.assertRaisesRegex(full.PackageError,'Server bundle record differs'):self.source()
 
     def test_bundle_entries_are_fixed(self):
@@ -199,7 +197,7 @@ class FullSystemPackageTests(unittest.TestCase):
 class RuntimeOnlyBuildTests(unittest.TestCase):
     """End-to-end build() with source identity and the PE/audit boundary stubbed."""
     def setUp(self):
-        self.base = FullSystemPackageTests('test_bundle_sources_and_migration_declaration_are_taken_from_actual_bytes'); self.base.setUp(); self.addCleanup(self.base.tearDown)
+        self.base = SetupPackageTests('test_bundle_sources_and_migration_declaration_are_taken_from_actual_bytes'); self.base.setUp(); self.addCleanup(self.base.tearDown)
         b = self.base; b.native('Yahad.Platform', b.prepared/'app/native')
         for name in ('app/dist/index.html', 'runtime/node/node.exe', 'runtime/ffmpeg/ffmpeg.exe', 'runtime/caddy/caddy.exe'):
             b.put(b.prepared, name, image() if name.endswith('.exe') else b'<html>')

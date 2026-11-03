@@ -39,11 +39,6 @@ internal sealed class AuthorizedServiceStart(AppRelease release,IPrivateAppLaunc
     internal IAppRecoveryBarrier Recovery=>recovery;
     public void Dispose()=>resources?.Dispose();
 }
-internal sealed class NoHostUpdateAuthority:IAppUpdateAuthority
-{
-    public Task<AppRelease> ActivateAsync(AppRelease requested,QuiescentApp grant,CancellationToken cancellation)
-        =>throw new UnauthorizedAccessException("HOST_HAS_NO_UPDATE_AUTHORITY");
-}
 internal readonly record struct ServiceRunResult(ServiceFailure Failure,bool QuiescenceConfirmed);
 internal enum ServiceStartupStage {NotStarted,Authorizing,ValidatingStart,Launching,WaitingForHealth,Ready,Running}
 // Operational observations only: no paths, credentials, payloads or exception text.
@@ -57,11 +52,9 @@ internal sealed class ServiceController
     private readonly TimeSpan startDeadline,lifecycleDeadline;
     private readonly TaskCompletionSource stop=new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int terminal;
-    private IContainedAppSession? updateSession;
-    internal Task<bool> PrepareUpdateAsync(string id,CancellationToken cancellation)=>Volatile.Read(ref terminal)==0&&StartupObservation.Stage==ServiceStartupStage.Running&&Volatile.Read(ref updateSession) is IUpdateIdleSession idle?idle.PrepareUpdateAsync(id,cancellation):Task.FromResult(false);
-    internal Task CancelUpdateAsync(string id,CancellationToken cancellation)=>Volatile.Read(ref updateSession) is IUpdateIdleSession idle?idle.CancelUpdateAsync(id,cancellation):Task.CompletedTask;
-    internal Task ReleaseEffectsAsync(ProbationRuntimeBinding binding,string id,CancellationToken cancellation)=>Volatile.Read(ref terminal)==0&&StartupObservation.Stage==ServiceStartupStage.Running&&Volatile.Read(ref updateSession) is IProbationAppSession probation?probation.ReleaseEffectsAsync(binding,id,cancellation):throw new IOException("PROBATION_RUNTIME_NOT_READY");
-    private ProbeOwnershipException? unresolvedProbe;private Task<AuthorizedServiceStart>? unresolvedAuthorization;
+    // Resources whose cleanup could not be observed stay referenced, so their
+    // handles are never released as if the tree were known to be empty.
+    private Task<AuthorizedServiceStart>? unresolvedAuthorization;
     private AppLifecycle? unresolvedLifecycle;private AuthorizedServiceStart? unresolvedGrant;
     private ServiceStartupObservation startupObservation=new(ServiceStartupStage.NotStarted,0,null);
     internal ServiceStartupObservation StartupObservation=>Volatile.Read(ref startupObservation);
@@ -71,7 +64,6 @@ internal sealed class ServiceController
     internal StartupStep[] StartupSteps{get{lock(startupSteps)return [..startupSteps];}}
     private ServiceRootExitObservation? rootExitObservation;
     internal ServiceRootExitObservation? RootExitObservation=>Volatile.Read(ref rootExitObservation);
-    internal bool CleanupReconciliationRequired=>unresolvedAuthorization is not null||unresolvedProbe is not null||unresolvedLifecycle is not null||unresolvedGrant is not null;
     internal ServiceController(IServiceStartAuthorizer authorizer,TimeSpan? startDeadline=null,TimeSpan? lifecycleDeadline=null,Action<Exception>? reportFailure=null)
     {
         this.authorizer=authorizer;this.reportFailure=reportFailure;this.startDeadline=startDeadline??(authorizer is IObservedAdmission observed?observed.AdmissionBudget:TimeSpan.FromSeconds(25));
@@ -79,18 +71,6 @@ internal sealed class ServiceController
         if(this.startDeadline<=TimeSpan.Zero||this.startDeadline>(authorizer is IObservedAdmission?TimeSpan.FromMinutes(5):TimeSpan.FromSeconds(30))||this.lifecycleDeadline<=TimeSpan.Zero||this.lifecycleDeadline>TimeSpan.FromSeconds(30))throw new ArgumentOutOfRangeException();
     }
     private void ReportFailure(Exception error){try{reportFailure?.Invoke(error);}catch{}}
-    internal async Task RetryAdmissionCleanupAsync(CancellationToken cancellation)
-    {
-        if(unresolvedAuthorization is { } pending)
-        {
-            try{var late=await pending.WaitAsync(cancellation);late.Dispose();unresolvedAuthorization=null;}
-            catch(ProbeOwnershipException owned){unresolvedProbe=owned;unresolvedAuthorization=null;}
-            catch when(pending.IsFaulted||pending.IsCanceled){_ =pending.Exception;unresolvedAuthorization=null;}
-        }
-        if(unresolvedProbe is { } probe){await probe.RetryCleanupAsync(cancellation);unresolvedProbe=null;}
-        if(unresolvedLifecycle is { } life){await life.DisposeAsync();unresolvedLifecycle=null;}
-        if(unresolvedAuthorization is null&&unresolvedProbe is null&&unresolvedLifecycle is null&&unresolvedGrant is { } grant){grant.Dispose();unresolvedGrant=null;}
-    }
     internal uint Control(uint control)
     {
         // Handler never runs cancellation callbacks, waits for a process, does
@@ -100,7 +80,7 @@ internal sealed class ServiceController
         if(Volatile.Read(ref terminal)!=0)return 1062;
         stop.TrySetResult();return 0;
     }
-    private sealed class TrackedLauncher(IPrivateAppLauncher inner,TimeSpan healthDeadline,Action<ServiceStartupStage,string?> observe,Action<int,bool,bool> observedExit,Action<IContainedAppSession> remember):IPrivateAppLauncher
+    private sealed class TrackedLauncher(IPrivateAppLauncher inner,TimeSpan healthDeadline,Action<ServiceStartupStage,string?> observe,Action<int,bool,bool> observedExit):IPrivateAppLauncher
     {
         private readonly TaskCompletionSource<int> exit=new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int readyObserved,forcedCleanup;
@@ -108,7 +88,7 @@ internal sealed class ServiceController
         public async Task<IContainedAppSession> StartAsync(AppRelease release,CancellationToken cancellation)
         {
             observe(ServiceStartupStage.Launching,null);
-            try{var session=await inner.StartAsync(release,cancellation);remember(session);_ = Watch(session);return new ObservedSession(session,()=>Interlocked.Exchange(ref forcedCleanup,1));}
+            try{var session=await inner.StartAsync(release,cancellation);_ = Watch(session);return new ObservedSession(session,()=>Interlocked.Exchange(ref forcedCleanup,1));}
             catch(OperationCanceledException){observe(ServiceStartupStage.Launching,"launch_cancelled");throw;}
             catch{observe(ServiceStartupStage.Launching,"launch_failed");throw;}
         }
@@ -200,7 +180,6 @@ internal sealed class ServiceController
                 else if(authorization.IsCompleted)
                 {
                     try{authorization.GetAwaiter().GetResult();}
-                    catch(ProbeOwnershipException){throw;}
                     catch{_ =authorization.Exception;}
                 }
                 else{unresolvedAuthorization=authorization;quiescent=false;}
@@ -209,8 +188,8 @@ internal sealed class ServiceController
             start.Token.ThrowIfCancellationRequested();Pending(ServiceState.StartPending);
             // Readiness belongs to startup. The linked start token still bounds
             // total admission + launch; stop/cleanup retain lifecycleDeadline.
-            var tracked=new TrackedLauncher(grant.Launcher,startDeadline,Observe,ObservedExit,session=>Volatile.Write(ref updateSession,session));
-            lifecycle=new(grant.Release,tracked,new BoundedStartBarrier(grant.Recovery),new NoHostUpdateAuthority(),lifecycleDeadline,authorizer is IObservedAdmission?startDeadline:null);
+            var tracked=new TrackedLauncher(grant.Launcher,startDeadline,Observe,ObservedExit);
+            lifecycle=new(grant.Release,tracked,new BoundedStartBarrier(grant.Recovery),lifecycleDeadline,authorizer is IObservedAdmission?startDeadline:null);
             Observe(ServiceStartupStage.ValidatingStart,null);
             await lifecycle.StartAsync(start.Token);
             start.Token.ThrowIfCancellationRequested();if(stop.Task.IsCompleted)throw new OperationCanceledException();
@@ -226,8 +205,6 @@ internal sealed class ServiceController
         }
         // Each handler latches its fixed failure token before reporting, so the
         // report carries the complete stage history including the verdict.
-        catch(ProbeOwnershipException owned)
-        {Refused("probe_quiescence_unconfirmed");ReportFailure(owned);unresolvedProbe=owned;lifecycle=AppLifecycle.RetainFailedAdmission(owned.OwnedSession);failure=ServiceFailure.StartFailed;}
         catch(ServiceStartDenied denied){if(pending==ServiceState.StartPending)Refused("admission_denied");ReportFailure(denied);failure=denied.Failure;}
         catch(OperationCanceledException error)
         {
@@ -257,7 +234,6 @@ internal sealed class ServiceController
                 }
             }
             if(unresolvedAuthorization is not null){quiescent=false;failure=ServiceFailure.QuiescenceUnknown;}
-            if(unresolvedProbe?.CleanupComplete==true)unresolvedProbe=null;
             if(!quiescent){unresolvedLifecycle=lifecycle;unresolvedGrant=grant;}
             else if(grant is not null)
             {try{grant.Dispose();}catch{unresolvedGrant=grant;quiescent=false;failure=ServiceFailure.QuiescenceUnknown;}}

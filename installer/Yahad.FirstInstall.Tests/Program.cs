@@ -61,17 +61,6 @@ if(args is ["--compiler-trace-only",var compilerNode,var compilerRepo,var compil
 if(args is ["--existing-link-guards-only",var hardFixture,var junctionFixture,var targetFixture,var linkOutput])
     return ExistingLinkGuardsProbe.Run(hardFixture,junctionFixture,targetFixture,linkOutput);
 
-if(args is ["--store-seed-probe-only",var probeNode,var probeRepo,var probeHelper])
-{
-    try
-    {
-        var watch=System.Diagnostics.Stopwatch.StartNew();using var fixture=await ProductionFixture.Create(probeNode,probeRepo,probeHelper);
-        var observed=await fixture.ReadQuiescentSchema(probeNode);
-        if(observed!=fixture.Schema)throw new IOException("SEEDED_STORE_SCHEMA_MISMATCH");
-        Console.WriteLine(JsonSerializer.Serialize(new{suite="store-seed-probe",ok=true,elapsedMilliseconds=watch.ElapsedMilliseconds,schema=observed,databaseSchemaReadBack=true,realScmInvoked=false}));return 0;
-    }
-    catch(Exception failure){Console.WriteLine(JsonSerializer.Serialize(new{suite="store-seed-probe",ok=false,reason=failure.GetType().Name,quiescenceConfirmed=(failure as FixturePreparationException)?.QuiescenceConfirmed,realScmInvoked=false}));return 1;}
-}
 if(args is ["--uninstall-recovery-only",var recoveryOutput])
 {
     Directory.CreateDirectory(recoveryOutput);var failed=0;var observations=new List<object>();
@@ -100,10 +89,6 @@ if(args is ["--failure-diagnostics-only"])
 if(args is ["--full-installer-atomic-only"])
 {
     FullInstallerAtomicTests.Run();Console.WriteLine(JsonSerializer.Serialize(new{suite="full-installer-atomic-private-files",passed=4,failed=0,nativeScmOperations=false,realFamilyData=false}));return 0;
-}
-if(args is ["--operator-binding-only",var operatorNode])
-{
-    await OperatorBindingTests.Run(operatorNode);Console.WriteLine(JsonSerializer.Serialize(new{suite="operator-binding-real-sqlite-synthetic",passed=6,failed=0,nativeScmOperations=false,realFamilyData=false}));return 0;
 }
 if(args is ["--full-installer-ui-only",var fullUiOutput])
 {
@@ -136,13 +121,13 @@ if(args is ["--version-only",var versionRepo])
 if(args is ["--store-schema-only",var schemaRepo])
 {
     foreach(var expected in new[]{5,6,17})
-        if(ProductionFixture.ParseSourceSchema($"// fixture\nexport const DATABASE_SCHEMA = {expected};\n")!=expected)throw new IOException("STORE_SCHEMA_PARSER");
+        if(StoreFixture.ParseSourceSchema($"// fixture\nexport const DATABASE_SCHEMA = {expected};\n")!=expected)throw new IOException("STORE_SCHEMA_PARSER");
     foreach(var invalid in new[]{"export const DATABASE_SCHEMA = 0;","export const DATABASE_SCHEMA = 6 + 1;","export const DATABASE_SCHEMA = 6;\nexport const DATABASE_SCHEMA = 7;","// export const DATABASE_SCHEMA = 6;","export const DATABASE_SCHEMA = 999999999999999999999;"})
     {
-        var refused=false;try{ProductionFixture.ParseSourceSchema(invalid);}catch(IOException){refused=true;}
+        var refused=false;try{StoreFixture.ParseSourceSchema(invalid);}catch(IOException){refused=true;}
         if(!refused)throw new IOException("STORE_SCHEMA_PARSER_ADMITTED_INVALID_SOURCE");
     }
-    var observed=ProductionFixture.ReadSourceSchema(schemaRepo);
+    var observed=StoreFixture.ReadSourceSchema(schemaRepo);
     Console.WriteLine(JsonSerializer.Serialize(new{suite="store-schema-source-pure",ok=true,schema=observed,declaredSchemasTested=new[]{5,6,17},nativeOperations=false,storeOpened=false}));return 0;
 }
 if(args is ["--lan-integration-only"])
@@ -165,11 +150,10 @@ if(args is ["--lan-runtime-only"])
     });
     Console.WriteLine(JsonSerializer.Serialize(new{suite="lan-runtime-pure",ok=failed==0,failed,nativeOperations=false,cases=observations}));return failed==0?0:1;
 }
-var storeFirst=args.Length==5&&args[0]=="--store-first-start-only";
-var storeOnly=(args.Length==5&&args[0]=="--store-integration-only")||storeFirst;
+var storeOnly=args.Length==5&&args[0]=="--store-integration-only";
 if(storeOnly)args=args.Skip(1).ToArray();
 if(args is not [var node,var repo,var helper,var output])throw new IOException("TEST_INPUTS_REQUIRED");
-Directory.CreateDirectory(output);var cases=new List<object>();int failures=0;int blockedStore=0;int storeCaseIndex=0;bool preparationBlocked=false;
+Directory.CreateDirectory(output);var cases=new List<object>();int failures=0;int blockedStore=0;bool preparationBlocked=false;
 void Assert(bool condition,string code="assertion failed"){if(!condition)throw new Exception(code);}
 async Task Check(string name,Func<Task> run){try{await run();cases.Add(new{name,status="PASS"});Console.WriteLine("PASS "+name);}catch(Exception e){failures++;cases.Add(new{name,status="FAIL",reason=e.GetType().Name});Console.WriteLine("FAIL "+name+" "+e);}}
 async Task Refuse(Func<Task> run){try{await run();}catch(Exception e)when(e is IOException or UnauthorizedAccessException or OperationCanceledException or Win32Exception or JsonException){return;}throw new Exception("unexpected admission");}
@@ -208,13 +192,6 @@ await Check("wrong member hash fails without overwriting preexisting files",asyn
  var fixture=Package();var document=NativeJson.Read<InstallPackageManifest>(fixture.Manifest);var records=document.Files.Select((x,i)=>i==0?x with{Sha256=new string('0',64)}:x).ToArray();using var p=new InstallPackage(new MemoryStream(fixture.Zip),JsonSerializer.SerializeToUtf8Bytes(document with{Files=records}));
  var root=SafeDirectory.CreatePrivateSession(Path.GetTempPath());await Refuse(()=>{p.Extract(root,_=>{},default);return Task.CompletedTask;});Assert(!File.Exists(Path.Combine(root,"payload/app/server/main.mjs")));
 });
-await Check("initial data capability is admin-owned read/delete only, never service-writable",()=>
-{
- var sid=new System.Security.Principal.SecurityIdentifier("S-1-5-80-1-2-3-4-5");var good=new RawSecurityDescriptor($"O:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1300a9;;;{sid.Value})");WindowsFileBoundary.ValidateInitialSeedAcl(good,sid);
- foreach(var bad in new[]{new RawSecurityDescriptor($"O:BAD:P(A;;FA;;;BA)(A;;FA;;;{sid.Value})"),new RawSecurityDescriptor($"O:{sid.Value}D:P(A;;FR;;;{sid.Value})")})
- {try{WindowsFileBoundary.ValidateInitialSeedAcl(bad,sid);throw new Exception("seed accepted");}catch(IOException){}}
- return Task.CompletedTask;
-});
 await Check("user installer enables existing real connector; only explicit test profile uses mock",()=>
 {
  var production=RuntimeConnectorSettings.For(RuntimeConnectorProfile.Production);Assert(production.Connector=="baileys"&&production.Approval=="I_APPROVE_UNOFFICIAL_LINK");
@@ -230,12 +207,10 @@ await Check("removal defaults to keeping data and full removal requires exact ex
  choice.Confirmation="מחיקה";Assert(choice.Confirmed()==UninstallMode.DeleteData);
  choice.Select(UninstallMode.KeepData);choice.Select(UninstallMode.DeleteData);Assert(!choice.CanBegin&&choice.Confirmation=="");return Task.CompletedTask;
 });
-await Check("authenticated flow carries full removal mode and refuses unknown or switched intent",async()=>
+await Check("authenticated flow carries full removal mode and refuses unknown intent",async()=>
 {
  var ops=new FakeHost();var result=await new InstallFlow(ops).RunAsync(owner,true,_=>{},default,UninstallMode.DeleteData);Assert(result.Ok&&!result.DataPreserved&&ops.LastRemoval==UninstallMode.DeleteData);
  var invalid=new FakeHost();await Refuse(()=>new InstallFlow(invalid).RunAsync(owner,true,_=>{},default,(UninstallMode)99));Assert(invalid.Calls.Count==0);
- await Refuse(()=>{UninstallChoice.RequireSameIntent("removing_keep_data",UninstallMode.DeleteData);return Task.CompletedTask;});
- await Refuse(()=>{UninstallChoice.RequireSameIntent("removing_all_data",UninstallMode.KeepData);return Task.CompletedTask;});UninstallChoice.RequireSameIntent("removing_all_data",UninstallMode.DeleteData);
  var serviceSid="S-1-5-80-123-456-789-123-456";
  WindowsFileBoundary.ValidateInstallerMetadataAcl(new System.Security.AccessControl.RawSecurityDescriptor(NativeInstallFiles.Descriptor(serviceSid)));
  await Refuse(()=>{WindowsFileBoundary.ValidateInstallerMetadataAcl(new System.Security.AccessControl.RawSecurityDescriptor(NativeInstallFiles.Descriptor(serviceSid,ownerSid:owner.Sid)));return Task.CompletedTask;});
@@ -251,96 +226,21 @@ await Check("locked or hardlinked synthetic data fails before deletion",()=>
 await Check("interrupted synthetic purge retains outside intent and resumes exact remaining tree",()=>
 {RemovalTests.Interrupted();return Task.CompletedTask;});
 }
-async Task StoreCheck(string name,Func<ProductionFixture,Task> run)
+async Task StoreCheck(string name,Func<StoreFixture,Task> run)
 {
- if(storeFirst&&storeCaseIndex++!=0)return;
  if(preparationBlocked){blockedStore++;cases.Add(new{name,status="BLOCKED",reason="fixture preparation failed"});Console.WriteLine("BLOCKED "+name);return;}
  await Check(name,async()=>
  {
-  ProductionFixture fixture;
-  try{fixture=await ProductionFixture.Create(node,repo,helper);}
+  StoreFixture fixture;
+  try{fixture=await StoreFixture.Create(node,repo,helper);}
   catch{preparationBlocked=true;throw;}
   Exception? bodyFailure=null;
-  try{await run(fixture);}catch(Exception failure){bodyFailure=failure;fixture.RetainFailure(failure);}
+  try{await run(fixture);}catch(Exception failure){bodyFailure=failure;}
   try{fixture.Dispose();}catch(Exception cleanup){preparationBlocked=true;if(bodyFailure is not null)throw new AggregateException(bodyFailure,cleanup);throw;}
   if(bodyFailure is not null)System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(bodyFailure).Throw();
  });
 }
-await StoreCheck($"real Store first startup creates schema{ProductionFixture.ReadSourceSchema(repo)} only after one-use authorization",async(f)=>
-{
- File.WriteAllText(f.PathOf("worker-error.json"),"synthetic prior-attempt failure");f.ClearSignals();Assert(!File.Exists(f.PathOf("worker-error.json")),"stale worker diagnostic survived retry reset");
- var original=Path.Combine(f.Data,"app.sqlite");File.Move(original,f.PathOf("original-seeded.sqlite"));f.ClearSignals();var head=NativeJson.Read<InstalledActivation>(File.ReadAllBytes(f.PathOf("activation.json")));var consumed=0;
- var fresh=new FreshDataAuthorization(f.InstallationId,f.OriginalDataId,head.ReleaseDigest,()=>{if(++consumed!=1)throw new IOException("seed replay");});
- var resolver=f.CreateResolver(fresh:fresh);
- var controller=new ServiceController(new ResolverStart(resolver,()=>f.Binding));var result=await controller.RunAsync(r=>{if(r.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);});
- Assert(result.Failure==ServiceFailure.None&&consumed==1&&File.Exists(original),$"STORE_FIRST_START_RESULT:{result.Failure};quiescence={result.QuiescenceConfirmed};consumed={consumed};db={File.Exists(original)}");var schema=await f.ReadQuiescentSchema(node);Assert(schema==f.Schema);
- File.Move(original,f.PathOf("new-seeded.sqlite"));f.ClearSignals();await Refuse(()=>f.Resolve());File.Move(f.PathOf("new-seeded.sqlite"),original);
-});
-await StoreCheck("existing verified database retires a leftover initial grant without reinitializing",async(f)=>
-{
- f.ClearSignals();var head=NativeJson.Read<InstalledActivation>(File.ReadAllBytes(f.PathOf("activation.json")));var count=0;
- var resolver=f.CreateResolver(fresh:new(f.InstallationId,f.OriginalDataId,head.ReleaseDigest,()=>count++));
- var controller=new ServiceController(new ResolverStart(resolver,()=>f.Binding));var result=await controller.RunAsync(r=>{if(r.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);});Assert(result.Failure==ServiceFailure.None&&count==1);
-});
-await StoreCheck("missing database plus unrelated data refuses fresh initialization and keeps files",async(f)=>
-{
- f.ClearSignals();var db=Path.Combine(f.Data,"app.sqlite");File.Move(db,f.PathOf("held-db.sqlite"));var sentinel=Path.Combine(f.Data,"family-marker");File.WriteAllText(sentinel,"preserve");var count=0;var head=NativeJson.Read<InstalledActivation>(File.ReadAllBytes(f.PathOf("activation.json")));
- try{var resolver=f.CreateResolver(fresh:new(f.InstallationId,f.OriginalDataId,head.ReleaseDigest,()=>count++));await Refuse(()=>resolver.ResolveAsync(f.Binding,default));Assert(count==0&&File.ReadAllText(sentinel)=="preserve"&&!File.Exists(db));}
- finally{File.Delete(sentinel);File.Move(f.PathOf("held-db.sqlite"),db);}
-});
-// Exercise the same two-file authorization used by the production resolver.
-FirstInstallReceipt CreateInitialGrants(ProductionFixture f)
-{
- var head=NativeJson.Read<InstalledActivation>(File.ReadAllBytes(f.PathOf("activation.json")));
- byte[] Grant()=>JsonSerializer.SerializeToUtf8Bytes(new FirstInstallSeed(1,f.InstallationId,f.OriginalDataId,head.ReleaseDigest,Guid.NewGuid().ToString("N")));
- var seed=Grant();var retry=Grant();File.WriteAllBytes(f.PathOf("initial-seed.json"),seed);File.WriteAllBytes(f.PathOf("initial-retry.json"),retry);
- return new(2,f.InstallationId,f.OriginalDataId,head.ReleaseDigest,ApplicationRelease.Version,ProductionFixture.Hash(seed),32000,new string('b',64),"committed",ProductionFixture.Hash(retry));
-}
-FreshDataAuthorization? ReadInitialGrants(ProductionFixture f,FirstInstallReceipt receipt)
-{
- byte[] Read(string path){using var file=WindowsFileBoundary.OpenPrivateRead(path);return file.Small(4096);}
- void Consume(string path,string digest){if(ProductionFixture.Hash(Read(path))!=digest)throw new IOException("PRIVATE_GRANT_CHANGED");File.Delete(path);}
- return FirstInstallInitialization.Read(f.Root,receipt,Read,Consume);
-}
-foreach(var failure in new[]{"handoff","early-crash"})await StoreCheck("initial "+failure+" retains durable retry grant and a quiescent retry succeeds",async(f)=>
-{
- f.ClearSignals();var db=Path.Combine(f.Data,"app.sqlite");var saved=f.PathOf("before-"+failure+".sqlite");File.Move(db,saved);var receipt=CreateInitialGrants(f);
- var fresh=ReadInitialGrants(f,receipt)!;
- if(failure=="handoff"){var original=fresh.Begin;fresh=fresh with{Begin=()=>{original?.Invoke();throw new IOException("INJECTED_BEFORE_DESCRIPTOR");}};}
- if(failure=="early-crash")File.WriteAllText(f.PathOf("crash-before-store"),"synthetic");
- var resolver=f.CreateResolver(fresh:fresh);
- var reports=new List<ServiceReport>();var controller=new ServiceController(new ResolverStart(resolver,()=>f.Binding),lifecycleDeadline:TimeSpan.FromSeconds(8));
- var failed=await controller.RunAsync(reports.Add);Assert(failed.Failure!=ServiceFailure.None&&failed.QuiescenceConfirmed&&!reports.Any(x=>x.State==ServiceState.Running));
- Assert(!File.Exists(db)&&!File.Exists(f.PathOf("initial-seed.json"))&&File.Exists(f.PathOf("initial-retry.json")));
- using(var observed=WindowsFileBoundary.AcquireDataLease(f.Data)){} // actual empty-job lease reacquisition, not a UI boolean
- if(failure=="early-crash")File.Delete(f.PathOf("crash-before-store"));
- f.ClearSignals();var retry=ReadInitialGrants(f,receipt);Assert(retry is not null);
- var next=new ServiceController(new ResolverStart(f.CreateResolver(fresh:retry),()=>f.Binding));
- var success=await next.RunAsync(report=>{if(report.State==ServiceState.Running)next.Control(ServiceDefinition.Stop);});
- Assert(success.Failure==ServiceFailure.None&&File.Exists(db)&&!File.Exists(f.PathOf("initial-retry.json")));
- // Once observed ready, deleting even every DB file cannot re-open first setup.
- f.ClearSignals();var initialized=f.PathOf("after-"+failure+".sqlite");File.Move(db,initialized);Assert(ReadInitialGrants(f,receipt) is null);await Refuse(()=>f.Resolve());Assert(!File.Exists(db));File.Move(initialized,db);
-});
-await StoreCheck("verified DB from an interrupted attempt retires grants before retry and never resets data",async(f)=>
-{
- f.ClearSignals();var receipt=CreateInitialGrants(f);var schema=await f.ReadQuiescentSchema(node);Assert(schema==f.Schema);
- var before=File.ReadAllBytes(Path.Combine(f.Data,"app.sqlite"));var grant=await f.CreateResolver(fresh:ReadInitialGrants(f,receipt)).ResolveAsync(f.Binding,default);
- try{await grant.Recovery.RequireStartAllowedAsync(grant.Release,default);Assert(File.Exists(f.PathOf("initial-retry.json")));}finally{grant.Dispose();}
- var controller=new ServiceController(new ResolverStart(f.CreateResolver(fresh:ReadInitialGrants(f,receipt)),()=>f.Binding));
- var result=await controller.RunAsync(report=>{if(report.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);});Assert(result.Failure==ServiceFailure.None&&!File.Exists(f.PathOf("initial-seed.json"))&&!File.Exists(f.PathOf("initial-retry.json")));
-});
-await StoreCheck("inconsistent or corrupt initial grant state fails closed and creates no replacement",async(f)=>
-{
- f.ClearSignals();var receipt=CreateInitialGrants(f);File.Delete(f.PathOf("initial-retry.json"));await Refuse(()=>{ReadInitialGrants(f,receipt);return Task.CompletedTask;});Assert(!File.Exists(f.PathOf("initial-retry.json")));File.Delete(f.PathOf("initial-seed.json"));
- receipt=CreateInitialGrants(f);File.WriteAllText(f.PathOf("initial-retry.json"),"corrupt");await Refuse(()=>{ReadInitialGrants(f,receipt);return Task.CompletedTask;});File.Delete(f.PathOf("initial-seed.json"));File.Delete(f.PathOf("initial-retry.json"));
-});
-await StoreCheck("SQLite handles a crash-left WAL under actual exclusive lease without deleting live data",async(f)=>
-{
- f.ClearSignals();var signal=f.PathOf("wal-ready");var code="const fs=require('node:fs'),{DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(process.argv[1]);db.exec('PRAGMA journal_mode=WAL;CREATE TABLE IF NOT EXISTS first_install_wal(value INTEGER);INSERT INTO first_install_wal VALUES(73)');fs.writeFileSync(process.argv[2],'ready');setInterval(()=>{},1000)";
- using(var writer=f.StartJob(node,["-e",code,Path.Combine(f.Data,"app.sqlite"),signal],f.Root,LaunchEnvironment.Clean(f.Root)))
- {using var limit=new CancellationTokenSource(TimeSpan.FromSeconds(15));while(!File.Exists(signal))await Task.Delay(20,limit.Token);await writer.TerminateAndWaitForTreeEmptyAsync(limit.Token);}
- Assert(File.Exists(Path.Combine(f.Data,"app.sqlite-wal")));using var lease=WindowsFileBoundary.AcquireDataLease(f.Data);var schema=await FirstInstallWal.ReconcileAsync(node,Path.Combine(f.Data,"app.sqlite"),f.PathOf("temporary"),default);Assert(schema==f.Schema&&!File.Exists(Path.Combine(f.Data,"app.sqlite-wal")));
-});
+await StoreIntegrationTests.RunAsync(StoreCheck,node);
 if(!storeOnly)
 await Check("native RTL window renders at desktop and minimum size without showing or installing",async()=>
 {
@@ -363,7 +263,7 @@ await Check("native RTL window renders at desktop and minimum size without showi
   }
   completed.SetResult();}catch(Exception e){completed.SetException(e);}});thread.SetApartmentState(ApartmentState.STA);thread.Start();await completed.Task;thread.Join();
 });
-File.WriteAllText(Path.Combine(output,"tests.json"),JsonSerializer.Serialize(new{kind=storeFirst?"first-install-synthetic-store-first-start":storeOnly?"first-install-synthetic-store-only":"first-install-synthetic-host-operations",passed=cases.Count-failures-blockedStore,failed=failures,blocked=blockedStore,nativeScmInvoked=false,hostAclProvisioned=false,setupCapabilityProvisioned=false,networkListenersOpened=false,offscreenUiOnly=!storeOnly,tests=cases},new JsonSerializerOptions{WriteIndented=true}));
+File.WriteAllText(Path.Combine(output,"tests.json"),JsonSerializer.Serialize(new{kind=storeOnly?"first-install-synthetic-store-only":"first-install-synthetic-host-operations",passed=cases.Count-failures-blockedStore,failed=failures,blocked=blockedStore,nativeScmInvoked=false,hostAclProvisioned=false,setupCapabilityProvisioned=false,networkListenersOpened=false,offscreenUiOnly=!storeOnly,tests=cases},new JsonSerializerOptions{WriteIndented=true}));
 Console.WriteLine($"{cases.Count-failures-blockedStore} passed; {failures} failed; {blockedStore} blocked. No native host installation, service, trust or listener.");return failures==0&&blockedStore==0?0:1;
 
 (byte[] Zip,byte[] Manifest) Package(bool duplicate=false)
@@ -382,29 +282,4 @@ internal sealed class FakeHost:ISetupHostOperations
  public Task PublishServiceAsync(SetupOwner o,Action<SetupProgress> p,CancellationToken c)=>Call("publish",c);
  public async Task<SetupResult> StartAndObserveAsync(Action<SetupProgress> p,CancellationToken c){await Call("ready",c);return Result;}
  public async Task<SetupResult> UninstallAsync(SetupOwner o,Action<SetupProgress> p,CancellationToken c,UninstallMode mode=UninstallMode.KeepData){LastRemoval=mode;await Call("uninstall",c);return new(true,"REMOVED",DataPreserved:mode==UninstallMode.KeepData);}
-}
-internal sealed class ResolverStart(FixtureProcesses.FixtureResolver resolver,Func<InstallationBinding> binding):IServiceStartAuthorizer,IObservedAdmission
-{
- public TimeSpan AdmissionBudget=>resolver.AdmissionBudget;public event Action? ObservedWork{add=>resolver.ObservedWork+=value;remove=>resolver.ObservedWork-=value;}
-    public async Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)
-    {
-        try
-        {
-            var grant=await resolver.ResolveAsync(binding(),cancellation);
-            return new(grant.Release,new DiagnosticLauncher(grant.Launcher),new DiagnosticBarrier(grant.Recovery),grant);
-        }
-        catch(Exception failure){Console.WriteLine("FIXTURE admission: "+failure);throw;}
-    }
-}
-internal sealed class DiagnosticLauncher(IPrivateAppLauncher inner):IPrivateAppLauncher
-{
-    public async Task<IContainedAppSession> StartAsync(AppRelease release,CancellationToken cancellation)
-    {try{return await inner.StartAsync(release,cancellation);}catch(Exception failure){Console.WriteLine("FIXTURE launch: "+failure);throw;}}
-    public async Task WaitForHealthyAsync(IContainedAppSession session,CancellationToken cancellation)
-    {try{await inner.WaitForHealthyAsync(session,cancellation);}catch(Exception failure){Console.WriteLine("FIXTURE health: "+failure);throw;}}
-}
-internal sealed class DiagnosticBarrier(IAppRecoveryBarrier inner):IAppRecoveryBarrier
-{
-    public async Task RequireStartAllowedAsync(AppRelease release,CancellationToken cancellation)
-    {try{await inner.RequireStartAllowedAsync(release,cancellation);}catch(Exception failure){Console.WriteLine("FIXTURE barrier: "+failure);throw;}}
 }

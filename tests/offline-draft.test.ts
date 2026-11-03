@@ -9,16 +9,11 @@ function harness(extra: Record<string, unknown> = {}) {
   const source = readFileSync(new URL('../web/main.tsx', import.meta.url), 'utf8');
   const start = source.indexOf('function Composer('), end = source.indexOf('  return (\n    <div className="composer-wrap"', start);
   assert.ok(end > start);
-  const idleSource = readFileSync(new URL('../web/useUpdateIdleLease.ts', import.meta.url), 'utf8');
-  const idleStart = idleSource.indexOf('type Blocker ='), idleEnd = idleSource.indexOf('const freeze =', idleStart);
-  assert.ok(idleStart >= 0 && idleEnd > idleStart);
-  // Execute the real blocker hook in the same synthetic hook runtime as Composer.
-  const idleCode = idleSource.slice(idleStart, idleEnd).replace('export function useUpdateIdleBlocker', 'function useUpdateIdleBlocker');
-  const code = ts.transpileModule(`${idleCode}\n${source.slice(start, end)} return {text, setText, file, setFile, voice, setVoice, id, send, record, sendUncertain, checkSend}; }; ({ Composer, idleSafe: safe });`,
+  const code = ts.transpileModule(`${source.slice(start, end)} return {text, setText, file, setFile, voice, setVoice, id, send, record, sendUncertain, checkSend}; }; Composer;`,
     { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   let cursor = 0, nextId = 0; const slots: any[] = [], effects: (() => void)[] = [];
   const requests: { path: string; method: string; body: any; resolve: (result?: any) => void; reject: (e: Error) => void }[] = [];
-  const { Composer, idleSafe } = vm.runInNewContext(code, {
+  const Composer = vm.runInNewContext(code, {
     useState(value: any) { const i = cursor++; if (!(i in slots)) slots[i] = value;
       return [slots[i], (v: any) => { slots[i] = typeof v === 'function' ? v(slots[i]) : v; }]; },
     useRef(value: any) { const i = cursor++; return slots[i] ||= { current: value }; },
@@ -30,25 +25,12 @@ function harness(extra: Record<string, unknown> = {}) {
     URL: { createObjectURL() { return 'blob:synthetic'; }, revokeObjectURL() {} },
     ...extra,
   });
-  let props: any = { identity: 'synthetic-parent', group: 'synthetic-group', messages: [], caps: {}, enabled: true, suspended: false, editing: null, reply: null, onBusyChange() {}, onError() {}, onSent() {} };
+  let props: any = { group: 'synthetic-group', messages: [], caps: {}, enabled: true, suspended: false, editing: null, reply: null, onBusyChange() {}, onError() {}, onSent() {} };
   const render = () => { cursor = 0; return Composer(props); };
   const flush = (patch = {}) => { props = { ...props, ...patch }; let result = render();
     while (effects.length) { effects.splice(0).forEach(fn => fn()); result = render(); } return result; };
-  return { flush, requests, idleSafe: idleSafe as () => boolean };
+  return { flush, requests };
 }
-
-test('draft edits and attachment removal update the actual updater blocker', () => {
-  const h = harness(); let state = h.flush();
-  assert.equal(h.idleSafe(), true);
-  state.setText('synthetic draft'); state = h.flush();
-  assert.equal(h.idleSafe(), false);
-  state.setText(''); state = h.flush();
-  assert.equal(h.idleSafe(), true);
-  state.setFile({ name: 'synthetic.txt' }); state = h.flush();
-  assert.equal(h.idleSafe(), false);
-  state.setFile(null); h.flush();
-  assert.equal(h.idleSafe(), true);
-});
 
 test('temporary disconnect retains typed draft and idempotency key, blocks send, and resumes after verification', async () => {
   const h = harness(); let state = h.flush();
@@ -63,11 +45,9 @@ test('temporary disconnect retains typed draft and idempotency key, blocks send,
   state = h.flush({ suspended: false, enabled: true });
   await state.send(); assert.equal(h.requests.length, 1, 'unknown result never triggers another POST');
   assert.equal(state.sendUncertain, true);
-  assert.equal(h.idleSafe(), false, 'an unknown send cannot release updater admission');
   const check = state.checkSend(); assert.equal(h.requests[1].method, 'GET');
   assert.ok(h.requests[1].path.endsWith('/outgoing/' + id));
   h.requests[1].resolve({ state: 'confirmed' }); await check; assert.equal(h.flush().text, '');
-  assert.equal(h.idleSafe(), true, 'a settled send with no draft releases the blocker');
 });
 
 test('local attachments survive suspension; copied message edit content does not', () => {

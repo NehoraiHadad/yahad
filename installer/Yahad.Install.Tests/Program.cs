@@ -162,18 +162,10 @@ await Check("multiple adapters require explicit current selection", async () =>
     Assert(choices.Count == 2); Assert(NetworkPlan.LanOrigin(choices, "ethernet", "192.168.4.10") == "https://192.168.4.10");
     await Reject(() => { NetworkPlan.LanOrigin(choices, "ethernet", "192.168.4.11"); return Task.CompletedTask; });
 });
-await Check("occupied loopback port is a recoverable conflict", () =>
-{
-    var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0); listener.Server.ExclusiveAddressUse = true; listener.Start();
-    try { var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port; Assert(!NetworkPlan.CanBindLoopback(port)); }
-    finally { listener.Stop(); }
-    return Task.CompletedTask;
-});
 await NativeBoundaryTests.Run(root, Check);
 await InstallerPlanningTests.Run(Check);
 await LanDeploymentTests.Run(Check);
 await AppLifecycleTests.Run(Check);
-await UpdateRecoveryTests.Run(Check);
 await LifecycleCleanupTests.Run(root,Check);
 var report = JsonSerializer.Serialize(new { platform = "Windows x64", kind = "synthetic-nonprivileged", passed = results.Count - failed, failed, tests = results }, new JsonSerializerOptions { WriteIndented = true });
 if (args is ["--report", var reportPath]) File.WriteAllText(reportPath, report);

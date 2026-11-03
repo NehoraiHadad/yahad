@@ -1,7 +1,7 @@
 # Windows native builds
 
-This directory contains the native installer, Windows service hosts, protected
-updater and their tests. The current package remains a development candidate:
+This directory contains the native installer, the Windows service host and
+their tests. The current package remains a development candidate:
 [Runtime installation acceptance is incomplete](../docs/VALIDATION.md).
 Building a package does not install it or prove native acceptance.
 
@@ -12,18 +12,18 @@ Use Windows x64, .NET 10 SDK, Node 24 and PowerShell 7. Start with
 
 ```powershell
 ./installer/build.ps1
-./tests/windows-updater/run.ps1 -DotNet (Get-Command dotnet).Source
+./installer/ci-test-suites.ps1 -Suite Install -DotNet (Get-Command dotnet).Source -Node (Get-Command node).Source -PackageCache C:/build-cache/nuget -Output .local/suites/Install
 ```
 
 `build.ps1 -Publish` publishes the Setup executable and the Platform helper. It
-does **not** create the complete app/updater installer.
+does **not** create the complete installer.
 
-## Standalone app + updater installer
+## Standalone installer
 
 The tracked `installer/package.ps1` replaces machine-specific private build wrappers.
 It calls the existing Python package validators and native projects. It derives the
 version from package.json, requires clean committed source and new output, rebuilds
-web assets, publishes the four project components, assembles the full payload and
+web assets, publishes the project components, assembles the full payload and
 embeds it in one self-contained Setup executable. It then runs **read-only**
 `--verify-package` and checks exact source/ZIP identities. It does not install,
 register services, change ACLs/firewall/trust or publish a release.

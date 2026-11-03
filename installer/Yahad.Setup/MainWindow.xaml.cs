@@ -8,11 +8,11 @@ namespace Yahad.Setup;
 public partial class MainWindow:Window
 {
     private bool running,completed;private readonly bool uninstall;private SetupResult? result;private readonly UninstallChoice choice=new();
-    internal MainWindow(bool uninstall=false,IReadOnlyList<LanChoice>? lanChoices=null,bool? existingAccess=null,bool? fullSystemProfile=null,bool? existingUpdate=null)
+    internal MainWindow(bool uninstall=false,IReadOnlyList<LanChoice>? lanChoices=null,bool? existingAccess=null,bool? existingUpdate=null)
     {
         InitializeComponent();VersionBadge.Text=ApplicationRelease.Version+" · Windows";this.uninstall=uninstall;Closing+=OnClosing;InitializeLan(lanChoices,existingAccess??(lanChoices is null&&HasExistingAccess()));
-        InitializeUpdate(fullSystemProfile??true,existingUpdate??HasExistingUpdateInstallation());
-        if(!uninstall&&(existingAccess??(System.IO.File.Exists(InstallLocations.InstallerImage)||PendingRemoval()))||!uninstall&&fullUpdateProfile&&existingUpdateProfile)RemovalEntry.Visibility=Visibility.Visible;
+        InitializeUpdate(existingUpdate??HasExistingUpdateInstallation());
+        if(!uninstall&&(existingAccess??(System.IO.File.Exists(InstallLocations.InstallerImage)||PendingRemoval()))||!uninstall&&existingUpdateProfile)RemovalEntry.Visibility=Visibility.Visible;
         if(uninstall)
         {
             Title="יחד | הסרה";Eyebrow.Text="הסרת יחד";Heading.Text="מסירים את יחד.\nמה עושים עם הנתונים?";

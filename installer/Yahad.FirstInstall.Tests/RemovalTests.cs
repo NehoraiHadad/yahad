@@ -33,7 +33,7 @@ internal static class RemovalTests
         using(WindowsFileBoundary.PinPrivateDirectory(root))
         {
             var plan=Plan(root);try{plan.DeleteContents((path,dir)=>{if(++count==2)throw new IOException("synthetic disk failure");Delete(path,dir);},_=>{},default);throw new Exception("fault ignored");}catch(IOException){}
-            Require(File.Exists(journal)&&Directory.Exists(root));UninstallChoice.RequireSameIntent(File.ReadAllText(journal),UninstallMode.DeleteData);Plan(root).DeleteContents(Delete,_=>{},default);
+            Require(File.Exists(journal)&&Directory.Exists(root));Plan(root).DeleteContents(Delete,_=>{},default);
         }
         Delete(root,true);Require(!Directory.Exists(root)&&File.Exists(journal));
         var cancelled=Root();using var stop=new CancellationTokenSource();stop.Cancel();using(WindowsFileBoundary.PinPrivateDirectory(cancelled))

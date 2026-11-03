@@ -35,7 +35,7 @@ internal static class FullInstallerIntegrationTests
             // A sent STOP moving RUNNING to STOP_PENDING is what refused removal as a generation change.
             Assert(NativeRuntimeService.SameGeneration(42,3,42));Assert(NativeRuntimeService.SameGeneration(42,4,42));
             Assert(!NativeRuntimeService.SameGeneration(42,4,43));Assert(!NativeRuntimeService.SameGeneration(42,2,42));
-            NativeRuntimeService.RequireRemovalStopped(1,0);Deny(()=>NativeRuntimeService.RequireRemovalStopped(1,12));Deny(()=>NativeRuntimeService.RequireRemovalStopped(3,0));
+            NativeRuntimeService.RequireStopped(1,0);Deny(()=>NativeRuntimeService.RequireStopped(1,12));Deny(()=>NativeRuntimeService.RequireStopped(3,0));
             return Task.CompletedTask;
         });
         await check("the Runtime service restarts after 5 s, 30 s and 2 min over one day and removal clears every action",()=>
@@ -199,13 +199,6 @@ internal static class FullInstallerIntegrationTests
             DenyCode("LAN_JOURNAL_CHANGED",()=>LanWebConfiguration.RequireRecoverable(journal,state,_=>InstalledLaunch.Encode(new(1,state.InstallationId,state.DataId,state.Port,"https://192.168.4.6"))));
             DenyCode("LAN_JOURNAL_CHANGED",()=>LanWebConfiguration.RequireRecoverable(journal with{InstallationId=Guid.NewGuid().ToString("N")},state,_=>before.Installed));
             return Task.CompletedTask;
-        });
-        await check("local loopback bootstrap requires its exact immutable full-profile installation anchor",()=>
-        {
-            var id=Guid.NewGuid().ToString("N");
-            byte[] Anchor(string? full)=>Json(new{Format=1,InstallationId=id,RuntimeService=InstalledUpdaterLayout.RuntimeServiceName,AuthorityService=InstalledUpdaterLayout.AuthorityServiceName,IntakePolicyDigest=new string('a',64),IntakePinDigest=new string('b',64),ProbeSha256=new string('c',64),FullSystemPolicyDigest=full});
-            Assert(InstalledUpdaterLayout.AllowsLoopbackOrigin(Anchor(new string('d',64)),id));Assert(!InstalledUpdaterLayout.AllowsLoopbackOrigin(Anchor(null),id));
-            Deny(()=>InstalledUpdaterLayout.AllowsLoopbackOrigin(Anchor(new string('d',64)),Guid.NewGuid().ToString("N")));Deny(()=>InstalledUpdaterLayout.AllowsLoopbackOrigin(Anchor("bad"),id));return Task.CompletedTask;
         });
         await check("state-only preserved installation never displays a fresh updater consent choice",()=>
         {

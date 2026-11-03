@@ -1,5 +1,4 @@
-import type { WindowsUpdateTransport } from './windows-update-client.js';
-import type { UpdateIdleFence } from './update-idle.js';
+import type { WindowsUpdateTransport } from './windows-update-transport.js';
 import type { FirstOwnerIdentity } from './bootstrap.js';
 import {readOnlyKind} from './rich-content.js';
 import Fastify, { type FastifyRequest } from 'fastify';
@@ -45,7 +44,7 @@ declare module 'fastify' {
 }
 export async function createApp(
   config: Config,
-  options: { windowsUpdates?: WindowsUpdateTransport; updateIdle?: UpdateIdleFence; effectsReady?: () => boolean; store?: Store; factory?: (h: ConnectorHooks) => Connector; boot?: boolean;
+  options: { windowsUpdates?: WindowsUpdateTransport; store?: Store; factory?: (h: ConnectorHooks) => Connector; boot?: boolean;
     firstOwner?: FirstOwnerIdentity; bootstrap?: { token: string; expiresAt: number; firstOwner?: FirstOwnerIdentity } } = {},
 ) {
   const acceptedOrigins = new Set([config.origin,
@@ -58,22 +57,11 @@ export async function createApp(
   });
   const store = options.store || new Store(config);
   const initialOwner = options.firstOwner ?? options.bootstrap?.firstOwner;
-  options.updateIdle?.observeBusy(() => !store.one('SELECT 1 FROM families LIMIT 1') || !!initialOwner &&
-    !store.one("SELECT 1 FROM users WHERE family_id=? AND id=? AND role='parent'", initialOwner.familyId, initialOwner.parentUserId));
   const service = new ChatService(store, options.factory);
   store.diagnostics.start(store.all('SELECT id FROM families').map(x => x.id));
   const timings = new WeakMap<object, number>();
   app.addHook('onRequest', async req => {
     timings.set(req, performance.now());
-    if (options.effectsReady && !options.effectsReady() && req.url.startsWith('/api/')) throw new AppError(503, 'UPDATE_PROBATION');
-    if (options.updateIdle && req.url.startsWith('/api/')) {
-      try {
-        if (options.updateIdle.preparing) throw new Error();
-        // Count before authentication/session refresh can touch durable state.
-        // SSE is protected by the acknowledged browser lease instead.
-        if (!req.url.startsWith('/api/events')) updateRequests.set(req, options.updateIdle.enterRequest());
-      } catch { throw new AppError(503, 'UPDATE_PREPARING'); }
-    }
   });
   app.addHook('onResponse', async (req, reply) => {
     if (!req.session || req.url.startsWith('/api/parent/diagnostics') || req.url.startsWith('/api/parent/updates') || req.url.startsWith('/api/events')) return;
@@ -108,10 +96,6 @@ export async function createApp(
     } });
   };
   const activeUploads = new Set<string>();
-  options.updateIdle?.observeBusy(() => pending.size > 0 || preparing.size > 0 || activeUploads.size > 0);
-  const updateRequests = new WeakMap<object, () => void>();
-  app.addHook('onResponse', async req => { updateRequests.get(req)?.(); });
-  app.addHook('onRequestAbort', async req => { updateRequests.get(req)?.(); });
   app.decorateRequest('session', null as unknown as Session);
   app.setErrorHandler((error, req, reply) => {
     const e = error as any;
@@ -165,31 +149,6 @@ export async function createApp(
   };
   app.addHook('preHandler', async req => {
     if (req.url.split('?')[0].startsWith('/api/groups')) store.usage.require(req.session);
-  });
-  app.post('/api/update-idle/lease', async req => {
-    const body = z.object({ id: z.uuid(), generation: z.uuid(), previousGeneration: z.uuid().optional(), action: z.enum(['open', 'release']) }).strict().parse(req.body);
-    try { options.updateIdle?.lease(body.id, req.session.user.familyId + ':' + req.session.user.id, body.action, body.generation, body.previousGeneration); }
-    catch { throw new AppError(409, 'UPDATE_IDLE_REFUSED'); }
-    return { ok: true };
-  });
-  app.get('/api/update-idle/leases', async req => ({ leases: options.updateIdle?.inventory(req.session.user.familyId + ':' + req.session.user.id) ?? [] }));
-  app.post('/api/update-idle/settle', async req => {
-    const body = z.object({ leases: z.array(z.object({ id: z.uuid(), generation: z.uuid() }).strict()).max(128), confirmClosed: z.literal(true) }).strict().parse(req.body);
-    try { options.updateIdle?.settle(req.session.user.familyId + ':' + req.session.user.id, body.leases); }
-    catch { throw new AppError(409, 'UPDATE_IDLE_REFUSED'); }
-    return { ok: true };
-  });
-  app.post('/api/parent/updates/defer', async req => {
-    parent(req.session);
-    if (!options.windowsUpdates?.defer) throw new AppError(409, 'UPDATES_UNAVAILABLE');
-    const status = await updateStatus(config, req.session.user, options.windowsUpdates);
-    if (!status.configured || !status.enabled || status.stale) throw new AppError(409, 'UPDATES_UNAVAILABLE');
-    const body = z.object({ hours: z.number().int().min(1).max(24) }).strict().parse(req.body);
-    // A parent's defer only reduces background authority; no source or target
-    // selection enters this command and a lost reply is never retried here.
-    await options.windowsUpdates.defer({ id: randomUUID(), untilUnix: Math.floor(Date.now() / 1000) + body.hours * 3600,
-      familyId: req.session.user.familyId, userId: req.session.user.id });
-    return { state: 'queued' };
   });
   app.addHook('onSend', async (req, reply, payload) => {
     if (reply.statusCode < 400 && req.url.split('?')[0].startsWith('/api/groups') && req.session) {

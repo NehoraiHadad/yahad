@@ -1,7 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk">
-  <Import Project="../../installer/Directory.Build.props" />
-  <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
-  <!-- Separate executable using the existing production-test friend boundary.
-       No new production accessibility or activation switch is introduced. -->
-  <ItemGroup><ProjectReference Include="../../installer/Yahad.Authority/Yahad.Authority.csproj" /></ItemGroup>
-</Project>

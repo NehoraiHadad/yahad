@@ -30,9 +30,8 @@ internal sealed record InstallerState(int Format,string InstallationId,string Da
 }
 internal static class InstallLocations
 {
-    internal static string State=>InstalledUpdaterLayout.StateRoot;
-    internal static string Binaries=>InstalledUpdaterLayout.BinaryRoot;
-    internal static string Versions=>InstalledLaunch.VersionsRoot;
+    internal static string State=>InstalledLayout.StateRoot;
+    internal static string Binaries=>InstalledLayout.BinaryRoot;
     internal static string VersionRoot(string version){RequireVersion(version);return InstalledLaunch.VersionRoot(version);}
     internal static string ServiceImage(string version)=>Path.Combine(VersionRoot(version),"host","Yahad.ServiceHost.exe");
     internal static string ServiceCommand(string version)=>"\""+ServiceImage(version)+"\" --service";

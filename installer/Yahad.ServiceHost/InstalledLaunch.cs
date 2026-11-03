@@ -11,8 +11,8 @@ internal sealed record InstalledLaunchConfiguration(int Format,string Installati
 internal static class InstalledLaunch
 {
     internal const string FileName="installed.json";
-    internal static string StateRoot=>InstalledUpdaterLayout.StateRoot;
-    internal static string VersionsRoot=>Path.Combine(InstalledUpdaterLayout.BinaryRoot,"versions");
+    internal static string StateRoot=>InstalledLayout.StateRoot;
+    internal static string VersionsRoot=>Path.Combine(InstalledLayout.BinaryRoot,"versions");
     internal static string VersionRoot(string version)=>Path.Combine(VersionsRoot,version);
     internal static int Run()
     {
@@ -72,8 +72,8 @@ internal sealed class InstalledLaunchResolver(string root,string versionRoot,ICh
         cancellation.ThrowIfCancellationRequested();var held=new HeldResources();
         try
         {
-            var files=InstalledStateFiles.SingleService(root);held.Add(files.PinDirectory(files.Root));
-            var file=files.Open(Path.Combine(files.Root,InstalledLaunch.FileName));held.Add(file);var bytes=file.Small(4096);
+            var state=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(root));held.Add(WindowsFileBoundary.PinSingleServiceDirectory(state,true));
+            var file=WindowsFileBoundary.OpenInstalledRead(Path.Combine(state,InstalledLaunch.FileName));held.Add(file);var bytes=file.Small(4096);
             if(InstalledLaunch.Hash(bytes)!=binding.ActivationReceiptDigest)throw new IOException("INSTALLED_LAUNCH_CHANGED");
             var config=InstalledLaunch.Parse(bytes);if(config.InstallationId!=binding.InstallationId)throw new IOException("INSTALLED_LAUNCH_CHANGED");
             var origin=InstalledLaunch.Origin(config.Origin,config.Port);
@@ -81,19 +81,20 @@ internal sealed class InstalledLaunchResolver(string root,string versionRoot,ICh
             var binaries=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(versionRoot));held.Add(WindowsFileBoundary.PinSingleServiceDirectory(binaries,true));
             var node=Path.Combine(binaries,"payload","runtime","node","node.exe");var app=Path.Combine(binaries,"payload","app");
             held.Add(WindowsFileBoundary.OpenInstalledRead(node));held.Add(WindowsFileBoundary.PinSingleServiceDirectory(app,true));
-            var dataset=Path.Combine(files.Root,"datasets",config.DataId);held.Add(files.PinDirectory(dataset));
-            var key=Path.Combine(dataset,"master-key");held.Add(files.Open(key));
-            var temporary=files.RuntimeTemporary;held.Add(files.PinDirectory(temporary));
-            var data=Path.Combine(dataset,"data");var lease=files.Lease(data);held.Add(lease);
+            // Administrator-owned dataset and key; only temporary/ and data/ are application-writable.
+            var dataset=Path.Combine(state,"datasets",config.DataId);held.Add(WindowsFileBoundary.PinSingleServiceDirectory(dataset,true));
+            var key=Path.Combine(dataset,"master-key");held.Add(WindowsFileBoundary.OpenInstalledRead(key));
+            var temporary=Path.Combine(state,"temporary");held.Add(WindowsFileBoundary.PinSingleServiceDirectory(temporary,false));
+            var data=Path.Combine(dataset,"data");var lease=WindowsFileBoundary.AcquireDataLease(data);held.Add(lease);
             var connector=RuntimeConnectorSettings.For(connectorProfile);
             var environment=new Dictionary<string,string>{{"HOST","127.0.0.1"},{"PORT",config.Port.ToString(System.Globalization.CultureInfo.InvariantCulture)},
                 {"APP_ORIGIN",origin.GetLeftPart(UriPartial.Authority)},{"COOKIE_SECURE",origin.Scheme=="https"?"true":"false"},{"DATA_DIR",data},{"MASTER_KEY_FILE",key},
-                {"CONNECTOR",connector.Connector},{"ALLOW_REAL_WHATSAPP",connector.Approval},{"SETUP_CAPABILITY_FILE",Path.Combine(files.Root,"Secrets","setup-capability.json")}};
+                {"CONNECTOR",connector.Connector},{"ALLOW_REAL_WHATSAPP",connector.Approval},{"SETUP_CAPABILITY_FILE",Path.Combine(state,"Secrets","setup-capability.json")}};
             // LAN HTTPS keeps Secure cookies. Only the fixed local loopback origin
             // is added for bootstrap; remote origins are never inferred here.
             if(origin.Scheme=="https"&&NetworkPlan.IsPrivateLanV4(origin.Host))environment["APP_ADDITIONAL_ORIGINS"]=$"http://127.0.0.1:{config.Port}";
             var release=new AppRelease(ApplicationRelease.Version);
-            var spec=new VerifiedProcessSpec(node,["server/main.mjs"],app,temporary,Path.Combine(binaries,"payload","runtime","ffmpeg","ffmpeg.exe"),environment,lease,held.BeginMutableStart,files);
+            var spec=new VerifiedProcessSpec(node,["server/main.mjs"],app,temporary,Path.Combine(binaries,"payload","runtime","ffmpeg","ffmpeg.exe"),environment,lease,held.BeginMutableStart);
             var launcher=processFactory is null?new ServiceProcessLauncher(spec,channels):processFactory(spec)??throw new IOException("INSTALLED_PROCESS_FACTORY_NULL");
             held.Release=release.Id;
             return Task.FromResult(new AuthorizedServiceStart(release,launcher,held,held));

@@ -153,7 +153,7 @@ class WindowsBundleTests(unittest.TestCase):
         bundle.validate(self.prepared)
 
     def test_server_entries_are_pinned_by_bundle_record(self):
-        with (self.prepared/'app/server/native-supervisor.mjs').open('ab') as stream: stream.write(b'changed')
+        with (self.prepared/'app/server/main.mjs').open('ab') as stream: stream.write(b'changed')
         with self.assertRaisesRegex(bundle.BundleError,'Server bundle checksum'): bundle.validate(self.prepared)
         self.server(); value=json.loads((self.prepared/'legal/server-bundle.json').read_text()); value['packages'][0]['path']='../escape'
         self.put('legal/server-bundle.json',json.dumps(value))

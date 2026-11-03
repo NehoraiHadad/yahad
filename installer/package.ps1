@@ -81,7 +81,7 @@ try {
     $appZip = Join-Path $app "yahad-app-native-$version.zip"
     RunStep 'app-payload' $pythonExe @('-m','installer.windows.first_install_package','payload','--repo',$repo,'--core',"$app/core",'--vendors',"$app/vendors",'--full',"$app/full",'--node',$nodeRoot,'--dotnet',$dotnetRoot,'--npm-cache',$npmRoot,'--verified-vendor-source',$vendorRoot,'--archive',$appZip)
     $system = Join-Path $output 'system'
-    RunStep 'system-package' $pythonExe @('-m','installer.windows.full_system_package','--repo',$repo,'--payload-zip',$appZip,'--runtime-host',"$output/Yahad.ServiceHost",'--output',$system)
+    RunStep 'system-package' $pythonExe @('-m','installer.windows.setup_package','--repo',$repo,'--payload-zip',$appZip,'--runtime-host',"$output/Yahad.ServiceHost",'--output',$system)
     $setup = Join-Path $output 'setup'
     RunStep 'setup-publish' $dotnetExe (@('publish','installer/Yahad.Setup/Yahad.Setup.csproj') + $common + @('-p:PublishSingleFile=true','-p:IncludeNativeLibrariesForSelfExtract=true',"-p:SetupPayloadDirectory=$system",'-o',$setup))
     Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination (Join-Path $setup 'LICENSE')

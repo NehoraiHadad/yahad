@@ -14,7 +14,7 @@ import shutil
 import subprocess
 import tempfile
 from .application_version import source_release_version, require_native_build_identity, describe_build_artifact
-from .full_system_package import source_schema
+from .setup_package import source_schema
 
 
 def stage_public_lan_help(repo, app):

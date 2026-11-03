@@ -19,8 +19,6 @@ internal static class NativeInstallFiles
         SafeDirectory.NoReparseAncestors(path);var bytes=Bytes(descriptor);var pin=GCHandle.Alloc(bytes,GCHandleType.Pinned);var attributes=new Attributes{Length=Marshal.SizeOf<Attributes>(),Descriptor=pin.AddrOfPinnedObject()};
         try{if(!CreateDirectoryW(Extended(path),ref attributes))throw new Win32Exception();}finally{pin.Free();}
     }
-    internal static void SetOwnedDirectory(string path,string descriptor)
-    {SafeDirectory.NoReparseAncestors(path);var acl=new DirectorySecurity();acl.SetSecurityDescriptorSddlForm(descriptor,AccessControlSections.Owner|AccessControlSections.Access);new DirectoryInfo(path).SetAccessControl(acl);}
     internal static void SetOwnedFile(string path,string descriptor)
     {SafeDirectory.NoReparseAncestors(path);var acl=new FileSecurity();acl.SetSecurityDescriptorSddlForm(descriptor.Replace("OICI",""),AccessControlSections.Owner|AccessControlSections.Access);new FileInfo(path).SetAccessControl(acl);}
     internal static byte[] ReadOwned(string path,string serviceSid)

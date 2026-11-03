@@ -57,12 +57,4 @@ internal static class UninstallDiagnostics
         if(!File.Exists(InstallLocations.RemovalDiagnosticFile))return;
         RequireOwned(state);File.Delete(InstallLocations.RemovalDiagnosticFile);
     }
-    internal static void Complete(ref bool diagnosticAllowed,Action removeReceipt,Action notify)
-    {
-        removeReceipt();
-        // Once the last recovery anchor is gone, a failed final notification must not
-        // recreate an orphan diagnostic for an installation already removed.
-        diagnosticAllowed=false;
-        notify();
-    }
 }

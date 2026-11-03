@@ -31,11 +31,6 @@ foreach(var token in new[]{Good() with{UserSid="S-1-5-18"},Good() with{ServiceLo
 await Check("identity rejects "+JsonSerializer.Serialize(token),()=>
 {try{ServiceIdentityPolicy.Require(token,sid);throw new Exception("unsafe identity accepted");}catch(ServiceStartDenied){}return Task.CompletedTask;});
 await Check("dedicated identity policy accepts only expected minimal observation",()=>{ServiceIdentityPolicy.Require(Good(),sid);return Task.CompletedTask;});
-var descriptor=JsonSerializer.SerializeToUtf8Bytes(new{schema=1,service=ServiceDefinition.Name,installationId=new string('a',32),activationReceiptDigest=new string('b',64)});
-await Check("bootstrap descriptor exact schema parses",()=>{Assert(WindowsInstallationReader.Parse(descriptor).InstallationId==new string('a',32));return Task.CompletedTask;});
-foreach(var text in new[]{"{}","{\"schema\":1,\"schema\":1}",Encoding.UTF8.GetString(descriptor).Replace("Yahad.Acceptance","OtherService"),Encoding.UTF8.GetString(descriptor).Replace("\"schema\":1","\"schema\":1,\"executable\":\"evil.exe\"")})
-await Check("bootstrap rejects malformed duplicate foreign or executable fields "+text.Length,()=>
-{try{WindowsInstallationReader.Parse(Encoding.UTF8.GetBytes(text));throw new Exception("bad bootstrap accepted");}catch(IOException){}return Task.CompletedTask;});
 await Check("identity denial occurs before bootstrap or activation access",async()=>
 {
     var reader=new Reader();var resolver=new Resolver();var auth=new InstalledStartAuthorizer(new Tokens(Good() with{Administrator=true},sid),reader,resolver);
@@ -45,11 +40,6 @@ await Check("bootstrap ACL/read failure cannot reach activation",async()=>
 {
     var reader=new Reader{Denied=true};var resolver=new Resolver();var auth=new InstalledStartAuthorizer(new Tokens(Good(),sid),reader,resolver);
     try{await auth.AuthorizeAsync(default);throw new Exception("bootstrap failure accepted");}catch(ServiceStartDenied denied){Assert(denied.Failure==ServiceFailure.BootstrapUnavailable);}Assert(resolver.Calls==0);
-});
-await Check("default production activation resolver always fails closed",async()=>
-{
-    var auth=new InstalledStartAuthorizer(new Tokens(Good(),sid),new Reader(),new UnconfiguredActivationResolver());
-    try{await auth.AuthorizeAsync(default);throw new Exception("unprovisioned activation accepted");}catch(ServiceStartDenied denied){Assert(denied.Failure==ServiceFailure.ActivationUnavailable);}
 });
 await Check("SCM application registers before first status and rejects extra start arguments",()=>
 {
@@ -78,13 +68,19 @@ await Check("noncooperative read-only recovery barrier times out without launchi
     var app=new FakeApp{StuckRecovery=true};var reports=new List<ServiceReport>();var result=await new ServiceController(new TestAuthorization(app),TimeSpan.FromMilliseconds(150)).RunAsync(reports.Add).WaitAsync(TimeSpan.FromSeconds(3));
     Assert(result.Failure==ServiceFailure.StartFailed&&result.QuiescenceConfirmed&&!app.Calls.Contains("start")&&!reports.Any(r=>r.State==ServiceState.Running));
 });
-await Check("authorization returning after cancellation has its resources revoked",async()=>
+await Check("authorization returning within the stop window has its resources revoked",async()=>
 {
     var app=new FakeApp();var resource=new RevokedResource();var late=new LateAuthorization();var controller=new ServiceController(late);var reports=new List<ServiceReport>();var running=controller.RunAsync(reports.Add);
-    controller.Control(ServiceDefinition.Stop);await running.WaitAsync(TimeSpan.FromSeconds(3));late.Completion.TrySetResult(new(new("late"),app,app,resource));await controller.RetryAdmissionCleanupAsync(default);
-    await resource.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(3));Assert(app.Calls.Count==0&&!reports.Any(r=>r.State==ServiceState.Running));
+    controller.Control(ServiceDefinition.Stop);await late.Cancelled.Task.WaitAsync(TimeSpan.FromSeconds(3));late.Completion.TrySetResult(new(new("late"),app,app,resource));var result=await running.WaitAsync(TimeSpan.FromSeconds(3));
+    await resource.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(3));Assert(result.QuiescenceConfirmed&&app.Calls.Count==0&&!reports.Any(r=>r.State==ServiceState.Running));
     // STOP is advertised while starting, so the SCM delivers it instead of refusing with 1052.
     Assert(reports.Any(r=>r.State==ServiceState.StartPending)&&reports.Where(r=>r.State==ServiceState.StartPending).All(r=>r.AcceptedControls==5));
+});
+await Check("authorization still pending after the stop window cannot report a confirmed stop",async()=>
+{
+    var app=new FakeApp();var late=new LateAuthorization();var controller=new ServiceController(late);var reports=new List<ServiceReport>();var running=controller.RunAsync(reports.Add);
+    controller.Control(ServiceDefinition.Stop);var result=await running.WaitAsync(TimeSpan.FromSeconds(3));
+    Assert(!result.QuiescenceConfirmed&&result.Failure==ServiceFailure.QuiescenceUnknown&&app.Calls.Count==0&&!reports.Any(r=>r.State==ServiceState.Running));
 });
 await Check("normal lifecycle reports real milestones and graceful stop before STOPPED",async()=>
 {
@@ -95,21 +91,11 @@ await Check("normal lifecycle reports real milestones and graceful stop before S
     Assert(reports.All(r=>r.State is ServiceState.Running or ServiceState.StartPending?r.AcceptedControls==5:r.AcceptedControls==0));Assert(reports[^1].State==ServiceState.Stopped&&reports[^1].Win32ExitCode==0);
     Assert(controller.Control(ServiceDefinition.Stop)==1062&&controller.Control(ServiceDefinition.Interrogate)==0&&controller.Control(128)==120);
 });
-await Check("Authority STOP of a Runtime already stopping is underway, not a cleanup failure",async()=>
+await Check("a stopping service accepts no further controls",async()=>
 {
-    // A stopping Runtime publishes STOP_PENDING with no accepted controls, so
-    // the SCM answers a concurrent second STOP (Setup's and the Authority's)
-    // with ERROR_SERVICE_CANNOT_ACCEPT_CTRL (1061).
     var app=new FakeApp();var controller=new ServiceController(new TestAuthorization(app));var reports=new List<ServiceReport>();
     _=await controller.RunAsync(r=>{reports.Add(r);if(r.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);});
     Assert(reports.Any(r=>r.State==ServiceState.StopPending)&&reports.Where(r=>r.State==ServiceState.StopPending).All(r=>(r.AcceptedControls&1)==0));
-    Assert(WindowsFixedRuntimeService.StopUnderway((uint)ServiceState.StopPending)&&WindowsFixedRuntimeService.StopUnderway((uint)ServiceState.Stopped));
-    Assert(!WindowsFixedRuntimeService.StopUnderway((uint)ServiceState.Running)&&!WindowsFixedRuntimeService.StopUnderway((uint)ServiceState.StartPending));
-    Assert(WindowsFixedRuntimeService.StopRefusalUnderway(1061,(uint)ServiceState.StopPending)&&WindowsFixedRuntimeService.StopRefusalUnderway(1061,(uint)ServiceState.Stopped));
-    Assert(WindowsFixedRuntimeService.StopRefusalUnderway(1062,(uint)ServiceState.Running));
-    // Any other refusal, or 1061 while the Runtime still runs or starts, fails.
-    foreach(var state in new[]{ServiceState.Running,ServiceState.StartPending})Assert(!WindowsFixedRuntimeService.StopRefusalUnderway(1061,(uint)state));
-    foreach(var error in new[]{5,1052,1051})Assert(!WindowsFixedRuntimeService.StopRefusalUnderway(error,(uint)ServiceState.StopPending));
 });
 foreach(var control in new[]{ServiceDefinition.Stop,ServiceDefinition.Shutdown})
 foreach(var phase in new[]{"graceful","root","tree"})
@@ -140,7 +126,6 @@ await Check("status transport failure triggers failed exit without false readine
 {
     var api=new FakeScm{RejectStatus=true};var fatal=0;Assert(new ServiceApplication(api,new TestAuthorization(new FakeApp()),_=>fatal++).Run()==1&&fatal==1);return Task.CompletedTask;
 });
-await Check("service host has no payload update authority",async()=>{await Reject(()=>new NoHostUpdateAuthority().ActivateAsync(new("candidate"),null!,default));});
 
 foreach(var mode in new[]{"normal","bad-peer","timeout","unexpected"})
 await Check("non-listening real native job with synthetic control channel: "+mode,async()=>
@@ -290,7 +275,12 @@ internal static class ChildScript
 internal sealed class RevokedResource:IDisposable
 {internal readonly TaskCompletionSource Disposed=new(TaskCreationOptions.RunContinuationsAsynchronously);public void Dispose()=>Disposed.TrySetResult();}
 internal sealed class LateAuthorization:IServiceStartAuthorizer
-{internal readonly TaskCompletionSource<AuthorizedServiceStart> Completion=new(TaskCreationOptions.RunContinuationsAsynchronously);public Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)=>Completion.Task;}
+{
+    internal readonly TaskCompletionSource<AuthorizedServiceStart> Completion=new(TaskCreationOptions.RunContinuationsAsynchronously);
+    // Set once startup has seen the stop, so a later result is "late" by observation, not by timing.
+    internal readonly TaskCompletionSource Cancelled=new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation){cancellation.Register(()=>Cancelled.TrySetResult());return Completion.Task;}
+}
 
 internal sealed class ObservedTestAuthorizer(FakeApp app):IServiceStartAuthorizer,IObservedAdmission
 {

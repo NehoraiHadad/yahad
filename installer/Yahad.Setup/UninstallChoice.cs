@@ -13,6 +13,4 @@ internal sealed class UninstallChoice
     internal static string Phase(UninstallMode mode){Require(mode);return mode==UninstallMode.DeleteData?"removing_all_data":"removing_keep_data";}
     internal static bool SameInstallation(InstallerState expected,InstallerState actual)=>
         expected with{Phase=actual.Phase,Files=actual.Files}==actual&&expected.Files.SequenceEqual(actual.Files);
-    internal static void RequireSameIntent(string phase,UninstallMode mode)
-    {Require(mode);if(phase.StartsWith("removing_",StringComparison.Ordinal)&&phase!=Phase(mode))throw new IOException("UNINSTALL_MODE_CHANGED");}
 }

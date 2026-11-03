@@ -73,9 +73,9 @@ internal sealed class StoreFixtureModules
         {
             SafeDirectory.NoReparseAncestors(path);
             if((File.GetAttributes(path)&FileAttributes.ReparsePoint)!=0)throw new IOException("STORE_FIXTURE_LINKED_INPUT");
-            text.Append(Path.GetRelativePath(relativeTo,path)).Append('\0').Append(ProductionFixture.Hash(File.ReadAllBytes(path))).Append('\n');
+            text.Append(Path.GetRelativePath(relativeTo,path)).Append('\0').Append(StoreFixture.Hash(File.ReadAllBytes(path))).Append('\n');
         }
-        return ProductionFixture.Hash(Encoding.UTF8.GetBytes(text.ToString()));
+        return StoreFixture.Hash(Encoding.UTF8.GetBytes(text.ToString()));
     }
     private static IReadOnlyList<string> TreeFiles(string root)
     {
@@ -112,7 +112,7 @@ internal sealed class StoreFixtureModules
         SafeDirectory.NoReparseAncestors(node);SafeDirectory.NoReparseAncestors(arguments[0]);
         FixtureProcesses.JobOwner seed;
         try{seed=processes.StartJob(node,arguments,repo,LaunchEnvironment.Clean(temporary));}
-        catch(JobStartQuiescenceUnconfirmedException failure){throw await ProductionFixture.StopPreparation(failure.OwnedProcess,failure);}
+        catch(JobStartQuiescenceUnconfirmedException failure){throw await StoreFixture.StopPreparation(failure.OwnedProcess,failure);}
         catch(Exception failure){throw new FixturePreparationException(true,failure);}
         using var jobOwner=seed;var job=seed.Process;using var bound=new CancellationTokenSource(TimeSpan.FromSeconds(120));
         try
@@ -120,12 +120,12 @@ internal sealed class StoreFixtureModules
             if(await job.WaitAsync(bound.Token)!=0)throw new IOException("STORE_FIXTURE_TYPESCRIPT_COMPILATION_FAILED");
             await job.WaitForTreeEmptyAsync(bound.Token);
         }
-        catch(Exception failure){throw await ProductionFixture.StopPreparation(job,failure);}
+        catch(Exception failure){throw await StoreFixture.StopPreparation(job,failure);}
         if(SourceFingerprint(node,repo)!=fingerprint||!File.Exists(Path.Combine(output,"store.js"))||!File.Exists(Path.Combine(output,"platform-files.js")))
             throw new IOException("STORE_FIXTURE_COMPILED_INPUT_CHANGED");
         var result=new StoreFixtureModules(node,repo,fingerprint,owned,output,processes);
         Console.Error.WriteLine("FIXTURE_STORE_COMPILED "+JsonSerializer.Serialize(new{files=Directory.GetFiles(output,"*",SearchOption.AllDirectories).Length,source=fingerprint,emitted=result.outputFingerprint}));
         return result;
-        }catch(Exception failure){processes.Retain(failure);try{await processes.CleanupAsync();owned.Cleanup(()=>processes.Confirmed);}catch(Exception cleanup){throw new AggregateException(failure,cleanup);}throw;}
+        }catch(Exception failure){try{await processes.CleanupAsync();owned.Cleanup(()=>processes.Confirmed);}catch(Exception cleanup){throw new AggregateException(failure,cleanup);}throw;}
     }
 }

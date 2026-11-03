@@ -1,6 +1,6 @@
 namespace Yahad.Install;
 
-public enum AppLifecycleState { Stopped, Starting, Running, Quiescing, Activating, RecoveryRequired }
+public enum AppLifecycleState { Stopped, Starting, Running, Quiescing, RecoveryRequired }
 
 /// <summary>A release identity, never an arbitrary executable supplied by UI.</summary>
 public sealed record AppRelease(string Id);
@@ -20,48 +20,29 @@ public interface IPrivateAppLauncher
 }
 public interface IAppRecoveryBarrier
 {
-    // Includes durable update/recovery journal, data schema, policy/pins and backup barriers.
     Task RequireStartAllowedAsync(AppRelease release, CancellationToken cancellation);
 }
 
-/// <summary>Only a completed graceful shutdown plus an empty native job can issue this grant.</summary>
-public sealed class QuiescentApp
-{
-    public AppRelease PreviousRelease { get; }
-    internal QuiescentApp(AppRelease previous) { PreviousRelease = previous; }
-}
-public interface IAppUpdateAuthority
-{
-    // The existing updater owns signature/policy verification, versioned payloads,
-    // backups, durable activation and recovery. The installer never copies a live DB.
-    Task<AppRelease> ActivateAsync(AppRelease requested, QuiescentApp quiescence, CancellationToken cancellation);
-}
-
-/// <summary>Host/update boundary; no SCM, filesystem activation or database implementation.</summary>
+/// <summary>Start and stop of one contained app session; no SCM or database implementation.</summary>
 public sealed class AppLifecycle : IAsyncDisposable
 {
     private readonly IPrivateAppLauncher launcher;
     private readonly IAppRecoveryBarrier recovery;
-    private readonly IAppUpdateAuthority updater;
     private readonly TimeSpan deadline,startupDeadline;
     private readonly SemaphoreSlim serial = new(1, 1);
+    private readonly AppRelease active;
     private IContainedAppSession? session;
-    private AppRelease active;
     private bool disposed;
-    public bool QuiescenceReconciliationRequired => session is not null && State == AppLifecycleState.RecoveryRequired;
     public AppLifecycleState State { get; private set; } = AppLifecycleState.Stopped;
 
     public AppLifecycle(AppRelease active, IPrivateAppLauncher launcher, IAppRecoveryBarrier recovery,
-        IAppUpdateAuthority updater, TimeSpan deadline, TimeSpan? startupDeadline=null)
+        TimeSpan deadline, TimeSpan? startupDeadline=null)
     {
         if (deadline <= TimeSpan.Zero || deadline > TimeSpan.FromMinutes(5)) throw new ArgumentOutOfRangeException(nameof(deadline));
-        this.active = active; this.launcher = launcher; this.recovery = recovery; this.updater = updater; this.deadline = deadline;
+        this.active = active; this.launcher = launcher; this.recovery = recovery; this.deadline = deadline;
         this.startupDeadline=startupDeadline??deadline;
         if(this.startupDeadline<=TimeSpan.Zero||this.startupDeadline>TimeSpan.FromMinutes(5))throw new ArgumentOutOfRangeException(nameof(startupDeadline));
     }
-    private AppLifecycle(AppRelease release,IContainedAppSession failed)
-    {active=release;session=failed;launcher=null!;recovery=null!;updater=null!;deadline=TimeSpan.FromSeconds(10);startupDeadline=deadline;State=AppLifecycleState.RecoveryRequired;}
-    public static AppLifecycle RetainFailedAdmission(IContainedAppSession failed)=>new(new("failed-admission"),failed);
     private CancellationTokenSource Bound(CancellationToken cancellation,TimeSpan? timeout=null)
     { var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellation); bounded.CancelAfter(timeout??deadline); return bounded; }
     private void Require(AppLifecycleState state)
@@ -87,7 +68,7 @@ public sealed class AppLifecycle : IAsyncDisposable
         await launcher.WaitForHealthyAsync(session, cancellation).WaitAsync(cancellation);
         State = AppLifecycleState.Running;
     }
-    private async Task<QuiescentApp> QuiesceAsync(CancellationToken cancellation)
+    private async Task QuiesceAsync(CancellationToken cancellation)
     {
         State = AppLifecycleState.Quiescing;
         var running = session ?? throw new InvalidOperationException("SESSION_REQUIRED");
@@ -96,7 +77,6 @@ public sealed class AppLifecycle : IAsyncDisposable
         await running.WaitForTreeEmptyAsync(cancellation).WaitAsync(cancellation);
         cancellation.ThrowIfCancellationRequested();
         await running.DisposeAsync(); session = null;
-        return new(active);
     }
     public async Task StopAsync(CancellationToken cancellation = default)
     {
@@ -106,27 +86,6 @@ public sealed class AppLifecycle : IAsyncDisposable
             Require(AppLifecycleState.Running);
             using var bounded = Bound(cancellation);
             try { await QuiesceAsync(bounded.Token); State = AppLifecycleState.Stopped; }
-            catch { await FailAndCleanAsync(); throw; }
-        }
-        finally { serial.Release(); }
-    }
-    public async Task UpdateAsync(AppRelease requested, CancellationToken cancellation = default)
-    {
-        await serial.WaitAsync(cancellation);
-        try
-        {
-            Require(AppLifecycleState.Running);
-            using var bounded = Bound(cancellation);
-            try
-            {
-                var grant = await QuiesceAsync(bounded.Token);
-                bounded.Token.ThrowIfCancellationRequested();
-                State = AppLifecycleState.Activating;
-                active = await updater.ActivateAsync(requested, grant, bounded.Token);
-                await StartCoreAsync(bounded.Token);
-            }
-            // Activation/start may already have changed the schema. Never relaunch
-            // the old app or overwrite data as a generic catch/rollback action.
             catch { await FailAndCleanAsync(); throw; }
         }
         finally { serial.Release(); }
@@ -143,8 +102,7 @@ public sealed class AppLifecycle : IAsyncDisposable
         }
         catch
         {
-            // Retain ownership and recovery quarantine when quiescence is unknown.
-            // No restore, activation grant or restart is issued from this path.
+            // Retain ownership when quiescence is unknown; nothing restarts from this path.
         }
     }
     public async ValueTask DisposeAsync()
