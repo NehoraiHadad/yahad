@@ -24,7 +24,8 @@ def image(imports=(), machine=0x8664, managed=False):
 
 class WindowsBundleTests(unittest.TestCase):
     def setUp(self):
-        self.root=Path(tempfile.mkdtemp(prefix='yahad-windows-bundle-')); self.prepared=self.root/'prepared'; self.prepared.mkdir()
+        temporary=tempfile.TemporaryDirectory(prefix='yahad-windows-bundle-'); self.addCleanup(temporary.cleanup)
+        self.root=Path(temporary.name); self.prepared=self.root/'prepared'; self.prepared.mkdir()
         for name in (*bundle.BASE_REQUIRED,*bundle.FULL_REQUIRED): self.put(name,'fixture')
         self.put('app/package.json',json.dumps({'version':'0.5.2','engines':{'node':'>=24.0.0 <25'},'dependencies':{'tsx':'4.20.6'}}))
         self.put('app/native/Yahad.Platform.runtimeconfig.json',json.dumps({'runtimeOptions':{'includedFrameworks':[{'name':'Microsoft.NETCore.App','version':'10.0.14'}]}}))
