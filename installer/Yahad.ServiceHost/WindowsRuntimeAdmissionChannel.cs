@@ -100,11 +100,17 @@ internal sealed class WindowsFixedRuntimeService:IDisposable
     {if(!QueryServiceStatusEx(service,0,out var value,(uint)Marshal.SizeOf<ServiceStatus>(),out _))throw new Win32Exception();if(value.Type!=16)throw new UnauthorizedAccessException("RUNTIME_SERVICE_TYPE");return(value.State,value.Pid);}
     internal void Start()
     {RequireConfiguration();if(Status().State!=1)throw new IOException("RUNTIME_SERVICE_ALREADY_ACTIVE");if(!StartServiceW(service,0,IntPtr.Zero))throw new Win32Exception();}
+    // Setup's removal/maintenance STOP reaches the Runtime concurrently with the
+    // Authority's own. A STOP_PENDING Runtime accepts no controls, so the SCM
+    // refuses the second STOP with 1061: the requested stop is then already
+    // underway, not failed. Callers still observe host exit and an empty job.
+    internal static bool StopUnderway(uint state)=>state is 1 or 3;
+    internal static bool StopRefusalUnderway(int error,uint state)=>error==1062||error==1061&&StopUnderway(state);
     internal void Stop()
     {
-        RequireConfiguration();var status=Status();if(status.State==1)return;
+        RequireConfiguration();if(StopUnderway(Status().State))return;
         if(!ControlService(service,1,out _))
-        {var error=Marshal.GetLastWin32Error();if(error!=1062)throw new Win32Exception(error);}
+        {var error=Marshal.GetLastWin32Error();if(!StopRefusalUnderway(error,Status().State))throw new Win32Exception(error);}
     }
     internal WindowsPinnedServiceProcess Pin(uint expectedPid,uint rights)
     {

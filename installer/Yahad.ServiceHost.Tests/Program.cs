@@ -95,6 +95,22 @@ await Check("normal lifecycle reports real milestones and graceful stop before S
     Assert(reports.All(r=>r.State is ServiceState.Running or ServiceState.StartPending?r.AcceptedControls==5:r.AcceptedControls==0));Assert(reports[^1].State==ServiceState.Stopped&&reports[^1].Win32ExitCode==0);
     Assert(controller.Control(ServiceDefinition.Stop)==1062&&controller.Control(ServiceDefinition.Interrogate)==0&&controller.Control(128)==120);
 });
+await Check("Authority STOP of a Runtime already stopping is underway, not a cleanup failure",async()=>
+{
+    // A stopping Runtime publishes STOP_PENDING with no accepted controls, so
+    // the SCM answers a concurrent second STOP (Setup's and the Authority's)
+    // with ERROR_SERVICE_CANNOT_ACCEPT_CTRL (1061).
+    var app=new FakeApp();var controller=new ServiceController(new TestAuthorization(app));var reports=new List<ServiceReport>();
+    _=await controller.RunAsync(r=>{reports.Add(r);if(r.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);});
+    Assert(reports.Any(r=>r.State==ServiceState.StopPending)&&reports.Where(r=>r.State==ServiceState.StopPending).All(r=>(r.AcceptedControls&1)==0));
+    Assert(WindowsFixedRuntimeService.StopUnderway((uint)ServiceState.StopPending)&&WindowsFixedRuntimeService.StopUnderway((uint)ServiceState.Stopped));
+    Assert(!WindowsFixedRuntimeService.StopUnderway((uint)ServiceState.Running)&&!WindowsFixedRuntimeService.StopUnderway((uint)ServiceState.StartPending));
+    Assert(WindowsFixedRuntimeService.StopRefusalUnderway(1061,(uint)ServiceState.StopPending)&&WindowsFixedRuntimeService.StopRefusalUnderway(1061,(uint)ServiceState.Stopped));
+    Assert(WindowsFixedRuntimeService.StopRefusalUnderway(1062,(uint)ServiceState.Running));
+    // Any other refusal, or 1061 while the Runtime still runs or starts, fails.
+    foreach(var state in new[]{ServiceState.Running,ServiceState.StartPending})Assert(!WindowsFixedRuntimeService.StopRefusalUnderway(1061,(uint)state));
+    foreach(var error in new[]{5,1052,1051})Assert(!WindowsFixedRuntimeService.StopRefusalUnderway(error,(uint)ServiceState.StopPending));
+});
 foreach(var control in new[]{ServiceDefinition.Stop,ServiceDefinition.Shutdown})
 foreach(var phase in new[]{"graceful","root","tree"})
 await Check("requested control "+control+" with stuck "+phase+" stop reports failure after forced cleanup",async()=>
