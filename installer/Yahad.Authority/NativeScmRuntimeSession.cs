@@ -185,7 +185,10 @@ internal sealed class NativeScmRuntimeSession:IRetainedScmMigrationSession,IReta
     {
         if(!startRequested)return;
         if(host is null)throw new IOException("RUNTIME_STOP_HOST_UNOBSERVED");
-        var status=service!.Status();if(status.State!=1)
+        // A Runtime already STOP_PENDING (a concurrent Setup STOP or SCM
+        // SHUTDOWN) needs no signal; only a STOP actually sent is bound to the
+        // pinned PID. Either way the owned host and job prove the exit below.
+        var status=service!.Status();if(!WindowsFixedRuntimeService.StopUnderway(status.State))
         {
             if(status.Pid!=host.Pid)throw new UnauthorizedAccessException("RUNTIME_STOP_GENERATION_CHANGED");service.Stop();
         }

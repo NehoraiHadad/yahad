@@ -198,7 +198,14 @@ internal sealed class WindowsScmRuntimeLifecycle:IAuthorityProbationLifecycle,IA
         {
             if(!started)throw new IOException("RUNTIME_NOT_STARTED");
             if(phase=="effects_outcome_unknown"&&unknownEffectsIdleFence is null)throw new IOException("RUNTIME_UNKNOWN_EFFECTS_IDLE_REQUIRED");
-            if(phase is "healthy" or "effects_outcome_unknown")RequireCurrent();
+            // Unknown effects may stop only at the idle fence of the SAME current
+            // generation. A healthy stop needs no fence, so it never requires a
+            // still-RUNNING generation: Setup's removal STOP and SCM SHUTDOWN reach
+            // the Runtime concurrently, leaving it STOP_PENDING. Refusing that
+            // left this owned job to kill the app mid-shutdown. The session binds
+            // any STOP it sends to the pinned host; quiescence is proven on the
+            // owned host and job.
+            if(phase=="effects_outcome_unknown")RequireCurrent();
             unknownEffectsIdleFence=null;retainStopped=true;phase="quiescing_runtime";
             if(!await CleanAsync(cancellation)){phase="recovery_required";throw new IOException("RUNTIME_CLEANUP_UNCONFIRMED");}
             phase="stopped";

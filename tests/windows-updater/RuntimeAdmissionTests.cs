@@ -54,6 +54,14 @@ internal static class RuntimeAdmissionTests
             session.CleanupUnavailable=true;await Denied(()=>life.StopAsync());Assert(life.CleanupReconciliationRequired&&!session.Disposed);
             session.CleanupUnavailable=false;await life.RetryCleanupAsync();life.ReleaseStoppedResources();Assert(session.Disposed);
         });
+        await check("SCM stop of a Runtime already STOP_PENDING still stops and proves quiescence",async()=>
+        {
+            // Setup's removal STOP (or SCM SHUTDOWN) reached the Runtime first:
+            // its generation is no longer RUNNING, so it is not current.
+            var session=new Session();var life=Lifecycle(session);await life.StartCommittedAsync(Binding,Release);session.NotCurrent=true;
+            await life.StopAsync();Assert(life.Phase=="stopped"&&session.Order[^1]=="stop"&&session.Exited);
+            life.RetainedGate.RequireQuiescence();life.ReleaseStoppedResources();Assert(session.Disposed&&!life.OwnsRuntimeResources);
+        });
         await check("SCM cancelled readiness cannot become healthy or release cleanup ownership",async()=>
         {
             var session=new Session{Fault="wait_ready"};var life=Lifecycle(session);using var cancellation=new CancellationTokenSource();
@@ -130,7 +138,7 @@ internal static class RuntimeAdmissionTests
     {try{await work();}catch(Exception e)when(e is IOException or UnauthorizedAccessException){return;}throw new Exception("RUNTIME_ADMISSION_UNEXPECTED_SUCCESS");}
     private sealed class Session:IRetainedScmRuntimeSession,IRuntimeGateKernel,IRetainedScmUpdatePreparation,IRetainedScmRecoveryObservation
     {
-        internal string? Fault;internal bool CleanupUnavailable,Disposed,Released;private bool assigned,exited;
+        internal string? Fault;internal bool CleanupUnavailable,Disposed,Released,NotCurrent;private bool assigned,exited;
         internal bool Idle,IdleCancelled;internal int IdleRequests;internal bool Exited=>exited;
         internal int RecoveryRetains;
         private RuntimeAdmissionBinding value=null!;internal readonly List<string> Order=[];
@@ -142,7 +150,7 @@ internal static class RuntimeAdmissionTests
             value=new(intent.Binding,intent.ReleaseDigest,intent.Nonce,55,66);
             return Task.FromResult(Fault switch{"nonce"=>value with{Nonce=new string('e',32)},"binding"=>value with{Binding=Binding with{ActivationReceiptDigest=new string('e',64)}},"release"=>value with{ReleaseDigest=new string('e',64)},"pid"=>value with{ProcessId=0},"created"=>value with{Created=0},_=>value});
         }
-        public void RequireAuthenticatedCurrent(RuntimeAdmissionBinding admission){Order.Add("authenticate");if(Fault=="identity"||admission!=value)throw new UnauthorizedAccessException("IDENTITY_CHANGED");}
+        public void RequireAuthenticatedCurrent(RuntimeAdmissionBinding admission){Order.Add("authenticate");if(Fault=="identity"||NotCurrent||admission!=value)throw new UnauthorizedAccessException("IDENTITY_CHANGED");}
         public Task ReleaseLaunchAsync(RuntimeAdmissionBinding admission,CancellationToken c){Order.Add("launch");Assert(assigned);Released=true;return Task.CompletedTask;}
         public async Task<RuntimeAdmissionBinding> WaitReadyAsync(CancellationToken c){Order.Add("ready");if(Fault=="wait_ready")await Task.Delay(Timeout.Infinite,c);return Fault=="ready"?value with{Created=67}:value;}
         public Task StopAsync(CancellationToken c){Order.Add("stop");exited=true;exit.TrySetResult();return Task.CompletedTask;}
