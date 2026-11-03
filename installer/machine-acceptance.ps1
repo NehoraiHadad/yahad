@@ -35,8 +35,10 @@ function YahadServices { @(Get-Service -Name 'Yahad*' -ErrorAction SilentlyConti
 function Collect {
     YahadServices | Select-Object Name, Status, StartType | ConvertTo-Json | Set-Content -Encoding utf8NoBOM (Join-Path $out 'services.json')
     $since = $started.AddMinutes(-1)
-    Get-WinEvent -FilterHashtable @{ LogName='Application'; ProviderName='Yahad'; StartTime=$since } -ErrorAction SilentlyContinue |
-        ForEach-Object { [ordered]@{ Time=$_.TimeCreated.ToString('o'); Id=$_.Id; Data=@($_.Properties | ForEach-Object Value) } } |
+    # The Yahad source exists only after a startup failure wrote to it; a
+    # ProviderName filter for an unregistered source throws, so filter after.
+    Get-WinEvent -FilterHashtable @{ LogName='Application'; StartTime=$since } -ErrorAction SilentlyContinue |
+        Where-Object ProviderName -eq 'Yahad' | ForEach-Object { [ordered]@{ Time=$_.TimeCreated.ToString('o'); Id=$_.Id; Data=@($_.Properties | ForEach-Object Value) } } |
         ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8NoBOM (Join-Path $out 'yahad-events.json')
     Get-WinEvent -FilterHashtable @{ LogName='System'; ProviderName='Service Control Manager'; StartTime=$since } -ErrorAction SilentlyContinue |
         Where-Object { $_.Message -like '*Yahad*' } | ForEach-Object { '{0:o} {1} {2}' -f $_.TimeCreated, $_.Id, ($_.Message -replace "`r?`n", ' ') } |
@@ -72,7 +74,7 @@ try {
 }
 catch { $state = 'Failed'; Write-Output "FAILED $($_.Exception.Message)"; throw }
 finally {
-    Collect
+    try { Collect } catch { Write-Output "COLLECTION_FAILED $($_.Exception.Message)" }
     [ordered]@{ State=$state; Phases=$phases; TotalSeconds=[math]::Round(((Get-Date)-$started).TotalSeconds, 1) } |
         ConvertTo-Json | Set-Content -Encoding utf8NoBOM (Join-Path $out 'summary.json')
 }
