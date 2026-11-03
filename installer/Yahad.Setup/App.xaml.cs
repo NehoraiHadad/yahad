@@ -15,6 +15,7 @@ public partial class App:Application
             }
             if(e.Args is [var action,var nonce,var parent]&&action is "--elevated-install" or "--elevated-uninstall" or "--elevated-repair-uninstall-receipt"&&int.TryParse(parent,out var pid))
             {var result=await SetupElevation.ElevatedAsync(action!="--elevated-install",nonce,pid,action=="--elevated-repair-uninstall-receipt");Shutdown(result);return;}
+            if(QuietSetup.Parse(e.Args) is {} quiet){Shutdown(await QuietSetup.RunAsync(quiet));return;}
             if(e.Args is ["--uninstall"])
             {
                 var copy=SetupElevation.RelocateForUninstall();Process.Start(new ProcessStartInfo(copy){UseShellExecute=true,ArgumentList={"--uninstall-ui"}});Shutdown();return;

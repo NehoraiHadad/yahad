@@ -49,6 +49,21 @@ internal static class FullInstallerIntegrationTests
             Assert(!NativeFullService.SameGeneration(42,4,43));Assert(!NativeFullService.SameGeneration(42,2,42));
             return Task.CompletedTask;
         });
+        await check("quiet setup accepts only explicit choices and builds the window's update consent",()=>
+        {
+            var install=QuietSetup.Parse(["--quiet-install","--updates","notify","--result",@"C:\out\result.json"])!;
+            Assert(!install.Uninstall&&install.Mode==UninstallMode.KeepData&&install.AutomaticUpdates==false);
+            Assert(QuietSetup.Parse(["--quiet-install","--updates","auto","--result",@"C:\r.json"])!.AutomaticUpdates==true);
+            Assert(QuietSetup.Parse(["--quiet-uninstall","--data","delete","--result",@"C:\r.json"])!.Mode==UninstallMode.DeleteData);
+            Assert(QuietSetup.Parse(["--quiet-uninstall","--data","keep","--result",@"C:\r.json"])!.Mode==UninstallMode.KeepData);
+            foreach(var args in new[]{new[]{"--quiet-install","--result",@"C:\r.json"},["--quiet-install","--updates","off","--result",@"C:\r.json"],["--quiet-uninstall","--result",@"C:\r.json"]})Assert(QuietSetup.Parse(args) is null);
+            try{QuietSetup.Parse(["--quiet-install","--updates","notify","--result","result.json"]);throw new Exception("relative result accepted");}catch(IOException){}
+            var now=DateTimeOffset.FromUnixTimeSeconds(1_800_000_000);var consent=QuietSetup.Consent(install,true,false,now)!;
+            consent.Require(now);Assert(!consent.Automatic&&consent.ApprovedUnix==now.ToUnixTimeSeconds());
+            Assert(QuietSetup.Consent(install,true,true,now) is null&&QuietSetup.Consent(install,false,false,now) is null);
+            Assert(QuietSetup.Consent(QuietSetup.Parse(["--quiet-uninstall","--data","keep","--result",@"C:\r.json"])!,true,false,now) is null);
+            return Task.CompletedTask;
+        });
         await check("full installer parses source-bound baseline using policy protocol 2 without a fake GitHub receipt",()=>
         {
             var system=System();Assert(system.Components.Count==5&&system.Protocols["policy"].Writer==2&&system.SourceCommit==ApplicationRelease.SourceCommit);

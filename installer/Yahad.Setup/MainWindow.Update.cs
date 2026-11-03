@@ -4,7 +4,7 @@ namespace Yahad.Setup;
 public partial class MainWindow
 {
     private bool fullUpdateProfile,existingUpdateProfile;
-    private static bool HasExistingUpdateInstallation()
+    internal static bool HasExistingUpdateInstallation()
     {
         // Presence through public parents only. A preserved computer-only
         // installation has no binaries/LAN state but still has enrollment.

@@ -1,0 +1,94 @@
+name: Windows install acceptance
+
+# Builds Yahad.Setup.exe from the exact commit and runs a real unattended
+# install, readiness check and full removal on a disposable Windows runner.
+on:
+  push:
+    branches: [main, windows-install-acceptance]
+    paths:
+      - 'installer/**'
+      - 'src/**'
+      - 'web/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/windows-install.yml'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: windows-install-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  install:
+    # Standard runners are free only for public repositories; never spend minutes.
+    if: github.repository == 'NehoraiHadad/yahad' && github.event.repository.private == false
+    runs-on: windows-2025
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      NODE_VERSION: v24.22.2
+      NODE_ZIP_SHA256: ca1bff5d8ead13c9f2ea404a176db46bd430704d5b5113734049fa365e7799e2
+      DOTNET_SDK_VERSION: 10.0.403
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Fetch pinned build tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force .local/tools, .local/downloads | Out-Null
+          $zip = ".local/downloads/node-$env:NODE_VERSION-win-x64.zip"
+          Invoke-WebRequest "https://nodejs.org/dist/$env:NODE_VERSION/node-$env:NODE_VERSION-win-x64.zip" -OutFile $zip
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $env:NODE_ZIP_SHA256) { throw 'Node archive checksum' }
+          Expand-Archive $zip .local/tools
+          Invoke-WebRequest 'https://builds.dotnet.microsoft.com/dotnet/scripts/v1/dotnet-install.ps1' -OutFile .local/downloads/dotnet-install.ps1
+          & .local/downloads/dotnet-install.ps1 -Version $env:DOTNET_SDK_VERSION -InstallDir .local/tools/dotnet -NoPath
+      - name: Fetch pinned vendors
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pins = Get-Content installer/windows/dependency-pins.json -Raw | ConvertFrom-Json
+          $d = '.local/downloads'
+          foreach ($name in 'ffmpeg', 'caddy') {
+            $source = $pins.sources.$name
+            Invoke-WebRequest $source.archive.url -OutFile "$d/$name-archive"
+            Invoke-WebRequest $source.checksums.url -OutFile "$d/$name-checksums"
+          }
+          python -m installer.windows.dependencies stage --ffmpeg-archive "$d/ffmpeg-archive" --ffmpeg-checksums "$d/ffmpeg-checksums" --caddy-archive "$d/caddy-archive" --caddy-checksums "$d/caddy-checksums" --output .local/vendors
+          if ($LASTEXITCODE -ne 0) { throw 'Vendor staging failed' }
+      - name: Install locked npm dependencies
+        shell: pwsh
+        run: |
+          $node = ".local/tools/node-$env:NODE_VERSION-win-x64"
+          & "$node/node.exe" "$node/node_modules/npm/bin/npm-cli.js" ci --cache .local/npm-cache --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
+      - name: Build Setup package
+        shell: pwsh
+        run: ./installer/package.ps1 -NodeDirectory ".local/tools/node-$env:NODE_VERSION-win-x64" -NpmCache .local/npm-cache -VendorDirectory .local/vendors -DotNet .local/tools/dotnet/dotnet.exe -PackageCache .local/nuget-cache
+      - name: Install, check readiness and remove
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem .local/packages/*/setup/Yahad.Setup.exe | Select-Object -First 1
+          ./installer/machine-acceptance.ps1 -Setup $setup.FullName -Output .local/acceptance -Disposable
+      - name: Keep diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: install-acceptance-${{ github.sha }}
+          path: |
+            .local/acceptance/
+            .local/packages/*/*.log
+            .local/packages/*/package-build.json
+          retention-days: 14
+          if-no-files-found: warn
