@@ -69,7 +69,7 @@ internal static class ServiceStartupFailureTests
             try
             {
                 lease=WindowsFileBoundary.AcquireDataLease(root);var gate=Path.Combine(root,"process.lock");var observed=false;
-                Require(lease.TryValidateHeldGate(gate,acl=>{Require(acl.Owner==WindowsIdentity.GetCurrent().User);observed=true;}));Require(observed);
+                Require(lease.TryValidateHeldGate(gate,acl=>{Require(acl.Owner==WindowsIdentity.GetCurrent().Owner);observed=true;}));Require(observed);
                 try{using var read=WindowsFileBoundary.OpenPrivateRead(gate);throw new Exception("EXCLUSIVE_GATE_REOPENED");}catch(Win32Exception error)when(error.NativeErrorCode==32){}
                 try{using var writer=WindowsFileBoundary.AcquireDataLease(root);throw new Exception("SECOND_WRITER_ADMITTED");}catch(Win32Exception error)when(error.NativeErrorCode==32){}
                 var other=Path.Combine(root,"other");Directory.CreateDirectory(other);File.WriteAllBytes(Path.Combine(other,"process.lock"),[]);
