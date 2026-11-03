@@ -5,7 +5,7 @@ using Microsoft.Win32;
 using Yahad.Install;
 namespace Yahad.Setup;
 
-// Normal authenticated/elevated uninstall dispatch owns the global setup lock.
+// The elevated Setup uninstall operation owns the global setup lock.
 // This adapter cannot adopt an enrolled profile, a running service or user data.
 internal sealed class NativePreparingCancellationHost:IPreparingCancellationHost
 {

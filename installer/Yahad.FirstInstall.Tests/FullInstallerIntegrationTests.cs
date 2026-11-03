@@ -186,12 +186,6 @@ internal static class FullInstallerIntegrationTests
             Assert(InstalledUpdaterLayout.AllowsLoopbackOrigin(Anchor(new string('d',64)),id));Assert(!InstalledUpdaterLayout.AllowsLoopbackOrigin(Anchor(null),id));
             Deny(()=>InstalledUpdaterLayout.AllowsLoopbackOrigin(Anchor(new string('d',64)),Guid.NewGuid().ToString("N")));Deny(()=>InstalledUpdaterLayout.AllowsLoopbackOrigin(Anchor("bad"),id));return Task.CompletedTask;
         });
-        await check("full-profile consent crosses authenticated elevation framing without changing LAN selection",()=>
-        {
-            var choice=new UpdateSetupChoice(2,true,true,DateTimeOffset.UtcNow.ToUnixTimeSeconds());var wire=new SetupWire(1,"install",null,null,Update:choice);
-            var observed=JsonSerializer.Deserialize<SetupWire>(Json(wire))!;Assert(observed.Update==choice&&observed.Lan is null&&observed.Removal is null);
-            return Task.CompletedTask;
-        });
         await check("state-only preserved installation never displays a fresh updater consent choice",()=>
         {
             var observed=new List<string>();Assert(MainWindow.HasExistingUpdateInstallation(path=>{observed.Add(path);return path==InstallLocations.State;}));Assert(observed.SequenceEqual(new[]{InstallLocations.State}));

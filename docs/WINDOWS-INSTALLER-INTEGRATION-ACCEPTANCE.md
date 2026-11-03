@@ -9,8 +9,9 @@ the historical activation patch must not be applied a second time.
 
 The legacy first-install receipt and full updater enrollment remain separate.
 A legacy installation cannot silently gain unlimited automatic approval. A
-fresh full-profile installer captures consent version 2 in the original Owner
-UI before UAC. Another administrator granting UAC does not become that Owner.
+fresh full-profile installer captures consent version 2 in the elevated Setup
+window. The Owner is the account running elevated Setup: the signed-in user
+under Admin Approval Mode, or the administrator whose credentials approved UAC.
 The protected durable choice, first-parent identifiers and approval timestamp
 survive exact-source retry, repair and preserved-data reinstall. Notify does
 not publish an automatic grant. Existing routine grants retain their limits.

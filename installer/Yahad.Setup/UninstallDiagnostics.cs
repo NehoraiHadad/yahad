@@ -18,7 +18,7 @@ internal sealed record UninstallDiagnosticRecord(int Format,string InstallationB
     {
         var detail=SetupFailureDetail.From(failure);
         return new(1,Binding(state),"uninstall",mode.ToString(),DateTimeOffset.UtcNow.ToString("O"),
-            ApplicationRelease.CompiledSourceCommit(typeof(App).Assembly),SetupElevation.Code(failure),
+            ApplicationRelease.CompiledSourceCommit(typeof(App).Assembly),SetupOperation.Code(failure),
             detail.Phase,detail.NativeError,detail.HResult,detail.Sites);
     }
     internal void RequireSameInstallation(InstallerState state)
@@ -60,7 +60,7 @@ internal static class UninstallDiagnostics
     internal static void Complete(ref bool diagnosticAllowed,Action removeReceipt,Action notify)
     {
         removeReceipt();
-        // Once the last recovery anchor is gone, a lost result/pipe must not
+        // Once the last recovery anchor is gone, a failed final notification must not
         // recreate an orphan diagnostic for an installation already removed.
         diagnosticAllowed=false;
         notify();

@@ -22,7 +22,7 @@ internal static class FullInstallDiagnostics
     internal static byte[] Encode(string installationId,SetupOperationException failure,long at)
     {
         var detail=SetupFailureDetail.From(failure);
-        return JsonSerializer.SerializeToUtf8Bytes(new{Format=1,InstallationId=installationId,Stage=failure.Phase.ToString(),detail.NativeError,detail.HResult,Code=SetupElevation.Code(failure),detail.Sites,AtUnix=at});
+        return JsonSerializer.SerializeToUtf8Bytes(new{Format=1,InstallationId=installationId,Stage=failure.Phase.ToString(),detail.NativeError,detail.HResult,Code=SetupOperation.Code(failure),detail.Sites,AtUnix=at});
     }
     internal static void DeleteOwned(FullInstallState state)
     {

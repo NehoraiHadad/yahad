@@ -85,10 +85,13 @@ try {
     $setup = Join-Path $output 'setup'
     RunStep 'setup-publish' $dotnetExe (@('publish','installer/Yahad.Setup/Yahad.Setup.csproj') + $common + @('-p:PublishSingleFile=true','-p:IncludeNativeLibrariesForSelfExtract=true',"-p:SetupPayloadDirectory=$system",'-o',$setup))
     Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination (Join-Path $setup 'LICENSE')
-    # Audit mode only: no install/uninstall/UAC or service operations.
+    # Audit mode only: no install/uninstall/UAC or service operations. Setup's
+    # manifest requires administrator rights; RunAsInvoker starts this read-only
+    # audit with the build step's own token, elevated or not, and never prompts.
     $executable = Join-Path $setup 'Yahad.Setup.exe'
     $start = [Diagnostics.ProcessStartInfo]::new($executable)
     $start.UseShellExecute = $false
+    $start.Environment['__COMPAT_LAYER'] = 'RunAsInvoker'
     $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true

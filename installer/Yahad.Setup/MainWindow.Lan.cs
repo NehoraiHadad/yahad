@@ -11,8 +11,8 @@ public partial class MainWindow
     private bool existingNetworkAccess;
     private static bool HasExistingAccess()
     {
-        // Presence only through public parent directories. Never read protected
-        // installation records or CA contents to populate the unelevated UI.
+        // Presence only through public parent directories. The window never reads
+        // installation records or CA contents; the operation verifies them.
         try
         {
             var root=LanProxyPaths.State;

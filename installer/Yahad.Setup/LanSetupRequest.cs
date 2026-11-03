@@ -28,5 +28,5 @@ internal sealed record LanSetupResult(string Origin, string? HelpOrigin, string 
     bool HostConnectionVerified, bool OtherDeviceVerified = false, string? CertificateDerBase64 = null);
 internal interface ILanSetupHostOperations
 {
-    Task ConfigureLanAsync(OwnerProcess owner, LanSetupRequest request, Action<SetupProgress> progress, CancellationToken cancellation);
+    Task ConfigureLanAsync(SetupOwner owner, LanSetupRequest request, Action<SetupProgress> progress, CancellationToken cancellation);
 }

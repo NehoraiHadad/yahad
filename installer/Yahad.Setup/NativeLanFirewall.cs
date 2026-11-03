@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 using Yahad.Install;
 namespace Yahad.Setup;
 
-// Called only by the elevated, owner-authenticated installer after explicit
+// Called only by the elevated in-process Setup operation after explicit
 // network consent. Tests use the pure LanFirewallRule model, never this adapter.
 internal static class NativeLanFirewall
 {

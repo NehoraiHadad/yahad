@@ -157,10 +157,6 @@ if(args is ["--lan-integration-only"])
     });
     Console.WriteLine(JsonSerializer.Serialize(new{suite="lan-integration-pure",ok=failed==0,failed,nativeOperations=false,cases=observations}));return failed==0?0:1;
 }
-if(args is ["--elevation-framing-only"])
-{
-    var result=await ElevationFramingRegression.RunAsync();Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));return result.Ok?0:1;
-}
 if(args is ["--lan-runtime-only"])
 {
     var observations=new List<object>();var failed=0;
@@ -182,7 +178,7 @@ async Task Refuse(Func<Task> run){try{await run();}catch(Exception e)when(e is I
 if(!storeOnly)
 {
 await FailureDiagnosticTests.RunAsync(Check);
-var owner=new OwnerProcess("S-1-5-21-1-2-3-1001",111,123,new string('a',64));
+var owner=new SetupOwner("S-1-5-21-1-2-3-1001",new string('a',64));
 await Check("single installer path performs prepare publish service readiness then browser handoff",async()=>
 {var ops=new FakeHost();var phases=new List<string>();var flow=new InstallFlow(ops);var result=await flow.RunAsync(owner,false,p=>phases.Add(p.Phase),default);Assert(result.Ok&&ops.Calls.SequenceEqual(new[]{"prepare","publish","ready"})&&phases.Last()=="ready"&&result.SetupToken!.Length==43);await Refuse(()=>flow.RunAsync(owner,false,_=>{},default));});
 foreach(var step in new[]{"prepare","publish","ready"})await Check("failed "+step+" never reports ready or removes data",async()=>
@@ -241,7 +237,7 @@ await Check("preserved reinstall binds exact owner package activation and keys w
  Put("installation.json",new FirstInstallReceipt(2,id,dataId,manifest.PayloadDigest,ApplicationRelease.Version,new string('a',64),47123,manifest.ZipSha256,"committed",new string('b',64)));
  var state=new InstallerState(1,id,dataId,manifest.ZipSha256,manifest.PayloadDigest,manifest.SourceCommit,owner.Sid,47123,"uninstalled",manifest.Files,"S-1-5-80-1-2-3-4-5",owner.ImageSha256);
  var before=records.ToDictionary(x=>x.Key,x=>Convert.ToHexStringLower(SHA256.HashData(x.Value)));
- void Verify(InstallerState value,OwnerProcess principal)=>PreservedInstallation.Require(value,manifest,principal,name=>records[name]);
+ void Verify(InstallerState value,SetupOwner principal)=>PreservedInstallation.Require(value,manifest,principal,name=>records[name]);
  Verify(state,owner);Verify(state with{Phase="reinstalling"},owner);
  var originalReceipt=records["installation.json"];var typedReceipt=NativeJson.Read<FirstInstallReceipt>(originalReceipt);
  Put("installation.json",typedReceipt with{Version="0.5.3"});await Refuse(()=>{Verify(state,owner);return Task.CompletedTask;});records["installation.json"]=originalReceipt;
@@ -261,8 +257,6 @@ await Check("reinstall cached payload verification rejects changed missing and a
  File.WriteAllText(file,"changed");await Refuse(()=>{PreservedInstallation.VerifyDirectory(root,records,"payload/");return Task.CompletedTask;});File.Delete(file);
  await Refuse(()=>{PreservedInstallation.VerifyDirectory(root,records,"payload/");return Task.CompletedTask;});
 });
-await Check("elevated progress frame completes while the calling UI context is synchronously blocked",async()=>
-{var result=await ElevationFramingRegression.RunAsync();Assert(result.Ok,"ELEVATION_PROGRESS_CONTEXT_DEADLOCK");});
 await Check("removal defaults to keeping data and full removal requires exact explicit confirmation",()=>
 {
  var choice=new UninstallChoice();Assert(choice.Mode==UninstallMode.KeepData&&choice.CanBegin);
@@ -419,10 +413,10 @@ internal sealed class FakeHost:ISetupHostOperations
 {
  internal UninstallMode? LastRemoval;internal readonly List<string> Calls=[];internal string? Failure;internal Action? AfterPrepare;internal SetupResult Result=new(true,"READY","http://127.0.0.1:47123/",new string('a',43));
  private Task Call(string name,CancellationToken c){c.ThrowIfCancellationRequested();Calls.Add(name);if(Failure==name)throw new IOException("injected");return Task.CompletedTask;}
- public async Task PrepareAsync(OwnerProcess o,Action<SetupProgress> p,CancellationToken c){await Call("prepare",c);AfterPrepare?.Invoke();}
- public Task PublishServiceAsync(OwnerProcess o,Action<SetupProgress> p,CancellationToken c)=>Call("publish",c);
+ public async Task PrepareAsync(SetupOwner o,Action<SetupProgress> p,CancellationToken c){await Call("prepare",c);AfterPrepare?.Invoke();}
+ public Task PublishServiceAsync(SetupOwner o,Action<SetupProgress> p,CancellationToken c)=>Call("publish",c);
  public async Task<SetupResult> StartAndObserveAsync(Action<SetupProgress> p,CancellationToken c){await Call("ready",c);return Result;}
- public async Task<SetupResult> UninstallAsync(OwnerProcess o,Action<SetupProgress> p,CancellationToken c,UninstallMode mode=UninstallMode.KeepData){LastRemoval=mode;await Call("uninstall",c);return new(true,"REMOVED",DataPreserved:mode==UninstallMode.KeepData);}
+ public async Task<SetupResult> UninstallAsync(SetupOwner o,Action<SetupProgress> p,CancellationToken c,UninstallMode mode=UninstallMode.KeepData){LastRemoval=mode;await Call("uninstall",c);return new(true,"REMOVED",DataPreserved:mode==UninstallMode.KeepData);}
 }
 internal sealed class ResolverStart(FixtureProcesses.FixtureResolver resolver,Func<InstallationBinding> binding):IServiceStartAuthorizer,IObservedAdmission
 {

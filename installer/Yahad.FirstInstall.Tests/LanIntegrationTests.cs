@@ -22,7 +22,7 @@ internal static class LanIntegrationTests
     { try { await action(); } catch (IOException) { return; } catch (OperationCanceledException) { return; } throw new Exception("LAN_UNEXPECTED_ADMISSION"); }
     private static byte[] Json<T>(T value) => JsonSerializer.SerializeToUtf8Bytes(value);
     private static string Hash(byte[] value) => Convert.ToHexStringLower(SHA256.HashData(value));
-    private static readonly OwnerProcess Owner = new("S-1-5-21-1-2-3-1001", 111, 123, new string('a', 64));
+    private static readonly SetupOwner Owner = new("S-1-5-21-1-2-3-1001", new string('a', 64));
     private static LanSetupRequest Enable(bool helper = true) => new(LanSetupAction.Enable, "fixture-home", "192.168.4.5", true, helper);
 
     internal static async Task RunAsync(Func<string, Func<Task>, Task> check)
@@ -386,19 +386,19 @@ internal static class LanIntegrationTests
         internal readonly List<string> Calls = [];
         internal string? Failure; internal Action? AfterPrepare; internal UninstallMode? Removal;
         protected void Step(string name) { Calls.Add(name); if (Failure == name) throw new IOException("SYNTHETIC_FAILURE"); }
-        public Task PrepareAsync(OwnerProcess owner, Action<SetupProgress> progress, CancellationToken cancellation)
+        public Task PrepareAsync(SetupOwner owner, Action<SetupProgress> progress, CancellationToken cancellation)
         { Step("prepare"); AfterPrepare?.Invoke(); return Task.CompletedTask; }
-        public Task PublishServiceAsync(OwnerProcess owner, Action<SetupProgress> progress, CancellationToken cancellation)
+        public Task PublishServiceAsync(SetupOwner owner, Action<SetupProgress> progress, CancellationToken cancellation)
         { Step("publish"); return Task.CompletedTask; }
         public Task<SetupResult> StartAndObserveAsync(Action<SetupProgress> progress, CancellationToken cancellation)
         { Step("start"); return Task.FromResult(new SetupResult(true, "READY", "http://127.0.0.1:47123/", new string('a', 43))); }
-        public Task<SetupResult> UninstallAsync(OwnerProcess owner, Action<SetupProgress> progress, CancellationToken cancellation, UninstallMode mode = UninstallMode.KeepData)
+        public Task<SetupResult> UninstallAsync(SetupOwner owner, Action<SetupProgress> progress, CancellationToken cancellation, UninstallMode mode = UninstallMode.KeepData)
         { Step("uninstall:" + mode); Removal = mode; return Task.FromResult(new SetupResult(true, "REMOVED", DataPreserved: mode == UninstallMode.KeepData)); }
     }
     private sealed class NetworkHost : BasicHost, ILanSetupHostOperations
     {
-        internal LanSetupRequest? Request; internal OwnerProcess? Owner;
-        public Task ConfigureLanAsync(OwnerProcess owner, LanSetupRequest request, Action<SetupProgress> progress, CancellationToken cancellation)
+        internal LanSetupRequest? Request; internal SetupOwner? Owner;
+        public Task ConfigureLanAsync(SetupOwner owner, LanSetupRequest request, Action<SetupProgress> progress, CancellationToken cancellation)
         { request.Require(); Step("lan:" + request.Action); Request = request; Owner = owner; return Task.CompletedTask; }
     }
 }

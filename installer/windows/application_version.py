@@ -55,6 +55,9 @@ def describe_build_artifact(executable, mode, cwd):
     # Audit-only entry points on locally built self-contained artifacts. No
     # PATH/global runtime/credential injection; no installer or SCM entry mode.
     environment = {key:os.environ[key] for key in ('SystemRoot','WINDIR','TEMP','TMP','APPDATA','LOCALAPPDATA') if key in os.environ}
-    environment.update(PATH='',DOTNET_EnableDiagnostics='0')
+    # Yahad.Setup's manifest requires administrator rights. RunAsInvoker runs
+    # these unprivileged audits with the caller's token instead of failing with
+    # ERROR_ELEVATION_REQUIRED (740); it never prompts and never elevates.
+    environment.update(PATH='',DOTNET_EnableDiagnostics='0',__COMPAT_LAYER='RunAsInvoker')
     return json.loads(subprocess.check_output([str(Path(executable).resolve()), mode], cwd=cwd,
         env=environment, text=True, timeout=30), object_pairs_hook=_object)

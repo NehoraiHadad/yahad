@@ -10,7 +10,7 @@ namespace Yahad.Setup;
 internal static class PreservedInstallation
 {
     private static string Hash(byte[] bytes)=>Convert.ToHexStringLower(SHA256.HashData(bytes));
-    internal static void Require(InstallerState s,InstallPackageManifest package,OwnerProcess owner,Func<string,byte[]> read)
+    internal static void Require(InstallerState s,InstallPackageManifest package,SetupOwner owner,Func<string,byte[]> read)
     {
         if(s.OwnerSid!=owner.Sid)throw new UnauthorizedAccessException("INSTALL_OWNER_CHANGED");
         if(s.Phase is not("uninstalled" or "reinstalling")||s.PackageDigest!=package.ZipSha256||s.PayloadDigest!=package.PayloadDigest||s.SourceCommit!=package.SourceCommit||s.SetupSha256!=owner.ImageSha256)throw new IOException("INSTALL_UPGRADE_REQUIRED");

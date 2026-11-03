@@ -48,7 +48,7 @@ internal static class PreparingInstallCancellation
         await host.VerifyAsync(intent,false,false,cancellation);progress(new("removing_service",30));
         await host.RemoveServicesAsync(intent,cancellation);await host.VerifyAsync(intent,false,true,cancellation);
         progress(new("deleting_data",60));host.RemoveFiles(intent,cancellation);await host.CompleteAsync(intent,cancellation);
-        completed?.Invoke(); // Disarm diagnostics before a possibly disconnected UI notification.
+        completed?.Invoke(); // Disarm diagnostics before the final progress notification.
         progress(new("removed",100));return new(true,"REMOVED_ALL","http://127.0.0.1:"+intent.State.Port+"/",DataPreserved:false,FullProfileInstallationId:intent.State.InstallationId);
     }
 }

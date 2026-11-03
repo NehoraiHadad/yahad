@@ -19,19 +19,19 @@ public partial class MainWindow:Window
             Description.Text="ההסרה תסגור את השירות במחשב הזה. בחרו מה יישאר לאחריה.";
             InstallSteps.Visibility=Visibility.Collapsed;UninstallChoices.Visibility=Visibility.Visible;
             SideHeading.Text="בוחרים איך\nלהיפרד.";SideIllustration.Visibility=Visibility.Collapsed;InstallSideDetails.Visibility=Visibility.Collapsed;UninstallSideDetails.Visibility=Visibility.Visible;
-            NoticeText.Text="Windows יבקש אישור מנהל לפני ההסרה. תוכנות ושירותים אחרים במחשב לא יוסרו.";UpdateRemovalUi();
+            NoticeText.Text="תוכנות ושירותים אחרים במחשב לא יוסרו.";UpdateRemovalUi();
         }
     }
     private static bool PendingRemoval()
     {
-        // Discover the fixed receipt name through its public parent directory;
-        // do not grant the unelevated UI read access to protected control records.
+        // Presence of the fixed receipt name only; its contents are read and
+        // verified by the removal operation itself.
         try{return System.IO.Directory.EnumerateFileSystemEntries(System.IO.Path.GetDirectoryName(InstallLocations.RemovalStateFile)!,System.IO.Path.GetFileName(InstallLocations.RemovalStateFile),System.IO.SearchOption.TopDirectoryOnly).Any();}catch{return false;}
     }
     private void RemovalOptions_Click(object sender,RoutedEventArgs e)
     {
         if(running||completed)return;
-        try{var copy=SetupElevation.RelocateForUninstall();Process.Start(new ProcessStartInfo(copy){UseShellExecute=true,ArgumentList={"--uninstall-ui"}});Close();}
+        try{SetupOperation.OpenRemoval();Close();}
         catch{NoticeText.Text="לא ניתן לפתוח את אפשרויות ההסרה. נסו שוב; לא בוצע שינוי בהתקנה.";}
     }
     private void RemovalChanged(object sender,RoutedEventArgs e)
@@ -53,12 +53,12 @@ public partial class MainWindow:Window
         if(running)return;if(completed){if(!uninstall&&result?.Url is not null)OpenBrowser(result);else Close();return;}
         var mode=uninstall?choice.Confirmed():UninstallMode.KeepData;var network=SelectedLanRequest();var update=SelectedUpdateRequest();UpdatePanel.IsEnabled=false;
         running=true;Primary.IsEnabled=false;Secondary.IsEnabled=false;UninstallChoices.IsEnabled=false;LanPanel.IsEnabled=false;ProgressBar.Visibility=Visibility.Visible;ProgressBar.IsIndeterminate=true;
-        Notice.Background=new SolidColorBrush(Color.FromRgb(234,241,234));Status.Text="ממתינים לאישור של Windows.";
+        Notice.Background=new SolidColorBrush(Color.FromRgb(234,241,234));Status.Text="בודקים מקום פנוי והרשאות.";
         Heading.Text=uninstall?(mode==UninstallMode.DeleteData?"מסירים את יחד\nואת הנתונים.":"מסירים את התוכנה.\nהנתונים יישמרו."):"מתקינים את יחד.\nעוד רגע בבית.";
-        Description.Text=uninstall?"הפעולה תתחיל לאחר אישור Windows. אל תכבו את המחשב במהלכה.":"מכינים את הרכיבים, מפעילים את השירות ובודקים שיחד זמינה.";
+        Description.Text=uninstall?"אל תכבו את המחשב במהלך הפעולה.":"מכינים את הרכיבים, מפעילים את השירות ובודקים שיחד זמינה.";
         try
         {
-            result=await SetupElevation.RunAsync(uninstall,p=>Dispatcher.Invoke(()=>ShowProgress(p)),CancellationToken.None,mode,network,update:update);
+            result=await SetupOperation.RunAsync(uninstall,p=>Dispatcher.Invoke(()=>ShowProgress(p)),CancellationToken.None,mode,network,update:update);
             if(!result.Ok){Failure(result.Code,result.Failure);return;}
             completed=true;ProgressBar.IsIndeterminate=false;ProgressBar.Value=100;
             Heading.Text=uninstall?(result.DataPreserved?"יחד הוסרה.\nהנתונים נשמרו.":"יחד והנתונים\nהוסרו מהמחשב."):"הכול מוכן.\nממשיכים ליחד.";
@@ -70,7 +70,7 @@ public partial class MainWindow:Window
             if(uninstall)ShortcutCleanup.TryRemove(result.Url);
             else try{OpenBrowser(result);}catch{Status.Text="הדפדפן לא נפתח. אפשר לנסות שוב בלחיצה על פתיחת יחד.";}
         }
-        catch(Exception error){Failure(SetupElevation.Code(error),SetupFailureDetail.From(error));}
+        catch(Exception error){Failure(SetupOperation.Code(error),SetupFailureDetail.From(error));}
         finally{UpdatePanel.IsEnabled=true;running=false;Primary.IsEnabled=true;Secondary.IsEnabled=true;UninstallChoices.IsEnabled=true;LanPanel.IsEnabled=true;if(uninstall&&!completed)Primary.IsEnabled=choice.CanBegin;else if(!completed)UpdateLanUi();}
     }
     private void ShowProgress(SetupProgress p)
@@ -98,7 +98,6 @@ public partial class MainWindow:Window
             "LAN_FIREWALL_CHANGED" or "LAN_FIREWALL_DUPLICATE" or "LAN_FIREWALL_REPAIR_REQUIRED"=>"כללי חומת האש אינם תואמים להגדרה של יחד. ההתקנה לא מחליפה כללים לא מוכרים. הגישה דורשת תיקון ואישור מחדש.",
             "LAN_PAYLOAD_NOT_SUPPORTED"=>"חבילת ההתקנה אינה כוללת את תמיכת הרשת הביתית הנדרשת. השתמשו בחבילת התקנה תואמת של יחד ונסו שוב.",
             "LAN_SETUP_PAUSED" or "LAN_HTTPS_CONNECTION_FAILED"=>"חיבור HTTPS לא הושלם. זו אינה אבחנה שחסרה תעודה: בדקו במסך המחשב כתובת, שירות ורשת, ונסו תיקון מפורש.",
-            "UAC_CANCELLED"=>"בקשת האישור של Windows בוטלה. לא התחילה הסרה או מחיקה בניסיון הזה.",
             "UNINSTALL_MODE_CHANGED"=>"ניסיון הסרה קודם נעצר עם בחירה אחרת. בחרו באותו מסלול כדי להמשיך אותו.",
             "UNINSTALL_QUIESCENCE_UNCONFIRMED"=>"לא ניתן לאמת שסגירת יחד הסתיימה. מחיקת הנתונים לא התחילה. נסו שוב לאחר סגירה תקינה של השירות.",
             "UNINSTALL_SERVICE_REMOVAL_PENDING"=>"Windows עדיין משחרר את השירות. סגרו חלונות ניהול שירותים ונסו שוב.",

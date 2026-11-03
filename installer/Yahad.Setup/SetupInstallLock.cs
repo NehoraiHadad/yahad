@@ -5,7 +5,7 @@ using System.Security.AccessControl;
 using Microsoft.Win32.SafeHandles;
 namespace Yahad.Setup;
 
-// Only the elevated installer owns this exact fixed namespace. The application
+// Only elevated Setup owns this exact fixed namespace. The application
 // service does not gain registration/update authority through it.
 internal sealed class SetupInstallLock:IDisposable
 {

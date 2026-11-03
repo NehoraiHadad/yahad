@@ -16,7 +16,7 @@ internal sealed record LanOwnedState(int Format,string InstallationId,string Own
 internal sealed record LanPreparation(int Format,string InstallationId,string OwnerSid,string PayloadDigest,LanSetupRequest Request,string? ServiceSid=null);
 internal sealed record LanRemovalIntent(int Format,UninstallMode Mode,LanOwnedState State);
 
-// Production adapter, entered only from the authenticated elevated installer.
+// Production adapter, entered only from the elevated in-process Setup operation.
 // Nothing in a plan, test, command line or a web request invokes this class.
 internal sealed class NativeLanInstall(InstallerState application,FullInstallFiles? fullFiles=null,Func<string,string>? retainedBinarySource=null,Func<string,byte[]>? retainedPayload=null)
 {

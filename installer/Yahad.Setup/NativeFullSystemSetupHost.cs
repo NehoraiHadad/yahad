@@ -14,7 +14,7 @@ namespace Yahad.Setup;
 
 // Separate full-profile adapter. The legacy receipt/uninstall path is not
 // reinterpreted as updater enrollment. No method is entered without the normal
-// elevated installer, authenticated original Owner and global install lock.
+// elevated in-process Setup operation, its recorded Owner and the global install lock.
 internal sealed class NativeFullSystemSetupHost(InstallPackage package,UpdateSetupChoice? requested):ISetupHostOperations,ILanSetupHostOperations,IDisposable
 {
     private FullInstallState? state;private FullInstallFiles? files,binaries;private SystemCandidateDescriptor? system;
@@ -59,7 +59,7 @@ internal sealed class NativeFullSystemSetupHost(InstallPackage package,UpdateSet
         var name=Path.GetFileName(stages[0]);if(!Guid.TryParseExact(name[12..],"N",out var id)||name!="setup-stage-"+id.ToString("N"))throw new IOException("INSTALL_STAGING_CHANGED");
         return stages[0];
     }
-    public Task PrepareAsync(OwnerProcess owner,Action<SetupProgress> progress,CancellationToken cancellation)=>Task.Run(()=>
+    public Task PrepareAsync(SetupOwner owner,Action<SetupProgress> progress,CancellationToken cancellation)=>Task.Run(()=>
     {
         NativeInstallFiles.RequireAdministrator();requested?.Require(DateTimeOffset.UtcNow);
         if(File.Exists(InstallLocations.RemovalStateFile))throw new IOException("UNINSTALL_INCOMPLETE");
@@ -123,7 +123,7 @@ internal sealed class NativeFullSystemSetupHost(InstallPackage package,UpdateSet
     }
     private void RequireRoles()
     {files=new(state!);binaries=new(state!,true);}
-    public Task PublishServiceAsync(OwnerProcess owner,Action<SetupProgress> progress,CancellationToken cancellation)=>Task.Run(async()=>
+    public Task PublishServiceAsync(SetupOwner owner,Action<SetupProgress> progress,CancellationToken cancellation)=>Task.Run(async()=>
     {
         operationPhase=UninstallPhase.FullProvision;
         if(existing)
@@ -277,7 +277,7 @@ internal sealed class NativeFullSystemSetupHost(InstallPackage package,UpdateSet
     private NativeLanInstall Network()=>new(LanView(),files,
         relative=>relative=="caddy.exe"?binaries!.PathOf("payloads/"+state!.PayloadDigest+"/runtime/caddy/caddy.exe"):binaries!.PathOf("system-slots/"+state!.SystemManifestDigest+"/bootstrap/servicehost/"+relative[5..]),
         relative=>binaries!.Read("payloads/"+state!.PayloadDigest+"/"+relative,65536));
-    public async Task ConfigureLanAsync(OwnerProcess owner,LanSetupRequest request,Action<SetupProgress> progress,CancellationToken cancellation)
+    public async Task ConfigureLanAsync(SetupOwner owner,LanSetupRequest request,Action<SetupProgress> progress,CancellationToken cancellation)
     {
         operationPhase=UninstallPhase.FullNetwork;if(state?.OwnerSid!=owner.Sid)throw new IOException("INSTALL_OWNER_CHANGED");var network=Network();network.Preflight(request);
         AcquireMaintenance();await StopAllAsync(cancellation,true);network.RecoverConfigurationOnly();RequireCurrent();await network.ConfigureAsync(request,progress,cancellation);
@@ -401,7 +401,7 @@ internal sealed class NativeFullSystemSetupHost(InstallPackage package,UpdateSet
         }
         if(complete&&tree.Files.Length!=expected.Count)throw new IOException("UNINSTALL_UNOWNED_FILE_PRESERVED");return tree;
     }
-    public async Task<SetupResult> UninstallAsync(OwnerProcess owner,Action<SetupProgress> progress,CancellationToken cancellation,UninstallMode mode=UninstallMode.KeepData)
+    public async Task<SetupResult> UninstallAsync(SetupOwner owner,Action<SetupProgress> progress,CancellationToken cancellation,UninstallMode mode=UninstallMode.KeepData)
     {
         operationPhase=UninstallPhase.FullUninstall;NativeInstallFiles.RequireAdministrator();UninstallChoice.Require(mode);
         if(NativePreparingCancellationHost.Selected())return await PreparingInstallCancellation.RunAsync(owner.Sid,mode,new NativePreparingCancellationHost(),progress,cancellation,s=>{state=s;diagnosticsAllowed=true;},()=>diagnosticsAllowed=false);

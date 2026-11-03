@@ -3,8 +3,8 @@ using System.Text.Json;
 namespace Yahad.Setup;
 
 // Unattended install/removal for administrators and machine acceptance. Same
-// elevation, consent and result contract as the window; the command line is the
-// explicit choice. The result file never carries the setup capability token.
+// in-process operation, consent and result contract as the window; the command
+// line is the explicit choice. The result file never carries the setup capability token.
 // Only with --setup-link stdout does an install hand the invoking administrator
 // the same one-time private link the window opens, on its standard output and
 // nowhere else; without it a quiet install leaves first-family setup to the window.
@@ -32,10 +32,10 @@ internal static class QuietSetup
         try
         {
             var update=Consent(request,InstallPackage.EmbeddedFullProfile(),MainWindow.HasExistingUpdateInstallation(),DateTimeOffset.UtcNow);
-            result=await SetupElevation.RunAsync(request.Uninstall,Progress,CancellationToken.None,request.Mode,null,update:update);
+            result=await SetupOperation.RunAsync(request.Uninstall,Progress,CancellationToken.None,request.Mode,null,update:update);
             if(result.Ok&&request.Uninstall)ShortcutCleanup.TryRemove(result.Url);
         }
-        catch(Exception error){result=new(false,SetupElevation.Code(error),Failure:SetupFailureDetail.From(error));}
+        catch(Exception error){result=new(false,SetupOperation.Code(error),Failure:SetupFailureDetail.From(error));}
         File.WriteAllBytes(request.ResultPath,JsonSerializer.SerializeToUtf8Bytes(new{result.Ok,result.Code,result.Url,result.DataPreserved,result.Failure,result.FullProfileInstallationId,Phases=phases,Seconds=Math.Round(clock.Elapsed.TotalSeconds,1)}));
         if(request.SetupLinkToStdout&&result.Ok&&result.Url is not null&&result.SetupToken is not null)
         {Console.Out.WriteLine(result.Url+"#setup="+result.SetupToken);Console.Out.Flush();}

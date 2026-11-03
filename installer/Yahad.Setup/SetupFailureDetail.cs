@@ -3,8 +3,8 @@ using System.IO;
 
 namespace Yahad.Setup;
 
-// Only fixed operation names and numeric error identifiers cross the elevated
-// boundary. Exception messages can contain private paths and must stay out.
+// Only fixed operation names and numeric error identifiers reach the window
+// and the result file. Exception messages can contain private paths and must stay out.
 internal enum UninstallPhase
 {
     ReadState, ValidateBinaries, ValidateRegistration, StopService, AcquireDataLease,

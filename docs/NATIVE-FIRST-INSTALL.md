@@ -21,14 +21,17 @@ native file helper, service executable and private .NET runtime closure. There
 is no target-machine npm, Python, Docker, WSL or runtime download. Build-time
 tools remain separate from the family-facing executable.
 
-The normal UI runs unelevated. One standard UAC consent starts the same verified
-installer image as an elevated helper. A bounded local-only channel verifies
-kernel process IDs, retained process identity, exact image hashes, user SID and
-session. The helper derives fixed paths and service settings itself. JSON/CLI
-cannot select an executable, installation directory, credential, owner claim or
-privileged arbitrary operation. The browser opens under the original user.
+Setup's manifest requires administrator rights, so Windows shows one standard
+UAC prompt before the process starts. The window and the quiet modes then run
+the install or removal in that one elevated process: there is no second process,
+temporary helper copy or local channel. Setup derives fixed paths and service
+settings itself. JSON/CLI cannot select an executable, installation directory,
+credential, owner claim or privileged arbitrary operation. The recorded owner is
+the account running elevated Setup: the signed-in user under Admin Approval
+Mode, or the administrator whose credentials approved the prompt. The browser
+opens from the elevated process, under that account.
 
-Only the elevated helper may perform installation. It checks collisions, creates
+Only elevated Setup may perform installation. It checks collisions, creates
 new protected locations, verifies every embedded member before publication,
 registers the service demand-start first, provisions the first-install records,
 then enables delayed automatic start and starts the service. Readiness requires
@@ -98,7 +101,12 @@ proof from this developer host. Do not enable landing-page download yet.
 
 The `--verify-package` mode is a non-mutating build/audit command; it validates
 the embedded payload without opening UI, requesting elevation or touching host
-installation state. It is not part of the family-facing flow.
+installation state. It is not part of the family-facing flow. Because the
+manifest requires administrator rights, build tooling starts it with the
+`__COMPAT_LAYER=RunAsInvoker` environment variable, so the audit runs with the
+build machine's own token instead of failing with `ERROR_ELEVATION_REQUIRED`
+(740). The audit needs no privilege; any install or removal mode started that
+way stops with `ADMIN_REQUIRED`.
 
 WIC classification is limited to the documented `windowscodecs.dll` OS component:
 [Microsoft WIC API library table](https://learn.microsoft.com/en-us/windows/win32/wic/-wic-api).
@@ -132,6 +140,9 @@ Synthetic checkpoint: 37 first-install cases and 45 service-host cases passed.
 These are not evidence of actual Windows SCM installation or OS-token acceptance.
 
 ## Elevation framing repair after ASUS attempt
+
+Superseded: Setup now runs elevated in one process (`requireAdministrator`), and
+the framing channel described below no longer exists.
 
 The actual owner-approved ASUS attempt reached the elevated helper but stalled
 before first progress/service creation. The elevated WPF dispatcher synchronously

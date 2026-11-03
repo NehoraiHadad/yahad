@@ -12,18 +12,18 @@ internal static class FailureDiagnosticTests
         static void Require(bool value){if(!value)throw new IOException("FAILURE_DIAGNOSTIC_REGRESSION");}
         await check("fixed installer recovery refusal codes survive without exposing arbitrary exception text",()=>
         {
-            foreach(var code in new[]{"INSTALL_STAGING_CHANGED","UPDATE_SERVICE_START_FAILED","UPDATE_SERVICE_GENERATION_CHANGED","UPDATE_PREPARING_CANCEL_REFUSED","UPDATE_PREPARING_INVENTORY_CHANGED","UPDATE_PREPARING_SERVICE_CHANGED","UPDATE_PREPARING_BINARIES_PUBLISHED","UPDATE_PREPARING_ENROLLED","UPDATE_PREPARING_FILE_CHANGED","UPDATE_PREPARING_STATE_CHANGED","UPDATE_PREPARING_CANCEL_REQUIRES_DELETE"})Require(SetupElevation.Code(new IOException(code))==code);
-            Require(SetupElevation.Code(new IOException("C:\\private-family\\connection.json"))=="INSTALL_FAILED");
-            Require(SetupElevation.Code(new IOException("UPDATE_SERVICE_QUIESCENCE_UNCONFIRMED"))=="UPDATE_SERVICE_QUIESCENCE_UNCONFIRMED");
+            foreach(var code in new[]{"INSTALL_STAGING_CHANGED","UPDATE_SERVICE_START_FAILED","UPDATE_SERVICE_GENERATION_CHANGED","UPDATE_PREPARING_CANCEL_REFUSED","UPDATE_PREPARING_INVENTORY_CHANGED","UPDATE_PREPARING_SERVICE_CHANGED","UPDATE_PREPARING_BINARIES_PUBLISHED","UPDATE_PREPARING_ENROLLED","UPDATE_PREPARING_FILE_CHANGED","UPDATE_PREPARING_STATE_CHANGED","UPDATE_PREPARING_CANCEL_REQUIRES_DELETE"})Require(SetupOperation.Code(new IOException(code))==code);
+            Require(SetupOperation.Code(new IOException("C:\\private-family\\connection.json"))=="INSTALL_FAILED");
+            Require(SetupOperation.Code(new IOException("UPDATE_SERVICE_QUIESCENCE_UNCONFIRMED"))=="UPDATE_SERVICE_QUIESCENCE_UNCONFIRMED");
             return Task.CompletedTask;
         });
         await check("full installation and removal get measured absolute bounds; non-full profile stays bounded",()=>
         {
-            Require(SetupElevation.OperationTimeout("install",true)==TimeSpan.FromMinutes(48));
-            Require(SetupElevation.OperationTimeout("uninstall",true)==TimeSpan.FromMinutes(96));
+            Require(SetupOperation.OperationTimeout("install",true)==TimeSpan.FromMinutes(48));
+            Require(SetupOperation.OperationTimeout("uninstall",true)==TimeSpan.FromMinutes(96));
             foreach(var operation in new[]{"install","uninstall"})
-                Require(SetupElevation.OperationTimeout(operation,false)==TimeSpan.FromMinutes(12));
-            var refused=false;try{SetupElevation.OperationTimeout("unknown",true);}catch(IOException){refused=true;}Require(refused);
+                Require(SetupOperation.OperationTimeout(operation,false)==TimeSpan.FromMinutes(12));
+            var refused=false;try{SetupOperation.OperationTimeout("unknown",true);}catch(IOException){refused=true;}Require(refused);
             return Task.CompletedTask;
         });
         await check("staging reuse requires the entire exact file and directory inventory",()=>
@@ -155,7 +155,7 @@ internal static class FailureDiagnosticTests
             foreach(var (native,code) in new[]{(5,"ACCESS_DENIED"),(32,"FILE_LOCKED"),(112,"DISK_SPACE"),(87,"INSTALL_FAILED")})
             {
                 var failure=new SetupOperationException(UninstallPhase.SaveRemovalState,new Win32Exception(native));
-                Require(SetupElevation.Code(failure)==code);
+                Require(SetupOperation.Code(failure)==code);
                 var detail=SetupFailureDetail.From(failure);
                 Require(detail.Phase=="SaveRemovalState"&&detail.NativeError==native);
             }
@@ -167,20 +167,20 @@ internal static class FailureDiagnosticTests
                 (new IOException("UNINSTALL_MODE_CHANGED"),"UNINSTALL_MODE_CHANGED"),
                 (new UnauthorizedAccessException("private owner"),"ACCESS_DENIED"),
                 (new OperationCanceledException(),"INSTALL_TIMEOUT")})
-                Require(SetupElevation.Code(new SetupOperationException(UninstallPhase.ReadState,cause))==code);
+                Require(SetupOperation.Code(new SetupOperationException(UninstallPhase.ReadState,cause))==code);
             return Task.CompletedTask;
         });
-        await check("authenticated result serializes bounded numeric diagnostics without private exception text",()=>
+        await check("setup result serializes bounded numeric diagnostics without private exception text",()=>
         {
             const string secret="C:\\private-family\\secret-connection.json";
             var failure=new SetupOperationException(UninstallPhase.ProtectRemovalReceipt,new Win32Exception(87,secret));
-            var result=new SetupResult(false,SetupElevation.Code(failure),DataPreserved:false,Failure:SetupFailureDetail.From(failure));
-            var bytes=JsonSerializer.SerializeToUtf8Bytes(new SetupWire(1,"result",null,result));
+            var result=new SetupResult(false,SetupOperation.Code(failure),DataPreserved:false,Failure:SetupFailureDetail.From(failure));
+            var bytes=JsonSerializer.SerializeToUtf8Bytes(result);
             var text=System.Text.Encoding.UTF8.GetString(bytes);
             Require(!text.Contains("private-family",StringComparison.Ordinal)&&!text.Contains("secret-connection",StringComparison.Ordinal));
-            var copy=JsonSerializer.Deserialize<SetupWire>(bytes)!;
-            Require(copy.Result is {Ok:false,DataPreserved:false,Failure:{Phase:"ProtectRemovalReceipt",NativeError:87}});
-            var copiedDetail=copy.Result?.Failure??throw new IOException("FAILURE_DETAIL_MISSING");
+            var copy=JsonSerializer.Deserialize<SetupResult>(bytes)!;
+            Require(copy is {Ok:false,DataPreserved:false,Failure:{Phase:"ProtectRemovalReceipt",NativeError:87}});
+            var copiedDetail=copy.Failure??throw new IOException("FAILURE_DETAIL_MISSING");
             Require(copiedDetail.Display().Contains("Windows 87",StringComparison.Ordinal));
             return Task.CompletedTask;
         });
@@ -191,7 +191,7 @@ internal static class FailureDiagnosticTests
             Exception? thrown=null;try{Refuse();}catch(IOException error){thrown=error;}
             var failure=new SetupOperationException(UninstallPhase.FullUninstall,thrown!);
             var detail=SetupFailureDetail.From(failure);
-            Require(SetupElevation.Code(failure)=="INSTALL_FAILED"&&detail.Sites is {Length:>0} sites&&sites[0].Contains("Refuse",StringComparison.Ordinal)&&sites.All(site=>site.Contains("+IL_",StringComparison.Ordinal)));
+            Require(SetupOperation.Code(failure)=="INSTALL_FAILED"&&detail.Sites is {Length:>0} sites&&sites[0].Contains("Refuse",StringComparison.Ordinal)&&sites.All(site=>site.Contains("+IL_",StringComparison.Ordinal)));
             var encoded=System.Text.Encoding.UTF8.GetString(FullInstallDiagnostics.Encode(new string('a',32),failure,123));
             Require(encoded.Contains("Refuse",StringComparison.Ordinal)&&!encoded.Contains("UNLISTED",StringComparison.Ordinal)&&!encoded.Contains("hidden",StringComparison.Ordinal));
             return Task.CompletedTask;
