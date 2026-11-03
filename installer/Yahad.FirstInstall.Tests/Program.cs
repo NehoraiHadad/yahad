@@ -106,7 +106,7 @@ if(args is ["--failure-diagnostics-only"])
 }
 if(args is ["--full-installer-atomic-only"])
 {
-    FullInstallerAtomicTests.Run();Console.WriteLine(JsonSerializer.Serialize(new{suite="full-installer-atomic-private-files",passed=3,failed=0,nativeScmOperations=false,realFamilyData=false}));return 0;
+    FullInstallerAtomicTests.Run();Console.WriteLine(JsonSerializer.Serialize(new{suite="full-installer-atomic-private-files",passed=4,failed=0,nativeScmOperations=false,realFamilyData=false}));return 0;
 }
 if(args is ["--operator-binding-only",var operatorNode])
 {

@@ -17,7 +17,7 @@ internal static class NativeInstallFiles
     internal static void NewDirectory(string path,string descriptor)
     {
         SafeDirectory.NoReparseAncestors(path);var bytes=Bytes(descriptor);var pin=GCHandle.Alloc(bytes,GCHandleType.Pinned);var attributes=new Attributes{Length=Marshal.SizeOf<Attributes>(),Descriptor=pin.AddrOfPinnedObject()};
-        try{if(!CreateDirectoryW(path,ref attributes))throw new Win32Exception();}finally{pin.Free();}
+        try{if(!CreateDirectoryW(Extended(path),ref attributes))throw new Win32Exception();}finally{pin.Free();}
     }
     internal static void SetOwnedDirectory(string path,string descriptor)
     {SafeDirectory.NoReparseAncestors(path);var acl=new DirectorySecurity();acl.SetSecurityDescriptorSddlForm(descriptor,AccessControlSections.Owner|AccessControlSections.Access);new DirectoryInfo(path).SetAccessControl(acl);}
@@ -40,7 +40,7 @@ internal static class NativeInstallFiles
     {
         SafeDirectory.NoReparseAncestors(path);var bytes=Bytes(descriptor);var pin=GCHandle.Alloc(bytes,GCHandleType.Pinned);
         var attributes=new Attributes{Length=Marshal.SizeOf<Attributes>(),Descriptor=pin.AddrOfPinnedObject()};
-        try{var handle=CreateFileW(path,0x40020000,0,ref attributes,1,0x80200080,IntPtr.Zero);if(handle.IsInvalid){handle.Dispose();throw new Win32Exception();}return new FileStream(handle,FileAccess.Write,1048576,false);}finally{pin.Free();}
+        try{var handle=CreateFileW(Extended(path),0x40020000,0,ref attributes,1,0x80200080,IntPtr.Zero);if(handle.IsInvalid){handle.Dispose();throw new Win32Exception();}return new FileStream(handle,FileAccess.Write,1048576,false);}finally{pin.Free();}
     }
     internal static void EnsureStageDirectory(string staging,string path,string descriptor)
     {
@@ -58,7 +58,7 @@ internal static class NativeInstallFiles
         var partial=path+".partial-"+Guid.NewGuid().ToString("N");WriteNew(partial,bytes,descriptor);
         beforeCommit?.Invoke(); // Internal synthetic crash cut; never supplied by product input.
         // No replacement: a competing canonical record is never overwritten.
-        if(!MoveFileExW(partial,path,8))throw new Win32Exception();
+        if(!MoveFileExW(Extended(partial),Extended(path),8))throw new Win32Exception();
     }
     // Control records beside Program Files must be protected at creation,
     // including the replacement partial. Never inherit that parent's Modify
@@ -72,13 +72,16 @@ internal static class NativeInstallFiles
     internal static void ReplaceOwned(string path,byte[] bytes,string? descriptor=null)
     {
         var partial=path+".partial-"+Guid.NewGuid().ToString("N");WriteNew(partial,bytes,descriptor);
-        if(!MoveFileExW(partial,path,9))
+        if(!MoveFileExW(Extended(partial),Extended(path),9))
         {
             var error=Marshal.GetLastPInvokeError();
             if(descriptor is not null){try{File.Delete(partial);}catch{}}
             throw new Win32Exception(error);
         }
     }
+    // Installed trees nest digests and preserved copies past MAX_PATH; the raw
+    // Win32 calls below need the extended form that System.IO adds itself.
+    internal static string Extended(string path)=>@"\\?\"+Path.GetFullPath(path);
     private static byte[] Bytes(string descriptor){var acl=new RawSecurityDescriptor(descriptor);var bytes=new byte[acl.BinaryLength];acl.GetBinaryForm(bytes,0);return bytes;}
     [StructLayout(LayoutKind.Sequential)]private struct Attributes{public int Length;public IntPtr Descriptor;public int Inherit;}
     [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)]private static extern SafeFileHandle CreateFileW(string path,uint access,uint share,ref Attributes attributes,uint creation,uint flags,IntPtr template);

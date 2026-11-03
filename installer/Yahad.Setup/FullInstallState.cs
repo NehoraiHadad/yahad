@@ -102,7 +102,7 @@ internal sealed class FullInstallFiles
             if(check.Length!=expected.Size)throw new IOException("UPDATE_INSTALL_SIZE");using var hash=System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);var buffer=new byte[65536];long offset=0;int count;while((count=check.Read(offset,buffer))>0){hash.AppendData(buffer,0,count);offset+=count;}
             if(Convert.ToHexStringLower(hash.GetHashAndReset())!=expected.Sha256)throw new IOException("UPDATE_INSTALL_HASH");
         }
-        if(!MoveFileExW(partial,path,8))throw new System.ComponentModel.Win32Exception();
+        if(!MoveFileExW(NativeInstallFiles.Extended(partial),NativeInstallFiles.Extended(path),8))throw new System.ComponentModel.Win32Exception();
         VerifyFile(relative,expected);
     }
     internal void VerifyFile(string relative,InstallMember expected)
