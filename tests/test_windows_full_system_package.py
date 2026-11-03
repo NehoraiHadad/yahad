@@ -31,23 +31,37 @@ class FullSystemPackageTests(unittest.TestCase):
     def setUp(self):
         self.temporary=tempfile.TemporaryDirectory(prefix='yahad-full-package-test-');self.addCleanup(self.temporary.cleanup)
         self.root=Path(self.temporary.name);self.repo=self.root/'repo';self.prepared=self.root/'payload';self.repo.mkdir();self.prepared.mkdir()
-        self.tracked=['package.json','package-lock.json','src/database-schema.ts','src/native-migrate-v1.ts','src/db.ts']
+        self.tracked=['package.json','package-lock.json','src/database-schema.ts','src/native-migrate-v1.ts','src/db.ts','src/main.ts','src/native-supervisor.ts']
         source={
             'package.json':json.dumps({'version':VERSION}),
-            'package-lock.json':json.dumps({'version':VERSION,'packages':{'':{'version':VERSION}}}),
+            'package-lock.json':json.dumps({'version':VERSION,'packages':{'':{'version':VERSION},'node_modules/fastify':{'version':'5.12.7'},'node_modules/vite':{'version':'7.3.7','dev':True}}}),
             'src/database-schema.ts':'export const DATABASE_SCHEMA = 6;\nexport const DATABASE_MIGRATIONS_FROM = [1, 2] as const;\n',
             'src/native-migrate-v1.ts':"import { DATABASE_SCHEMA } from './database-schema.js';\nimport { migrate } from './db.js';\n",
             'src/db.ts':"import type { DatabaseSync } from 'node:sqlite';\nexport function migrate() {}\n",
+            'src/main.ts':"import { migrate } from './db.js';\n",
+            'src/native-supervisor.ts':"import { fork } from 'node:child_process';\n",
         }
-        for name,value in source.items():self.put(self.repo,name,value);self.put(self.prepared,'app/'+name,value)
-        self.build=dict(appSourceCommit=SOURCE,helperSourceCommit=SOURCE,packagerSourceCommit=SOURCE,databaseSchema=6)
+        for name,value in source.items():self.put(self.repo,name,value)
+        self.put(self.prepared,'app/package.json',source['package.json'])
+        for name in full.bundle.SERVER:self.put(self.prepared,name,'// bundled '+name+'\n')
+        self.server=dict(format='yahad-server-bundle',schema=1,sources={name:hashlib.sha256(source[name].encode()).hexdigest() for name in source if name.startswith('src/')},
+            packages=[dict(path='node_modules/fastify',name='fastify',version='5.12.7',noticeFiles=[])],outputs=[
+            self.output('main',['src/main.ts','src/db.ts','src/database-schema.ts'],['node_modules/fastify']),
+            self.output('native-migrate-v1',['src/native-migrate-v1.ts','src/db.ts','src/database-schema.ts'],[]),
+            self.output('native-supervisor',['src/native-supervisor.ts'],[])])
+        self.build=dict(appSourceCommit=SOURCE,helperSourceCommit=SOURCE,packagerSourceCommit=SOURCE,databaseSchema=6,databaseMigrationsFrom=[1,2])
         self.save_build();self.manifest=dict(schema=1,kind='windows-runtime-candidate',profile='full',target='win-x64',version=VERSION,authority='application-updater',files=[])
         self.refresh_records()
 
     def put(self,root,name,value):
         path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(value.encode() if isinstance(value,str) else value);return path
 
-    def save_build(self):self.put(self.prepared,'legal/build-inputs.json',json.dumps(self.build))
+    def output(self,stem,sources,packages):
+        bytes_=(self.prepared/'app/server'/(stem+'.mjs')).read_bytes()
+        return dict(path='app/server/'+stem+'.mjs',entry='src/'+stem+'.ts',size=len(bytes_),sha256=hashlib.sha256(bytes_).hexdigest(),sources=sources,packages=packages)
+
+    def save_build(self):
+        self.put(self.prepared,'legal/build-inputs.json',json.dumps(self.build));self.put(self.prepared,'legal/server-bundle.json',json.dumps(self.server))
 
     def refresh_records(self):
         self.manifest['files']=[full._record(p.relative_to(self.prepared).as_posix(),p) for p in sorted(self.prepared.rglob('*')) if p.is_file()]
@@ -73,10 +87,16 @@ class FullSystemPackageTests(unittest.TestCase):
             values.append(descriptor);entries.update(members)
         return values,entries
 
-    def test_fixed_source_and_migration_declaration_are_taken_from_actual_bytes(self):
+    def test_bundle_sources_and_migration_declaration_are_taken_from_actual_bytes(self):
         self.assertEqual(self.source(),(6,[1,2]))
-        self.put(self.prepared,'app/src/db.ts','changed bytes')
+        self.put(self.repo,'src/db.ts','changed bytes')
         with self.assertRaisesRegex(full.PackageError,'source bytes'):self.source()
+
+    def test_migration_declaration_must_match_build_record(self):
+        for value in ([1],[1,2,3],None,[1,True]):
+            with self.subTest(value=value):
+                self.build['databaseMigrationsFrom']=value;self.save_build()
+                with self.assertRaisesRegex(full.PackageError,'schema'):self.source()
 
     def test_every_build_input_source_claim_must_match(self):
         for field in ('appSourceCommit','helperSourceCommit','packagerSourceCommit'):
@@ -91,14 +111,29 @@ class FullSystemPackageTests(unittest.TestCase):
             self.build['databaseSchema']=value;self.save_build()
             with self.assertRaisesRegex(full.PackageError,'schema'):self.source()
 
-    def test_fixed_migration_entry_is_required_even_if_omitted_from_claimed_source_inventory(self):
-        self.tracked.remove('src/native-migrate-v1.ts');(self.prepared/'app/src/native-migrate-v1.ts').unlink();self.refresh_records()
-        with self.assertRaisesRegex(full.PackageError,'Migration source closure missing'):self.source()
+    def test_shipped_migration_bytes_are_pinned_by_the_bundle_record(self):
+        self.put(self.prepared,'app/server/native-migrate-v1.mjs','// replaced\n');self.refresh_records()
+        with self.assertRaisesRegex(full.PackageError,'Server bundle record differs'):self.source()
 
-    def test_migration_missing_local_dependency_and_dynamic_loading_are_refused(self):
-        for source,expected in (("import { missing } from './missing.js';",'closure missing'),("const x = import('./db.js');",'Dynamic migration')):
-            self.put(self.repo,'src/native-migrate-v1.ts',source);self.put(self.prepared,'app/src/native-migrate-v1.ts',source)
-            with self.subTest(source=source),self.assertRaisesRegex(full.PackageError,expected):self.source()
+    def test_migration_bundle_needs_schema_source_and_no_package(self):
+        migration=self.server['outputs'][1]
+        for change in (dict(sources=['src/native-migrate-v1.ts','src/db.ts']),dict(packages=['node_modules/fastify']),dict(packages=None)):
+            with self.subTest(change=change):
+                original=dict(migration);migration.update(change);self.save_build();self.refresh_records()
+                with self.assertRaisesRegex(full.PackageError,'Migration bundle closure'):self.source()
+                migration.clear();migration.update(original)
+
+    def test_bundle_entries_are_fixed(self):
+        self.server['outputs'][0]['entry']='src/db.ts';self.save_build();self.refresh_records()
+        with self.assertRaisesRegex(full.PackageError,'record differs'):self.source()
+        self.server['outputs'].pop(0);self.save_build();self.refresh_records()
+        with self.assertRaisesRegex(full.PackageError,'Server bundle record'):self.source()
+
+    def test_bundled_packages_must_be_locked_production_packages(self):
+        for package in (dict(path='node_modules/fastify',version='5.0.0'),dict(path='node_modules/vite',version='7.3.7'),dict(path='node_modules/absent',version='1.0.0')):
+            with self.subTest(package=package):
+                self.server['packages']=[dict(package,name=package['path'].rsplit('/',1)[1],noticeFiles=[])];self.save_build();self.refresh_records()
+                with self.assertRaisesRegex(full.PackageError,'not locked'):self.source()
 
     def test_schema_sources_must_be_unique_sorted_and_strictly_older(self):
         for values in ('2,1','1,1','0,1','1,6'):
@@ -106,8 +141,14 @@ class FullSystemPackageTests(unittest.TestCase):
             with self.subTest(values=values),self.assertRaisesRegex(full.PackageError,'migration declaration'):full.source_schema(self.repo)
 
     def test_untracked_source_and_synthetic_cache_cannot_join_verified_payload(self):
-        self.put(self.prepared,'app/src/untracked.ts','extra');self.refresh_records()
-        with self.assertRaisesRegex(full.PackageError,'tracked source closure'):self.source()
+        self.put(self.repo,'src/untracked.ts','extra');self.server['sources']['src/untracked.ts']=hashlib.sha256(b'extra').hexdigest();self.save_build();self.refresh_records()
+        with self.assertRaisesRegex(full.PackageError,'source bytes'):self.source()
+        del self.server['sources']['src/untracked.ts'];self.save_build()
+        for name in ('app/src/main.ts','app/node_modules/fastify/package.json','app/package-lock.json'):
+            with self.subTest(name=name):
+                self.put(self.prepared,name,'extra');self.refresh_records()
+                with self.assertRaisesRegex(full.PackageError,'source or dependency tree'):self.source()
+                (self.prepared/name).unlink()
         self.put(self.prepared,'app/.local/synthetic.js','extra');self.refresh_records()
         with self.assertRaisesRegex(full.PackageError,'Private member'):self.source()
 

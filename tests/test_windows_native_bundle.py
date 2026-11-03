@@ -26,17 +26,22 @@ class WindowsBundleTests(unittest.TestCase):
     def setUp(self):
         self.root=Path(tempfile.mkdtemp(prefix='yahad-windows-bundle-')); self.prepared=self.root/'prepared'; self.prepared.mkdir()
         for name in (*bundle.BASE_REQUIRED,*bundle.FULL_REQUIRED): self.put(name,'fixture')
-        package={'version':'0.5.2','engines':{'node':'>=24.0.0 <25'},'dependencies':{'tsx':'4.20.6'}}
-        self.put('app/package.json',json.dumps(package)); self.put('app/package-lock.json',json.dumps({'packages':{'':package}}))
+        self.put('app/package.json',json.dumps({'version':'0.5.2','engines':{'node':'>=24.0.0 <25'},'dependencies':{'tsx':'4.20.6'}}))
         self.put('app/native/Yahad.Platform.runtimeconfig.json',json.dumps({'runtimeOptions':{'includedFrameworks':[{'name':'Microsoft.NETCore.App','version':'10.0.14'}]}}))
         self.put('app/native/Yahad.Platform.deps.json',json.dumps({'runtimeTarget':{'name':'net10.0/win-x64'},'targets':{'net10.0/win-x64':{'runtimepack/10.0.14':{'runtime':{'System.Private.CoreLib.dll':{}},'native':{'coreclr.dll':{},'hostfxr.dll':{},'hostpolicy.dll':{}}}}}}))
         self.put('legal/SBOM.json','{"fixture":true}')
         for path in self.prepared.rglob('*'):
             if path.suffix in ('.exe','.dll','.node'): path.write_bytes(image(('kernel32.dll',)))
+        self.server()
         self.lock()
 
     def put(self,name,value):
         path=self.prepared/name; path.parent.mkdir(parents=True,exist_ok=True); path.write_bytes(value.encode() if isinstance(value,str) else value)
+
+    def server(self):
+        outputs=[{'path':name,'size':(self.prepared/name).stat().st_size,'sha256':hashlib.sha256((self.prepared/name).read_bytes()).hexdigest()} for name in bundle.SERVER]
+        self.put('legal/server-bundle.json',json.dumps({'format':'yahad-server-bundle','schema':1,'outputs':outputs,
+            'packages':[{'path':'node_modules/fastify','name':'fastify','version':'5.12.7','noticeFiles':[{'name':'LICENSE','sha256':'0'*64}]}]}))
 
     def lock(self,profile='full'):
         components=[{'id':'node','path':'runtime/node/node.exe','version':'24.22.2','sourceUrl':'https://nodejs.org/dist/v24.22.2/node-v24.22.2-win-x64.zip'},
@@ -138,14 +143,27 @@ class WindowsBundleTests(unittest.TestCase):
         self.put('app/native/Yahad.Platform.deps.json', json.dumps({'runtimeTarget':{'name':'net10.0/win-x64'},'targets':{'net10.0/win-x64':{'app/1':{'runtime':{'missing.dll':{}}}}}}))
         with self.assertRaisesRegex(bundle.BundleError,'Missing private .NET'): bundle.validate(self.prepared)
 
-    def test_addon_node_host_import_resolves_only_for_native_addon(self):
-        self.put('app/node_modules/addon/addon.node',image(('node.exe',))); bundle.validate(self.prepared)
-        self.put('app/node_modules/addon/rogue.dll',image(('node.exe',)))
+    def test_source_tree_and_node_modules_are_not_payload(self):
+        for name in ('app/src/main.ts','app/node_modules/tsx/package.json','app/package-lock.json','app/server/extra.mjs'):
+            with self.subTest(name=name):
+                self.put(name,'fixture')
+                with self.assertRaisesRegex(bundle.BundleError,'Undeclared app namespace'): bundle.validate(self.prepared)
+                (self.prepared/name).unlink()
+        bundle.validate(self.prepared)
+
+    def test_server_entries_are_pinned_by_bundle_record(self):
+        with (self.prepared/'app/server/native-migrate-v1.mjs').open('ab') as stream: stream.write(b'changed')
+        with self.assertRaisesRegex(bundle.BundleError,'Server bundle checksum'): bundle.validate(self.prepared)
+        self.server(); value=json.loads((self.prepared/'legal/server-bundle.json').read_text()); value['packages'][0]['path']='../escape'
+        self.put('legal/server-bundle.json',json.dumps(value))
+        with self.assertRaisesRegex(bundle.BundleError,'Server bundle contract'): bundle.validate(self.prepared)
+
+    def test_native_addon_has_no_node_host_exception(self):
+        self.put('app/native/addon.node',image(('node.exe',)))
         with self.assertRaisesRegex(bundle.BundleError,'MISSING_PRIVATE_DLL'): bundle.validate(self.prepared)
 
-    def test_dependency_data_folder_does_not_allow_live_app_data(self):
-        self.put('app/node_modules/example/tests/data/fixture.txt','fixture'); bundle.validate(self.prepared)
-        self.put('app/Data/family.txt','synthetic state')
+    def test_data_folder_never_packaged(self):
+        self.put('app/dist/data/fixture.txt','fixture')
         with self.assertRaisesRegex(bundle.BundleError,'Private or unsafe'): bundle.validate(self.prepared)
 
     def test_pe_bounds_and_rva_reject_malformed_files(self):

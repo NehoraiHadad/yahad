@@ -13,12 +13,15 @@ from . import pe, dependencies
 
 class BundleError(ValueError): pass
 
-BASE_REQUIRED = ('app/package.json', 'app/package-lock.json', 'app/src/main.ts', 'app/dist/index.html',
-    'app/node_modules/tsx/package.json', 'app/node_modules/@esbuild/win32-x64/esbuild.exe',
-    'runtime/node/node.exe', 'app/native/Yahad.Platform.exe', 'app/native/Yahad.Platform.runtimeconfig.json',
+# One self-contained ESM file per fixed process entry; no source tree, loader or node_modules.
+SERVER = ('app/server/main.mjs', 'app/server/native-migrate-v1.mjs', 'app/server/native-supervisor.mjs')
+APP_ROOTS = ('app/server/', 'app/native/', 'app/dist/', 'app/fixtures/', 'app/deploy/')
+BASE_REQUIRED = ('app/package.json', *SERVER, 'app/dist/index.html', 'runtime/node/node.exe',
+    'app/native/Yahad.Platform.exe', 'app/native/Yahad.Platform.runtimeconfig.json',
     'app/native/Yahad.Platform.deps.json', 'app/native/coreclr.dll', 'app/native/hostfxr.dll',
     'app/native/hostpolicy.dll', 'app/native/System.Private.CoreLib.dll', 'legal/runtime-lock.json',
-    'legal/SBOM.json', 'legal/Node-LICENSE.txt', 'legal/DotNet-LICENSE.txt', 'legal/DotNet-ThirdPartyNotices.txt')
+    'legal/SBOM.json', 'legal/server-bundle.json', 'legal/ThirdPartyNotices-server.txt',
+    'legal/Node-LICENSE.txt', 'legal/DotNet-LICENSE.txt', 'legal/DotNet-ThirdPartyNotices.txt')
 FULL_REQUIRED = ('runtime/ffmpeg/ffmpeg.exe', 'runtime/caddy/caddy.exe', 'legal/FFmpeg-LICENSE.txt',
     'legal/ffmpeg-build.json', 'legal/Caddy-LICENSE.txt', 'legal/Caddy-NOTICES.txt')
 MAX_FILES, MAX_BYTES = 50000, 2 * 1024 ** 3
@@ -44,7 +47,7 @@ def inventory(root):
                 pending.append(path); continue
             if len(name) > 240 or not name.startswith(('app/', 'runtime/', 'legal/')): raise BundleError('Package path')
             for part in name.split('/'):
-                if part in ('', '.', '..') or part.casefold() == '.git' or (not name.startswith('app/node_modules/') and part.casefold() in ('data', 'backups', 'secrets', 'updatestate')) or part.casefold().startswith('.env') or part.endswith(('.', ' ')) or ':' in part or '\\' in part or re.fullmatch(r'(?i)(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\..*)?', part): raise BundleError('Private or unsafe path')
+                if part in ('', '.', '..') or part.casefold() == '.git' or part.casefold() in ('data', 'backups', 'secrets', 'updatestate') or part.casefold().startswith('.env') or part.endswith(('.', ' ')) or ':' in part or '\\' in part or re.fullmatch(r'(?i)(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\..*)?', part): raise BundleError('Private or unsafe path')
             info = path.lstat()
             if path.is_symlink() or getattr(info, 'st_file_attributes', 0) & 0x400: raise BundleError('Linked path')
             if path.is_dir(): pending.append(path); continue
@@ -63,11 +66,17 @@ def validate(prepared, profile='full'):
         if name not in files: raise BundleError('MISSING_PAYLOAD: ' + name)
     runtime_prefixes = ('runtime/node/',) if profile == 'core-fixture' else ('runtime/node/', 'runtime/ffmpeg/', 'runtime/caddy/')
     if any(name.startswith('runtime/') and not name.startswith(runtime_prefixes) for name in files): raise BundleError('Undeclared runtime namespace')
-    package, lock = object_file(files['app/package.json']), object_file(files['app/package-lock.json'])
-    root_lock = lock.get('packages', {}).get('', {})
-    if not isinstance(root_lock, dict) or package.get('engines', {}).get('node') != '>=24.0.0 <25' or not re.fullmatch(r'\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?', package.get('version', '')) or root_lock.get('version') != package['version'] or root_lock.get('dependencies') != package.get('dependencies'): raise BundleError('App lock mismatch')
-    for name in package.get('dependencies', {}):
-        if not re.fullmatch(r'(?:@[a-zA-Z0-9._-]+/)?[a-zA-Z0-9._-]+', name) or f'app/node_modules/{name}/package.json' not in files: raise BundleError('Production dependency missing')
+    if any(name.startswith('app/') and name != 'app/package.json' and not name.startswith(APP_ROOTS) for name in files) or {name for name in files if name.startswith('app/server/')} != set(SERVER): raise BundleError('Undeclared app namespace')
+    package = object_file(files['app/package.json'])
+    if package.get('engines', {}).get('node') != '>=24.0.0 <25' or not re.fullmatch(r'\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?', package.get('version', '')): raise BundleError('App package identity')
+    # The bundler's record pins each shipped entry and names every bundled package.
+    server = object_file(files['legal/server-bundle.json']); outputs = server.get('outputs'); packages = server.get('packages')
+    if (server.get('format') != 'yahad-server-bundle' or server.get('schema') != 1 or not isinstance(outputs, list) or not all(isinstance(o, dict) for o in outputs) or
+            sorted(o.get('path') for o in outputs) != list(SERVER) or not isinstance(packages, list) or
+            not all(isinstance(p, dict) and isinstance(p.get('name'), str) and isinstance(p.get('version'), str) and isinstance(p.get('noticeFiles'), list) and
+                re.fullmatch(r'(?:node_modules/(?:@[a-zA-Z0-9._-]+/)?[a-zA-Z0-9._-]+/)*node_modules/(?:@[a-zA-Z0-9._-]+/)?[a-zA-Z0-9._-]+', str(p.get('path'))) for p in packages)): raise BundleError('Server bundle contract')
+    for output in outputs:
+        if output.get('size') != files[output['path']].stat().st_size or output.get('sha256') != digest(files[output['path']]): raise BundleError('Server bundle checksum')
     runtimeconfig = object_file(files['app/native/Yahad.Platform.runtimeconfig.json']).get('runtimeOptions', {})
     if runtimeconfig.get('framework') or runtimeconfig.get('frameworks') or not any(f.get('name') == 'Microsoft.NETCore.App' and str(f.get('version', '')).startswith('10.') for f in runtimeconfig.get('includedFrameworks', [])): raise BundleError('Helper must have private self-contained .NET')
     deps = object_file(files['app/native/Yahad.Platform.deps.json'])
@@ -111,9 +120,6 @@ def validate(prepared, profile='full'):
     for name, module in modules.items():
         for imported in module['imports']:
             if pe.is_system(imported): continue
-            # Native Node addons resolve Node exports from the fixed executable
-            # already hosting them, never from a DLL search or developer PATH.
-            if imported == 'node.exe' and name.endswith('.node') and 'runtime/node/node.exe' in modules: continue
             sibling = name.rsplit('/',1)[0] + '/' + imported
             # No developer PATH, global .NET, registry or arbitrary whole-tree DLL search.
             if sibling.casefold() not in folded_files: unresolved.append(name + ' -> ' + imported)
@@ -123,7 +129,7 @@ def validate(prepared, profile='full'):
     records = [{'path':name,'size':path.stat().st_size,'sha256':digest(path)} for name,path in sorted(files.items())]
     return {'schema':1,'kind':'windows-runtime-candidate','target':'win-x64','profile':profile,
         'version':package['version'],'authority':'application-updater','machineAcceptance':'not-performed',
-        'familyInstallationReady':False,'launch':{'node':'runtime/node/node.exe','entry':'app/src/main.ts',
+        'familyInstallationReady':False,'launch':{'node':'runtime/node/node.exe','entry':'app/server/main.mjs',
         'helper':'app/native/Yahad.Platform.exe','ffmpeg':'runtime/ffmpeg/ffmpeg.exe' if profile == 'full' else None,
         'caddy':'runtime/caddy/caddy.exe' if profile == 'full' else None},
         'files':records,'peModules':modules}

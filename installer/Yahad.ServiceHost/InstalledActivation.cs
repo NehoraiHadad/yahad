@@ -155,7 +155,7 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
             // is added for bootstrap; remote origins are never inferred here.
             if(origin.Scheme=="https"&&NetworkPlan.IsPrivateLanV4(origin.Host))
                 environment["APP_ADDITIONAL_ORIGINS"]=$"http://127.0.0.1:{web.Port}";
-            var spec=new VerifiedProcessSpec(node,reservation.NodeDigest,["--import","tsx","src/main.ts"],Path.Combine(payload,"app"),temporary,
+            var spec=new VerifiedProcessSpec(node,reservation.NodeDigest,["server/main.mjs"],Path.Combine(payload,"app"),temporary,
                 Path.Combine(payload,"runtime","ffmpeg","ffmpeg.exe"),environment,reservation.Lease,reservation.BeginMutableStart,files,reservation.ObserveHealthy);
             var launcher=processFactory is null?new ServiceProcessLauncher(spec,channels,startFault):processFactory(spec)??throw new IOException("INSTALLED_PROCESS_FACTORY_NULL");
             return new(new(head.ReleaseDigest),launcher,reservation,reservation);
@@ -211,7 +211,7 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
         {
             Payload=payload;var value=NativeJson.Read<JsonElement>(manifest);
             if(value.GetProperty("schema").GetInt32()!=1||value.GetProperty("kind").GetString()!="windows-runtime-candidate"||value.GetProperty("target").GetString()!="win-x64"||value.GetProperty("profile").GetString()!="full"||value.GetProperty("authority").GetString()!="application-updater")throw new IOException("INSTALLED_RELEASE_FORMAT");
-            var launch=value.GetProperty("launch");foreach(var pair in new Dictionary<string,string>{{"node","runtime/node/node.exe"},{"entry","app/src/main.ts"},{"helper","app/native/Yahad.Platform.exe"},{"ffmpeg","runtime/ffmpeg/ffmpeg.exe"},{"caddy","runtime/caddy/caddy.exe"}})if(launch.GetProperty(pair.Key).GetString()!=pair.Value)throw new IOException("INSTALLED_LAUNCH_FORMAT");
+            var launch=value.GetProperty("launch");foreach(var pair in new Dictionary<string,string>{{"node","runtime/node/node.exe"},{"entry","app/server/main.mjs"},{"helper","app/native/Yahad.Platform.exe"},{"ffmpeg","runtime/ffmpeg/ffmpeg.exe"},{"caddy","runtime/caddy/caddy.exe"}})if(launch.GetProperty(pair.Key).GetString()!=pair.Value)throw new IOException("INSTALLED_LAUNCH_FORMAT");
             var expected=new HashSet<string>(StringComparer.OrdinalIgnoreCase){"bundle.json"};long total=0;
             foreach(var record in value.GetProperty("files").EnumerateArray())
             {
@@ -222,7 +222,7 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
                 var digest=record.GetProperty("sha256").GetString()!;Digest(digest);var file=files.Open(path);Hold(file);
                 if(file.Length!=size||FileHash(file,work)!=digest)throw new IOException("INSTALLED_RELEASE_BYTES");if(name=="runtime/node/node.exe")NodeDigest=digest;
             }
-            foreach(var required in new[]{"runtime/node/node.exe","app/src/main.ts","app/node_modules/tsx/package.json","app/native/Yahad.Platform.exe","runtime/ffmpeg/ffmpeg.exe","runtime/caddy/caddy.exe","legal/build-inputs.json"})if(!expected.Contains(required))throw new IOException("INSTALLED_RELEASE_INCOMPLETE");
+            foreach(var required in new[]{"runtime/node/node.exe","app/server/main.mjs","app/native/Yahad.Platform.exe","runtime/ffmpeg/ffmpeg.exe","runtime/caddy/caddy.exe","legal/build-inputs.json"})if(!expected.Contains(required))throw new IOException("INSTALLED_RELEASE_INCOMPLETE");
             payloadMembers=Names(payload);if(!expected.SetEquals(payloadMembers))throw new IOException("INSTALLED_RELEASE_CLOSURE");
             using var build=JsonDocument.Parse(PinBytes(Path.Combine(payload,"legal","build-inputs.json"),65536));PayloadSchema=build.RootElement.GetProperty("databaseSchema").GetInt32();
         }

@@ -406,7 +406,7 @@ internal static class OfflineMigrationRuntimeTests
         var plan=new OfflineMigrationPlan(1,new('a',32),new('b',32),new('c',32),new('d',32),new('e',32),new('f',32),new('a',64),5,6,new('b',64),new('c',64),new('d',64),new('e',64),new('f',64));
         var root=Path.GetFullPath(Path.Combine(Path.GetTempPath(),"synthetic-migration-scope"));var work=Path.Combine(root,"migration-staging",plan.OperationId);var payload=Path.Combine(work,"payload");
         var clone=Path.Combine(root,"datasets",plan.SourceDataId,"restore-"+plan.CloneOperationId,"completed");
-        return new(plan,Path.Combine(payload,"runtime","node","node.exe"),new('a',64),Path.Combine(payload,"app","src","native-migrate-v1.ts"),payload,clone,Path.Combine(clone,"data"),
+        return new(plan,Path.Combine(payload,"runtime","node","node.exe"),new('a',64),Path.Combine(payload,"app","server","native-migrate-v1.mjs"),payload,clone,Path.Combine(clone,"data"),
             Path.Combine(work,"work","request.json"),Path.Combine(work,"work","result.json"),Path.Combine(work,"temp"),"S-1-5-80-1-2-3-4-5","S-1-15-2-1-2-3-4-5-6-7",new('1',32),Path.Combine(root,"datasets",plan.SourceDataId,"data"),root,"S-1-5-80-5-4-3-2-1");
     }
     private static MigrationSandboxObservation Fault(MigrationSandboxObservation value,string kind)=>kind switch

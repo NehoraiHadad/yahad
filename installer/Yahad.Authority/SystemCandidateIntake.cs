@@ -150,10 +150,11 @@ internal sealed class SystemCandidateIntake(InstalledStateFiles files,InstalledA
     }
     private void VerifyMigrationDeclaration(string payload,SystemCandidateDescriptor descriptor)
     {
-        var bytes=files.Read(Path.Combine(payload,"app","src","database-schema.ts"),65536);var text=System.Text.Encoding.UTF8.GetString(bytes);
-        var schema=Regex.Matches(text,@"(?m)^export const DATABASE_SCHEMA\s*=\s*([0-9]+);",RegexOptions.CultureInvariant);var from=Regex.Matches(text,@"(?m)^export const DATABASE_MIGRATIONS_FROM\s*=\s*\[([0-9,\s]*)\]\s*as const;",RegexOptions.CultureInvariant);
-        if(schema.Count!=1||from.Count!=1||!int.TryParse(schema[0].Groups[1].Value,out var target)||target!=descriptor.DatabaseTargetSchema)throw Error("MIGRATION_DECLARATION");
-        var migrations=from[0].Groups[1].Value.Split(',',StringSplitOptions.TrimEntries|StringSplitOptions.RemoveEmptyEntries).Select(int.Parse).ToArray();if(!migrations.SequenceEqual(descriptor.DatabaseMigrationsFrom))throw Error("MIGRATION_DECLARATION");
+        // The bundled payload carries no source; the build records the schema declaration.
+        var build=NativeJson.Read<JsonElement>(files.Read(Path.Combine(payload,"legal","build-inputs.json"),65536));
+        if(!build.TryGetProperty("databaseSchema",out var schema)||schema.ValueKind!=JsonValueKind.Number||!schema.TryGetInt32(out var target)||target!=descriptor.DatabaseTargetSchema||
+            !build.TryGetProperty("databaseMigrationsFrom",out var from)||from.ValueKind!=JsonValueKind.Array||from.GetArrayLength()>1024||from.EnumerateArray().Any(v=>v.ValueKind!=JsonValueKind.Number||!v.TryGetInt32(out _)))throw Error("MIGRATION_DECLARATION");
+        if(!from.EnumerateArray().Select(v=>v.GetInt32()).SequenceEqual(descriptor.DatabaseMigrationsFrom))throw Error("MIGRATION_DECLARATION");
     }
     private void VerifyAppSource(string payload,SystemCandidateDescriptor descriptor)
     {

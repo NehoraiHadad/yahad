@@ -6,7 +6,7 @@ internal sealed record OfflineMigrationPlan(int Format,string InstallationId,str
     string CloneOperationId,string NewDataId,string BackupId,string BackupReceiptDigest,int SourceSchema,int TargetSchema,
     string PayloadDigest,string EntryDigest,string MasterKeyDigest,string PolicyDigest,string PinDigest,string? SystemOperationId=null)
 {
-    internal const string Entry="app/src/native-migrate-v1.ts";
+    internal const string Entry="app/server/native-migrate-v1.mjs";
     internal void Validate()
     {
         foreach(var value in new[]{InstallationId,OperationId,SourceDataId,CloneOperationId,NewDataId,BackupId})
@@ -33,7 +33,7 @@ internal sealed record VerifiedMigrationSpec(OfflineMigrationPlan Plan,string No
         if(!Guid.TryParseExact(Nonce,"N",out var nonce)||nonce.ToString("N")!=Nonce)throw new IOException("MIGRATION_NONCE");
         foreach(var path in new[]{NodePath,EntryPath,PayloadRoot,CloneRoot,DataDirectory,RequestFile,ResultFile,TemporaryDirectory,SourceDataDirectory,ControlRoot})
             if(!Path.IsPathFullyQualified(path)||!Same(WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(path)),path))throw new IOException("MIGRATION_ABSOLUTE_PATH");
-        if(!Same(NodePath,Path.Combine(PayloadRoot,"runtime","node","node.exe"))||!Same(EntryPath,Path.Combine(PayloadRoot,"app","src","native-migrate-v1.ts"))||
+        if(!Same(NodePath,Path.Combine(PayloadRoot,"runtime","node","node.exe"))||!Same(EntryPath,Path.Combine(PayloadRoot,"app","server","native-migrate-v1.mjs"))||
             !Same(DataDirectory,Path.Combine(CloneRoot,"data"))||Same(DataDirectory,SourceDataDirectory)||!Within(CloneRoot,ControlRoot)||!Within(SourceDataDirectory,ControlRoot)||
             !Within(PayloadRoot,ControlRoot)||!Within(TemporaryDirectory,ControlRoot)||!Within(RequestFile,ControlRoot)||!Within(ResultFile,ControlRoot)||
             Same(RequestFile,ResultFile)||Within(RequestFile,DataDirectory)||Within(ResultFile,DataDirectory))throw new IOException("MIGRATION_PATH_SCOPE");

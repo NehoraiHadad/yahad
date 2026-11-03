@@ -36,7 +36,7 @@ internal sealed class InstallPackage:IDisposable
             Name(entry.FullName);if(!expected.Remove(entry.FullName)||entry.Length<0||((entry.ExternalAttributes>>16)&0xf000) is not(0 or 0x8000)||((entry.ExternalAttributes&0x400)!=0))throw new IOException("PACKAGE_MEMBER_TYPE");
         }
         if(expected.Count!=0)throw new IOException("PACKAGE_MEMBERS");
-        foreach(var required in new[]{"payload/bundle.json","payload/runtime/node/node.exe","payload/runtime/ffmpeg/ffmpeg.exe","payload/runtime/caddy/caddy.exe","payload/app/src/main.ts","payload/app/dist/index.html","payload/app/native/Yahad.Platform.exe"})if(!Manifest.Files.Any(r=>r.Path==required))throw new IOException("PACKAGE_MISSING");
+        foreach(var required in new[]{"payload/bundle.json","payload/runtime/node/node.exe","payload/runtime/ffmpeg/ffmpeg.exe","payload/runtime/caddy/caddy.exe","payload/app/server/main.mjs","payload/app/dist/index.html","payload/app/native/Yahad.Platform.exe"})if(!Manifest.Files.Any(r=>r.Path==required))throw new IOException("PACKAGE_MISSING");
         if(FullSystem)
         {
             if(Manifest.Files.Any(f=>f.Path.StartsWith("host/",StringComparison.Ordinal)))throw new IOException("PACKAGE_FORMAT");

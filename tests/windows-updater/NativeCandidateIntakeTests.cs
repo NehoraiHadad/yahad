@@ -146,7 +146,7 @@ internal static class NativeCandidateIntakeTests
             var f=new Fixture();var artifact=Build("0.6.1");string target;
             using(var intake=f.Intake(artifact))target=(await intake.CheckAndPublishAsync(default))!.Target;
             using(var intake=f.Intake(artifact))Assert((await intake.CheckAndPublishAsync(default))!.Target==target);
-            File.AppendAllText(f.Files.PathOf("payloads/"+Hash(artifact.Manifest)+"/app/src/main.ts"),"changed");
+            File.AppendAllText(f.Files.PathOf("payloads/"+Hash(artifact.Manifest)+"/app/server/main.mjs"),"changed");
             using(var intake=f.Intake(artifact))await Refused(()=>intake.CheckAndPublishAsync(default));
             Assert(NativeJson.Read<IntakePointer>(File.ReadAllBytes(f.Files.PathOf("intake/available.json"))).ReceiptDigest==target);
         });
@@ -201,24 +201,27 @@ internal static class NativeCandidateIntakeTests
                 await Refused(()=>intake.CheckAndPublishAsync(default));Assert(calls<=7&&!File.Exists(f.Files.PathOf("intake/available.json")));
             }
         });
-        foreach(var path in new[]{"../escape","app/../escape","app/a:b","app/CON.txt","app/trailing.","app/back\\slash","app/.env.local","app/Data/app.sqlite","runtime/authority/tool.exe","app/a/file.txt/child"})
+        foreach(var path in new[]{"../escape","app/../escape","app/dist/a:b","app/dist/CON.txt","app/dist/trailing.","app/dist/back\\slash","app/dist/.env.local","app/dist/Data/app.sqlite","app/dist/data/file.txt","runtime/authority/tool.exe","app/dist/a/file.txt/child",
+            "app/src/main.ts","app/node_modules/tsx/package.json","app/package-lock.json","app/server/extra.mjs","app/extra.txt"})
             await check("native intake refuses unsafe declared path "+path,async()=>
             {
-                var f=new Fixture();var artifact=Build("0.6.1",changeFiles:items=>{items[path]=[1];if(path=="app/a/file.txt/child")items["app/a/file.txt"]=[2];});
+                var f=new Fixture();var artifact=Build("0.6.1",changeFiles:items=>{items[path]=[1];if(path=="app/dist/a/file.txt/child")items["app/dist/a/file.txt"]=[2];});
                 using var intake=f.Intake(artifact);await Refused(()=>intake.CheckAndPublishAsync(default));Assert(!File.Exists(f.Files.PathOf("intake/available.json")));
             });
-        foreach(var mutation in new[]{"schema","arch","profile","launch","checksum","extra","symlink","collision","directory_case","private_clr","package","source"})
+        foreach(var mutation in new[]{"schema","arch","profile","launch","checksum","extra","symlink","collision","directory_case","private_clr","package","source","server_bundle","server_record"})
             await check("native intake refuses candidate mismatch "+mutation,async()=>
             {
                 var f=new Fixture();var artifact=Build("0.6.1",schema:mutation=="schema"?7:6,changeFiles:items=>
                 {
                     if(mutation=="arch"){var pe=items["runtime/node/node.exe"];BinaryPrimitives.WriteUInt16LittleEndian(pe.AsSpan(0x84),0xaa64);}
-                    if(mutation=="collision"){items["app/A.txt"]=[1];items["app/a.txt"]=[1];}
-                    if(mutation=="directory_case"){items["app/Folder/a.txt"]=[1];items["app/folder/b.txt"]=[1];}
+                    if(mutation=="collision"){items["app/dist/A.txt"]=[1];items["app/dist/a.txt"]=[1];}
+                    if(mutation=="directory_case"){items["app/dist/Folder/a.txt"]=[1];items["app/dist/folder/b.txt"]=[1];}
                     if(mutation=="private_clr")items["app/native/Yahad.Platform.runtimeconfig.json"]=Json(new{runtimeOptions=new{framework=new{name="Microsoft.NETCore.App",version="10.0.0"}}});
                     if(mutation=="package")items["app/package.json"]=Json(new{version="0.6.9",engines=new{node=">=24.0.0 <25"},dependencies=new{tsx="4.20.6"}});
+                    if(mutation=="server_record")items["app/server/native-migrate-v1.mjs"]=Encoding.UTF8.GetBytes("// not the recorded migration bundle");
                     if(mutation=="source")items["legal/build-inputs.json"]=Json(new{databaseSchema=6,appSourceCommit=new string('a',40),helperSourceCommit=new string('b',40),packagerSourceCommit=new string('a',40)});
-                },changeManifest:manifest=>{if(mutation=="profile")manifest["profile"]="core-fixture";if(mutation=="launch")manifest["launch"]!["node"]="runtime/caddy/caddy.exe";},alterZip:mutation);
+                },changeManifest:manifest=>{if(mutation=="profile")manifest["profile"]="core-fixture";if(mutation=="launch")manifest["launch"]!["node"]="runtime/caddy/caddy.exe";},alterZip:mutation,
+                changeBundle:record=>{if(mutation=="server_bundle")record["outputs"]![0]!["sha256"]=new string('0',64);});
                 using var intake=f.Intake(artifact);await Refused(()=>intake.CheckAndPublishAsync(default));Assert(!File.Exists(f.Files.PathOf("intake/available.json")));
             });
         foreach(var phase in new[]{"download_verified","payload_verified","payload_published","receipt_published","pointer_prepared","pointer_published"})
@@ -297,23 +300,25 @@ internal static class NativeCandidateIntakeTests
     private sealed class ReadNotificationStream(byte[] bytes,Action read):MemoryStream(bytes,false)
     {public override async ValueTask<int> ReadAsync(Memory<byte> buffer,CancellationToken cancellationToken=default){var count=await base.ReadAsync(buffer,cancellationToken);if(count>0)read();return count;}}
     internal sealed record Artifact(string Version,byte[] Zip,byte[] Manifest);
-    internal static Artifact Build(string version,int schema=6,Action<Dictionary<string,byte[]>>? changeFiles=null,Action<JsonObject>? changeManifest=null,string? alterZip=null)
+    internal static Artifact Build(string version,int schema=6,Action<Dictionary<string,byte[]>>? changeFiles=null,Action<JsonObject>? changeManifest=null,string? alterZip=null,Action<JsonObject>? changeBundle=null)
     {
-        var names=new[]{"app/package.json","app/package-lock.json","app/src/main.ts","app/dist/index.html","app/node_modules/tsx/package.json","app/node_modules/@esbuild/win32-x64/esbuild.exe","runtime/node/node.exe","app/native/Yahad.Platform.exe","app/native/Yahad.Platform.runtimeconfig.json","app/native/Yahad.Platform.deps.json","app/native/coreclr.dll","app/native/hostfxr.dll","app/native/hostpolicy.dll","app/native/System.Private.CoreLib.dll","legal/runtime-lock.json","legal/SBOM.json","legal/Node-LICENSE.txt","legal/DotNet-LICENSE.txt","legal/DotNet-ThirdPartyNotices.txt","runtime/ffmpeg/ffmpeg.exe","runtime/caddy/caddy.exe","legal/FFmpeg-LICENSE.txt","legal/ffmpeg-build.json","legal/Caddy-LICENSE.txt","legal/Caddy-NOTICES.txt","legal/build-inputs.json"};
+        var server=new[]{"app/server/main.mjs","app/server/native-migrate-v1.mjs","app/server/native-supervisor.mjs"};
+        var names=new[]{"app/package.json",server[0],server[1],server[2],"app/dist/index.html","runtime/node/node.exe","app/native/Yahad.Platform.exe","app/native/Yahad.Platform.runtimeconfig.json","app/native/Yahad.Platform.deps.json","app/native/coreclr.dll","app/native/hostfxr.dll","app/native/hostpolicy.dll","app/native/System.Private.CoreLib.dll","legal/runtime-lock.json","legal/SBOM.json","legal/server-bundle.json","legal/ThirdPartyNotices-server.txt","legal/Node-LICENSE.txt","legal/DotNet-LICENSE.txt","legal/DotNet-ThirdPartyNotices.txt","runtime/ffmpeg/ffmpeg.exe","runtime/caddy/caddy.exe","legal/FFmpeg-LICENSE.txt","legal/ffmpeg-build.json","legal/Caddy-LICENSE.txt","legal/Caddy-NOTICES.txt","legal/build-inputs.json"};
         var files=names.ToDictionary(n=>n,n=>new[]{".exe",".dll",".node"}.Contains(Path.GetExtension(n))?Image():Encoding.UTF8.GetBytes("fixture"),StringComparer.Ordinal);
-        var package=new{version,engines=new{node=">=24.0.0 <25"},dependencies=new{tsx="4.20.6"}};
-        files["app/package.json"]=Json(package);files["app/package-lock.json"]=Json(new{version,packages=new Dictionary<string,object>{{"",package}}});
+        files["app/package.json"]=Json(new{version,engines=new{node=">=24.0.0 <25"},dependencies=new{tsx="4.20.6"}});
+        foreach(var name in server)files[name]=Encoding.UTF8.GetBytes("// bundled "+name);
         files["app/native/Yahad.Platform.runtimeconfig.json"]=Json(new{runtimeOptions=new{includedFrameworks=new[]{new{name="Microsoft.NETCore.App",version="10.0.14"}}}});
         files["app/native/Yahad.Platform.deps.json"]=Json(new{runtimeTarget=new{name="net10.0/win-x64"},targets=new Dictionary<string,object>{{"net10.0/win-x64",new Dictionary<string,object>()}}});
-        files["legal/build-inputs.json"]=Json(new{databaseSchema=schema,appSourceCommit=new string('a',40),helperSourceCommit=new string('a',40),packagerSourceCommit=new string('a',40)});files["legal/SBOM.json"]=Json(new{fixture=true});
-        changeFiles?.Invoke(files);
+        files["legal/build-inputs.json"]=Json(new{databaseSchema=schema,databaseMigrationsFrom=Enumerable.Range(1,schema-1).ToArray(),appSourceCommit=new string('a',40),helperSourceCommit=new string('a',40),packagerSourceCommit=new string('a',40)});files["legal/SBOM.json"]=Json(new{fixture=true});
+        var record=JsonNode.Parse(Json(new{format="yahad-server-bundle",schema=1,outputs=server.Select(name=>new{path=name,size=files[name].Length,sha256=Hash(files[name])}).ToArray()}))!.AsObject();
+        changeFiles?.Invoke(files);changeBundle?.Invoke(record);files["legal/server-bundle.json"]=JsonSerializer.SerializeToUtf8Bytes(record);
         var componentPaths=new Dictionary<string,string>{{"node","runtime/node/node.exe"},{"platform","app/native/Yahad.Platform.exe"},{"ffmpeg","runtime/ffmpeg/ffmpeg.exe"},{"caddy","runtime/caddy/caddy.exe"}};
         files["legal/runtime-lock.json"]=Json(new{schema=1,target="win-x64",components=componentPaths.Select(pair=>new{id=pair.Key,path=pair.Value,sha256=Hash(files[pair.Value]),version="24.22.2",origin="project-built",sourceCommit=new string('a',40),sourceUrl=pair.Key switch{"node"=>"https://nodejs.org/dist/v24.22.2/node-v24.22.2-win-x64.zip","caddy"=>"https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy.zip","ffmpeg"=>"https://ffmpeg.org/releases/ffmpeg.tar.xz",_=>"https://github.com/NehoraiHadad/yahad"}}).ToArray()});
-        var manifest=JsonNode.Parse(Json(new{schema=1,kind="windows-runtime-candidate",target="win-x64",profile="full",version,authority="application-updater",familyInstallationReady=false,machineAcceptance="not-performed",launch=new{node="runtime/node/node.exe",entry="app/src/main.ts",helper="app/native/Yahad.Platform.exe",ffmpeg="runtime/ffmpeg/ffmpeg.exe",caddy="runtime/caddy/caddy.exe"},files=files.Select(pair=>new{path=pair.Key,size=pair.Value.Length,sha256=Hash(pair.Value)}).ToArray(),peModules=files.Where(pair=>new[]{".exe",".dll",".node"}.Contains(Path.GetExtension(pair.Key))).ToDictionary(pair=>pair.Key,_=>new{machine="x64",managed=false,imports=Array.Empty<string>()})}))!.AsObject();changeManifest?.Invoke(manifest);var bytes=JsonSerializer.SerializeToUtf8Bytes(manifest);
+        var manifest=JsonNode.Parse(Json(new{schema=1,kind="windows-runtime-candidate",target="win-x64",profile="full",version,authority="application-updater",familyInstallationReady=false,machineAcceptance="not-performed",launch=new{node="runtime/node/node.exe",entry="app/server/main.mjs",helper="app/native/Yahad.Platform.exe",ffmpeg="runtime/ffmpeg/ffmpeg.exe",caddy="runtime/caddy/caddy.exe"},files=files.Select(pair=>new{path=pair.Key,size=pair.Value.Length,sha256=Hash(pair.Value)}).ToArray(),peModules=files.Where(pair=>new[]{".exe",".dll",".node"}.Contains(Path.GetExtension(pair.Key))).ToDictionary(pair=>pair.Key,_=>new{machine="x64",managed=false,imports=Array.Empty<string>()})}))!.AsObject();changeManifest?.Invoke(manifest);var bytes=JsonSerializer.SerializeToUtf8Bytes(manifest);
         using var output=new MemoryStream();using(var archive=new ZipArchive(output,ZipArchiveMode.Create,true))
         {
-            void Add(string name,byte[] contents){var entry=archive.CreateEntry(name,CompressionLevel.Fastest);entry.ExternalAttributes=(0x8000|0x1a4)<<16;if(alterZip=="symlink"&&name=="app/src/main.ts")entry.ExternalAttributes=0xa1ff<<16;using var stream=entry.Open();stream.Write(contents);}
-            Add("bundle.json",bytes);foreach(var pair in files)Add(pair.Key,alterZip=="checksum"&&pair.Key=="app/src/main.ts"?Encoding.UTF8.GetBytes("changed"):pair.Value);if(alterZip=="extra")Add("app/extra",[1]);
+            void Add(string name,byte[] contents){var entry=archive.CreateEntry(name,CompressionLevel.Fastest);entry.ExternalAttributes=(0x8000|0x1a4)<<16;if(alterZip=="symlink"&&name=="app/server/main.mjs")entry.ExternalAttributes=0xa1ff<<16;using var stream=entry.Open();stream.Write(contents);}
+            Add("bundle.json",bytes);foreach(var pair in files)Add(pair.Key,alterZip=="checksum"&&pair.Key=="app/server/main.mjs"?Encoding.UTF8.GetBytes("changed"):pair.Value);if(alterZip=="extra")Add("app/extra",[1]);
         }
         return new(version,output.ToArray(),bytes);
     }

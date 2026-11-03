@@ -35,7 +35,7 @@ internal static class NativeMigrationAdmission
         var source=sourceRestoreOperationId is { } operation?files.PathOf("datasets/"+plan.SourceDataId+"/restore-"+operation+"/completed/data"):files.PathOf("datasets/"+plan.SourceDataId+"/data");
         var authority=files.Roles?.Authority.Value??"S-1-5-80-2";var runtime=files.Roles?.Runtime.Value??runtimeSid;
         if(runtime!=runtimeSid)throw new IOException("MIGRATION_RUNTIME_ROLE_CHANGED");
-        return new(plan,Path.Combine(payload,"runtime","node","node.exe"),nodeDigest,Path.Combine(payload,"app","src","native-migrate-v1.ts"),payload,clone,Path.Combine(clone,"data"),
+        return new(plan,Path.Combine(payload,"runtime","node","node.exe"),nodeDigest,Path.Combine(payload,"app","server","native-migrate-v1.mjs"),payload,clone,Path.Combine(clone,"data"),
             Path.Combine(workspace,"work","request.json"),Path.Combine(workspace,"work","result.json"),Path.Combine(workspace,"temp"),runtime,appContainerSid,nonce,source,files.Root,authority);
     }
     private static string Key(VerifiedMigrationSpec spec)=>Path.Combine(spec.CloneRoot,"identity","master-key");

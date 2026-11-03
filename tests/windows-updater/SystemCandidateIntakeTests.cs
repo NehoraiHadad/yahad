@@ -46,7 +46,7 @@ internal static class SystemCandidateIntakeTests
             Directory.CreateDirectory(f.Binary.PathOf("host"));var oldHost=f.Binary.PathOf("host/Yahad.ServiceHost.exe");File.WriteAllBytes(oldHost,[1,2,3]);Directory.CreateDirectory(f.App.Files.PathOf("datasets/fixture/data"));var data=f.App.Files.PathOf("datasets/fixture/data/app.sqlite");File.WriteAllBytes(data,[7,8,9]);
             var staged=await f.Intake.StageVerifiedArchiveAsync(source,f.CachePath(source),Environment(),default);var facts=f.Intake.RequireVerified(staged.SourceReceiptDigest);
             Assert(facts.Components.Count==5&&facts.TargetSchema==7&&facts.MigrationSources.Contains(6)&&facts.SourceCommit==Commit);
-            Assert(File.Exists(Path.Combine(staged.SystemSlotRoot,"bootstrap","owner","Yahad.Owner.exe"))&&File.Exists(Path.Combine(staged.ApplicationPayloadRoot,"app","src","main.ts")));
+            Assert(File.Exists(Path.Combine(staged.SystemSlotRoot,"bootstrap","owner","Yahad.Owner.exe"))&&File.Exists(Path.Combine(staged.ApplicationPayloadRoot,"app","server","main.mjs")));
             Assert(File.ReadAllBytes(oldHost).SequenceEqual(new byte[]{1,2,3})&&File.ReadAllBytes(data).SequenceEqual(new byte[]{7,8,9})&&legacy.SequenceEqual(File.ReadAllBytes(f.App.Files.PathOf("intake/available.json"))));
             Assert(f.App.Before.SequenceEqual(File.ReadAllBytes(f.App.Files.PathOf("activation.json")))&&f.PolicyChecks>=5);
         });
@@ -74,7 +74,7 @@ internal static class SystemCandidateIntakeTests
                 if(mutation=="component_commit"){var key="bootstrap/authority/build-identity.json";var identity=JsonNode.Parse(files[key])!.AsObject();identity["sourceCommit"]=new string('b',40);files[key]=Json(identity);}
                 if(mutation=="clr_missing")files.Remove("bootstrap/authority/coreclr.dll");
                 if(mutation=="private_path")files["bootstrap/owner/Secrets/master-key"]=[1];
-                if(mutation=="bad_app_schema"){var key="payload/app/src/database-schema.ts";files[key]=Encoding.UTF8.GetBytes("export const DATABASE_SCHEMA = 8;\nexport const DATABASE_MIGRATIONS_FROM = [6] as const;\n");}
+                if(mutation=="bad_app_schema"){var key="payload/legal/build-inputs.json";var build=JsonNode.Parse(files[key])!.AsObject();build["databaseSchema"]=8;build["databaseMigrationsFrom"]=new JsonArray(6);files[key]=Json(build);}
             },extraMember:mutation=="extra_member"?"bootstrap/authority/undeclared.txt":null);var source=await Source(artifact);f.Cache(artifact,source);
             await Refused(()=>f.Intake.StageVerifiedArchiveAsync(source,f.CachePath(source),Environment(),default));Assert(!File.Exists(f.App.Files.PathOf("intake/system-available.json"))&&f.App.Before.SequenceEqual(File.ReadAllBytes(f.App.Files.PathOf("activation.json"))));
         });
@@ -86,7 +86,7 @@ internal static class SystemCandidateIntakeTests
         foreach(var mutation in new[]{"source_receipt","slot","application"})await check("protected resolver rechecks "+mutation+" bytes before policy can mint capability",async()=>
         {
             using var f=new Fixture();var artifact=Build();var source=await Source(artifact);f.Cache(artifact,source);var staged=await f.Intake.StageVerifiedArchiveAsync(source,f.CachePath(source),Environment(),default);
-            var path=mutation switch{"source_receipt"=>f.App.Files.PathOf("intake/system-source-"+staged.SourceReceiptDigest+".json"),"slot"=>Path.Combine(staged.SystemSlotRoot,"bootstrap","authority","Yahad.Authority.exe"),_=>Path.Combine(staged.ApplicationPayloadRoot,"app","src","main.ts")};File.AppendAllText(path,"tampered fixture");
+            var path=mutation switch{"source_receipt"=>f.App.Files.PathOf("intake/system-source-"+staged.SourceReceiptDigest+".json"),"slot"=>Path.Combine(staged.SystemSlotRoot,"bootstrap","authority","Yahad.Authority.exe"),_=>Path.Combine(staged.ApplicationPayloadRoot,"app","server","main.mjs")};File.AppendAllText(path,"tampered fixture");
             await Refused(()=>Task.FromResult(f.Intake.RequireVerified(staged.SourceReceiptDigest)));
         });
         await check("system slots refuse interrupted staging and low-space allocation without deleting residue",async()=>
@@ -120,7 +120,7 @@ internal static class SystemCandidateIntakeTests
     private sealed record Artifact(string Version,byte[] Zip,byte[] Manifest,byte[] Application,Dictionary<string,byte[]> Files);
     private static Artifact Build(string version="0.6.1",Action<JsonObject>? changeManifest=null,Action<Dictionary<string,byte[]>>? changeFiles=null,string? extraMember=null)
     {
-        var app=NativeCandidateIntakeTests.Build(version,7,files=>files["app/src/database-schema.ts"]=Encoding.UTF8.GetBytes("export const DATABASE_SCHEMA = 7;\nexport const DATABASE_MIGRATIONS_FROM = [1, 2, 3, 4, 5, 6] as const;\n"));
+        var app=NativeCandidateIntakeTests.Build(version,7);
         var files=new Dictionary<string,byte[]>(StringComparer.Ordinal);byte[] image;
         using(var input=new MemoryStream(app.Zip))using(var zip=new ZipArchive(input,ZipArchiveMode.Read)){foreach(var entry in zip.Entries){using var source=entry.Open();using var output=new MemoryStream();source.CopyTo(output);files["payload/"+entry.FullName]=output.ToArray();}image=files["payload/runtime/node/node.exe"];}
         foreach(var kind in Enum.GetValues<SystemComponentKind>())

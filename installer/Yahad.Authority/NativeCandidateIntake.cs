@@ -36,8 +36,11 @@ internal sealed class NativeCandidateIntake : IDisposable
     private long allocationUnit;
     private static readonly Regex Stable=new(@"^(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})$",RegexOptions.CultureInvariant);
     private static readonly HashSet<string> Hosts=new(StringComparer.Ordinal){"api.github.com","github.com","objects.githubusercontent.com","release-assets.githubusercontent.com"};
-    private static readonly Dictionary<string,string> Launch=new(){["node"]="runtime/node/node.exe",["entry"]="app/src/main.ts",["helper"]="app/native/Yahad.Platform.exe",["ffmpeg"]="runtime/ffmpeg/ffmpeg.exe",["caddy"]="runtime/caddy/caddy.exe"};
-    private static readonly string[] Required=["app/package.json","app/package-lock.json","app/src/main.ts","app/dist/index.html","app/node_modules/tsx/package.json","app/node_modules/@esbuild/win32-x64/esbuild.exe","runtime/node/node.exe","app/native/Yahad.Platform.exe","app/native/Yahad.Platform.runtimeconfig.json","app/native/Yahad.Platform.deps.json","app/native/coreclr.dll","app/native/hostfxr.dll","app/native/hostpolicy.dll","app/native/System.Private.CoreLib.dll","legal/runtime-lock.json","legal/SBOM.json","legal/Node-LICENSE.txt","legal/DotNet-LICENSE.txt","legal/DotNet-ThirdPartyNotices.txt","runtime/ffmpeg/ffmpeg.exe","runtime/caddy/caddy.exe","legal/FFmpeg-LICENSE.txt","legal/ffmpeg-build.json","legal/Caddy-LICENSE.txt","legal/Caddy-NOTICES.txt","legal/build-inputs.json"];
+    private static readonly Dictionary<string,string> Launch=new(){["node"]="runtime/node/node.exe",["entry"]="app/server/main.mjs",["helper"]="app/native/Yahad.Platform.exe",["ffmpeg"]="runtime/ffmpeg/ffmpeg.exe",["caddy"]="runtime/caddy/caddy.exe"};
+    // One self-contained bundle per fixed process entry; no source tree, loader or node_modules.
+    private static readonly string[] Server=["app/server/main.mjs","app/server/native-migrate-v1.mjs","app/server/native-supervisor.mjs"];
+    private static readonly string[] AppRoots=["app/server/","app/native/","app/dist/","app/fixtures/","app/deploy/"];
+    private static readonly string[] Required=["app/package.json","app/server/main.mjs","app/server/native-migrate-v1.mjs","app/server/native-supervisor.mjs","app/dist/index.html","runtime/node/node.exe","app/native/Yahad.Platform.exe","app/native/Yahad.Platform.runtimeconfig.json","app/native/Yahad.Platform.deps.json","app/native/coreclr.dll","app/native/hostfxr.dll","app/native/hostpolicy.dll","app/native/System.Private.CoreLib.dll","legal/runtime-lock.json","legal/SBOM.json","legal/server-bundle.json","legal/ThirdPartyNotices-server.txt","legal/Node-LICENSE.txt","legal/DotNet-LICENSE.txt","legal/DotNet-ThirdPartyNotices.txt","runtime/ffmpeg/ffmpeg.exe","runtime/caddy/caddy.exe","legal/FFmpeg-LICENSE.txt","legal/ffmpeg-build.json","legal/Caddy-LICENSE.txt","legal/Caddy-NOTICES.txt","legal/build-inputs.json"];
 
     internal NativeCandidateIntake(InstalledStateFiles files,InstalledAuthorityAnchor anchor,Func<DateTimeOffset> clock,HttpMessageHandler? transport=null,Action<string>? fault=null,Func<long>? availableBytes=null)
     {
@@ -255,9 +258,10 @@ internal sealed class NativeCandidateIntake : IDisposable
     {
         if(name.Length>240||!(name.StartsWith("app/",StringComparison.Ordinal)||name.StartsWith("runtime/",StringComparison.Ordinal)||name.StartsWith("legal/",StringComparison.Ordinal))||name.Contains('\\')||Regex.IsMatch(name,@"\.(key|pem|sqlite(?:-wal|-shm)?|backup)$",RegexOptions.IgnoreCase|RegexOptions.CultureInvariant))throw Error("PATH");
         if(name.StartsWith("runtime/",StringComparison.Ordinal)&&!name.StartsWith("runtime/node/",StringComparison.Ordinal)&&!name.StartsWith("runtime/ffmpeg/",StringComparison.Ordinal)&&!name.StartsWith("runtime/caddy/",StringComparison.Ordinal))throw Error("RUNTIME_PATH");
+        if(name.StartsWith("app/",StringComparison.Ordinal)&&name!="app/package.json"&&!AppRoots.Any(root=>name.StartsWith(root,StringComparison.Ordinal))||name.StartsWith("app/server/",StringComparison.Ordinal)&&!Server.Contains(name,StringComparer.Ordinal))throw Error("APP_PATH");
         var parts=name.Split('/');if(parts.Length>64)throw Error("DEPTH");
         foreach(var part in parts)
-            if(part is "" or "." or ".."||part.Equals(".git",StringComparison.OrdinalIgnoreCase)||part.StartsWith(".env",StringComparison.OrdinalIgnoreCase)||part.EndsWith('.')||part.EndsWith(' ')||part.IndexOfAny(Path.GetInvalidFileNameChars())>=0||Regex.IsMatch(part,@"^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\..*)?$",RegexOptions.IgnoreCase|RegexOptions.CultureInvariant)||!name.StartsWith("app/node_modules/",StringComparison.Ordinal)&&new[]{"data","backups","secrets","updatestate"}.Contains(part,StringComparer.OrdinalIgnoreCase))throw Error("PATH");
+            if(part is "" or "." or ".."||part.Equals(".git",StringComparison.OrdinalIgnoreCase)||part.StartsWith(".env",StringComparison.OrdinalIgnoreCase)||part.EndsWith('.')||part.EndsWith(' ')||part.IndexOfAny(Path.GetInvalidFileNameChars())>=0||Regex.IsMatch(part,@"^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\..*)?$",RegexOptions.IgnoreCase|RegexOptions.CultureInvariant)||new[]{"data","backups","secrets","updatestate"}.Contains(part,StringComparer.OrdinalIgnoreCase))throw Error("PATH");
     }
     private void VerifyPublished(string root,byte[] manifest,CandidatePlan plan,CancellationToken token)
     {
@@ -281,9 +285,13 @@ internal sealed class NativeCandidateIntake : IDisposable
         JsonElement Json(string name,int bound=65536)=>NativeJson.Read<JsonElement>(files.Read(Child(root,name),bound));
         var build=Json("legal/build-inputs.json");if(Int(build,"databaseSchema")!=plan.Schema)throw Error("SCHEMA");
         var source=String(build,"appSourceCommit");if(!Regex.IsMatch(source,"^[a-f0-9]{40}$",RegexOptions.CultureInvariant)||String(build,"helperSourceCommit")!=source||String(build,"packagerSourceCommit")!=source)throw Error("BUILD_IDENTITY");
-        var package=Json("app/package.json");var locked=Json("app/package-lock.json",16*1024*1024);var rootLock=locked.GetProperty("packages").GetProperty("");
-        if(String(package,"version")!=plan.Version||String(locked,"version")!=plan.Version||String(rootLock,"version")!=plan.Version||String(package.GetProperty("engines"),"node")!=">=24.0.0 <25"||!JsonElement.DeepEquals(package.GetProperty("dependencies"),rootLock.GetProperty("dependencies")))throw Error("PACKAGE_IDENTITY");
-        foreach(var dependency in package.GetProperty("dependencies").EnumerateObject())if(!Regex.IsMatch(dependency.Name,@"^(?:@[a-zA-Z0-9._-]+/)?[a-zA-Z0-9._-]+$",RegexOptions.CultureInvariant)||!plan.Files.Any(f=>f.Path=="app/node_modules/"+dependency.Name+"/package.json"))throw Error("DEPENDENCY");
+        var package=Json("app/package.json");
+        if(String(package,"version")!=plan.Version||String(package.GetProperty("engines"),"node")!=">=24.0.0 <25")throw Error("PACKAGE_IDENTITY");
+        // The bundler's record pins each shipped server entry.
+        var server=Json("legal/server-bundle.json",1024*1024);var outputs=server.GetProperty("outputs");var bundled=new HashSet<string>(StringComparer.Ordinal);
+        if(String(server,"format")!="yahad-server-bundle"||Int(server,"schema")!=1||outputs.GetArrayLength()!=Server.Length)throw Error("SERVER_BUNDLE");
+        foreach(var output in outputs.EnumerateArray())
+        {var path=String(output,"path");var file=plan.Files.SingleOrDefault(f=>f.Path==path);if(!Server.Contains(path,StringComparer.Ordinal)||!bundled.Add(path)||file is null||file.Sha256!=String(output,"sha256")||file.Size!=Long(output,"size"))throw Error("SERVER_BUNDLE");}
         var runtime=Json("app/native/Yahad.Platform.runtimeconfig.json").GetProperty("runtimeOptions");
         if(runtime.TryGetProperty("framework",out _)||runtime.TryGetProperty("frameworks",out _)||!runtime.GetProperty("includedFrameworks").EnumerateArray().Any(f=>String(f,"name")=="Microsoft.NETCore.App"&&String(f,"version").StartsWith("10.",StringComparison.Ordinal)))throw Error("PRIVATE_CLR");
         var dependencyMap=Json("app/native/Yahad.Platform.deps.json",16*1024*1024);var target=String(dependencyMap.GetProperty("runtimeTarget"),"name");

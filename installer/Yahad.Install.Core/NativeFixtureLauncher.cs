@@ -15,8 +15,7 @@ public sealed class DeveloperRuntimeLayout : IDisposable
     public string App => Path.Combine(Root,"app");
     public string Node => Path.Combine(Root,"runtime","node","node.exe");
     public string FFmpeg => Path.Combine(Root,"runtime","ffmpeg","ffmpeg.exe");
-    public string Supervisor => Path.Combine(App,"src","native-supervisor.ts");
-    public string Loader => Path.Combine(App,"node_modules","tsx","dist","loader.mjs");
+    public string Supervisor => Path.Combine(App,"server","native-supervisor.mjs");
     private DeveloperRuntimeLayout(string root) { Root=root; }
     public static DeveloperRuntimeLayout Open(string root,string manifestFile)
     {
@@ -27,7 +26,7 @@ public sealed class DeveloperRuntimeLayout : IDisposable
         using var document=JsonDocument.Parse(File.ReadAllBytes(manifestFile));var m=document.RootElement;
         if(m.GetProperty("kind").GetString()!="windows-runtime-candidate"||m.GetProperty("profile").GetString()!="full"||m.GetProperty("target").GetString()!="win-x64"||m.GetProperty("familyInstallationReady").GetBoolean())throw new IOException("DEVELOPER_CANDIDATE_ONLY");
         var records=m.GetProperty("files").EnumerateArray().ToDictionary(r=>r.GetProperty("path").GetString()!,r=>r.GetProperty("sha256").GetString()!,StringComparer.OrdinalIgnoreCase);
-        string[] required=["runtime/node/node.exe","runtime/ffmpeg/ffmpeg.exe","app/src/main.ts","app/src/native-supervisor.ts","app/node_modules/tsx/dist/loader.mjs","app/native/Yahad.Platform.exe"];
+        string[] required=["runtime/node/node.exe","runtime/ffmpeg/ffmpeg.exe","app/server/main.mjs","app/server/native-supervisor.mjs","app/native/Yahad.Platform.exe"];
         var selected=required.Concat(records.Keys.Where(p=>p.StartsWith("runtime/ffmpeg/",StringComparison.Ordinal)||p.StartsWith("app/native/",StringComparison.Ordinal))).Distinct(StringComparer.OrdinalIgnoreCase);
         var result=new DeveloperRuntimeLayout(root);
         try
@@ -70,7 +69,7 @@ public sealed class NativeFixtureLauncher(DeveloperRuntimeLayout layout,NativeFi
                 ["MASTER_KEY_FILE"]=settings.MasterKeyPath,["CONNECTOR"]="mock",["ALLOW_REAL_WHATSAPP"]="no",["DIAGNOSTICS_ENABLED"]="false",
                 ["SETUP_CAPABILITY_FILE"]=Path.Combine(settings.TemporaryDirectory,"absent-capability"),["YAHAD_NATIVE_PIPE"]=@"\\.\pipe\"+name
             })env.Add(pair.Key,pair.Value);
-            var job=JobProcess.Start(layout.Node,["--import",new Uri(layout.Loader).AbsoluteUri,layout.Supervisor],layout.App,env);
+            var job=JobProcess.Start(layout.Node,[layout.Supervisor],layout.App,env);
             return Task.FromResult<IContainedAppSession>(new NativeSession(job,pipe,settings.Port));
         }
         catch {pipe.Dispose();throw;}

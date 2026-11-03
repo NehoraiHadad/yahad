@@ -72,9 +72,7 @@ def _safe_path(name, *, component=False):
         if (part in ('', '.', '..') or part.endswith(('.', ' ')) or any(ord(c)<32 or c in '<>"|?*' for c in part) or
                 re.fullmatch(r'(?i)(CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|CLOCK\$|COM[0-9¹²³]|LPT[0-9¹²³])(?:\..*)?', part)):
             raise PackageError('Unsafe member path')
-        dependency = name.startswith(('app/node_modules/','payload/app/node_modules/'))
-        blocked = PRIVATE if component or not dependency else {'.git', '.local', '.agents', '.codex', '.authority'}
-        if part.casefold().startswith('.env') or part.casefold() in blocked:
+        if part.casefold().startswith('.env') or part.casefold() in PRIVATE:
             raise PackageError('Private member path')
     if re.search(r'\.(?:pdb|key|pem|pfx|p12|db|sqlite(?:-wal|-shm|-journal)?|backup|bak)$', name, re.I):
         raise PackageError('Private or debug member')
@@ -160,37 +158,42 @@ def validate_payload_source(repo, prepared, manifest, version, source, tracked):
     if (type(manifest.get('schema')) is not int or manifest['schema']!=1 or manifest.get('version')!=version or manifest.get('profile')!='full' or manifest.get('target')!='win-x64' or
             manifest.get('kind')!='windows-runtime-candidate' or manifest.get('authority')!='application-updater'):
         raise PackageError('Application identity differs')
-    records = manifest.get('files', []); _closed_names([r['path'] for r in records])
-    names = {r['path'] for r in records}
-    expected = {'app/'+name for name in tracked}
-    actual = {name for name in names if name.startswith('app/src/') or name in ('app/package.json', 'app/package-lock.json')}
-    if not expected or actual!=expected: raise PackageError('Application tracked source closure differs')
-    for name in tracked:
-        if _unlinked(repo/name, file=True).read_bytes()!=_unlinked(prepared/'app'/name, file=True).read_bytes():
-            raise PackageError('Application source bytes differ')
+    records = {r['path']:r for r in manifest.get('files', [])}; _closed_names(records)
+    # The payload runs the bundle only: no source tree, lockfile or node_modules ships.
+    if any(name.startswith(('app/src/', 'app/node_modules/')) or name=='app/package-lock.json' for name in records):
+        raise PackageError('Application source or dependency tree in payload')
+    if _unlinked(repo/'package.json', file=True).read_bytes()!=_unlinked(prepared/'app/package.json', file=True).read_bytes():
+        raise PackageError('Application package bytes differ')
     build = _json((prepared/'legal/build-inputs.json').read_bytes(), 65536)
     if any(build.get(field)!=source for field in ('appSourceCommit', 'helperSourceCommit', 'packagerSourceCommit')):
         raise PackageError('Mixed source build inputs')
     schema, migrations = source_schema(repo)
-    if type(build.get('databaseSchema')) is not int or build['databaseSchema']!=schema: raise PackageError('Mixed source database schema')
-    # The source closure is checked above, not inferred from a build claim.
-    # Walk the fixed migration entry's static local imports as a separate guard.
-    pending, seen = ['src/native-migrate-v1.ts'], set()
-    while pending:
-        name = pending.pop()
-        if name in seen: continue
-        seen.add(name)
-        if 'app/'+name not in names: raise PackageError('Migration source closure missing')
-        text = (prepared/'app'/name).read_text(encoding='utf-8')
-        if re.search(r'\b(?:import\s*\(|require\s*\()', text): raise PackageError('Dynamic migration dependency')
-        imports = re.findall(r'\bfrom\s*[\'"]([^\'"]+)[\'"]|^\s*import\s*[\'"]([^\'"]+)[\'"]', text, re.M)
-        for pair in imports:
-            specifier = pair[0] or pair[1]
-            if specifier.startswith('node:'): continue
-            if not specifier.startswith('./') or not specifier.endswith('.js'): raise PackageError('Unsupported migration dependency')
-            dependency = (PurePosixPath(name).parent/specifier).as_posix()[:-3]+'.ts'
-            _safe_path(dependency); pending.append(dependency)
-    if 'src/database-schema.ts' not in seen: raise PackageError('Migration schema dependency missing')
+    if (type(build.get('databaseSchema')) is not int or build['databaseSchema']!=schema or
+            build.get('databaseMigrationsFrom')!=migrations or any(type(v) is not int for v in build['databaseMigrationsFrom'])):
+        raise PackageError('Mixed source database schema')
+    # The bundler's record ties every shipped entry to tracked source bytes and to
+    # non-development lockfile packages; the payload records pin the entry bytes.
+    server = _json((prepared/'legal/server-bundle.json').read_bytes())
+    lock = _json(_unlinked(repo/'package-lock.json', file=True).read_bytes(), 64*1024**2).get('packages', {})
+    sources, packages = server.get('sources'), server.get('packages')
+    if not isinstance(sources, dict) or not sources or not isinstance(packages, list): raise PackageError('Server bundle record')
+    for name, digest in sources.items():
+        if not name.startswith('src/') or name not in tracked or _hash(_unlinked(repo/name, file=True).read_bytes())!=digest:
+            raise PackageError('Application source bytes differ')
+    for item in packages:
+        locked = lock.get(item.get('path')) if isinstance(item, dict) else None
+        if not isinstance(locked, dict) or locked.get('dev') or locked.get('version')!=item.get('version'): raise PackageError('Bundled package not locked')
+    outputs = {o.get('path'):o for o in server.get('outputs', []) if isinstance(o, dict)}
+    if set(outputs)!=set(bundle.SERVER): raise PackageError('Server bundle record')
+    for name, output in outputs.items():
+        record, entry = records.get(name), 'src/'+PurePosixPath(name).stem+'.ts'
+        if (not record or record['sha256']!=output.get('sha256') or record['size']!=output.get('size') or output.get('entry')!=entry or
+                not isinstance(output.get('sources'), list) or entry not in output['sources'] or not set(output['sources'])<=sources.keys()):
+            raise PackageError('Server bundle record differs')
+    # The offline migration runs against old data: its pinned bundle holds only
+    # migration source with the schema declaration, never a third-party package.
+    migration = outputs['app/server/native-migrate-v1.mjs']
+    if 'src/database-schema.ts' not in migration['sources'] or migration.get('packages')!=[]: raise PackageError('Migration bundle closure')
     return schema, migrations
 
 

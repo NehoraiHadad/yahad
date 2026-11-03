@@ -69,14 +69,16 @@ internal sealed class ProductionFixture:IDisposable
         File.Copy(node,f.Node);Copy(helper,Path.Combine(f.Payload,"app/native"));
         void Put(string name,string text){var p=Path.Combine(f.Payload,name);Directory.CreateDirectory(Path.GetDirectoryName(p)!);File.WriteAllText(p,text);}
         Put("runtime/ffmpeg/ffmpeg.exe","synthetic-ffmpeg-not-executed");Put("runtime/caddy/caddy.exe","synthetic-caddy-not-executed");
-        Put("app/package.json","{\"type\":\"module\"}");Put("app/node_modules/tsx/package.json","{\"type\":\"module\",\"exports\":\"./index.mjs\"}");
-        Put("app/node_modules/tsx/index.mjs","export * from "+JsonSerializer.Serialize(new Uri(Path.Combine(repo,"node_modules/tsx/dist/loader.mjs")).AbsoluteUri)+";");
+        Put("app/package.json","{\"type\":\"module\"}");
+        // Stands in for the server bundle: the package has no loader, so the entry
+        // registers the repository tsx before importing the source Store worker.
+        var register="const{register}=await import("+JsonSerializer.Serialize(new Uri(Path.Combine(repo,"node_modules/tsx/dist/esm/api/index.mjs")).AbsoluteUri)+");register();";
         Put("legal/build-inputs.json",JsonSerializer.Serialize(new{databaseSchema=f.Schema}));
-        Put("app/src/worker.ts",f.Worker());
-        Put("app/src/main.ts","import fs from 'node:fs';try{await import('./worker.ts')}catch(error){fs.writeFileSync("+JsonSerializer.Serialize(f.PathOf("worker-error.json"))+",JSON.stringify({name:error.name,message:error.message,stack:error.stack}));process.exitCode=1}");
+        Put("app/server/worker.ts",f.Worker());
+        Put("app/server/main.mjs","import fs from 'node:fs';try{"+register+"await import('./worker.ts')}catch(error){fs.writeFileSync("+JsonSerializer.Serialize(f.PathOf("worker-error.json"))+",JSON.stringify({name:error.name,message:error.message,stack:error.stack}));process.exitCode=1}");
         var records=Directory.GetFiles(f.Payload,"*",SearchOption.AllDirectories).Order(StringComparer.Ordinal).Select(p=>new{path=Path.GetRelativePath(f.Payload,p).Replace('\\','/'),size=new FileInfo(p).Length,sha256=Hash(File.ReadAllBytes(p))}).ToArray();
         var manifest=JsonSerializer.SerializeToUtf8Bytes(new{version=ApplicationRelease.Version,schema=1,kind="windows-runtime-candidate",target="win-x64",profile="full",authority="application-updater",
-            launch=new{node="runtime/node/node.exe",entry="app/src/main.ts",helper="app/native/Yahad.Platform.exe",ffmpeg="runtime/ffmpeg/ffmpeg.exe",caddy="runtime/caddy/caddy.exe"},files=records});
+            launch=new{node="runtime/node/node.exe",entry="app/server/main.mjs",helper="app/native/Yahad.Platform.exe",ffmpeg="runtime/ffmpeg/ffmpeg.exe",caddy="runtime/caddy/caddy.exe"},files=records});
         f.release=Hash(manifest);File.WriteAllBytes(Path.Combine(f.Payload,"bundle.json"),manifest);Directory.CreateDirectory(Path.Combine(f.Root,"payloads"));var target=Path.Combine(f.Root,"payloads",f.release);Directory.Move(f.Payload,target);
         f.actualPayload=target;
         await f.Seed(node);f.Publish();return f;
@@ -184,7 +186,7 @@ internal sealed class ProductionFixture:IDisposable
         {var destination=Path.Combine(target,Path.GetRelativePath(prepared,path));Directory.CreateDirectory(Path.GetDirectoryName(destination)!);File.Copy(path,destination);}
         actualPayload=target;Publish();
     }
-    internal VerifiedProcessSpec RawSpec(WindowsFileBoundary.DataLease lease)=>new(Path.Combine(Package,"runtime/node/node.exe"),Hash(File.ReadAllBytes(Path.Combine(Package,"runtime/node/node.exe"))),["--import","tsx","src/main.ts"],Path.Combine(Package,"app"),Path.Combine(Root,"temporary"),Path.Combine(Package,"runtime/ffmpeg/ffmpeg.exe"),new Dictionary<string,string>{{"DATA_DIR",Data},{"MASTER_KEY_FILE",Path.Combine(Dataset,"master-key")}},lease);
+    internal VerifiedProcessSpec RawSpec(WindowsFileBoundary.DataLease lease)=>new(Path.Combine(Package,"runtime/node/node.exe"),Hash(File.ReadAllBytes(Path.Combine(Package,"runtime/node/node.exe"))),["server/main.mjs"],Path.Combine(Package,"app"),Path.Combine(Root,"temporary"),Path.Combine(Package,"runtime/ffmpeg/ffmpeg.exe"),new Dictionary<string,string>{{"DATA_DIR",Data},{"MASTER_KEY_FILE",Path.Combine(Dataset,"master-key")}},lease);
     internal static string Hash(byte[] value)=>Convert.ToHexStringLower(SHA256.HashData(value));
     internal static int ReadSourceSchema(string repo)
     {

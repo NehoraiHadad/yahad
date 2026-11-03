@@ -45,7 +45,7 @@ internal static class PackagedNativeStartupProbe
                 ["DIAGNOSTICS_ENABLED"] = "false"
             };
             lease = WindowsFileBoundary.AcquireDataLease(data);
-            var spec = new VerifiedProcessSpec(node, hash, ["--import", "tsx", "src/main.ts"],
+            var spec = new VerifiedProcessSpec(node, hash, ["server/main.mjs"],
                 Path.Combine(prepared, "app"), temporary, Path.Combine(prepared, "runtime", "ffmpeg", "ffmpeg.exe"), environment, lease);
             var launcher = jobs.Launcher(new ServiceProcessLauncher(spec, new LocalChildControlFactory()));
             controller = new ServiceController(new Start(launcher), TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(20));

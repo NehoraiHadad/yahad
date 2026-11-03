@@ -51,7 +51,7 @@ internal sealed class NativeMigrationSandbox(IMigrationSandboxKernel kernel):IMi
         InstalledActivationResolver.Id(spec.Plan.InstallationId);InstalledActivationResolver.Id(spec.Plan.OperationId);InstalledActivationResolver.Id(spec.Nonce);
         InstalledActivationResolver.Digest(spec.NodeDigest);InstalledActivationResolver.Digest(spec.Plan.EntryDigest);InstalledActivationResolver.Digest(spec.Plan.PayloadDigest);
         var payload=Canonical(spec.PayloadRoot);var clone=Canonical(spec.CloneRoot);
-        if(!Same(spec.NodePath,Path.Combine(payload,"runtime","node","node.exe"))||!Same(spec.EntryPath,Path.Combine(payload,"app","src","native-migrate-v1.ts"))||
+        if(!Same(spec.NodePath,Path.Combine(payload,"runtime","node","node.exe"))||!Same(spec.EntryPath,Path.Combine(payload,"app","server","native-migrate-v1.mjs"))||
             !Same(spec.DataDirectory,Path.Combine(clone,"data"))||Same(payload,clone)||Within(clone,payload)||Within(payload,clone)||
             !spec.ExpectedRuntimeSid.StartsWith("S-1-5-80-",StringComparison.Ordinal)||!spec.ExpectedAuthoritySid.StartsWith("S-1-5-80-",StringComparison.Ordinal)||spec.ExpectedRuntimeSid==spec.ExpectedAuthoritySid||
             !spec.ExpectedAppContainerSid.StartsWith("S-1-15-2-",StringComparison.Ordinal)||spec.ExpectedAppContainerSid=="S-1-15-2-1")throw new IOException("MIGRATION_PROCESS_SPEC");
@@ -113,7 +113,7 @@ internal sealed class WindowsMigrationSandboxKernel:IMigrationSandboxKernel
             try{Marshal.StructureToPtr(limits,limit,false);if(!SetInformationJobObject(job,9,limit,(uint)Marshal.SizeOf<ExtendedLimit>()))throw new Win32Exception();}finally{Marshal.FreeHGlobal(limit);}
             environment=Marshal.StringToHGlobalUni(LaunchEnvironment.Block(LaunchEnvironment.Clean(spec.TemporaryDirectory)));
             var start=new StartupInfoEx{Startup=new StartupInfo{Size=Marshal.SizeOf<StartupInfoEx>()},Attributes=attributes};
-            var command=new StringBuilder(JobProcess.Quote(spec.NodePath)+" --import tsx "+JobProcess.Quote(spec.EntryPath)+" --request "+JobProcess.Quote(spec.RequestFile));
+            var command=new StringBuilder(JobProcess.Quote(spec.NodePath)+" "+JobProcess.Quote(spec.EntryPath)+" --request "+JobProcess.Quote(spec.RequestFile));
             // No handle list, inheritance or source data lease. Suspended start
             // lets the host verify actual token/job/access before any Node code.
             if(!CreateProcessW(spec.NodePath,command,IntPtr.Zero,IntPtr.Zero,false,0x00000004|0x00080000|0x08000000|0x00000400,

@@ -191,7 +191,7 @@ internal static class OfflineMigrationTests
         var root=SafeDirectory.CreatePrivateSession(Path.Combine(Path.GetTempPath(),"fm"));var id=Guid.NewGuid().ToString("N");var data=Guid.NewGuid().ToString("N");var clone=Guid.NewGuid().ToString("N");
         var p=new OfflineMigrationPlan(1,Guid.NewGuid().ToString("N"),id,data,clone,Guid.NewGuid().ToString("N"),Guid.NewGuid().ToString("N"),new('a',64),6,7,new('b',64),new('c',64),new('d',64),new('e',64),new('f',64));
         var work=Path.Combine(root,"migration-staging",id);var payload=Path.Combine(work,"payload");var cloneRoot=Path.Combine(root,"datasets",data,"restore-"+clone,"completed");
-        return new(p,Path.Combine(payload,"runtime","node","node.exe"),digest??new('a',64),Path.Combine(payload,"app","src","native-migrate-v1.ts"),payload,cloneRoot,Path.Combine(cloneRoot,"data"),Path.Combine(work,"work","request.json"),Path.Combine(work,"work","result.json"),Path.Combine(work,"temp"),"S-1-5-80-1","S-1-15-2-123",Guid.NewGuid().ToString("N"),Path.Combine(root,"datasets",data,"data"),root,"S-1-5-80-2");
+        return new(p,Path.Combine(payload,"runtime","node","node.exe"),digest??new('a',64),Path.Combine(payload,"app","server","native-migrate-v1.mjs"),payload,cloneRoot,Path.Combine(cloneRoot,"data"),Path.Combine(work,"work","request.json"),Path.Combine(work,"work","result.json"),Path.Combine(work,"temp"),"S-1-5-80-1","S-1-15-2-123",Guid.NewGuid().ToString("N"),Path.Combine(root,"datasets",data,"data"),root,"S-1-5-80-2");
     }
     private sealed class JournalFixture
     {

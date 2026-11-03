@@ -238,7 +238,7 @@ internal static class FullInstallerIntegrationTests
     }
     private static InstallPackage LayoutPackage(bool full,bool duplicate,bool missing)
     {
-        var names=new List<string>{"payload/bundle.json","payload/runtime/node/node.exe","payload/runtime/ffmpeg/ffmpeg.exe","payload/runtime/caddy/caddy.exe","payload/app/src/main.ts","payload/app/dist/index.html","payload/app/native/Yahad.Platform.exe","payload/legal/fixture.json"};
+        var names=new List<string>{"payload/bundle.json","payload/runtime/node/node.exe","payload/runtime/ffmpeg/ffmpeg.exe","payload/runtime/caddy/caddy.exe","payload/app/server/main.mjs","payload/app/dist/index.html","payload/app/native/Yahad.Platform.exe","payload/legal/fixture.json"};
         names.AddRange(full?new[]{"system-manifest.json","bootstrap/authority/Yahad.Authority.exe","bootstrap/owner/Yahad.Owner.exe","bootstrap/servicehost/Yahad.ServiceHost.exe","bootstrap/servicehost/Yahad.ServiceHost.runtimeconfig.json","bootstrap/probe/node/node.exe","bootstrap/handoff/Yahad.Authority.exe"}:new[]{"host/Yahad.ServiceHost.exe","host/Yahad.ServiceHost.runtimeconfig.json"});
         if(duplicate)names.Add("host/Yahad.ServiceHost.exe");if(missing)names.Remove("bootstrap/servicehost/Yahad.ServiceHost.runtimeconfig.json");
         var stream=new MemoryStream();using(var zip=new ZipArchive(stream,ZipArchiveMode.Create,true))foreach(var name in names){using var entry=zip.CreateEntry(name).Open();entry.WriteByte(1);}
