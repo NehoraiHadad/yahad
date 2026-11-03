@@ -9,6 +9,7 @@ on:
     branches: [main, windows-install-acceptance]
     paths:
       - 'installer/**'
+      - 'scripts/**'
       - 'src/**'
       - 'web/**'
       - 'package.json'
