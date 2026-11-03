@@ -2,11 +2,18 @@
 # person or administrator observes (Setup results, services, HTTP answers, the
 # account they created), so it keeps gating when the mechanism behind it changes:
 #   install -> ready -> create the first family over the app's own HTTP API ->
-#   restart the service and time it -> repair a stopped Runtime -> refuse foreign,
-#   unsigned and tampered releases -> upgrade with a schema change -> refuse a
-#   replay -> a broken release rolls back with the data restored -> an upgrade
-#   killed mid-way is undone by repair -> uninstall keeping data -> reinstall ->
-#   the same account signs in -> uninstall deleting data -> nothing remains.
+#   the parent reads and changes update settings through app, Platform and the
+#   Updater's pipe -> restart the service and time it -> repair stopped services
+#   and a missing task -> the Repair task repairs as SYSTEM -> refuse foreign,
+#   unsigned and tampered releases -> the parent installs a signed staged release
+#   with a schema change through the Updater -> refuse a replay -> a broken release
+#   rolls both services back with the data restored -> an upgrade killed mid-way is
+#   undone by repair -> uninstall keeping data -> reinstall -> the same account signs
+#   in -> uninstall deleting data -> nothing remains.
+# Only the Updater's download from GitHub into its staging folder is not driven
+# here: GitHub carries no release signed by CI's throwaway key and the source URL is
+# fixed by design. The Updater's real check against GitHub does run; the download
+# path has unit tests in Yahad.FirstInstall.Tests.
 # Changes services and machine folders, so it runs only on a disposable
 # administrator machine (CI), never a family PC. Diagnostics and summary.json
 # are written even on failure. The one-time setup link and the generated
@@ -34,11 +41,10 @@ $failedPhase = $null
 $programData = Join-Path $env:ProgramData 'Yahad.FirstInstall'
 $programFiles = Join-Path $env:ProgramFiles 'Yahad.FirstInstall'
 $runtime = 'Yahad.Acceptance'
-# The collapse to the single Runtime service is deliberate: an Updater service
-# is added in a later step, and that change must be made here deliberately.
-$installedServices = @($runtime)
-$runningServices = @($runtime)
-# Layout the single-service installer no longer creates; each must stay absent.
+$updater = 'Yahad.Acceptance.Updater'
+$installedServices = @($runtime, $updater)
+$runningServices = @($runtime, $updater)
+# Layout the installer no longer creates; each must stay absent.
 $removedProgramFilesEntries = @('payloads', 'bootstrap', 'system-slots', '.authority', 'intake')
 $removedProgramDataEntries = @('update-authority.json', 'activation.json', 'epoch.json', 'web.json', 'bootstrap.json')
 $account = $null
@@ -64,6 +70,12 @@ $upgradeSetup = Join-Path $upgradeDirectory $upgradeRelease.setup.name
 $brokenSetup = Join-Path $brokenDirectory $brokenRelease.setup.name
 $baseSetup = Join-Path $baseDirectory $baseRelease.setup.name
 $upgradeState = Join-Path $programData 'upgrade-state.json'
+$updaterRoot = Join-Path $programData 'updater'
+$lastUpgrade = Join-Path $updaterRoot 'last-upgrade.json'
+$taskPath = '\Yahad\'
+$taskName = 'Repair'
+$parentSession = $null
+$liveCheck = $null
 function RetainedSetup([string]$Version) { Join-Path $programFiles "versions\$Version\Yahad.Setup.exe" }
 
 function Phase([string]$Name, [scriptblock]$Body) {
@@ -101,11 +113,31 @@ function RunSetupExpecting([string]$Image, [string[]]$Arguments, [string]$Result
     return $value
 }
 function Health { Invoke-RestMethod -Uri "$origin/health/ready" -TimeoutSec 30 }
-function ImagePathOf { (Get-CimInstance -ClassName Win32_Service -Filter "Name='$runtime'").PathName }
+function ImagePathOf([string]$Name = $runtime) { (Get-CimInstance -ClassName Win32_Service -Filter "Name='$Name'").PathName }
 function SignIn {
     $body = Json @{ name=$account.Name; password=$account.Password }
     Invoke-RestMethod -Method Post -Uri "$origin/api/login" -Body $body -ContentType 'application/json' -SessionVariable session -TimeoutSec 60 -Headers @{ Origin=$origin } | Out-Null
     if ((RequireSignedInAccount $session) -ne $familyId) { throw 'The acceptance parent signed in to a different family' }
+    $script:parentSession = $session
+}
+function RepairTaskOf { Get-ScheduledTask -TaskPath $taskPath -TaskName $taskName -ErrorAction SilentlyContinue }
+function RequireRepairTask([string]$Version) {
+    $task = RepairTaskOf
+    if (!$task) { throw 'The Yahad\Repair task is missing' }
+    if ($task.Principal.UserId -notin 'SYSTEM', 'S-1-5-18') { throw "The Repair task runs as $($task.Principal.UserId)" }
+    if ($task.Actions.Count -ne 1 -or $task.Actions[0].Execute -ne (RetainedSetup $Version) -or $task.Actions[0].Arguments -notlike '--repair --result *') { throw "The Repair task runs $($task.Actions[0].Execute) $($task.Actions[0].Arguments)" }
+    if ($task.Triggers.Count -ne 2) { throw "The Repair task has $($task.Triggers.Count) triggers, expected boot and daily" }
+}
+function RequireNoRepairTask { if (RepairTaskOf) { throw 'The Yahad\Repair task remains' } }
+# What the parent's own browser does: the live app -> Platform -> pipe -> Updater path.
+function UpdatesStatus {
+    $status = Invoke-RestMethod -Uri "$origin/api/parent/updates" -WebSession $parentSession -TimeoutSec 30
+    if ($status.configured -ne $true) { throw 'Updates are not configured through the app; the Platform refused or could not verify the Updater' }
+    return $status
+}
+function UpdatesRequest($Body) {
+    $csrf = (Invoke-RestMethod -Uri "$origin/api/me" -WebSession $parentSession -TimeoutSec 30).csrf
+    Invoke-RestMethod -Method Post -Uri "$origin/api/parent/updates" -Body (Json $Body) -ContentType 'application/json' -WebSession $parentSession -TimeoutSec 30 -Headers @{ Origin=$origin; 'X-CSRF-Token'=$csrf }
 }
 # What a person sees of a whole installation at one release: it answers as that
 # release, the family is theirs, the service points at it and nothing is pending.
@@ -116,6 +148,10 @@ function RequireInstalled([string]$Version, [int]$Schema, [string[]]$Retained) {
     SignIn
     RequireServiceConfiguration
     if ((ImagePathOf) -notlike "*\versions\$Version\host\*") { throw "ImagePath is $(ImagePathOf), expected version $Version" }
+    if ((ImagePathOf $updater) -ne ('"' + (Join-Path $programFiles "versions\$Version\updater\Yahad.Updater.exe") + '" --service')) { throw "Updater ImagePath is $(ImagePathOf $updater), expected version $Version" }
+    if ((Get-Service -Name $updater).Status -ne 'Running') { throw "$updater is not running at $Version" }
+    if ((UpdatesStatus).currentVersion -ne $Version) { throw "The Updater reports the wrong version, expected $Version" }
+    RequireRepairTask $Version
     if (Test-Path -LiteralPath $upgradeState) { throw 'An upgrade record remains' }
     $present = @(Get-ChildItem -LiteralPath (Join-Path $programFiles 'versions') -Directory | ForEach-Object Name | Sort-Object)
     if (($present -join ',') -ne (($Retained | Sort-Object) -join ',')) { throw "Version directories are $($present -join ','), expected $($Retained -join ',')" }
@@ -133,10 +169,22 @@ function RequireInstalledAndReady($Result) {
     $response = Invoke-WebRequest -Uri "$origin/health/ready" -UseBasicParsing -TimeoutSec 30
     if ($response.StatusCode -ne 200) { throw "health/ready returned $($response.StatusCode)" }
 }
-# The Runtime is the only service: automatic start, restarted by the SCM after a
-# failure (5s/30s/120s, counter reset after a day, also on non-crash exits), and
-# launched from its own versioned host folder. Read from the SCM registry keys
-# so the check does not depend on the display language of sc.exe.
+# Automatic start, restarted by the SCM after a failure (counter reset after a day,
+# also on non-crash exits), and launched from its own versioned folder. Read from
+# the SCM registry keys so the check does not depend on the display language of sc.exe.
+function RequireFailureActions([string]$Name, [string]$Expected) {
+    $key = Get-ItemProperty -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Services\$Name"
+    $bytes = [byte[]]$key.FailureActions
+    if (!$bytes -or $bytes.Length -lt 20) { throw "$Name has no SCM failure actions" }
+    $reset = [BitConverter]::ToUInt32($bytes, 0)
+    $count = [BitConverter]::ToUInt32($bytes, 12)
+    $offset = [BitConverter]::ToUInt32($bytes, 16)
+    if ($reset -ne 86400) { throw "$Name failure reset period is $reset, expected 86400" }
+    if ($count -ne 3 -or $bytes.Length -lt $offset + 8 * $count) { throw "$Name has $count failure actions, expected 3" }
+    $actual = for ($i = 0; $i -lt $count; $i++) { '{0}:{1}' -f [BitConverter]::ToUInt32($bytes, $offset + 8 * $i), [BitConverter]::ToUInt32($bytes, $offset + 8 * $i + 4) }
+    if (($actual -join ',') -ne $Expected) { throw "$Name failure actions are $($actual -join ','), expected $Expected" }
+    if ($key.FailureActionsOnNonCrashFailures -ne 1) { throw "$Name FailureActionsOnNonCrashFailures is $($key.FailureActionsOnNonCrashFailures), expected 1" }
+}
 function RequireServiceConfiguration {
     $details = Get-CimInstance -ClassName Win32_Service -Filter "Name='$runtime'"
     if (!$details) { throw "$runtime is not registered with the SCM" }
@@ -144,19 +192,16 @@ function RequireServiceConfiguration {
     if ($details.StartName -ne "NT SERVICE\$runtime") { throw "$runtime runs as $($details.StartName), expected NT SERVICE\$runtime" }
     $expectedImage = '^"' + [regex]::Escape($programFiles) + '\\versions\\\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\\host\\Yahad\.ServiceHost\.exe" --service$'
     if ($details.PathName -notmatch $expectedImage) { throw "$runtime ImagePath does not match versions\<version>\host\Yahad.ServiceHost.exe --service: $($details.PathName)" }
-    $key = Get-ItemProperty -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Services\$runtime"
-    $bytes = [byte[]]$key.FailureActions
-    if (!$bytes -or $bytes.Length -lt 20) { throw "$runtime has no SCM failure actions" }
-    $reset = [BitConverter]::ToUInt32($bytes, 0)
-    $count = [BitConverter]::ToUInt32($bytes, 12)
-    $offset = [BitConverter]::ToUInt32($bytes, 16)
-    if ($reset -ne 86400) { throw "$runtime failure reset period is $reset, expected 86400" }
-    if ($count -ne 3 -or $bytes.Length -lt $offset + 8 * $count) { throw "$runtime has $count failure actions, expected 3" }
-    $actual = for ($i = 0; $i -lt $count; $i++) { '{0}:{1}' -f [BitConverter]::ToUInt32($bytes, $offset + 8 * $i), [BitConverter]::ToUInt32($bytes, $offset + 8 * $i + 4) }
-    if (($actual -join ',') -ne '1:5000,1:30000,1:120000') { throw "$runtime failure actions are $($actual -join ','), expected restart 5s/30s/120s" }
-    if ($key.FailureActionsOnNonCrashFailures -ne 1) { throw "$runtime FailureActionsOnNonCrashFailures is $($key.FailureActionsOnNonCrashFailures), expected 1" }
-    foreach ($entry in $removedProgramFilesEntries) { if (Test-Path -LiteralPath (Join-Path $programFiles $entry)) { throw "$entry exists under $programFiles; the single-service layout has none" } }
-    foreach ($entry in $removedProgramDataEntries) { if (Test-Path -LiteralPath (Join-Path $programData $entry)) { throw "$entry exists under $programData; the single-service layout has none" } }
+    RequireFailureActions $runtime '1:5000,1:30000,1:120000'
+    $self = Get-CimInstance -ClassName Win32_Service -Filter "Name='$updater'"
+    if (!$self) { throw "$updater is not registered with the SCM" }
+    if ($self.StartMode -ne 'Auto' -or !$self.DelayedAutoStart) { throw "$updater start mode is $($self.StartMode) delayed=$($self.DelayedAutoStart), expected delayed Auto" }
+    if ($self.StartName -ne 'LocalSystem') { throw "$updater runs as $($self.StartName), expected LocalSystem" }
+    $expectedSelf = '^"' + [regex]::Escape($programFiles) + '\\versions\\\d+\.\d+\.\d+\\updater\\Yahad\.Updater\.exe" --service$'
+    if ($self.PathName -notmatch $expectedSelf) { throw "$updater ImagePath does not match versions\<version>\updater\Yahad.Updater.exe --service: $($self.PathName)" }
+    RequireFailureActions $updater '1:60000,1:300000,1:600000'
+    foreach ($entry in $removedProgramFilesEntries) { if (Test-Path -LiteralPath (Join-Path $programFiles $entry)) { throw "$entry exists under $programFiles; the current layout has none" } }
+    foreach ($entry in $removedProgramDataEntries) { if (Test-Path -LiteralPath (Join-Path $programData $entry)) { throw "$entry exists under $programData; the current layout has none" } }
 }
 function SetupState { (Invoke-RestMethod -Uri "$origin/api/setup/status" -TimeoutSec 30).state }
 function Json($Value) { $Value | ConvertTo-Json -Compress }
@@ -169,6 +214,10 @@ function RequireRemovedServices { if ((YahadServices).Count) { throw ('Services 
 function Collect {
     @(YahadServices | ForEach-Object { [ordered]@{ Name=$_.Name; Status=[string]$_.Status; StartType=[string]$_.StartType; ImagePath=(Get-CimInstance -ClassName Win32_Service -Filter "Name='$($_.Name)'").PathName } }) | ConvertTo-Json | Set-Content -Encoding utf8NoBOM (Join-Path $out 'services.json')
     if (Test-Path -LiteralPath $upgradeState) { Copy-Item -LiteralPath $upgradeState -Destination (Join-Path $out 'upgrade-state.json') }
+    foreach ($name in 'state.json', 'last-upgrade.json', 'repair-result.json') {
+        $file = Join-Path $updaterRoot $name
+        if (Test-Path -LiteralPath $file) { Copy-Item -LiteralPath $file -Destination (Join-Path $out "updater-$name") }
+    }
     $since = $started.AddMinutes(-1)
     # The Yahad source exists only after a startup failure wrote to it; a
     # ProviderName filter for an unregistered source throws, so filter after.
@@ -210,12 +259,45 @@ try {
         $script:familyId = RequireSignedInAccount $created
         if ((SetupState) -ne 'complete') { throw 'Setup still open after the family was created' }
     }
+    Phase 'updater-status' {
+        SignIn
+        $status = UpdatesStatus
+        if ($status.enabled -ne $true) { throw 'A build with a release key reports updates as unavailable' }
+        if ($status.mode -ne 'notify') { throw "The Updater's mode is $($status.mode), expected the administrator's choice" }
+        if ($status.currentVersion -ne $baseRelease.version) { throw "The Updater reports $($status.currentVersion), expected $($baseRelease.version)" }
+        if ($status.modeControlAllowed -ne $true) { throw 'The parent cannot change the update mode' }
+        # The mode goes through the pipe and survives the Updater's own restart.
+        foreach ($mode in 'auto', 'notify') {
+            UpdatesRequest @{ action='set_mode'; mode=$mode } | Out-Null
+            Restart-Service -Name $updater
+            $after = UpdatesStatus
+            if ($after.mode -ne $mode -or $after.lastModeRequest.state -ne 'applied') { throw "The mode is $($after.mode)/$($after.lastModeRequest.state) after asking for $mode" }
+        }
+    }
+    Phase 'updater-check' {
+        # The real check against GitHub. Its outcome depends on GitHub and on CI's
+        # rate limit, but it must end, and only in one of these ways.
+        $before = (UpdatesStatus).checkedAt
+        UpdatesRequest @{ action='check' } | Out-Null
+        $deadline = [Diagnostics.Stopwatch]::StartNew()
+        while ($true) {
+            $status = UpdatesStatus
+            if ($status.lastRequest.action -eq 'check' -and $status.lastRequest.state -ne 'running') { break }
+            if ($deadline.Elapsed -ge [TimeSpan]::FromMinutes(3)) { throw 'The update check did not finish' }
+            Start-Sleep -Seconds 2
+        }
+        if ($status.lastRequest.error -notin $null, 'network', 'signature') { throw "The update check ended with $($status.lastRequest.error)" }
+        if ($status.checkedAt -eq $before) { throw 'The update check did not record itself' }
+        $script:liveCheck = if ($status.lastRequest.error) { $status.lastRequest.error } else { 'ok' }
+        Write-Output "LIVE_CHECK $liveCheck"
+        if (Test-Path -LiteralPath (Join-Path $updaterRoot 'staging')) { throw 'A check against the public release staged something CI never signed' }
+    }
     Phase 'restart' {
         # What the SCM does for a stopped service: stop the Runtime, then start it
         # again. Measured from the start request to the first 200 from
         # /health/ready, bounded by the Runtime's own five-minute admission budget.
         Stop-Service -Name $runtime
-        foreach ($name in $runningServices) { $service = Get-Service -Name $name; if ($service.Status -ne 'Stopped') { throw "$name is $($service.Status) after stop" } }
+        if ((Get-Service -Name $runtime).Status -ne 'Stopped') { throw "$runtime is $((Get-Service -Name $runtime).Status) after stop" }
         $timer = [Diagnostics.Stopwatch]::StartNew()
         Start-Service -Name $runtime
         $deadline = [TimeSpan]::FromMinutes(5)
@@ -232,16 +314,37 @@ try {
     $version = $baseRelease.version
     $schema = $baseRelease.databaseSchema
     Phase 'repair' {
-        # A Runtime an administrator (or a crash loop) left stopped and unconfigured.
-        Stop-Service -Name $runtime
-        & sc.exe failure $runtime reset= 0 actions= '' | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw 'Could not clear the failure actions' }
-        & sc.exe failureflag $runtime 0 | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw 'Could not clear the failure flag' }
+        # Services an administrator (or a crash loop) left stopped and unconfigured,
+        # and a task someone deleted.
+        foreach ($name in $installedServices) {
+            Stop-Service -Name $name
+            & sc.exe failure $name reset= 0 actions= '' | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'Could not clear the failure actions' }
+            & sc.exe failureflag $name 0 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'Could not clear the failure flag' }
+        }
+        Unregister-ScheduledTask -TaskPath $taskPath -TaskName $taskName -Confirm:$false
         $repair = RunSetupExpecting (RetainedSetup $version) @('--repair') (Join-Path $out 'repair-result.json') 'REPAIRED' 0
         $script:repairSeconds = $repair.Seconds
         RequireInstalled $version $schema @($version)
         $null = RunSetupExpecting (RetainedSetup $version) @('--repair') (Join-Path $out 'repair-again-result.json') 'NOTHING_TO_REPAIR' 0
+    }
+    Phase 'repair-task' {
+        # The task itself, in the session and token it has at 3 a.m.: SYSTEM runs the
+        # retained single-file Setup, which finds nothing to do and says so.
+        RequireRepairTask $version
+        $taskResult = Join-Path $updaterRoot 'repair-result.json'
+        Remove-Item -LiteralPath $taskResult -Force -ErrorAction SilentlyContinue
+        Start-ScheduledTask -TaskPath $taskPath -TaskName $taskName
+        $deadline = [Diagnostics.Stopwatch]::StartNew()
+        while ($true) {
+            $value = $null
+            try { if (Test-Path -LiteralPath $taskResult) { $value = Get-Content -LiteralPath $taskResult -Raw | ConvertFrom-Json } } catch { }
+            if ($value) { break }
+            if ($deadline.Elapsed -ge [TimeSpan]::FromMinutes(5)) { throw 'The Repair task wrote no result' }
+            Start-Sleep -Seconds 1
+        }
+        if ($value.Code -ne 'NOTHING_TO_REPAIR') { throw "The Repair task ended with $($value.Code)" }
     }
     Phase 'refuse-release' {
         foreach ($case in 'foreign', 'unsigned', 'tampered') {
@@ -253,11 +356,50 @@ try {
         RequireInstalled $version $schema @($version)
     }
     Phase 'upgrade' {
-        $result = RunSetupExpecting $upgradeSetup @('--quiet-upgrade', $upgradeDirectory) (Join-Path $out 'upgrade-result.json') 'UPGRADED' 0
+        # The Updater's own install path from the parent's click on. The release is
+        # placed where the Updater's download would leave it (the staging folder only
+        # administrators can write) with nothing vouching for it but its signature: the
+        # Updater re-verifies it, offers it, launches its Setup detached, and is itself
+        # stopped and replaced by that Setup.
+        $stage = Join-Path $updaterRoot "staging\$($upgradeRelease.version)"
+        New-Item -ItemType Directory -Force -Path $stage | Out-Null
+        Copy-Item -Path (Join-Path $upgradeDirectory '*') -Destination $stage
+        Restart-Service -Name $updater
+        $status = UpdatesStatus
+        $manifest = Join-Path $upgradeDirectory "yahad-windows-$($upgradeRelease.version).json"
+        $fingerprint = (Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($status.phase -ne 'available' -or $status.latestVersion -ne $upgradeRelease.version -or $status.installTarget.fingerprint -ne $fingerprint) { throw "The Updater offers $($status.phase)/$($status.latestVersion)/$($status.installTarget.fingerprint), expected $($upgradeRelease.version)/$fingerprint" }
+        # A target that is not the staged release is refused before anything runs.
+        $stale = $false
+        try { UpdatesRequest @{ action='install'; target=@{ version=$upgradeRelease.version; fingerprint=('0' * 64) } } | Out-Null } catch { $stale = [int]$_.Exception.Response.StatusCode -eq 409 }
+        if (!$stale) { throw 'An install of another target was not refused' }
+        UpdatesRequest @{ action='install'; target=@{ version=$upgradeRelease.version; fingerprint=$fingerprint } } | Out-Null
+        $deadline = [Diagnostics.Stopwatch]::StartNew()
+        while ($true) {
+            $result = $null
+            # The Setup may still be writing it.
+            try { if (Test-Path -LiteralPath $lastUpgrade) { $result = Get-Content -LiteralPath $lastUpgrade -Raw | ConvertFrom-Json } } catch { }
+            if ($result) { break }
+            if ($deadline.Elapsed -ge [TimeSpan]::FromMinutes(10)) { throw 'The Setup the Updater launched wrote no result' }
+            Start-Sleep -Seconds 1
+        }
+        Copy-Item -LiteralPath $lastUpgrade -Destination (Join-Path $out 'upgrade-result.json')
+        if ($result.Code -ne 'UPGRADED') { throw "The Updater's install ended with $($result.Code)" }
         if ($result.FromVersion -ne $version -or $result.ToVersion -ne $upgradeRelease.version -or $result.RolledBack) { throw 'Upgrade reported the wrong versions' }
         $script:upgradeSeconds = $result.Seconds
     }
     Phase 'upgraded' {
+        # The new Updater reads what the Setup left and tells the parent, whose session
+        # a real upgrade leaves signed in.
+        $status = UpdatesStatus
+        if ($status.phase -ne 'healthy' -or $status.lastRequest.action -ne 'install' -or $status.lastRequest.state -ne 'succeeded') { throw "After the install the Updater reports $($status.phase)/$($status.lastRequest.action)/$($status.lastRequest.state)" }
+        # The Setup image may be finishing its exit; the next minute's pass takes the folder.
+        $stage = Join-Path $updaterRoot "staging\$($upgradeRelease.version)"
+        $deadline = [Diagnostics.Stopwatch]::StartNew()
+        while (Test-Path -LiteralPath $stage) {
+            if ($deadline.Elapsed -ge [TimeSpan]::FromMinutes(3)) { throw 'The installed release stayed in the staging folder' }
+            Start-Sleep -Seconds 5
+        }
         if ($upgradeRelease.databaseSchema -ne $schema + 1) { throw 'The upgrade fixture does not change the schema' }
         RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema @($version, $upgradeRelease.version)
         $retained = (Get-FileHash -LiteralPath (RetainedSetup $upgradeRelease.version) -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -317,6 +459,9 @@ try {
         RequireRemovedServices
         if (!(Test-Path -LiteralPath $programData)) { throw "$programData was removed by a keep-data uninstall" }
         if (Test-Path -LiteralPath $programFiles) { throw "$programFiles remains after a keep-data uninstall" }
+        RequireNoRepairTask
+        if (!(Test-Path -LiteralPath (Join-Path $updaterRoot 'state.json'))) { throw 'A keep-data uninstall lost the update mode' }
+        if (Test-Path -LiteralPath (Join-Path $updaterRoot 'staging')) { throw 'A keep-data uninstall kept downloaded releases' }
     }
     $reinstall = $null
     Phase 'reinstall' { $script:reinstall = RunSetup @('--quiet-install', '--updates', 'notify') (Join-Path $out 'reinstall-result.json') @('--setup-link', 'stdout') }
@@ -330,7 +475,8 @@ try {
     Phase 'uninstall' { RunSetup @('--quiet-uninstall', '--data', 'delete') (Join-Path $out 'uninstall-result.json') | Out-Null }
     Phase 'removed' {
         RequireRemovedServices
-        foreach ($path in $programData, $programFiles) { if (Test-Path -LiteralPath $path) { throw "$path remains after removal" } }
+        foreach ($path in $programData, $programFiles, (Join-Path $env:windir 'System32\Tasks\Yahad')) { if (Test-Path -LiteralPath $path) { throw "$path remains after removal" } }
+        RequireNoRepairTask
     }
     $state = 'Passed'
 }
@@ -338,6 +484,6 @@ catch { $state = 'Failed'; Write-Output "FAILED $($_.Exception.Message)"; throw 
 finally {
     $account = $null
     try { Collect } catch { Write-Output "COLLECTION_FAILED $($_.Exception.Message)" }
-    [ordered]@{ State=$state; FailedPhase=$failedPhase; Phases=$phases; StartSeconds=$startSeconds; UpgradeSeconds=$upgradeSeconds; RollbackSeconds=$rollbackSeconds; RepairSeconds=$repairSeconds; ResumeSeconds=$resumeSeconds; TotalSeconds=[math]::Round(((Get-Date)-$started).TotalSeconds, 1) } |
+    [ordered]@{ State=$state; FailedPhase=$failedPhase; Phases=$phases; StartSeconds=$startSeconds; UpgradeSeconds=$upgradeSeconds; RollbackSeconds=$rollbackSeconds; RepairSeconds=$repairSeconds; ResumeSeconds=$resumeSeconds; LiveCheck=$liveCheck; TotalSeconds=[math]::Round(((Get-Date)-$started).TotalSeconds, 1) } |
         ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8NoBOM (Join-Path $out 'summary.json')
 }

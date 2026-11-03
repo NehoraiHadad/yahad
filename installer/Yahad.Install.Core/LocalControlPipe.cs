@@ -11,7 +11,11 @@ internal static class LocalControlPipe
     public static NamedPipeServerStream Create(string name)
     {
         var sid=WindowsIdentity.GetCurrent().User??throw new IOException("IPC_IDENTITY");
-        if(!ConvertStringSecurityDescriptorToSecurityDescriptorW($"D:P(A;;GRGW;;;{sid.Value})",1,out var descriptor,out _))throw new Win32Exception();
+        return Create(name,$"D:P(A;;GRGW;;;{sid.Value})");
+    }
+    public static NamedPipeServerStream Create(string name,string sddl)
+    {
+        if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl,1,out var descriptor,out _))throw new Win32Exception();
         try
         {
             var attributes=new SecurityAttributes{Length=Marshal.SizeOf<SecurityAttributes>(),Descriptor=descriptor};

@@ -6,29 +6,39 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using Microsoft.Win32.SafeHandles;
 using Yahad.Install;
+using Yahad.Service;
 namespace Yahad.Setup;
 
-// Installer-only SCM writer for the one Runtime service. The name, account and
-// image come from compiled constants and the verified package version; no CLI,
-// file or runtime peer can choose them.
-internal sealed class NativeRuntimeService:IDisposable
+// All that differs between the two services. The Runtime holds one privilege and
+// restarts quickly; the Updater is LocalSystem, starts after everything else and
+// has no reason to hurry back.
+internal sealed record ServiceSpec(string Name,string Account,Func<string,string> Command,uint[] FailureDelays,bool Restricted,bool Delayed)
+{
+    internal static readonly ServiceSpec Runtime=new(ServiceDefinition.Name,ServiceDefinition.Account,InstallLocations.ServiceCommand,[5000,30000,120000],true,false);
+    internal static readonly ServiceSpec Updater=new(ServiceDefinition.UpdaterName,ServiceDefinition.UpdaterAccount,
+        version=>{InstallLocations.RequireVersion(version);return InstalledLayout.UpdaterCommand(version);},[60000,300000,600000],false,true);
+}
+// Installer-only SCM writer. The names, accounts and images come from compiled
+// constants and the verified package version; no CLI, file or runtime peer can
+// choose them.
+internal sealed class NativeService:IDisposable
 {
     internal const uint DemandStart=3,AutoStart=2,Disabled=4;
-    private string command;private readonly Handle manager,service;private bool stopRequested;
-    private NativeRuntimeService(string command,Handle manager,Handle service){this.command=command;this.manager=manager;this.service=service;}
-    internal static bool Exists()
+    private readonly ServiceSpec spec;private string command;private readonly Handle manager,service;private bool stopRequested;
+    private NativeService(ServiceSpec spec,string command,Handle manager,Handle service){this.spec=spec;this.command=command;this.manager=manager;this.service=service;}
+    internal static bool Exists(ServiceSpec? spec=null)
     {
         using var manager=new Handle(OpenSCManagerW(null,null,1));if(manager.IsInvalid)throw new Win32Exception();
-        using var service=new Handle(OpenServiceW(manager,InstallLocations.ServiceName,4));if(!service.IsInvalid)return true;
+        using var service=new Handle(OpenServiceW(manager,(spec??ServiceSpec.Runtime).Name,4));if(!service.IsInvalid)return true;
         var error=Marshal.GetLastPInvokeError();if(error==1060)return false;if(error==1072)return true;throw new Win32Exception(error);
     }
-    internal static NativeRuntimeService Create(string version,string owner)
+    internal static NativeService Create(string version,string owner,ServiceSpec? kind=null)
     {
-        NativeInstallFiles.RequireAdministrator();var command=InstallLocations.ServiceCommand(version);
+        var spec=kind??ServiceSpec.Runtime;NativeInstallFiles.RequireAdministrator();var command=spec.Command(version);
         var manager=new Handle(OpenSCManagerW(null,null,3));if(manager.IsInvalid){manager.Dispose();throw new Win32Exception();}
-        var service=new Handle(CreateServiceW(manager,InstallLocations.ServiceName,InstallLocations.ServiceName,0xf01ff,16,DemandStart,1,command,null,IntPtr.Zero,null,InstallLocations.ServiceAccount,null));
+        var service=new Handle(CreateServiceW(manager,spec.Name,spec.Name,0xf01ff,16,DemandStart,1,command,null,IntPtr.Zero,null,spec.Account,null));
         if(service.IsInvalid){service.Dispose();manager.Dispose();throw new Win32Exception();}
-        var value=new NativeRuntimeService(command,manager,service);
+        var value=new NativeService(spec,command,manager,service);
         try
         {
             // This handle is the result of a successful CREATE, never adoption
@@ -43,9 +53,9 @@ internal sealed class NativeRuntimeService:IDisposable
     // Only a same-package preparing record enters this path. An interruption
     // between CreateService and its configuration resumes only before the
     // service has EVER started; the strict Open stays unchanged.
-    internal static NativeRuntimeService OpenForProvisioning(string version,string owner)
+    internal static NativeService OpenForProvisioning(string version,string owner,ServiceSpec? kind=null)
     {
-        var value=OpenHandle(version);
+        var value=OpenHandle(version,kind);
         try
         {
             var status=value.Status();RequireProvisioningState(value.RequireConfigurationIdentity(),status.State,status.Pid,status.Win32,status.Specific);
@@ -54,21 +64,21 @@ internal sealed class NativeRuntimeService:IDisposable
         }
         catch{value.Dispose();throw;}
     }
-    internal static NativeRuntimeService Open(string version,string owner)
+    internal static NativeService Open(string version,string owner,ServiceSpec? kind=null)
     {
-        var value=OpenHandle(version);
+        var value=OpenHandle(version,kind);
         try{value.RequireOwned();RequireProtection(value.Security(),owner);return value;}catch{value.Dispose();throw;}
     }
     // During an upgrade the image is one of exactly two recorded versions.
-    internal static NativeRuntimeService OpenAt(string version,string other,string owner)
+    internal static NativeService OpenAt(string version,string other,string owner,ServiceSpec? kind=null)
     {
-        try{return Open(version,owner);}catch(IOException error)when(error.Message=="SERVICE_NOT_OWNED"){return Open(other,owner);}
+        try{return Open(version,owner,kind);}catch(IOException error)when(error.Message=="SERVICE_NOT_OWNED"){return Open(other,owner,kind);}
     }
     // Repair: an image pointing anywhere else is set back to the installed
-    // release. Type and account are still required to be the Runtime's own.
-    internal static NativeRuntimeService OpenRepointed(string version,string owner,ref bool repointed)
+    // release. Type and account are still required to be the service's own.
+    internal static NativeService OpenRepointed(string version,string owner,ref bool repointed,ServiceSpec? kind=null)
     {
-        var value=OpenHandle(version);
+        var value=OpenHandle(version,kind);
         try
         {
             RequireProtection(value.Security(),owner);
@@ -78,28 +88,32 @@ internal sealed class NativeRuntimeService:IDisposable
         }
         catch{value.Dispose();throw;}
     }
-    internal static async Task<NativeRuntimeService?> OpenForRemovalAsync(string version,string owner,CancellationToken cancellation)
+    internal static async Task<NativeService?> OpenForRemovalAsync(string version,string owner,CancellationToken cancellation,ServiceSpec? kind=null)
     {
         var until=Stopwatch.StartNew();
         while(true)
         {
-            cancellation.ThrowIfCancellationRequested();if(!Exists())return null;
-            try{return Open(version,owner);}
+            cancellation.ThrowIfCancellationRequested();if(!Exists(kind))return null;
+            try{return Open(version,owner,kind);}
             catch(Win32Exception error)when(error.NativeErrorCode==1072)
             {if(until.Elapsed>=TimeSpan.FromSeconds(15))throw new IOException("UNINSTALL_SERVICE_REMOVAL_PENDING",error);await Task.Delay(100,cancellation);}
             catch(Win32Exception error)when(error.NativeErrorCode==1060){return null;}
         }
     }
-    private static NativeRuntimeService OpenHandle(string version)
+    private static NativeService OpenHandle(string version,ServiceSpec? kind)
     {
-        NativeInstallFiles.RequireAdministrator();var command=InstallLocations.ServiceCommand(version);var manager=new Handle(OpenSCManagerW(null,null,1));
-        if(manager.IsInvalid){manager.Dispose();throw new Win32Exception();}var handle=new Handle(OpenServiceW(manager,InstallLocations.ServiceName,0xf01ff));
-        if(handle.IsInvalid){handle.Dispose();manager.Dispose();throw new Win32Exception();}return new(command,manager,handle);
+        var spec=kind??ServiceSpec.Runtime;NativeInstallFiles.RequireAdministrator();var command=spec.Command(version);var manager=new Handle(OpenSCManagerW(null,null,1));
+        if(manager.IsInvalid){manager.Dispose();throw new Win32Exception();}var handle=new Handle(OpenServiceW(manager,spec.Name,0xf01ff));
+        if(handle.IsInvalid){handle.Dispose();manager.Dispose();throw new Win32Exception();}return new(spec,command,manager,handle);
     }
     private void Provision(string owner)
     {
-        Change(5,1u);var names=Marshal.StringToHGlobalUni("SeChangeNotifyPrivilege\0\0");
-        try{Change(6,new Privileges{Names=names});}finally{Marshal.FreeHGlobal(names);}
+        Change(5,1u);
+        if(spec.Restricted)
+        {
+            var names=Marshal.StringToHGlobalUni("SeChangeNotifyPrivilege\0\0");
+            try{Change(6,new Privileges{Names=names});}finally{Marshal.FreeHGlobal(names);}
+        }
         RequireOwned();var acl=new RawSecurityDescriptor(ServiceDescriptor(owner,Sid()));var bytes=new byte[acl.BinaryLength];acl.GetBinaryForm(bytes,0);
         if(!SetServiceObjectSecurity(service,4,bytes))throw new Win32Exception();
         RequireProtection(Security(),owner);
@@ -118,7 +132,7 @@ internal sealed class NativeRuntimeService:IDisposable
         try
         {
             if(!QueryServiceConfigW(service,memory,count,out _))throw new Win32Exception();var config=Marshal.PtrToStructure<Configuration>(memory);
-            if(config.Type!=16||Marshal.PtrToStringUni(config.Image)!=command||!string.Equals(Marshal.PtrToStringUni(config.Account),InstallLocations.ServiceAccount,StringComparison.OrdinalIgnoreCase))throw new IOException("SERVICE_NOT_OWNED");
+            if(config.Type!=16||Marshal.PtrToStringUni(config.Image)!=command||!string.Equals(Marshal.PtrToStringUni(config.Account),spec.Account,StringComparison.OrdinalIgnoreCase))throw new IOException("SERVICE_NOT_OWNED");
             return config.Start;
         }
         finally{Marshal.FreeHGlobal(memory);}
@@ -126,6 +140,7 @@ internal sealed class NativeRuntimeService:IDisposable
     private void RequireRestrictedIdentity()
     {
         if(ReadConfig2(5,(p,_)=>Marshal.ReadInt32(p))!=1)throw new IOException("INSTALL_SERVICE_SID_TYPE");
+        if(!spec.Restricted)return;
         _=ReadConfig2(6,(p,n)=>
         {
             if(n<IntPtr.Size)throw new IOException("INSTALL_SERVICE_PRIVILEGES");
@@ -190,11 +205,12 @@ internal sealed class NativeRuntimeService:IDisposable
     }
     private void Change<T>(uint kind,T value)where T:struct
     {var memory=Marshal.AllocHGlobal(Marshal.SizeOf<T>());try{Marshal.StructureToPtr(value,memory,false);if(!ChangeServiceConfig2W(service,kind,memory))throw new Win32Exception();}finally{Marshal.FreeHGlobal(memory);}}
-    // Automatic start with SCM restarts after 5 s, 30 s and 2 min, counted
-    // over one day. A reported (non-crash) failure also restarts the service.
+    // Automatic start with the service's SCM restarts, counted over one day.
+    // A reported (non-crash) failure also restarts the service.
     internal void EnableStartup()
     {
         RequireOwned();if(!ChangeServiceConfigW(service,0xffffffff,AutoStart,0xffffffff,null,null,IntPtr.Zero,null,null,null,null))throw new Win32Exception();
+        if(spec.Delayed)Change(3,1u);
         SetFailureActions(true);Change(4,1u);
         if(ReadConfig2(4,(p,_)=>Marshal.ReadInt32(p))!=1)throw new IOException("INSTALL_SERVICE_FAILURE_FLAGS");
         RequireStartType(AutoStart);
@@ -203,7 +219,7 @@ internal sealed class NativeRuntimeService:IDisposable
     internal void ClearFailureActions(){RequireOwned();SetFailureActions(false);Change(4,0u);}
     internal void SwitchImage(string version)
     {
-        RequireStoppedForSwitch();command=InstallLocations.ServiceCommand(version);SetImage();RequireOwned();
+        RequireStoppedForSwitch();command=spec.Command(version);SetImage();RequireOwned();
     }
     private void RequireStoppedForSwitch(){var observed=Status();RequireStopped(observed.State,observed.Pid);}
     private void SetImage()
@@ -215,13 +231,15 @@ internal sealed class NativeRuntimeService:IDisposable
         try
         {
             RequireOwned();RequireStartType(AutoStart);VerifyFailureActions(true);
+            if(spec.Delayed&&ReadConfig2(3,(p,_)=>Marshal.ReadInt32(p))!=1)return false;
             return ReadConfig2(4,(p,_)=>Marshal.ReadInt32(p))==1;
         }
         catch(IOException){return false;}
     }
     internal void FenceForRemoval()
     {
-        RequireOwned();if(!ChangeServiceConfigW(service,0xffffffff,Disabled,0xffffffff,null,null,IntPtr.Zero,null,null,null,null))throw new Win32Exception();
+        RequireOwned();if(spec.Delayed)Change(3,0u);
+        if(!ChangeServiceConfigW(service,0xffffffff,Disabled,0xffffffff,null,null,IntPtr.Zero,null,null,null,null))throw new Win32Exception();
         SetFailureActions(false);Change(4,0u);
         RequireStartType(Disabled);if(ReadConfig2(4,(p,_)=>Marshal.ReadInt32(p))!=0)throw new IOException("INSTALL_SERVICE_FAILURE_FLAGS");
     }
@@ -231,18 +249,18 @@ internal sealed class NativeRuntimeService:IDisposable
         try{if(!QueryServiceConfigW(service,memory,bytes,out _))throw new Win32Exception();if(Marshal.PtrToStructure<Configuration>(memory).Start!=expected)throw new IOException("INSTALL_SERVICE_START_TYPE");}finally{Marshal.FreeHGlobal(memory);}
     }
     internal const uint FailureReset=86400;
-    internal static FailureAction[] FailurePlan(bool configured)
-        =>!configured?[]:[new(){Kind=1,Delay=5000},new(){Kind=1,Delay=30000},new(){Kind=1,Delay=120000}];
-    internal static void RequireFailurePlan(bool configured,uint reset,IReadOnlyList<FailureAction> actual)
+    internal static FailureAction[] FailurePlan(bool configured,ServiceSpec? kind=null)
+        =>!configured?[]:(kind??ServiceSpec.Runtime).FailureDelays.Select(delay=>new FailureAction{Kind=1,Delay=delay}).ToArray();
+    internal static void RequireFailurePlan(bool configured,uint reset,IReadOnlyList<FailureAction> actual,ServiceSpec? kind=null)
     {
-        var expected=FailurePlan(configured);
+        var expected=FailurePlan(configured,kind);
         if(reset!=(configured?FailureReset:0u)||actual.Count!=expected.Length||actual.Where((value,index)=>value.Kind!=expected[index].Kind||value.Delay!=expected[index].Delay).Any())throw new IOException("INSTALL_SERVICE_FAILURE_ACTIONS");
     }
     private void SetFailureActions(bool configured)
     {
         // NULL means "leave unchanged" in SERVICE_FAILURE_ACTIONS. An empty
         // command and a non-NULL zero-count array REMOVE the old actions.
-        var plan=FailurePlan(configured);var stride=Marshal.SizeOf<FailureAction>();
+        var plan=FailurePlan(configured,spec);var stride=Marshal.SizeOf<FailureAction>();
         var text=Marshal.StringToHGlobalUni("");var action=Marshal.AllocHGlobal(stride*Math.Max(1,plan.Length));
         try
         {
@@ -255,7 +273,7 @@ internal sealed class NativeRuntimeService:IDisposable
     }
     private void VerifyFailureActions(bool configured)
     {
-        var plan=FailurePlan(configured);var stride=Marshal.SizeOf<FailureAction>();
+        var plan=FailurePlan(configured,spec);var stride=Marshal.SizeOf<FailureAction>();
         _=ReadConfig2(2,(p,n)=>
         {
             if(n<(uint)Marshal.SizeOf<FailureActions>())throw new IOException("INSTALL_SERVICE_FAILURE_ACTIONS");
@@ -266,7 +284,7 @@ internal sealed class NativeRuntimeService:IDisposable
                 var offset=observed.Actions.ToInt64()-p.ToInt64();if(offset<0||offset>n-stride*plan.Length)throw new IOException("INSTALL_SERVICE_FAILURE_ACTIONS");
                 for(var i=0;i<plan.Length;i++)actual.Add(Marshal.PtrToStructure<FailureAction>(observed.Actions+i*stride));
             }
-            RequireFailurePlan(configured,observed.Reset,actual);return 0;
+            RequireFailurePlan(configured,observed.Reset,actual,spec);return 0;
         });
     }
     internal async Task StartAsync(CancellationToken cancellation)

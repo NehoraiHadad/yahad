@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 namespace Yahad.Install;
 
-internal enum StartupDiagnosticRole { Runtime }
+internal enum StartupDiagnosticRole { Runtime, Updater }
 // One startup stage transition: a fixed stage name, elapsed time since the
 // service began starting, and a fixed failure token latched at that stage.
 internal sealed record StartupStep(string Stage,long ElapsedMilliseconds,string? Failure);

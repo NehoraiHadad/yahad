@@ -19,7 +19,7 @@ $env:TEMP = Join-Path $installerRoot '.scratch/temp'
 $env:TMP = $env:TEMP
 New-Item -ItemType Directory $env:TEMP -Force | Out-Null
 $restoreConfig = Join-Path $installerRoot 'NuGet.Config'
-foreach ($project in @('Yahad.Install.Tests', 'Yahad.Setup', 'Yahad.Platform')) {
+foreach ($project in @('Yahad.Install.Tests', 'Yahad.Setup', 'Yahad.Platform', 'Yahad.Updater')) {
     & $DotNet build (Join-Path $installerRoot "$project/$project.csproj") -c Release --nologo "-p:RestoreConfigFile=$restoreConfig"
     if ($LASTEXITCODE -ne 0) { throw "Build failed: $project" }
 }

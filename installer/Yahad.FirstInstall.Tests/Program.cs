@@ -108,6 +108,8 @@ if(args is ["--full-installer-only"])
     {try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);}});
     await UpgradeTests.RunAsync(async(name,run)=>
     {try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);}});
+    await UpdaterTests.RunAsync(async(name,run)=>
+    {try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);}});
     Console.WriteLine(JsonSerializer.Serialize(new{suite="full-installer-integration-pure",passed,failed,nativeOperations=false}));return failed==0?0:1;
 }
 if(args is ["--version-only",var versionRepo])

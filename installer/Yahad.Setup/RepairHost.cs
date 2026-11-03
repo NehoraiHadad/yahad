@@ -3,7 +3,7 @@ using Yahad.Install;
 namespace Yahad.Setup;
 
 // --repair: finishes or undoes an interrupted upgrade, or brings the installed
-// release's service back to its recorded configuration. It needs no release: the
+// release's services and task back to their recorded configuration. It needs no release: the
 // upgrade state and the retained version directories hold everything.
 internal static class RepairHost
 {
@@ -50,18 +50,31 @@ internal static class RepairHost
     private static async Task<UpgradeOutcome> HealthPassAsync(InstallerState installed,Action<SetupProgress> progress)
     {
         var url="http://127.0.0.1:"+installed.Port+"/";var repaired=false;
-        var repointed=false;using var service=OpenOrCreate(installed,ref repointed);repaired=repointed;
-        // A process started from another image is not the installed release.
-        if(repointed&&!service.IsStopped())await service.StopAsync(CancellationToken.None);
-        if(!service.StartupConfigured()){service.EnableStartup();repaired=true;}
-        if(!service.IsRunning()){progress(new("starting_server",50));await service.StartAsync(CancellationToken.None);repaired=true;}
+        // Each on its own: an Updater that cannot start says nothing about the Runtime.
+        async Task<NativeService> Restore(ServiceSpec spec)
+        {
+            var repointed=false;var service=OpenOrCreate(installed,spec,ref repointed);repaired|=repointed;
+            try
+            {
+                // A process started from another image is not the installed release.
+                if(repointed&&!service.IsStopped())await service.StopAsync(CancellationToken.None);
+                if(!service.StartupConfigured()){service.EnableStartup();repaired=true;}
+                if(!service.IsRunning()){progress(new("starting_server",50));await service.StartAsync(CancellationToken.None);repaired=true;}
+                return service;
+            }
+            catch{service.Dispose();throw;}
+        }
+        using var service=await Restore(ServiceSpec.Runtime);
+        UpgradeFiles.EnsureUpdaterState(installed.Consent.Automatic);
+        using var updater=await Restore(ServiceSpec.Updater);
+        if(!RepairTask.Matches(installed.Version)){RepairTask.Register(installed.Version,DateTimeOffset.Now);repaired=true;}
         try{await UpgradeFiles.RequireHealthyAsync(service,installed.Port,installed.Version,null,UpgradeFiles.HealthDeadline());}
         catch(IOException failure){return new(new(false,"REPAIR_UNHEALTHY",url,Failure:SetupFailureDetail.From(failure)),installed.Version);}
         return new(new(true,repaired?"REPAIRED":"NOTHING_TO_REPAIR",url),installed.Version);
     }
-    private static NativeRuntimeService OpenOrCreate(InstallerState installed,ref bool repaired)
+    private static NativeService OpenOrCreate(InstallerState installed,ServiceSpec spec,ref bool repaired)
     {
-        if(!NativeRuntimeService.Exists()){repaired=true;return NativeRuntimeService.Create(installed.Version,installed.OwnerSid);}
-        return NativeRuntimeService.OpenRepointed(installed.Version,installed.OwnerSid,ref repaired);
+        if(!NativeService.Exists(spec)){repaired=true;return NativeService.Create(installed.Version,installed.OwnerSid,spec);}
+        return NativeService.OpenRepointed(installed.Version,installed.OwnerSid,ref repaired,spec);
     }
 }

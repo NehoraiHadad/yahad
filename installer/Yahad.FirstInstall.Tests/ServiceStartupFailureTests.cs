@@ -50,8 +50,8 @@ internal static class ServiceStartupFailureTests
         });
         await check("stop observation requires only stopped with zero PID, so a failed last run can still be repaired",()=>
         {
-            NativeRuntimeService.RequireStopped(1,0);
-            foreach(var status in new[]{(1u,123u),(2u,0u),(3u,123u),(4u,0u),(4u,123u)})Refuse(()=>NativeRuntimeService.RequireStopped(status.Item1,status.Item2));
+            NativeService.RequireStopped(1,0);
+            foreach(var status in new[]{(1u,123u),(2u,0u),(3u,123u),(4u,0u),(4u,123u)})Refuse(()=>NativeService.RequireStopped(status.Item1,status.Item2));
             return Task.CompletedTask;
         });
         await check("retained lease validates only its exact gate metadata while excluding another writer",()=>
@@ -75,14 +75,14 @@ internal static class ServiceStartupFailureTests
         });
         await check("failure action readback refuses a missing, repeated or altered restart, reset or extra action",()=>
         {
-            var plan=NativeRuntimeService.FailurePlan(true);NativeRuntimeService.RequireFailurePlan(true,86400,plan);
-            Refuse(()=>NativeRuntimeService.RequireFailurePlan(true,86400,[plan[0]]));
-            Refuse(()=>NativeRuntimeService.RequireFailurePlan(true,86400,[plan[0],plan[0],plan[0]]));
-            Refuse(()=>NativeRuntimeService.RequireFailurePlan(true,1,plan));
-            Refuse(()=>NativeRuntimeService.RequireFailurePlan(true,86400,[new(){Kind=3,Delay=5000},plan[1],plan[2]]));
-            Refuse(()=>NativeRuntimeService.RequireFailurePlan(true,86400,[..plan,new(){Kind=0,Delay=0}]));
-            NativeRuntimeService.RequireFailurePlan(false,0,[]);
-            Refuse(()=>NativeRuntimeService.RequireFailurePlan(false,86400,[]));return Task.CompletedTask;
+            var plan=NativeService.FailurePlan(true);NativeService.RequireFailurePlan(true,86400,plan);
+            Refuse(()=>NativeService.RequireFailurePlan(true,86400,[plan[0]]));
+            Refuse(()=>NativeService.RequireFailurePlan(true,86400,[plan[0],plan[0],plan[0]]));
+            Refuse(()=>NativeService.RequireFailurePlan(true,1,plan));
+            Refuse(()=>NativeService.RequireFailurePlan(true,86400,[new(){Kind=3,Delay=5000},plan[1],plan[2]]));
+            Refuse(()=>NativeService.RequireFailurePlan(true,86400,[..plan,new(){Kind=0,Delay=0}]));
+            NativeService.RequireFailurePlan(false,0,[]);
+            Refuse(()=>NativeService.RequireFailurePlan(false,86400,[]));return Task.CompletedTask;
         });
         await check("startup diagnostic excludes unknown exception text, paths and data",()=>
         {

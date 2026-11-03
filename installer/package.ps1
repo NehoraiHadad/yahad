@@ -88,7 +88,7 @@ try {
     $common = @('-c','Release','-r','win-x64','--self-contained','true','-p:RuntimeFrameworkVersion=10.0.14','-p:UseSharedCompilation=false','-p:DebugType=None','-p:DebugSymbols=false',$restore,'-m:1')
     # Every publish carries it, so no step can reuse a keyless Install.Core.
     if ($ReleaseKey) { $common += "-p:YahadReleaseKey=$ReleaseKey" }
-    foreach ($project in @('Yahad.Platform','Yahad.ServiceHost')) {
+    foreach ($project in @('Yahad.Platform','Yahad.ServiceHost','Yahad.Updater')) {
         $destination = if ($project -eq 'Yahad.Platform') { $platform } else { Join-Path $output $project }
         RunStep $project $dotnetExe (@('publish',"installer/$project/$project.csproj") + $common + @('-o',$destination))
     }
@@ -97,7 +97,7 @@ try {
     $appZip = Join-Path $app "yahad-app-native-$version.zip"
     RunStep 'app-payload' $pythonExe @('-m','installer.windows.first_install_package','payload','--repo',$repo,'--core',"$app/core",'--vendors',"$app/vendors",'--full',"$app/full",'--node',$nodeRoot,'--dotnet',$dotnetRoot,'--npm-cache',$npmRoot,'--verified-vendor-source',$vendorRoot,'--archive',$appZip)
     $system = Join-Path $output 'system'
-    RunStep 'system-package' $pythonExe @('-m','installer.windows.setup_package','--repo',$repo,'--payload-zip',$appZip,'--runtime-host',"$output/Yahad.ServiceHost",'--output',$system)
+    RunStep 'system-package' $pythonExe @('-m','installer.windows.setup_package','--repo',$repo,'--payload-zip',$appZip,'--runtime-host',"$output/Yahad.ServiceHost",'--updater',"$output/Yahad.Updater",'--output',$system)
     $setup = Join-Path $output 'setup'
     RunStep 'setup-publish' $dotnetExe (@('publish','installer/Yahad.Setup/Yahad.Setup.csproj') + $common + @('-p:PublishSingleFile=true','-p:IncludeNativeLibrariesForSelfExtract=true',"-p:SetupPayloadDirectory=$system",'-o',$setup))
     Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination (Join-Path $setup 'LICENSE')

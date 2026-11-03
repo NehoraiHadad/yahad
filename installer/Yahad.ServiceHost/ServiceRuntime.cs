@@ -2,25 +2,10 @@ using Yahad.Install;
 
 namespace Yahad.Service;
 
-internal static class ServiceDefinition
-{
-    internal const string Name="Yahad.Acceptance";
-    internal const string Account="NT SERVICE\\Yahad.Acceptance";
-    internal const uint OwnProcess=0x10,Stop=1,Interrogate=4,Shutdown=5;
-}
-internal enum ServiceState:uint {Stopped=1,StartPending=2,StopPending=3,Running=4}
 internal enum ServiceFailure:uint {None=0,IdentityDenied=1001,BootstrapUnavailable=1002,ActivationUnavailable=1003,
     StartFailed=1004,UnexpectedExit=1005,StopFailed=1006,QuiescenceUnknown=1007,ArgumentsRejected=1008,StatusTransport=1009}
 internal sealed class ServiceStartDenied(ServiceFailure failure):Exception
 {internal ServiceFailure Failure=>failure;}
-internal readonly record struct ServiceReport(ServiceState State,uint AcceptedControls,uint Checkpoint,uint WaitHint,
-    uint Win32ExitCode,uint ServiceSpecificExitCode);
-internal interface IScmApi
-{
-    void Dispatch(string name,Action<string[]> main);
-    void Register(string name,Func<uint,uint> handler);
-    void Publish(ServiceReport report);
-}
 internal interface IObservedAdmission
 {
     TimeSpan AdmissionBudget {get;}

@@ -4,6 +4,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using Microsoft.Win32.SafeHandles;
+using Yahad.Install;
 using Yahad.Service;
 
 namespace Yahad.Setup;

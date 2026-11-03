@@ -22,6 +22,15 @@ internal static class UpgradeFiles
         tree.DeleteContents((member,directory)=>WindowsFileBoundary.DeleteRemovalMember(member,directory,Application),_=>{},CancellationToken.None);
         WindowsFileBoundary.DeleteRemovalMember(tree.Root,true,Application);
     }
+    // The Updater's own folder and mode record, which outlive any one release.
+    internal static void EnsureUpdaterState(bool automatic)
+    {
+        var root=InstalledLayout.UpdaterRoot;
+        if(!Directory.Exists(root))NativeInstallFiles.NewDirectory(root,NativeInstallFiles.Descriptor());
+        else{using(WindowsFileBoundary.PinInstallerRemovalRoot(root,Application)){}}
+        var state=Path.Combine(root,"state.json");
+        if(!File.Exists(state))NativeInstallFiles.PublishNewProtectedFile(state,UpdaterRecord.Seed(automatic).Encode(),AdminFile);
+    }
     internal static void Save(UpgradeState state)=>NativeInstallFiles.PublishProtectedFile(InstallLocations.UpgradeStateFile,state.Encode(),AdminFile);
     internal static UpgradeState Load()
     {using var file=WindowsFileBoundary.OpenInstallerMetadata(InstallLocations.UpgradeStateFile);return UpgradeState.Parse(file.Small(33554432));}
@@ -48,7 +57,7 @@ internal static class UpgradeFiles
     }
     // Consecutive answers from this release, not one lucky poll, and an early
     // end when the service itself has already stopped.
-    internal static async Task RequireHealthyAsync(NativeRuntimeService service,int port,string version,int? schema,long deadlineUnix)
+    internal static async Task RequireHealthyAsync(NativeService service,int port,string version,int? schema,long deadlineUnix)
     {
         var healthy=0;
         while(true)
@@ -62,12 +71,13 @@ internal static class UpgradeFiles
     }
     internal static long HealthDeadline()=>DateTimeOffset.UtcNow.ToUnixTimeSeconds()+UpgradeRules.HealthWindowSeconds;
 }
-// --quiet-upgrade: the release's own Setup, carrying the new payload, moves the
-// one service to the new version directory, or back. The service image is the
-// version pointer; one SCM call moves it and nothing else follows it.
+// --quiet-upgrade: the release's own Setup, carrying the new payload, moves both
+// services to the new version directory, or back. A service's image is its
+// version pointer; one SCM call moves it and nothing else follows it. The Updater
+// that launched this Setup is stopped and replaced here like any other part of it.
 internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Action<SetupProgress> progress):IDisposable
 {
-    private InstallerState installed=installed;private UpgradeState state=state;private NativeRuntimeService? service;
+    private InstallerState installed=installed;private UpgradeState state=state;private NativeService? service,updater;
     private string Dataset=>Path.Combine(InstallLocations.State,"datasets",installed.DataId);
     private string DataPath=>Path.Combine(Dataset,"data");
     private string BackupRoot=>Path.Combine(Dataset,"upgrade-backup");
@@ -135,18 +145,20 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
         ClearStateResidue();Advance("preparing");
         try
         {
-            service=NativeRuntimeService.Open(state.From,installed.OwnerSid);
-            Prepare(package,setupBytes);service.ClearFailureActions();Advance("prepared");
-            await service.StopAsync(CancellationToken.None);Advance("stopped");
+            service=NativeService.Open(state.From,installed.OwnerSid);updater=NativeService.Open(state.From,installed.OwnerSid,ServiceSpec.Updater);
+            UpgradeFiles.EnsureUpdaterState(installed.Consent.Automatic);
+            Prepare(package,setupBytes);service.ClearFailureActions();updater.ClearFailureActions();Advance("prepared");
+            await updater.StopAsync(CancellationToken.None);await service.StopAsync(CancellationToken.None);Advance("stopped");
             if(state.SchemaChanged)DatabaseBackup.Create(DataPath,Backup);
             Advance("backed_up");
-            service.SwitchImage(state.To);Advance("switched");
+            service.SwitchImage(state.To);updater.SwitchImage(state.To);Advance("switched");
             state=state with{HealthDeadlineUnix=UpgradeFiles.HealthDeadline()};
             await service.StartAsync(CancellationToken.None);Advance("started");
-            await UpgradeFiles.RequireHealthyAsync(service,installed.Port,state.To,state.ToSchema,state.HealthDeadlineUnix);Advance("healthy");
+            await UpgradeFiles.RequireHealthyAsync(service,installed.Port,state.To,state.ToSchema,state.HealthDeadlineUnix);
+            await updater.StartAsync(CancellationToken.None);Advance("healthy");
         }
         catch(Exception failure){return await RecoverAsync(failure);}
-        try{service.EnableStartup();Commit();}
+        try{service.EnableStartup();updater.EnableStartup();Commit();}
         catch(Exception failure){return Result("UPGRADE_COMMIT_INCOMPLETE",failure:failure);}
         return new(new(true,"UPGRADED",LocalUrl),state.From,state.To);
     }
@@ -180,25 +192,32 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
         }
         catch(Exception failure){return Result("ROLLBACK_FAILED",failure:failure);}
     }
-    private NativeRuntimeService Service(){service??=NativeRuntimeService.OpenAt(state.To,state.From,installed.OwnerSid);return service;}
-    // The image never moved, so the installed release only has to be running again:
+    private NativeService Service(){service??=NativeService.OpenAt(state.To,state.From,installed.OwnerSid);return service;}
+    private NativeService Updater(){updater??=NativeService.OpenAt(state.To,state.From,installed.OwnerSid,ServiceSpec.Updater);return updater;}
+    private static async Task RunningAsync(NativeService value)
+    {
+        value.EnableStartup();
+        if(!value.IsRunning()){await value.StopAsync(CancellationToken.None);await value.StartAsync(CancellationToken.None);}
+    }
+    // The images never moved, so the installed release only has to be running again:
     // a failed or killed Setup may have cleared its failure actions or asked it to stop.
     internal async Task DiscardAsync(string? failure)
     {
         state=state with{Failure=failure??state.Failure};
-        var runtime=Service();runtime.EnableStartup();
-        if(!runtime.IsRunning()){await runtime.StopAsync(CancellationToken.None);await runtime.StartAsync(CancellationToken.None);}
+        await RunningAsync(Service());await RunningAsync(Updater());
         FinishRollback();
     }
     internal async Task RollBackAsync(string failure)
     {
         state=state with{Phase="rolling_back",Failure=failure,RestoreData=UpgradeRules.RestoresData(state),Attempts=state.Attempts+1};UpgradeFiles.Save(state);progress(new("rolling_back",0));
-        var runtime=Service();
-        await runtime.StopAsync(CancellationToken.None);runtime.SwitchImage(state.From);
+        var runtime=Service();var self=Updater();
+        await self.StopAsync(CancellationToken.None);await runtime.StopAsync(CancellationToken.None);
+        runtime.SwitchImage(state.From);self.SwitchImage(state.From);
         if(state.RestoreData)DatabaseBackup.Restore(DataPath,Backup);
         await runtime.StartAsync(CancellationToken.None);
         await UpgradeFiles.RequireHealthyAsync(runtime,installed.Port,state.From,state.FromSchema,UpgradeFiles.HealthDeadline());
-        runtime.EnableStartup();Advance("rolled_back");FinishRollback();
+        await self.StartAsync(CancellationToken.None);
+        runtime.EnableStartup();self.EnableStartup();Advance("rolled_back");FinishRollback();
     }
     internal void FinishRollback()
     {
@@ -206,7 +225,7 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
         UpgradeFiles.DeleteState();
     }
     // Everything from here is idempotent: a repair after a crash repeats it.
-    internal void FinishCommitAfterRepair(){Service().EnableStartup();Commit();}
+    internal void FinishCommitAfterRepair(){Service().EnableStartup();Updater().EnableStartup();Commit();}
     private void Commit()
     {
         if(installed.Version==state.From)
@@ -216,12 +235,12 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
             next.Require();NativeInstallFiles.PublishProtectedFile(InstallLocations.StateFile,JsonSerializer.SerializeToUtf8Bytes(next),UpgradeFiles.AdminFile);installed=next;
         }
         else if(installed.Version!=state.To)throw new IOException("INSTALL_STATE_INVALID");
-        Advance("committed");NativeSetupHost.Register(installed);
+        Advance("committed");NativeSetupHost.Register(installed);RepairTask.Register(installed.Version,DateTimeOffset.Now);
         foreach(var directory in Directory.EnumerateDirectories(UpgradeFiles.Versions))
         {var name=Path.GetFileName(directory);if(name!=state.To&&name!=state.From)UpgradeFiles.Remove(directory);}
         if(Directory.Exists(BackupRoot))foreach(var directory in Directory.EnumerateDirectories(BackupRoot))
         {if(Path.GetFileName(directory)!=state.To)UpgradeFiles.Remove(directory);}
         UpgradeFiles.DeleteState();
     }
-    public void Dispose(){service?.Dispose();service=null;}
+    public void Dispose(){service?.Dispose();service=null;updater?.Dispose();updater=null;}
 }

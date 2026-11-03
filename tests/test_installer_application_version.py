@@ -38,7 +38,7 @@ class ApplicationVersionTests(unittest.TestCase):
 class NativeBuildIdentityTests(unittest.TestCase):
     def test_mixed_native_core_host_or_helper_release_and_source_is_refused(self):
         source='a'*40
-        for artifact in ('Yahad.ServiceHost','Yahad.Platform'):
+        for artifact in ('Yahad.ServiceHost','Yahad.Platform','Yahad.Updater'):
             description=dict(artifact=artifact,applicationVersion='0.6.0',sourceCommit=source,version='1.0.0+'+source)
             self.assertEqual(require_native_build_identity(description,artifact,'0.6.0',source),description)
             for field,value in (('applicationVersion','0.5.3'),('sourceCommit','b'*40),('version','1.0.0+'+'b'*40),('artifact','foreign')):

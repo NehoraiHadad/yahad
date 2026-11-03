@@ -203,7 +203,7 @@ class RuntimeOnlyBuildTests(unittest.TestCase):
             b.put(b.prepared, name, image() if name.endswith('.exe') else b'<html>')
         b.put(b.prepared, 'legal/runtime-lock.json', json.dumps(dict(components=[dict(id='platform', sourceCommit=SOURCE)])))
         b.refresh_records(); self.application = full._encode(b.manifest); b.put(b.prepared, 'bundle.json', self.application)
-        self.host = b.native('Yahad.ServiceHost'); self.output = b.root/'out'
+        self.host = b.native('Yahad.ServiceHost'); self.updater = b.native('Yahad.Updater'); self.output = b.root/'out'
 
     def build(self, describe=None):
         b = self.base
@@ -211,9 +211,9 @@ class RuntimeOnlyBuildTests(unittest.TestCase):
         def audit(path, flag, repo): return b.audit(Path(path).stem)
         with patch.object(full, '_source_identity', return_value=(VERSION, SOURCE, b.tracked)), patch.object(full.verify_archive, 'verify', side_effect=extract), \
              patch.object(full, 'describe_build_artifact', side_effect=describe or audit), patch.object(full, '_unlinked', side_effect=lambda p, file=False: Path(p).absolute()):
-            return full.build(b.repo, b.root/'payload.zip', self.host, self.output)
+            return full.build(b.repo, b.root/'payload.zip', self.host, self.updater, self.output)
 
-    def test_package_is_format_one_with_only_host_and_payload_members(self):
+    def test_package_is_format_one_with_only_host_updater_and_payload_members(self):
         result = self.build(); metadata = json.loads((self.output/'install-manifest.json').read_bytes())
         self.assertEqual(sorted(metadata), ['Files', 'Format', 'PayloadDigest', 'SourceCommit', 'Version', 'ZipSha256'])
         self.assertEqual((metadata['Format'], metadata['Version'], metadata['SourceCommit']), (1, VERSION, SOURCE))
@@ -223,7 +223,7 @@ class RuntimeOnlyBuildTests(unittest.TestCase):
         with zipfile.ZipFile(self.output/'install.zip') as archive:
             names = archive.namelist()
             self.assertEqual(set(names), {r['Path'] for r in metadata['Files']}); self.assertEqual(result['files'], len(names))
-            self.assertTrue(all(n.startswith(('host/', 'payload/')) for n in names))
+            self.assertTrue(all(n.startswith(('host/', 'updater/', 'payload/')) for n in names))
             self.assertEqual(archive.read('payload/bundle.json'), self.application)
             for record in metadata['Files']: self.assertEqual(hashlib.sha256(archive.read(record['Path'])).hexdigest(), record['Sha256'])
         self.assertTrue(full.REQUIRED_MEMBERS <= set(names))

@@ -1,8 +1,9 @@
 """Offline build-machine packager for the single-service Windows installer.
 
 Produces the Format 1 install package Setup embeds: install.zip with only
-payload/ (the verified application payload) and host/ (the published
-Yahad.ServiceHost directory), plus install-manifest.json written last.
+payload/ (the verified application payload), host/ (the published
+Yahad.ServiceHost directory) and updater/ (the published Yahad.Updater
+directory), plus install-manifest.json written last.
 Never installs or fabricates release receipts; only audit-only --describe entry
 points of verified local project builds run. Outputs remain private candidates.
 """
@@ -39,7 +40,8 @@ class _VerifiedFiles(dict):
 RUNTIME_VERSION = '10.0.14'
 REQUIRED_MEMBERS = frozenset({'payload/bundle.json','payload/runtime/node/node.exe','payload/runtime/ffmpeg/ffmpeg.exe',
     'payload/runtime/caddy/caddy.exe','payload/app/server/main.mjs','payload/app/dist/index.html','payload/app/native/Yahad.Platform.exe',
-    'host/Yahad.ServiceHost.exe','host/Yahad.ServiceHost.runtimeconfig.json'})
+    'host/Yahad.ServiceHost.exe','host/Yahad.ServiceHost.runtimeconfig.json',
+    'updater/Yahad.Updater.exe','updater/Yahad.Updater.runtimeconfig.json'})
 MAX_FILE, MAX_TOTAL, MAX_FILES = 512 * 1024**2, 2 * 1024**3, 50000
 PRIVATE = {'.git', '.local', '.agents', '.codex', '.authority', 'data', 'datasets', 'backups', 'secrets',
            'enrollment.json', 'installation.json', 'update-authority.json', 'activation.json',
@@ -234,8 +236,9 @@ def _write_archive(output, entries, expected=None):
     _closed_names(entries)
     for name in entries:
         if name=='payload/bundle.json' or name.startswith(('payload/app/','payload/runtime/','payload/legal/')): continue
-        if not name.startswith('host/'): raise PackageError('Undeclared archive namespace')
-        _safe_path(name[len('host/'):],component=True)
+        prefix = next((p for p in ('host/','updater/') if name.startswith(p)),None)
+        if prefix is None: raise PackageError('Undeclared archive namespace')
+        _safe_path(name[len(prefix):],component=True)
     expected=expected if expected is not None else {name:_record(name,value) for name,value in entries.items()}
     if set(expected)!=set(entries) or len(entries)>MAX_FILES or any(not 0<=r['size']<=MAX_FILE for r in expected.values()) or sum(r['size'] for r in expected.values())>MAX_TOTAL:
         raise PackageError('Archive bound')
@@ -272,10 +275,10 @@ def require_members(names):
     if not REQUIRED_MEMBERS<=names: raise PackageError('Required package member missing')
 
 
-def build(repo, payload_zip, runtime_host, output):
-    repo, payload_zip, runtime_host = map(_unlinked,(repo,payload_zip,runtime_host))
+def build(repo, payload_zip, runtime_host, updater, output):
+    repo, payload_zip, runtime_host, updater = map(_unlinked,(repo,payload_zip,runtime_host,updater))
     output = Path(output).absolute()
-    if output.exists() or output==repo or output.is_relative_to(runtime_host):
+    if output.exists() or output==repo or output.is_relative_to(runtime_host) or output.is_relative_to(updater):
         raise PackageError('New output outside input closures required')
     for ancestor in output.parents:
         if ancestor.exists(): _unlinked(ancestor)
@@ -289,21 +292,23 @@ def build(repo, payload_zip, runtime_host, output):
         # Platform is part of the verified application, not another caller input.
         validate_native(prepared/'app/native','Yahad.Platform',version,source,repo)
         host=validate_native(runtime_host,'Yahad.ServiceHost',version,source,repo)
+        updates=validate_native(updater,'Yahad.Updater',version,source,repo)
         runtime_lock=_json((prepared/'legal/runtime-lock.json').read_bytes(),65536)
         platforms=[c for c in runtime_lock['components'] if c.get('id')=='platform']
         if len(platforms)!=1 or platforms[0].get('sourceCommit')!=source: raise PackageError('Mixed Platform runtime-lock source')
         entries={'payload/bundle.json':application};expected={'payload/bundle.json':_record('payload/bundle.json',application)}
         for record in manifest['files']:
             name='payload/'+record['path'];entries[name]=prepared/record['path'];expected[name]=dict(record,path=name)
-        for name,path in host.items():
-            entries['host/'+name]=path;expected['host/'+name]=dict(host.records[name],path='host/'+name)
+        for prefix,component in (('host/',host),('updater/',updates)):
+            for name,path in component.items():
+                entries[prefix+name]=path;expected[prefix+name]=dict(component.records[name],path=prefix+name)
         require_members(entries)
         archive=output/'install.zip';records=_write_archive(archive,entries,expected)
         saved=dict(Format=1,Version=version,SourceCommit=source,ZipSha256=bundle.digest(archive),
                    PayloadDigest=_hash(application),Files=records)
         metadata=_encode(saved)
         if len(metadata)>16*1024**2: raise PackageError('Installer manifest bound')
-        host.require_unchanged()
+        host.require_unchanged();updates.require_unchanged()
         if _source_identity(repo)!=(version,source,tracked): raise PackageError('Build source changed')
         # Last output is the success prerequisite for Setup's embedded input.
         with (output/'install-manifest.json').open('xb') as destination: destination.write(metadata)
@@ -313,7 +318,7 @@ def build(repo, payload_zip, runtime_host, output):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('repo','payload-zip','runtime-host','output'):
+    for name in ('repo','payload-zip','runtime-host','updater','output'):
         parser.add_argument('--'+name,required=True,type=Path)
     try: print(json.dumps(build(**{k.replace('-','_'):v for k,v in vars(parser.parse_args()).items()}),sort_keys=True))
     except (ValueError,OSError,TypeError,KeyError,AttributeError,subprocess.SubprocessError,zipfile.BadZipFile,zipfile.LargeZipFile) as error:

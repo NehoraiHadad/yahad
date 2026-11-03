@@ -3,6 +3,24 @@ using System.Runtime.InteropServices;
 
 namespace Yahad.Service;
 
+internal static class ServiceDefinition
+{
+    internal const string Name="Yahad.Acceptance";
+    internal const string Account="NT SERVICE\\Yahad.Acceptance";
+    internal const string UpdaterName="Yahad.Acceptance.Updater";
+    internal const string UpdaterAccount="LocalSystem";
+    internal const uint OwnProcess=0x10,Stop=1,Interrogate=4,Shutdown=5;
+}
+internal enum ServiceState:uint {Stopped=1,StartPending=2,StopPending=3,Running=4}
+internal readonly record struct ServiceReport(ServiceState State,uint AcceptedControls,uint Checkpoint,uint WaitHint,
+    uint Win32ExitCode,uint ServiceSpecificExitCode);
+internal interface IScmApi
+{
+    void Dispatch(string name,Action<string[]> main);
+    void Register(string name,Func<uint,uint> handler);
+    void Publish(ServiceReport report);
+}
+
 // Transport only: no CreateService/OpenSCManager/StartService/DeleteService or
 // account/ACL installation APIs exist in this executable.
 internal sealed class NativeScmApi:IScmApi

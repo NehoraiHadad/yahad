@@ -3,5 +3,5 @@
   <!-- The release key this build trusts: a public key given by package.ps1 -ReleaseKey. None is committed; without one, upgrades are refused. -->
   <ItemGroup Condition="'$(YahadReleaseKey)'!=''"><EmbeddedResource Include="$(YahadReleaseKey)" LogicalName="release-key.spki" /></ItemGroup>
   <ItemGroup>
-    <InternalsVisibleTo Include="Yahad.ServiceHost" /><InternalsVisibleTo Include="Yahad.ServiceHost.Tests" /><InternalsVisibleTo Include="Yahad.Setup"/><InternalsVisibleTo Include="Yahad.FirstInstall.Tests"/></ItemGroup>
+    <InternalsVisibleTo Include="Yahad.ServiceHost" /><InternalsVisibleTo Include="Yahad.ServiceHost.Tests" /><InternalsVisibleTo Include="Yahad.Setup"/><InternalsVisibleTo Include="Yahad.FirstInstall.Tests"/><InternalsVisibleTo Include="Yahad.Updater"/><InternalsVisibleTo Include="Yahad.Platform"/></ItemGroup>
 </Project>

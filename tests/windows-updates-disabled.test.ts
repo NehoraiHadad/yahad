@@ -10,8 +10,8 @@ import type { Config } from '../src/config.js';
 import type { User } from '../src/store.js';
 import { privateFixtureDirectory } from './fixtures/private-directory.js';
 
-// The exact reply of `Yahad.Platform.exe windows-updates` in this release
-// (installer/Yahad.Platform/Program.cs): every request is refused.
+// The exact reply of `Yahad.Platform.exe windows-updates` when the Updater service
+// cannot be reached and verified (installer/Yahad.Platform/UpdaterClient.cs).
 const platformRefusal = JSON.stringify({ schema: 1, ok: false, code: 'UPDATES_UNAVAILABLE' });
 const platformTransport = (calls: string[]): WindowsUpdateTransport => ({
   status: async () => { calls.push('status'); return windowsUpdateResult(platformRefusal); },
@@ -34,7 +34,7 @@ test('the Windows transport runs only an absolute Platform helper on Windows and
   await assert.rejects(missing.status(), /WINDOWS_UPDATES_UNAVAILABLE/);
 });
 
-test('Windows updates stay disabled: status is not configured and requests are refused without submitting', async () => {
+test('Windows updates without a verified Updater: status is not configured and requests are refused without submitting', async () => {
   const dataDir = privateFixtureDirectory('yahad-windows-updates-');
   // A valid enabled Linux status file must not be consulted on the Windows path.
   const updateStatusFile = join(dataDir, 'linux-status.json');
@@ -60,7 +60,6 @@ test('Windows updates stay disabled: status is not configured and requests are r
   } finally { await app.close(); }
 });
 
-// Kept for the transport that step 6.5 puts behind this same interface.
 test('a configured Windows transport binds the exact target, submits once and never retries or falls back to a file queue', async () => {
   const user = { role: 'parent', familyId: 'synthetic-family', id: 'synthetic-parent' } as User;
   const config = { dataDir: privateFixtureDirectory('yahad-windows-submit-') } as Config;
@@ -76,4 +75,27 @@ test('a configured Windows transport binds the exact target, submits once and ne
   let attempts = 0; transport.submit = async () => { attempts++; throw new Error('reply lost after durable acceptance'); };
   await assert.rejects(requestUpdate(config, user, 'check', undefined, undefined, transport)); assert.equal(attempts, 1);
   assert.deepEqual(readdirSync(config.dataDir), []);
+});
+
+// The field set installer/Yahad.FirstInstall.Tests/UpdaterTests.cs pins for the
+// status Yahad.Platform prints, with every optional value in both of its forms.
+test('the status and submit replies Yahad.Platform prints pass the schema the app reads', async () => {
+  const user = { role: 'parent', familyId: 'synthetic-family', id: 'synthetic-parent' } as User;
+  const config = { dataDir: privateFixtureDirectory('yahad-windows-shape-') } as Config;
+  const id = '6f1c1f0a-3f0e-4f43-9b1e-0a4d1f7c2b11', target = { version: '0.6.1', fingerprint: 'a'.repeat(64) }, now = Date.now();
+  const empty = { enabled: true, mode: 'notify', phase: 'idle', currentVersion: '0.6.0', latestVersion: null, installTarget: null, checkedAt: null, updatedAt: now, error: null,
+    lastRequest: null, lastModeRequest: null, operator: { familyId: user.familyId, userId: user.id }, modeControlAllowed: true };
+  const reply = (result: unknown) => windowsUpdateResult(JSON.stringify({ schema: 1, ok: true, result }));
+  let status: unknown = empty, answer = 'target_changed';
+  const transport: WindowsUpdateTransport = { status: async () => reply(status), submit: async () => reply({ state: answer }) };
+  assert.equal((await updateStatus(config, user, transport)).configured, true);
+  status = { ...empty, phase: 'available', latestVersion: '0.6.1', installTarget: target, checkedAt: now, error: 'network',
+    lastRequest: { id, action: 'install', state: 'failed', startedAt: now, finishedAt: now, error: 'internal', target },
+    lastModeRequest: { id, mode: 'auto', state: 'applied', error: null } };
+  const seen = await updateStatus(config, user, transport);
+  assert.equal(seen.configured, true);
+  assert.deepEqual('lastRequest' in seen && seen.lastRequest?.target, target);
+  // The Updater found the release changed between the app's look and its own.
+  assert.equal(await requestUpdate(config, user, 'install', undefined, target, transport), 'target_changed');
+  answer = 'pending'; assert.equal(await requestUpdate(config, user, 'check', undefined, undefined, transport), 'pending');
 });

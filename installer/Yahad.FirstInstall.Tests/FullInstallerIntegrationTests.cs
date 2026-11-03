@@ -27,27 +27,27 @@ internal static class FullInstallerIntegrationTests
         await check("stop is sent only when the service state accepts it and a pending state is bounded by its own progress",()=>
         {
             // START_PENDING without STOP is what refused removal with 1052.
-            Assert(!NativeRuntimeService.SendsStop(2,0,false));Assert(NativeRuntimeService.SendsStop(2,1,false));
-            Assert(NativeRuntimeService.SendsStop(4,5,false));Assert(!NativeRuntimeService.SendsStop(4,5,true));
-            Assert(!NativeRuntimeService.SendsStop(3,1,false));Assert(!NativeRuntimeService.SendsStop(1,1,false));
-            Assert(!NativeRuntimeService.Stalled(300000,TimeSpan.FromMinutes(4)));Assert(NativeRuntimeService.Stalled(300000,TimeSpan.FromMinutes(6)));
-            Assert(!NativeRuntimeService.Stalled(0,TimeSpan.FromSeconds(59)));Assert(NativeRuntimeService.Stalled(0,TimeSpan.FromSeconds(61)));
+            Assert(!NativeService.SendsStop(2,0,false));Assert(NativeService.SendsStop(2,1,false));
+            Assert(NativeService.SendsStop(4,5,false));Assert(!NativeService.SendsStop(4,5,true));
+            Assert(!NativeService.SendsStop(3,1,false));Assert(!NativeService.SendsStop(1,1,false));
+            Assert(!NativeService.Stalled(300000,TimeSpan.FromMinutes(4)));Assert(NativeService.Stalled(300000,TimeSpan.FromMinutes(6)));
+            Assert(!NativeService.Stalled(0,TimeSpan.FromSeconds(59)));Assert(NativeService.Stalled(0,TimeSpan.FromSeconds(61)));
             // A sent STOP moving RUNNING to STOP_PENDING is what refused removal as a generation change.
-            Assert(NativeRuntimeService.SameGeneration(42,3,42));Assert(NativeRuntimeService.SameGeneration(42,4,42));
-            Assert(!NativeRuntimeService.SameGeneration(42,4,43));Assert(!NativeRuntimeService.SameGeneration(42,2,42));
-            NativeRuntimeService.RequireStopped(1,0);Deny(()=>NativeRuntimeService.RequireStopped(1,12));Deny(()=>NativeRuntimeService.RequireStopped(3,0));
+            Assert(NativeService.SameGeneration(42,3,42));Assert(NativeService.SameGeneration(42,4,42));
+            Assert(!NativeService.SameGeneration(42,4,43));Assert(!NativeService.SameGeneration(42,2,42));
+            NativeService.RequireStopped(1,0);Deny(()=>NativeService.RequireStopped(1,12));Deny(()=>NativeService.RequireStopped(3,0));
             return Task.CompletedTask;
         });
         await check("the Runtime service restarts after 5 s, 30 s and 2 min over one day and removal clears every action",()=>
         {
-            var plan=NativeRuntimeService.FailurePlan(true);
-            Assert(plan.Length==3&&plan.All(a=>a.Kind==1)&&plan.Select(a=>a.Delay).SequenceEqual(new uint[]{5000,30000,120000})&&NativeRuntimeService.FailureReset==86400);
-            NativeRuntimeService.RequireFailurePlan(true,86400,plan);NativeRuntimeService.RequireFailurePlan(false,0,[]);
-            Deny(()=>NativeRuntimeService.RequireFailurePlan(true,0,plan));Deny(()=>NativeRuntimeService.RequireFailurePlan(true,86400,plan[..2]));
-            Deny(()=>NativeRuntimeService.RequireFailurePlan(true,86400,[plan[0],plan[1],new(){Kind=0,Delay=120000}]));
-            Deny(()=>NativeRuntimeService.RequireFailurePlan(true,86400,[plan[0],plan[1],new(){Kind=1,Delay=60000}]));
-            Deny(()=>NativeRuntimeService.RequireFailurePlan(false,0,plan));Deny(()=>NativeRuntimeService.RequireFailurePlan(false,86400,[]));
-            Assert(NativeRuntimeService.AutoStart==2&&NativeRuntimeService.DemandStart==3&&NativeRuntimeService.Disabled==4);
+            var plan=NativeService.FailurePlan(true);
+            Assert(plan.Length==3&&plan.All(a=>a.Kind==1)&&plan.Select(a=>a.Delay).SequenceEqual(new uint[]{5000,30000,120000})&&NativeService.FailureReset==86400);
+            NativeService.RequireFailurePlan(true,86400,plan);NativeService.RequireFailurePlan(false,0,[]);
+            Deny(()=>NativeService.RequireFailurePlan(true,0,plan));Deny(()=>NativeService.RequireFailurePlan(true,86400,plan[..2]));
+            Deny(()=>NativeService.RequireFailurePlan(true,86400,[plan[0],plan[1],new(){Kind=0,Delay=120000}]));
+            Deny(()=>NativeService.RequireFailurePlan(true,86400,[plan[0],plan[1],new(){Kind=1,Delay=60000}]));
+            Deny(()=>NativeService.RequireFailurePlan(false,0,plan));Deny(()=>NativeService.RequireFailurePlan(false,86400,[]));
+            Assert(NativeService.AutoStart==2&&NativeService.DemandStart==3&&NativeService.Disabled==4);
             return Task.CompletedTask;
         });
         await check("the one service binds its own virtual account and grants the installer and Runtime query only",()=>
@@ -56,27 +56,27 @@ internal static class FullInstallerIntegrationTests
             // The installer grants files to the service SID before CreateService: it is SHA-1 of the upper-case name.
             Assert(InstallLocations.ServiceSidFor("TrustedInstaller")=="S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464");
             Assert(InstallLocations.ServiceSidFor("yahad.acceptance")==InstallLocations.ServiceSid&&InstallLocations.ServiceSid.StartsWith("S-1-5-80-",StringComparison.Ordinal));
-            var exact="O:BA"+NativeRuntimeService.ServiceDescriptor(Owner,InstallLocations.ServiceSid);var acl=new RawSecurityDescriptor(exact);Assert(acl.DiscretionaryAcl!.Count==4);
-            NativeRuntimeService.RequireProtection(acl,Owner);
+            var exact="O:BA"+NativeService.ServiceDescriptor(Owner,InstallLocations.ServiceSid);var acl=new RawSecurityDescriptor(exact);Assert(acl.DiscretionaryAcl!.Count==4);
+            NativeService.RequireProtection(acl,Owner);
             Assert(acl.DiscretionaryAcl.Cast<CommonAce>().Where(a=>a.SecurityIdentifier.Value is not("S-1-5-18" or "S-1-5-32-544")).All(a=>a.AccessMask==5));
-            Deny(()=>NativeRuntimeService.RequireProtection(new(exact.Replace("0x00000005;;;"+Owner,"0x00000035;;;"+Owner)),Owner));
-            Deny(()=>NativeRuntimeService.RequireProtection(new(exact+"(A;;0x00000005;;;AU)"),Owner));
-            Deny(()=>NativeRuntimeService.RequireProtection(new(exact.Replace("O:BA","O:"+Owner)),Owner));
-            Deny(()=>NativeRuntimeService.RequireProtection(acl,"S-1-5-21-1-2-3-1002"));
-            Deny(()=>NativeRuntimeService.ServiceDescriptor("S-1-5-32-545",InstallLocations.ServiceSid));Deny(()=>NativeRuntimeService.ServiceDescriptor(Owner,"S-1-5-21-1-2-3-4"));
+            Deny(()=>NativeService.RequireProtection(new(exact.Replace("0x00000005;;;"+Owner,"0x00000035;;;"+Owner)),Owner));
+            Deny(()=>NativeService.RequireProtection(new(exact+"(A;;0x00000005;;;AU)"),Owner));
+            Deny(()=>NativeService.RequireProtection(new(exact.Replace("O:BA","O:"+Owner)),Owner));
+            Deny(()=>NativeService.RequireProtection(acl,"S-1-5-21-1-2-3-1002"));
+            Deny(()=>NativeService.ServiceDescriptor("S-1-5-32-545",InstallLocations.ServiceSid));Deny(()=>NativeService.ServiceDescriptor(Owner,"S-1-5-21-1-2-3-4"));
             Assert(InstallLocations.ServiceCommand("1.2.3")=="\""+Path.Combine(InstallLocations.Binaries,"versions","1.2.3","host","Yahad.ServiceHost.exe")+"\" --service");
             foreach(var bad in new[]{"1.2","01.2.3","1.2.3-beta","..","1.2.3\\..\\x"})Deny(()=>InstallLocations.ServiceCommand(bad));
             return Task.CompletedTask;
         });
         await check("interrupted service provisioning admits only the same never-started demand registration and administrative writers",()=>
         {
-            NativeRuntimeService.RequireProvisioningState(3,1,0,1077,0);
-            foreach(var value in new(uint,uint,uint,uint,uint)[]{(2,1,0,1077,0),(4,1,0,1077,0),(3,4,123,0,0),(3,1,0,0,0),(3,1,0,1066,1),(3,1,123,1077,0)})Deny(()=>NativeRuntimeService.RequireProvisioningState(value.Item1,value.Item2,value.Item3,value.Item4,value.Item5));
-            NativeRuntimeService.RequireAdministrativeWriters(new("O:BAD:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x2008d;;;AU)"));
-            Deny(()=>NativeRuntimeService.RequireAdministrativeWriters(new("O:BAD:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x35;;;AU)")));
-            var exact="O:BA"+NativeRuntimeService.ServiceDescriptor(Owner,InstallLocations.ServiceSid);NativeRuntimeService.RequireAdministrativeOwner(new(exact));
-            Deny(()=>NativeRuntimeService.RequireAdministrativeOwner(new(exact.Replace("O:BA","O:"+Owner))));
-            Deny(()=>NativeRuntimeService.RequireAdministrativeWriters(new(exact.Replace("O:BA","O:"+Owner))));return Task.CompletedTask;
+            NativeService.RequireProvisioningState(3,1,0,1077,0);
+            foreach(var value in new(uint,uint,uint,uint,uint)[]{(2,1,0,1077,0),(4,1,0,1077,0),(3,4,123,0,0),(3,1,0,0,0),(3,1,0,1066,1),(3,1,123,1077,0)})Deny(()=>NativeService.RequireProvisioningState(value.Item1,value.Item2,value.Item3,value.Item4,value.Item5));
+            NativeService.RequireAdministrativeWriters(new("O:BAD:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x2008d;;;AU)"));
+            Deny(()=>NativeService.RequireAdministrativeWriters(new("O:BAD:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x35;;;AU)")));
+            var exact="O:BA"+NativeService.ServiceDescriptor(Owner,InstallLocations.ServiceSid);NativeService.RequireAdministrativeOwner(new(exact));
+            Deny(()=>NativeService.RequireAdministrativeOwner(new(exact.Replace("O:BA","O:"+Owner))));
+            Deny(()=>NativeService.RequireAdministrativeWriters(new(exact.Replace("O:BA","O:"+Owner))));return Task.CompletedTask;
         });
         await check("quiet setup accepts only explicit choices and builds the window's update consent",()=>
         {
@@ -141,13 +141,13 @@ internal static class FullInstallerIntegrationTests
             Deny(()=>(intent with{Binaries=inventory.Where(f=>f.Path!=RemovalIntent.SetupMember(state.Version)).ToArray()}).Require());
             Deny(()=>(intent with{Binaries=[..inventory,inventory[1]]}).Require());return Task.CompletedTask;
         });
-        await check("runtime package accepts only Format 1 host and payload members anchored to its bundle",()=>
+        await check("runtime package accepts only Format 1 host, updater and payload members anchored to its bundle",()=>
         {
             using(var exact=LayoutPackage())Assert(exact.Manifest.Format==1);
             DenyCode("PACKAGE_FORMAT",()=>{using var full=LayoutPackage(format:2);});
             DenyCode("PACKAGE_PATH",()=>{using var bootstrap=LayoutPackage(extra:"bootstrap/authority/Yahad.Authority.exe");});
             DenyCode("PACKAGE_PATH",()=>{using var manifest=LayoutPackage(extra:"system-manifest.json");});
-            DenyCode("PACKAGE_MISSING",()=>{using var missing=LayoutPackage(omit:"host/Yahad.ServiceHost.runtimeconfig.json");});
+            DenyCode("PACKAGE_MISSING",()=>{using var missing=LayoutPackage(omit:"host/Yahad.ServiceHost.runtimeconfig.json");});DenyCode("PACKAGE_MISSING",()=>{using var missing=LayoutPackage(omit:"updater/Yahad.Updater.exe");});
             DenyCode("PACKAGE_PAYLOAD_ANCHOR",()=>{using var anchor=LayoutPackage(payloadDigest:new string('e',64));});
             DenyCode("PACKAGE_SOURCE",()=>{using var source=LayoutPackage(source:new string('0',40)==ApplicationRelease.SourceCommit?new string('1',40):new string('0',40));});
             return Task.CompletedTask;
@@ -232,7 +232,7 @@ internal static class FullInstallerIntegrationTests
     }
     private static InstallPackage LayoutPackage(int format=1,string? extra=null,string? omit=null,string? payloadDigest=null,string? source=null)
     {
-        var names=new List<string>{"host/Yahad.ServiceHost.exe","host/Yahad.ServiceHost.runtimeconfig.json","payload/bundle.json","payload/runtime/node/node.exe","payload/runtime/ffmpeg/ffmpeg.exe","payload/runtime/caddy/caddy.exe","payload/app/server/main.mjs","payload/app/dist/index.html","payload/app/native/Yahad.Platform.exe","payload/legal/fixture.json"};
+        var names=new List<string>{"host/Yahad.ServiceHost.exe","host/Yahad.ServiceHost.runtimeconfig.json","updater/Yahad.Updater.exe","updater/Yahad.Updater.runtimeconfig.json","payload/bundle.json","payload/runtime/node/node.exe","payload/runtime/ffmpeg/ffmpeg.exe","payload/runtime/caddy/caddy.exe","payload/app/server/main.mjs","payload/app/dist/index.html","payload/app/native/Yahad.Platform.exe","payload/legal/fixture.json"};
         if(extra is not null)names.Add(extra);if(omit is not null){names.Remove(omit);names.Add("payload/legal/other.json");}
         var stream=new MemoryStream();using(var zip=new ZipArchive(stream,ZipArchiveMode.Create,true))foreach(var name in names){using var entry=zip.CreateEntry(name).Open();entry.WriteByte(1);}
         var bytes=stream.ToArray();stream.Position=0;var sha=Hash([1]);
