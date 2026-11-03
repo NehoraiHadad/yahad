@@ -1,5 +1,7 @@
 import { fork } from 'node:child_process';
 import { connect } from 'node:net';
+import { extname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // Private native-host IPC only. No HTTP control endpoint or user setup flow.
 const pipe = process.env.YAHAD_NATIVE_PIPE;
@@ -9,7 +11,8 @@ delete environment.YAHAD_NATIVE_PIPE;
 const channel = connect(pipe);
 let stopping = false;
 let deadline: NodeJS.Timeout | undefined;
-const child = fork(new URL('./main.ts', import.meta.url), {
+// The sibling server entry: main.ts under the source loader, main.mjs when bundled.
+const child = fork(new URL('./main' + extname(fileURLToPath(import.meta.url)), import.meta.url), {
   env: environment,
   execPath: process.execPath,
   execArgv: process.execArgv,
