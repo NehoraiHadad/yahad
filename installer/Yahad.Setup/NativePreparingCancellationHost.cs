@@ -53,17 +53,34 @@ internal sealed class NativePreparingCancellationHost:IPreparingCancellationHost
         }
         var requiredDirectories=parents.ToHashSet(StringComparer.OrdinalIgnoreCase);
         if(state.RuntimeSid is not null)
-        {
-            foreach(var file in state.Files.Where(f=>f.Path.StartsWith("payload/",StringComparison.Ordinal)))
-            {
-                var path="payloads/"+state.PayloadDigest+"/"+file.Path[8..];expected.Add(path);var slash=path.LastIndexOf('/');
-                while(slash>0){parents.Add(path[..slash]);slash=path.LastIndexOf('/',slash-1);}
-            }
-            foreach(var directory in new[]{"datasets","datasets/"+state.DataId,"datasets/"+state.DataId+"/data","temporary","Secrets","payloads","intake","owner-ledger","authority-temporary",".authority",".authority/update-serial",".authority/updates"})parents.Add(directory);
-        }
+            foreach(var directory in new[]{"datasets","datasets/"+state.DataId,"datasets/"+state.DataId+"/data","temporary","Secrets","intake","owner-ledger","authority-temporary",".authority",".authority/update-serial",".authority/updates"})parents.Add(directory);
         if(files.Distinct(StringComparer.OrdinalIgnoreCase).Count()!=files.Count||directories.Distinct(StringComparer.OrdinalIgnoreCase).Count()!=directories.Count||
             files.Any(p=>!expected.Contains(p))||directories.Any(p=>!parents.Contains(p))||complete&&(!required.IsSubsetOf(files)||!requiredDirectories.IsSubsetOf(directories)))
             throw new IOException("UPDATE_PREPARING_INVENTORY_CHANGED");
+    }
+    // Before enrollment the binary root may hold only verified members of the
+    // package payload, which Setup copies first; any other binary means the
+    // install went further and must be repaired, not cancelled.
+    private static Dictionary<string,InstallMember> PayloadMembers(FullInstallState state)
+        =>state.Files.Where(f=>f.Path.StartsWith("payload/",StringComparison.Ordinal)).ToDictionary(f=>"payloads/"+state.PayloadDigest+"/"+f.Path[8..],StringComparer.OrdinalIgnoreCase);
+    internal static void RequireBinaryInventory(PreparingCancellationIntent intent,IReadOnlyCollection<string> files,IReadOnlyCollection<string> directories)
+    {
+        var expected=intent.State.RuntimeSid is null?new Dictionary<string,InstallMember>():PayloadMembers(intent.State);var parents=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach(var path in expected.Keys){var slash=path.LastIndexOf('/');while(slash>0){parents.Add(path[..slash]);slash=path.LastIndexOf('/',slash-1);}}
+        if(files.Distinct(StringComparer.OrdinalIgnoreCase).Count()!=files.Count||directories.Distinct(StringComparer.OrdinalIgnoreCase).Count()!=directories.Count||
+            files.Any(p=>!expected.ContainsKey(p))||directories.Any(p=>!parents.Contains(p)))throw new IOException("UPDATE_PREPARING_BINARIES_PUBLISHED");
+    }
+    private static RemovalTree? InspectBinaries(PreparingCancellationIntent intent,CancellationToken cancellation)
+    {
+        cancellation.ThrowIfCancellationRequested();if(!RemovalTree.DirectoryPresent(InstallLocations.Binaries))return null;
+        var state=intent.State;var roles=state.RuntimeSid is null?null:new FullInstallFiles(state,true);
+        var tree=RemovalTree.Inspect(InstallLocations.Binaries,(p,d)=>{cancellation.ThrowIfCancellationRequested();if(roles is null){using var pin=WindowsFileBoundary.PinPreparingInstallMember(p,d);}else roles.Validate(p,d);});
+        string Relative(string path)=>Path.GetRelativePath(InstallLocations.Binaries,path).Replace('\\','/');
+        RequireBinaryInventory(intent,tree.Files.Select(Relative).ToArray(),tree.Directories.Select(Relative).ToArray());
+        var expected=PayloadMembers(state);
+        foreach(var path in tree.Files)
+        {using var input=WindowsFileBoundary.OpenInstallerRoleRead(path,roles!.Roles,roles.Role(path),administrativeOwner:true);RequireFileContents(expected[Relative(path)],input.Length,(offset,buffer)=>input.Read(offset,buffer),cancellation);}
+        return tree;
     }
     private static RemovalTree? Inspect(PreparingCancellationIntent intent,bool complete,CancellationToken cancellation)
     {
@@ -75,7 +92,6 @@ internal sealed class NativePreparingCancellationHost:IPreparingCancellationHost
         string Relative(string path)=>Path.GetRelativePath(InstallLocations.State,path).Replace('\\','/');
         RequireInventory(intent,tree.Files.Select(Relative).ToArray(),tree.Directories.Select(Relative).ToArray(),complete);
         var expected=intent.State.Files.ToDictionary(f=>intent.StagingDirectory+"/"+f.Path,StringComparer.OrdinalIgnoreCase);
-        if(roles is not null)foreach(var member in state.Files.Where(f=>f.Path.StartsWith("payload/",StringComparison.Ordinal)))expected.Add("payloads/"+state.PayloadDigest+"/"+member.Path[8..],member);
         foreach(var path in tree.Files)
         {
             cancellation.ThrowIfCancellationRequested();
@@ -110,12 +126,7 @@ internal sealed class NativePreparingCancellationHost:IPreparingCancellationHost
         NativeInstallFiles.RequireAdministrator();var state=intent.State;var provisioned=state.RuntimeSid is not null;
         if(complete&&provisioned&&(state.RuntimeSid!=NativeFullService.Sid(FullServiceKind.Runtime)||state.AuthoritySid!=NativeFullService.Sid(FullServiceKind.Authority)))throw new IOException("UPDATE_PREPARING_SERVICE_CHANGED");
         _=Inspect(intent,complete,cancellation);
-        if(RemovalTree.DirectoryPresent(InstallLocations.Binaries))
-        {
-            if(provisioned)new FullInstallFiles(state,true).Validate(InstallLocations.Binaries,true);else{using var pin=WindowsFileBoundary.PinPreparingInstallMember(InstallLocations.Binaries,true);}
-            if(Directory.EnumerateFileSystemEntries(InstallLocations.Binaries).Any())throw new IOException("UPDATE_PREPARING_BINARIES_PUBLISHED");
-        }
-        else if(complete)throw new IOException("UPDATE_PREPARING_INVENTORY_CHANGED");
+        if(InspectBinaries(intent,cancellation) is null&&complete)throw new IOException("UPDATE_PREPARING_INVENTORY_CHANGED");
         using var registration=Registry.LocalMachine.OpenSubKey(Registration);if(registration is not null)throw new IOException("UPDATE_PREPARING_ENROLLED");
         if(LanServiceRegistration.Exists()||!provisioned&&(NativeFullService.Exists(FullServiceKind.RecoveryA)||NativeFullService.Exists(FullServiceKind.RecoveryB)))throw new IOException("UPDATE_PREPARING_ENROLLED");
         foreach(var kind in PlannedKinds(intent))
@@ -154,7 +165,6 @@ internal sealed class NativePreparingCancellationHost:IPreparingCancellationHost
         if(tree is not null)
         {
             var expected=intent.State.Files.ToDictionary(f=>intent.StagingDirectory+"/"+f.Path,StringComparer.OrdinalIgnoreCase);
-            if(roles is not null)foreach(var member in state.Files.Where(f=>f.Path.StartsWith("payload/",StringComparison.Ordinal)))expected.Add("payloads/"+state.PayloadDigest+"/"+member.Path[8..],member);
             foreach(var path in tree.Files.Where(p=>!p.Equals(InstallLocations.StateFile,StringComparison.OrdinalIgnoreCase)))
             {
                 cancellation.ThrowIfCancellationRequested();var relative=Path.GetRelativePath(InstallLocations.State,path).Replace('\\','/');var member=expected[relative];
@@ -164,8 +174,17 @@ internal sealed class NativePreparingCancellationHost:IPreparingCancellationHost
             if(FilePresent(InstallLocations.StateFile)){if(roles is null)WindowsFileBoundary.DeletePreparingInstallMember(InstallLocations.StateFile,false,intent.StateBytes.Length,PreparingCancellationIntent.Hash(intent.StateBytes));else roles.Delete(InstallLocations.StateFile,false);}
             if(roles is null)WindowsFileBoundary.DeletePreparingInstallMember(InstallLocations.State,true);else roles.Delete(InstallLocations.State,true);
         }
-        if(RemovalTree.DirectoryPresent(InstallLocations.Binaries))
-        {if(Directory.EnumerateFileSystemEntries(InstallLocations.Binaries).Any())throw new IOException("UPDATE_PREPARING_BINARIES_PUBLISHED");if(roles is null)WindowsFileBoundary.DeletePreparingInstallMember(InstallLocations.Binaries,true);else new FullInstallFiles(state,true).Delete(InstallLocations.Binaries,true);}
+        if(InspectBinaries(intent,cancellation) is { } binaryTree)
+        {
+            if(roles is null)WindowsFileBoundary.DeletePreparingInstallMember(InstallLocations.Binaries,true);
+            else
+            {
+                var binaries=new FullInstallFiles(state,true);var payload=PayloadMembers(state);
+                foreach(var path in binaryTree.Files){cancellation.ThrowIfCancellationRequested();var relative=Path.GetRelativePath(InstallLocations.Binaries,path).Replace('\\','/');binaries.VerifyFile(relative,payload[relative]);binaries.Delete(path,false);}
+                foreach(var directory in binaryTree.Directories){cancellation.ThrowIfCancellationRequested();binaries.Delete(directory,true);}
+                binaries.Delete(InstallLocations.Binaries,true);
+            }
+        }
     }
     public async Task CompleteAsync(PreparingCancellationIntent intent,CancellationToken cancellation)
     {

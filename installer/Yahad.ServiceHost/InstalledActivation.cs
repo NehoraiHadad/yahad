@@ -1,5 +1,4 @@
 using System.Security.Cryptography;
-using System.Text.Json;
 using System.Text.Json.Serialization;
 using Yahad.Install;
 
@@ -93,9 +92,9 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
             reservation.Lease=commitInspection&&commitInspectionLease is not null?commitInspectionLease(reservation.Data):files.Lease(reservation.Data);reservation.Hold(reservation.Lease);
             if(!files.IsSingleService)reservation.CheckWal();
             if(reservation.PinDigest(key)!=head.MasterKeyDigest||reservation.PinDigest(policy)!=head.PolicyDigest||reservation.PinDigest(pins)!=head.PinDigest)throw new IOException("INSTALLED_DATA_IDENTITY");
-            var payload=Path.Combine(root,"payloads",head.ReleaseDigest);var payloadManifest=reservation.PinBytes(Path.Combine(payload,"bundle.json"),16*1024*1024);
-            if(Hash(payloadManifest)!=head.ReleaseDigest)throw new IOException("INSTALLED_RELEASE_ANCHOR");
-            reservation.VerifyPayload(payload,payloadManifest);
+            // The immutable payload is hash-verified by Setup when it is
+            // extracted (install/repair); a service start only locates it.
+            var payload=files.PathOf("payloads/"+head.ReleaseDigest);
             var node=Path.Combine(payload,"runtime","node","node.exe");var temporary=Path.Combine(root,"temporary");
             reservation.Hold(files.PinDirectory(temporary));
             var probe=string.IsNullOrEmpty(files.ProbeExecutable)?node:files.ProbeExecutable;
@@ -110,8 +109,8 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
             else if(files.IsSingleService&&new[]{"app.sqlite-wal","app.sqlite-shm","app.sqlite-journal"}.Any(n=>Path.Exists(Path.Combine(reservation.Data,n))))
                 _=await FirstInstallWal.ReconcileAsync(probe,Path.Combine(reservation.Data,"app.sqlite"),probeTemporary,cancellation);
             reservation.CheckWal();reservation.PinData(initializing);
-            var schema=initializing?reservation.PayloadSchema:await FrozenAdmissionSchema.ReadAsync(probe,Path.Combine(reservation.Data,"app.sqlite"),probeTemporary,cancellation);
-            if(schema<head.MinimumSchema||schema>head.MaximumSchema||schema>reservation.PayloadSchema||head.MaximumSchema!=reservation.PayloadSchema)throw new IOException("INSTALLED_SCHEMA_INCOMPATIBLE");
+            var schema=initializing?head.MaximumSchema:await FrozenAdmissionSchema.ReadAsync(probe,Path.Combine(reservation.Data,"app.sqlite"),probeTemporary,cancellation);
+            if(schema<head.MinimumSchema||schema>head.MaximumSchema)throw new IOException("INSTALLED_SCHEMA_INCOMPATIBLE");
             if(head.Recovery is { } recovered)
             {
                 var source=recovered.SourceDirectory(root);
@@ -155,7 +154,7 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
             // is added for bootstrap; remote origins are never inferred here.
             if(origin.Scheme=="https"&&NetworkPlan.IsPrivateLanV4(origin.Host))
                 environment["APP_ADDITIONAL_ORIGINS"]=$"http://127.0.0.1:{web.Port}";
-            var spec=new VerifiedProcessSpec(node,reservation.NodeDigest,["server/main.mjs"],Path.Combine(payload,"app"),temporary,
+            var spec=new VerifiedProcessSpec(node,["server/main.mjs"],Path.Combine(payload,"app"),temporary,
                 Path.Combine(payload,"runtime","ffmpeg","ffmpeg.exe"),environment,reservation.Lease,reservation.BeginMutableStart,files,reservation.ObserveHealthy);
             var launcher=processFactory is null?new ServiceProcessLauncher(spec,channels):processFactory(spec)??throw new IOException("INSTALLED_PROCESS_FACTORY_NULL");
             return new(new(head.ReleaseDigest),launcher,reservation,reservation);
@@ -171,10 +170,9 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
     private sealed class InstalledReservation(string root,Func<DateTimeOffset> clock,Action work,CancellationToken admissionCancellation,string? expectedPendingDigest,InstalledStateFiles files):IAppRecoveryBarrier,IDisposable
     {
         internal readonly List<IDisposable> Resources=[],DataPins=[];private bool disposed,mutable;
-        internal WindowsFileBoundary.DataLease Lease=null!;internal InstalledOwnerIntent Owner=null!;internal string Data="",Release="",Payload="",NodeDigest="";internal int PayloadSchema;
-        private string[] dataMembers=[],payloadMembers=[];
+        internal WindowsFileBoundary.DataLease Lease=null!;internal InstalledOwnerIntent Owner=null!;internal string Data="",Release="";
+        private string[] dataMembers=[];
         internal void Hold(IDisposable item)=>Resources.Add(item);
-        internal byte[] PinBytes(string path,int max){var file=files.Open(path);Hold(file);return file.Small(max);}
         internal string PinDigest(string path){var file=files.Open(path);Hold(file);return FileHash(file,work);}
         internal void CheckOwner(){var now=clock().ToUnixTimeSeconds();if(Owner.ApprovedUnix>now||Owner.ExpiresUnix is { } expiry&&(expiry<=now||expiry<=Owner.ApprovedUnix))throw new IOException("INSTALLED_OWNER_EXPIRED");}
         internal void CheckPending()
@@ -207,31 +205,12 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
             dataMembers=Names(Data,100001).Where(n=>n!="process.lock").ToArray();if(initializing?dataMembers.Length!=0:!dataMembers.Contains("app.sqlite"))throw new IOException("INSTALLED_DATABASE_MISSING");
             foreach(var name in dataMembers){work();DataPins.Add(files.Open(Path.Combine(Data,name.Replace('/',Path.DirectorySeparatorChar))));}
         }
-        internal void VerifyPayload(string payload,byte[] manifest)
-        {
-            Payload=payload;var value=NativeJson.Read<JsonElement>(manifest);
-            if(value.GetProperty("schema").GetInt32()!=1||value.GetProperty("kind").GetString()!="windows-runtime-candidate"||value.GetProperty("target").GetString()!="win-x64"||value.GetProperty("profile").GetString()!="full"||value.GetProperty("authority").GetString()!="application-updater")throw new IOException("INSTALLED_RELEASE_FORMAT");
-            var launch=value.GetProperty("launch");foreach(var pair in new Dictionary<string,string>{{"node","runtime/node/node.exe"},{"entry","app/server/main.mjs"},{"helper","app/native/Yahad.Platform.exe"},{"ffmpeg","runtime/ffmpeg/ffmpeg.exe"},{"caddy","runtime/caddy/caddy.exe"}})if(launch.GetProperty(pair.Key).GetString()!=pair.Value)throw new IOException("INSTALLED_LAUNCH_FORMAT");
-            var expected=new HashSet<string>(StringComparer.OrdinalIgnoreCase){"bundle.json"};long total=0;
-            foreach(var record in value.GetProperty("files").EnumerateArray())
-            {
-                work();
-                var name=record.GetProperty("path").GetString()!;var path=WindowsFileBoundary.CanonicalLocalPath(Path.Combine(payload,name.Replace('/',Path.DirectorySeparatorChar)));
-                if(name.Length>240||name.Contains('\\')||!name.StartsWith("app/",StringComparison.Ordinal)&&!name.StartsWith("runtime/",StringComparison.Ordinal)&&!name.StartsWith("legal/",StringComparison.Ordinal)||!expected.Add(name)||expected.Count>50001)throw new IOException("INSTALLED_RELEASE_PATH");
-                var size=record.GetProperty("size").GetInt64();if(size<0||size>512L*1024*1024||(total+=size)>2L*1024*1024*1024)throw new IOException("INSTALLED_RELEASE_BOUND");
-                var digest=record.GetProperty("sha256").GetString()!;Digest(digest);var file=files.Open(path);Hold(file);
-                if(file.Length!=size||FileHash(file,work)!=digest)throw new IOException("INSTALLED_RELEASE_BYTES");if(name=="runtime/node/node.exe")NodeDigest=digest;
-            }
-            foreach(var required in new[]{"runtime/node/node.exe","app/server/main.mjs","app/native/Yahad.Platform.exe","runtime/ffmpeg/ffmpeg.exe","runtime/caddy/caddy.exe","legal/build-inputs.json"})if(!expected.Contains(required))throw new IOException("INSTALLED_RELEASE_INCOMPLETE");
-            payloadMembers=Names(payload);if(!expected.SetEquals(payloadMembers))throw new IOException("INSTALLED_RELEASE_CLOSURE");
-            using var build=JsonDocument.Parse(PinBytes(Path.Combine(payload,"legal","build-inputs.json"),65536));PayloadSchema=build.RootElement.GetProperty("databaseSchema").GetInt32();
-        }
         public Task RequireStartAllowedAsync(AppRelease release,CancellationToken cancellation)
             =>Task.Run(()=>CheckStart(release,cancellation),cancellation);
         private void CheckStart(AppRelease release,CancellationToken cancellation)
         {
             cancellation.ThrowIfCancellationRequested();ObjectDisposedException.ThrowIf(disposed,this);if(mutable||release.Id!=Release)throw new IOException("INSTALLED_ALREADY_STARTED");
-            CheckOwner();CheckPending();CheckWal();if(!Names(Data,100001,cancellation).Where(n=>n!="process.lock").SequenceEqual(dataMembers)||!Names(Payload,50001,cancellation).SequenceEqual(payloadMembers))throw new IOException("INSTALLED_SELECTION_CHANGED");
+            CheckOwner();CheckPending();CheckWal();if(!Names(Data,100001,cancellation).Where(n=>n!="process.lock").SequenceEqual(dataMembers))throw new IOException("INSTALLED_SELECTION_CHANGED");
         }
         internal void BeginMutableStart()
         {

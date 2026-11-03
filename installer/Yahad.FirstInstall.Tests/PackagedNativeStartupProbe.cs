@@ -31,8 +31,6 @@ internal static class PackagedNativeStartupProbe
             var key = Path.Combine(owned.Root, "master-key");
             File.WriteAllText(key, Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)));
             var node = Path.Combine(prepared, "runtime", "node", "node.exe");
-            using var input = File.OpenRead(node);
-            var hash = Convert.ToHexStringLower(SHA256.HashData(input));
             var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start(); var port = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop();
             var origin = "http://127.0.0.1:" + port;
@@ -45,7 +43,7 @@ internal static class PackagedNativeStartupProbe
                 ["DIAGNOSTICS_ENABLED"] = "false"
             };
             lease = WindowsFileBoundary.AcquireDataLease(data);
-            var spec = new VerifiedProcessSpec(node, hash, ["server/main.mjs"],
+            var spec = new VerifiedProcessSpec(node, ["server/main.mjs"],
                 Path.Combine(prepared, "app"), temporary, Path.Combine(prepared, "runtime", "ffmpeg", "ffmpeg.exe"), environment, lease);
             var launcher = jobs.Launcher(new ServiceProcessLauncher(spec, new LocalChildControlFactory()));
             controller = new ServiceController(new Start(launcher), TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(20));

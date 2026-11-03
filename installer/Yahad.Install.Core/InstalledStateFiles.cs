@@ -8,6 +8,10 @@ internal sealed class InstalledStateFiles
 {
     internal bool IsSingleService{get;}
     internal string Root{get;}internal InstalledFileRoles? Roles{get;}
+    // The immutable application payload is logically "payloads/" of the state
+    // root but physically lives under the Program Files binary root on an
+    // installed machine. Private roots keep it beside their own state.
+    internal string PayloadRoot{get;}
     internal string ProbeExecutable{get;}internal string ProbeDigest{get;}
     internal string RuntimeTemporary=>Path.Combine(Root,"temporary");
     internal bool IsRuntimeProfile{get;private set;}
@@ -15,7 +19,11 @@ internal sealed class InstalledStateFiles
     private readonly Action<string,InstalledFileRole>? projectedRole;
     private string? recoveryStaging;
     private InstalledStateFiles(string root,InstalledFileRoles? roles,string probe,string probeDigest,Action<string,InstalledFileRole>? projection,bool singleService=false)
-    {IsSingleService=singleService;Root=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(root));Roles=roles;ProbeExecutable=probe;ProbeDigest=probeDigest;projectedRole=projection;ValidateRoot();}
+    {
+        IsSingleService=singleService;Root=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(root));Roles=roles;ProbeExecutable=probe;ProbeDigest=probeDigest;projectedRole=projection;
+        PayloadRoot=roles is not null&&Root.Equals(WindowsFileBoundary.CanonicalLocalPath(InstalledUpdaterLayout.StateRoot),StringComparison.OrdinalIgnoreCase)?WindowsFileBoundary.CanonicalLocalPath(InstalledUpdaterLayout.PayloadRoot):Path.Combine(Root,"payloads");
+        ValidateRoot();
+    }
     internal static InstalledStateFiles SingleService(string root)=>new(root,null,"","",null,true);
     internal static InstalledStateFiles Private(string root,string probe="",string digest="",Action<string,InstalledFileRole>? projection=null)=>new(root,null,probe,digest,projection);
     internal static InstalledStateFiles Installed(string root,InstalledFileRoles roles,string probe,string digest)=>new(root,roles,probe,digest,null);
@@ -23,7 +31,18 @@ internal sealed class InstalledStateFiles
     internal void ValidateRoot(){if(IsSingleService){using var root=WindowsFileBoundary.PinSingleServiceDirectory(Root,true);}
         else if(Roles is null)SafeDirectory.ValidateSession(Root);else using(WindowsFileBoundary.PinInstalledRoleDirectory(Root,Roles,InstalledFileRole.Control)){}projectedRole?.Invoke(Root,InstalledFileRole.Control);}
     internal string PathOf(string relative)
-    {var path=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(Path.Combine(Root,relative)));if(!path.StartsWith(Root+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))throw new IOException("AUTHORITY_STORAGE_PATH");return path;}
+    {
+        var path=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(Path.Combine(Root,relative)));var logical=Path.Combine(Root,"payloads");
+        if(Under(path,logical))path=PayloadRoot+path[logical.Length..];
+        if(!Under(path,PayloadRoot)&&!path.StartsWith(Root+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))throw new IOException("AUTHORITY_STORAGE_PATH");return path;
+    }
+    private static bool Under(string path,string root)=>path.Equals(root,StringComparison.OrdinalIgnoreCase)||path.StartsWith(root+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase);
+    // Root-relative logical name; payload members map back to "payloads/...".
+    private string Relative(string path)
+    {
+        var selected=PathOf(Path.GetRelativePath(Root,path));
+        return(Under(selected,PayloadRoot)?"payloads"+selected[PayloadRoot.Length..]:Path.GetRelativePath(Root,selected)).Replace('\\','/');
+    }
     internal InstalledFileRole SecretClass(string path,SecretRole role)=>role==SecretRole.MasterKey?InstalledFileRole.MasterKey:string.Equals(Path.GetFullPath(path),PathOf("bootstrap.json"),StringComparison.OrdinalIgnoreCase)?InstalledFileRole.Control:InstalledFileRole.Anchor;
     internal InstalledFileRole Role(string path)
     {
@@ -32,7 +51,7 @@ internal sealed class InstalledStateFiles
     }
     private InstalledFileRole PublishedRole(string path)
     {
-        var relative=Path.GetRelativePath(Root,PathOf(Path.GetRelativePath(Root,path))).Replace('\\','/');
+        var relative=Relative(path);
         if(relative is "installation.json" or InstalledUpdaterLayout.AnchorFile||relative.StartsWith("Secrets/",StringComparison.Ordinal))return InstalledFileRole.Anchor;
         if(relative.StartsWith("payloads/",StringComparison.Ordinal))return InstalledFileRole.Payload;
         if(relative.StartsWith(".authority",StringComparison.Ordinal)||relative.StartsWith("owner-ledger",StringComparison.Ordinal)||relative.StartsWith("intake",StringComparison.Ordinal)||relative.StartsWith("authority-temporary",StringComparison.Ordinal)||relative.StartsWith("pending.json",StringComparison.Ordinal))return InstalledFileRole.Recovery;

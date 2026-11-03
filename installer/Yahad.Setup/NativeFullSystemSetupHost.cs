@@ -43,7 +43,7 @@ internal sealed class NativeFullSystemSetupHost(InstallPackage package,UpdateSet
         foreach(var f in s.Files){InstallPackage.Name(f.Path);InstalledActivationResolver.Digest(f.Sha256);if(f.Size<0)throw new IOException("UPDATE_INSTALL_FILES");}
         if(s.PolicyDigest is not null)InstalledActivationResolver.Digest(s.PolicyDigest);
         if(s.PlanDigest is not null)InstalledActivationResolver.Digest(s.PlanDigest);
-        if(s.PreservedBinaries is { } retained){if(retained.Length is <1 or >50000)throw new IOException("UPDATE_INSTALL_FILES");foreach(var f in retained){FixedSystemComponents.Member(f.Path);InstalledActivationResolver.Digest(f.Sha256);if(f.Size<0||f.Size>FullInstallFiles.MaximumBinaryBytes(f.Path))throw new IOException("UPDATE_INSTALL_FILES");}}
+        if(s.PreservedBinaries is { } retained){if(retained.Length is <1 or >50000)throw new IOException("UPDATE_INSTALL_FILES");foreach(var f in retained){FullInstallFiles.BinaryMember(f.Path);InstalledActivationResolver.Digest(f.Sha256);if(f.Size<0||f.Size>FullInstallFiles.MaximumBinaryBytes(f.Path))throw new IOException("UPDATE_INSTALL_FILES");}}
     }
     private void Save(string phase)
     {
@@ -143,10 +143,10 @@ internal sealed class NativeFullSystemSetupHost(InstallPackage package,UpdateSet
         void Copied(){if(++copied%100==0||copied==copyCount)progress(new("installing_service",70+copied*9/copyCount));}
         NativeInstallFiles.SetOwnedDirectory(InstallLocations.State,FullUpdateInstallerPlan.Descriptor(files!.Roles,InstalledFileRole.Control,true));
         NativeInstallFiles.SetOwnedDirectory(InstallLocations.Binaries,FullUpdateInstallerPlan.Descriptor(files.Roles,InstalledFileRole.Control,true));
-        foreach(var relative in new[]{"datasets","datasets/"+state.DataId,"datasets/"+state.DataId+"/data","temporary","Secrets","payloads","intake","owner-ledger","authority-temporary",".authority",".authority/update-serial",".authority/updates"})files.EnsureDirectory(relative);
+        foreach(var relative in new[]{"datasets","datasets/"+state.DataId,"datasets/"+state.DataId+"/data","temporary","Secrets","intake","owner-ledger","authority-temporary",".authority",".authority/update-serial",".authority/updates"})files.EnsureDirectory(relative);
         if(Directory.EnumerateFileSystemEntries(files.PathOf("datasets/"+state.DataId+"/data")).Any(p=>Path.GetFileName(p)!="process.lock"))throw new IOException("EXISTING_DATA_PRESERVED");
         foreach(var member in state.Files.Where(f=>f.Path.StartsWith("payload/",StringComparison.Ordinal)))
-        {cancellation.ThrowIfCancellationRequested();files.CopyVerified(Path.Combine(staging,member.Path.Replace('/',Path.DirectorySeparatorChar)),"payloads/"+state.PayloadDigest+"/"+member.Path[8..],member);Copied();}
+        {cancellation.ThrowIfCancellationRequested();binaries!.CopyVerified(Path.Combine(staging,member.Path.Replace('/',Path.DirectorySeparatorChar)),"payloads/"+state.PayloadDigest+"/"+member.Path[8..],member);Copied();}
         foreach(var component in system.Components)
         {
             foreach(var member in component.Files)
@@ -231,7 +231,7 @@ internal sealed class NativeFullSystemSetupHost(InstallPackage package,UpdateSet
     private InstallMember[] CurrentBinaryInventory()
     {
         var current=CurrentBootstrap();var result=new Dictionary<string,InstallMember>(StringComparer.OrdinalIgnoreCase);
-        void Add(string path,long size,string hash){FixedSystemComponents.Member(path);if(result.TryGetValue(path,out var old)&&old!=new InstallMember(path,size,hash))throw new IOException("UPDATE_BINARY_COLLISION");result[path]=new(path,size,hash);}
+        void Add(string path,long size,string hash){FullInstallFiles.BinaryMember(path);if(result.TryGetValue(path,out var old)&&old!=new InstallMember(path,size,hash))throw new IOException("UPDATE_BINARY_COLLISION");result[path]=new(path,size,hash);}
         foreach(var component in current.Components)
         {
             _=new SystemComponentDescriptor(component.Kind,FixedSystemComponents.SlotPrefix(component.Kind),component.EntryPoint,component.EntrySha256,component.Files.Select(f=>new SystemComponentFile(f.RelativePath,f.Size,f.Sha256)));
@@ -258,14 +258,26 @@ internal sealed class NativeFullSystemSetupHost(InstallPackage package,UpdateSet
                 foreach(var member in descriptor.Files)Add("system-slots/"+digest+"/"+descriptor.SlotRelativeDirectory+"/"+member.RelativePath,member.Size,member.Sha256);
             }
         }
+        // Every retained application payload is an owned binary-root closure:
+        // its bundle.json is named by its digest and lists every other member.
+        var payloads=binaries.PathOf("payloads");var releases=0;var head=Head().ReleaseDigest;var headPresent=false;
+        foreach(var directory in Directory.Exists(payloads)?Directory.EnumerateDirectories(payloads):[])
+        {
+            if(++releases>128)throw new IOException("UPDATE_PAYLOAD_BOUND");var digest=Path.GetFileName(directory);InstalledActivationResolver.Digest(digest);headPresent|=digest==head;
+            var relative="payloads/"+digest+"/bundle.json";var manifest=binaries.Read(relative,16*1024*1024);if(Hash(manifest)!=digest)throw new IOException("UPDATE_PAYLOAD_MANIFEST");Add(relative,manifest.Length,digest);
+            using var json=JsonDocument.Parse(manifest);
+            foreach(var member in json.RootElement.GetProperty("files").EnumerateArray())
+                Add("payloads/"+digest+"/"+member.GetProperty("path").GetString(),member.GetProperty("size").GetInt64(),member.GetProperty("sha256").GetString()!);
+        }
+        if(!headPresent)throw new IOException("UPDATE_PAYLOAD_MISSING");
         if(result.Count>50000)throw new IOException("UPDATE_BINARY_BOUND");
         Add("Yahad.Setup.exe",new FileInfo(InstallLocations.InstallerImage).Length,state.SetupSha256);return result.Values.ToArray();
     }
     private InstallerState LanView()
     =>NativeLanInstall.PendingFullApplication(state!,files!)??NativeLanInstall.FullApplication(state!,Head());
     private NativeLanInstall Network()=>new(LanView(),files,
-        relative=>relative=="caddy.exe"?files!.PathOf("payloads/"+state!.PayloadDigest+"/runtime/caddy/caddy.exe"):binaries!.PathOf("system-slots/"+state!.SystemManifestDigest+"/bootstrap/servicehost/"+relative[5..]),
-        relative=>files!.Read("payloads/"+state!.PayloadDigest+"/"+relative,65536));
+        relative=>relative=="caddy.exe"?binaries!.PathOf("payloads/"+state!.PayloadDigest+"/runtime/caddy/caddy.exe"):binaries!.PathOf("system-slots/"+state!.SystemManifestDigest+"/bootstrap/servicehost/"+relative[5..]),
+        relative=>binaries!.Read("payloads/"+state!.PayloadDigest+"/"+relative,65536));
     public async Task ConfigureLanAsync(OwnerProcess owner,LanSetupRequest request,Action<SetupProgress> progress,CancellationToken cancellation)
     {
         operationPhase=UninstallPhase.FullNetwork;if(state?.OwnerSid!=owner.Sid)throw new IOException("INSTALL_OWNER_CHANGED");var network=Network();network.Preflight(request);
@@ -355,7 +367,7 @@ internal sealed class NativeFullSystemSetupHost(InstallPackage package,UpdateSet
     }
     private void Register()
     {
-        var head=Head();using var payload=JsonDocument.Parse(files!.Read("payloads/"+head.ReleaseDigest+"/bundle.json"));
+        var head=Head();using var payload=JsonDocument.Parse(binaries!.Read("payloads/"+head.ReleaseDigest+"/bundle.json"));
         var version=payload.RootElement.GetProperty("version").GetString()??throw new IOException("PAYLOAD_VERSION");SystemCandidateManifest.Version(version);
         using var key=Registry.LocalMachine.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\Yahad.FirstInstall",true);key.SetValue("DisplayName","יחד");key.SetValue("DisplayVersion",version);key.SetValue("Publisher","Yahad");key.SetValue("InstallLocation",InstallLocations.Binaries);key.SetValue("UninstallString","\""+InstallLocations.InstallerImage+"\" --uninstall");key.SetValue("NoModify",1,RegistryValueKind.DWord);key.SetValue("NoRepair",1,RegistryValueKind.DWord);
     }

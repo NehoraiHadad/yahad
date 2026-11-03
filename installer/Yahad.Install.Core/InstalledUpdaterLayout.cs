@@ -12,6 +12,9 @@ internal static class InstalledUpdaterLayout
     internal const string AnchorFile="update-authority.json";
     internal static string StateRoot=>Path.Combine(MachineFolders.Required(Environment.SpecialFolder.CommonApplicationData),StateProduct);
     internal static string BinaryRoot=>Path.Combine(MachineFolders.Required(Environment.SpecialFolder.ProgramFiles),BinaryProduct);
+    // Immutable application payloads: written by Setup/updater, read and
+    // executed by the Runtime. Mutable data and secrets stay under StateRoot.
+    internal static string PayloadRoot=>Path.Combine(BinaryRoot,"payloads");
     internal static string AnchorPath=>Path.Combine(StateRoot,AnchorFile);
     internal static string DescriptorPath=>Path.Combine(StateRoot,"bootstrap.json");
     internal static string RuntimeExecutable=>Path.Combine(BinaryRoot,"host","Yahad.ServiceHost.exe");

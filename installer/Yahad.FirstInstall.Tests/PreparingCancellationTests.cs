@@ -39,12 +39,19 @@ internal static class PreparingCancellationTests
             var state=State() with{RuntimeSid="S-1-5-80-1-2-3-4-5",AuthoritySid="S-1-5-80-5-4-3-2-1",ServicesCompleted=true};
             var intent=Intent(state);intent.Require(Owner);
             var files=state.Files.Select(f=>intent.StagingDirectory+"/"+f.Path).Append("installer-state.json").ToArray();
-            string[] directories=[intent.StagingDirectory,intent.StagingDirectory+"/payload","datasets","datasets/"+state.DataId,"datasets/"+state.DataId+"/data","payloads","payloads/"+state.PayloadDigest];
-            var payload="payloads/"+state.PayloadDigest+"/file-0";
-            NativePreparingCancellationHost.RequireInventory(intent,files.Append(payload).ToArray(),directories,true);
-            NativePreparingCancellationHost.RequireInventory(intent,[payload],["payloads","payloads/"+state.PayloadDigest],false);
-            foreach(var extra in new[]{"datasets/"+state.DataId+"/data/app.sqlite","datasets/"+state.DataId+"/master-key","Secrets/setup-capability.json","intake/enrollment.json","activation.json","full-installer-plan.json","payloads/"+new string('f',64)+"/file-0",payload+".install-partial-"+Guid.NewGuid().ToString("N")})
+            string[] directories=[intent.StagingDirectory,intent.StagingDirectory+"/payload","datasets","datasets/"+state.DataId,"datasets/"+state.DataId+"/data"];
+            var payload="payloads/"+state.PayloadDigest+"/file-0";string[] payloadDirectories=["payloads","payloads/"+state.PayloadDigest];
+            NativePreparingCancellationHost.RequireInventory(intent,files,directories,true);
+            NativePreparingCancellationHost.RequireBinaryInventory(intent,[payload],payloadDirectories);
+            NativePreparingCancellationHost.RequireBinaryInventory(intent,[],[]);
+            // The payload is published under the binary root, never under state.
+            await Refuse(()=>{NativePreparingCancellationHost.RequireInventory(intent,files.Append(payload).ToArray(),directories.Concat(payloadDirectories).ToArray(),true);return Task.CompletedTask;});
+            foreach(var extra in new[]{"datasets/"+state.DataId+"/data/app.sqlite","datasets/"+state.DataId+"/master-key","Secrets/setup-capability.json","intake/enrollment.json","activation.json","full-installer-plan.json"})
                 await Refuse(()=>{NativePreparingCancellationHost.RequireInventory(intent,files.Append(extra).ToArray(),directories,true);return Task.CompletedTask;});
+            foreach(var extra in new[]{"payloads/"+new string('f',64)+"/file-0",payload+".install-partial-"+Guid.NewGuid().ToString("N"),"host/Yahad.ServiceHost.exe","Yahad.Setup.exe","bootstrap/probe/node/node.exe"})
+                await Refuse(()=>{NativePreparingCancellationHost.RequireBinaryInventory(intent,[payload,extra],payloadDirectories);return Task.CompletedTask;});
+            await Refuse(()=>{NativePreparingCancellationHost.RequireBinaryInventory(intent,[payload],[..payloadDirectories,"system-slots"]);return Task.CompletedTask;});
+            await Refuse(()=>{NativePreparingCancellationHost.RequireBinaryInventory(Intent(State()),[payload],payloadDirectories);return Task.CompletedTask;});
             await Refuse(()=>{NativePreparingCancellationHost.RequireInventory(intent,files.Skip(1).ToArray(),directories,true);return Task.CompletedTask;});
             foreach(var changed in new[]{state with{PolicyDigest=new string('d',64)},state with{PlanDigest=new string('d',64)},state with{Phase="committed"},state with{ServicesCompleted=false},state with{RuntimeSid="S-1-5-80-5-4-3-2-1"}})
                 await Refuse(()=>{Intent(changed).Require(Owner);return Task.CompletedTask;});

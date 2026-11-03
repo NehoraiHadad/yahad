@@ -141,7 +141,7 @@ internal sealed class NativeLanInstall(InstallerState application,FullInstallFil
         var member=application.Files.SingleOrDefault(f=>f.Path=="payload/"+relative)??throw new IOException("LAN_PAYLOAD_NOT_SUPPORTED");
         if(member.Size>bound)throw new IOException("LAN_PAYLOAD_NOT_SUPPORTED");
         if(retainedPayload is not null){var retained=retainedPayload(relative);if(retained.Length!=member.Size||retained.Length>bound||Hash(retained)!=member.Sha256)throw new IOException("LAN_PAYLOAD_CHANGED");return retained;}
-        var path=Path.Combine(InstallLocations.State,"payloads",application.PayloadDigest,relative.Replace('/',Path.DirectorySeparatorChar));
+        var path=Path.Combine(InstallLocations.Binaries,"payloads",application.PayloadDigest,relative.Replace('/',Path.DirectorySeparatorChar));
         SafeDirectory.NoReparseAncestors(path);using var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read);
         if(file.Length!=member.Size)throw new IOException("LAN_PAYLOAD_CHANGED");using var memory=new MemoryStream();file.CopyTo(memory);var bytes=memory.ToArray();
         if(Hash(bytes)!=member.Sha256)throw new IOException("LAN_PAYLOAD_CHANGED");return bytes;
@@ -174,7 +174,7 @@ internal sealed class NativeLanInstall(InstallerState application,FullInstallFil
             var target=Path.Combine(LanProxyPaths.Binaries,member.Path.Replace('/',Path.DirectorySeparatorChar));
             NativeInstallFiles.EnsureStageDirectory(LanProxyPaths.Binaries,Path.GetDirectoryName(target)!,descriptor);
             if(File.Exists(target)){VerifyBinary(target,member);continue;}
-            var source=retainedBinarySource is not null?retainedBinarySource(member.Path):member.Path=="caddy.exe"?Path.Combine(InstallLocations.State,"payloads",application.PayloadDigest,"runtime","caddy","caddy.exe"):
+            var source=retainedBinarySource is not null?retainedBinarySource(member.Path):member.Path=="caddy.exe"?Path.Combine(InstallLocations.Binaries,"payloads",application.PayloadDigest,"runtime","caddy","caddy.exe"):
                 Path.Combine(InstallLocations.Binaries,member.Path.Replace('/',Path.DirectorySeparatorChar));
             SafeDirectory.NoReparseAncestors(source);using var input=new FileStream(source,FileMode.Open,FileAccess.Read,FileShare.Read);
             if(input.Length!=member.Size||Convert.ToHexStringLower(SHA256.HashData(input))!=member.Sha256)throw new IOException("LAN_PAYLOAD_CHANGED");

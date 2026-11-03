@@ -15,7 +15,7 @@ internal sealed record FullRemovalIntent(int Format,FullInstallState State,Unins
         if(Format!=4||State.Phase!=UninstallChoice.Phase(Mode)||!Stages.Contains(Stage)||Binaries.Length is <10 or >50000||State.RuntimeSid is null||State.AuthoritySid is null)throw new IOException("UNINSTALL_INTENT_INVALID");
         var names=new HashSet<string>(StringComparer.OrdinalIgnoreCase);long total=0;
         foreach(var member in Binaries)
-        {FixedSystemComponents.Member(member.Path);InstalledActivationResolver.Digest(member.Sha256);if(!names.Add(member.Path)||member.Size<0||member.Size>FullInstallFiles.MaximumBinaryBytes(member.Path)||(total+=member.Size)>8589934592)throw new IOException("UNINSTALL_INTENT_INVALID");}
+        {FullInstallFiles.BinaryMember(member.Path);InstalledActivationResolver.Digest(member.Sha256);if(!names.Add(member.Path)||member.Size<0||member.Size>FullInstallFiles.MaximumBinaryBytes(member.Path)||(total+=member.Size)>8589934592)throw new IOException("UNINSTALL_INTENT_INVALID");}
         if(!Binaries.Any(f=>f.Path=="Yahad.Setup.exe"&&f.Sha256==State.SetupSha256)||LanApplication.InstallationId!=State.InstallationId||LanApplication.OwnerSid!=State.OwnerSid||LanApplication.ServiceSid!=State.RuntimeSid||LanApplication.Port!=State.Port)throw new IOException("UNINSTALL_INTENT_INVALID");
         if(WasPreserved&&State.PreservedBinaries?.SequenceEqual(Binaries)!=true)throw new IOException("UNINSTALL_INTENT_INVALID");
     }

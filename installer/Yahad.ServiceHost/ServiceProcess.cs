@@ -9,7 +9,7 @@ namespace Yahad.Service;
 
 // Supplied only by installed activation admission after protected identity and
 // observed recovery checks. No executable/argument JSON or CLI factory.
-internal sealed record VerifiedProcessSpec(string Image,string ImageSha256,string[] Arguments,string WorkingDirectory,
+internal sealed record VerifiedProcessSpec(string Image,string[] Arguments,string WorkingDirectory,
     string PrivateTemporaryDirectory,string PrivateFFmpeg,IReadOnlyDictionary<string,string> AppEnvironment,WindowsFileBoundary.DataLease? DataLease=null,Action? BeforeMutableStart=null,InstalledStateFiles? StateFiles=null,Action? AfterHealthy=null);
 internal readonly record struct ChildReady(uint PeerPid,string Type);
 internal interface IChildControl:IDisposable
@@ -122,11 +122,9 @@ internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildCont
         var image=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(spec.Image));
         var ffmpeg=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(spec.PrivateFFmpeg));
         SafeDirectory.NoReparseAncestors(image);SafeDirectory.NoReparseAncestors(spec.WorkingDirectory);SafeDirectory.NoReparseAncestors(spec.PrivateTemporaryDirectory);
-        var pinned=new FileStream(image,FileMode.Open,FileAccess.Read,FileShare.Read);
         IChildControl? channel=null;LaunchLease? handoff=null;
         try
         {
-            if(Convert.ToHexStringLower(SHA256.HashData(pinned))!=spec.ImageSha256)throw new IOException("SERVICE_IMAGE_CHANGED");
             var environment=LaunchEnvironment.Clean(spec.PrivateTemporaryDirectory);
             foreach(var pair in spec.AppEnvironment)
             {
@@ -143,16 +141,16 @@ internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildCont
             void Handoff(Microsoft.Win32.SafeHandles.SafeProcessHandle process,int pid)
             {spec.BeforeMutableStart?.Invoke();if(handoff is not null)handoff.Publish(spec.DataLease!,process,pid,spec.AppEnvironment["DATA_DIR"]);}
             var job=JobProcess.Start(image,spec.Arguments,spec.WorkingDirectory,environment,Handoff);
-            return Task.FromResult<IContainedAppSession>(new Session(job,channel,pinned,handoff));
+            return Task.FromResult<IContainedAppSession>(new Session(job,channel,handoff));
         }
         catch(JobStartQuiescenceUnconfirmedException failure)
         {
             // Return ownership before reporting failed health. AppLifecycle can
             // now retry cleanup and preserve the grant/lease if still unknown.
-            var failed=new Session(failure.OwnedProcess,channel!,pinned,handoff,failure);
+            var failed=new Session(failure.OwnedProcess,channel!,handoff,failure);
             return Task.FromResult<IContainedAppSession>(failed);
         }
-        catch{handoff?.Dispose();channel?.Dispose();pinned.Dispose();throw;}
+        catch{handoff?.Dispose();channel?.Dispose();throw;}
     }
     public async Task WaitForHealthyAsync(IContainedAppSession session,CancellationToken cancellation)
     {
@@ -193,7 +191,7 @@ internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildCont
         }
         public void Dispose(){pin?.Dispose();if(File.Exists(path))File.Delete(path);Directory.Delete(directory,false);}
     }
-    private sealed class Session(JobProcess job,IChildControl channel,FileStream pinned,LaunchLease? handoff,Exception? startFailure=null):IContainedAppSession,IUpdateIdleSession
+    private sealed class Session(JobProcess job,IChildControl channel,LaunchLease? handoff,Exception? startFailure=null):IContainedAppSession,IUpdateIdleSession
     {
         internal JobProcess Job=>job;internal IChildControl Channel=>channel;internal Exception? StartFailure=>startFailure;
         public Task RequestGracefulStopAsync(CancellationToken cancellation)=>channel.StopAsync(cancellation);
@@ -202,6 +200,6 @@ internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildCont
         public Task<int> WaitForRootExitAsync(CancellationToken cancellation)=>job.WaitAsync(cancellation);
         public Task WaitForTreeEmptyAsync(CancellationToken cancellation)=>job.WaitForTreeEmptyAsync(cancellation);
         public Task TerminateAndWaitForTreeEmptyAsync(CancellationToken cancellation)=>job.TerminateAndWaitForTreeEmptyAsync(cancellation);
-        public ValueTask DisposeAsync(){channel.Dispose();job.Dispose();pinned.Dispose();handoff?.Dispose();return ValueTask.CompletedTask;}
+        public ValueTask DisposeAsync(){channel.Dispose();job.Dispose();handoff?.Dispose();return ValueTask.CompletedTask;}
     }
 }

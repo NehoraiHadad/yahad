@@ -13,6 +13,14 @@ internal sealed class FullInstallFiles
     // Setup embeds the complete self-contained package and is larger than an
     // individual component. Keep the ordinary member cap and aggregate bound.
     internal static long MaximumBinaryBytes(string path)=>path=="Yahad.Setup.exe"?1073741824L:536870912L;
+    // A binary-root member is either a fixed system component path or an
+    // application payload member, payloads/<release>/<package payload path>,
+    // which keeps the package's own path rule.
+    internal static void BinaryMember(string path)
+    {
+        if(!path.StartsWith("payloads/",StringComparison.Ordinal)){FixedSystemComponents.Member(path);return;}
+        var parts=path.Split('/',3);if(parts.Length!=3)throw new IOException("UPDATE_INSTALL_FILES");Yahad.Service.InstalledActivationResolver.Digest(parts[1]);InstallPackage.Name("payload/"+parts[2]);
+    }
     internal InstalledFileRoles Roles{get;}private readonly SecurityIdentifier owner;private readonly string root;private readonly bool binaries;
     internal FullInstallFiles(FullInstallState state,bool binaries=false)
     {
@@ -24,9 +32,9 @@ internal sealed class FullInstallFiles
     internal InstalledFileRole Role(string path)
     {
         var relative=Path.GetRelativePath(root,path).Replace('\\','/');
-        if(binaries)return relative=="Yahad.Setup.exe"||relative=="bootstrap/probe"||relative.StartsWith("bootstrap/probe/",StringComparison.Ordinal)?InstalledFileRole.Anchor:InstalledFileRole.Control;
+        if(binaries)return relative=="Yahad.Setup.exe"||relative=="bootstrap/probe"||relative.StartsWith("bootstrap/probe/",StringComparison.Ordinal)?InstalledFileRole.Anchor:
+            relative.StartsWith("payloads/",StringComparison.Ordinal)?InstalledFileRole.Payload:InstalledFileRole.Control;
         if(relative is "installer-state.json" or "full-installer-plan.json" or "installation.json" or "update-authority.json" or "lan-preparation.json" or "installer-readiness.json"||relative.StartsWith("Secrets/",StringComparison.Ordinal))return InstalledFileRole.Anchor;
-        if(relative.StartsWith("payloads/",StringComparison.Ordinal))return InstalledFileRole.Payload;
         if(relative=="intake"||relative=="owner-ledger"||relative.StartsWith("intake/",StringComparison.Ordinal)||relative.StartsWith("owner-ledger/",StringComparison.Ordinal)||relative.StartsWith(".authority",StringComparison.Ordinal)||relative.StartsWith("authority-temporary",StringComparison.Ordinal))return InstalledFileRole.Recovery;
         if(relative=="temporary"||relative.StartsWith("temporary/",StringComparison.Ordinal))return InstalledFileRole.Data;
         if(relative.StartsWith("datasets/",StringComparison.Ordinal))

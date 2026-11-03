@@ -2,8 +2,8 @@
 # person or administrator observes (Setup results, services, HTTP answers, the
 # account they created), so it keeps gating when the mechanism behind it changes:
 #   install -> ready -> create the first family over the app's own HTTP API ->
-#   uninstall keeping data -> reinstall -> the same account signs in ->
-#   uninstall deleting data -> nothing remains.
+#   restart the services and time it -> uninstall keeping data -> reinstall ->
+#   the same account signs in -> uninstall deleting data -> nothing remains.
 # Changes services and machine folders, so it runs only on a disposable
 # administrator machine (CI), never a family PC. Diagnostics and summary.json
 # are written even on failure. The one-time setup link and the generated
@@ -26,12 +26,14 @@ $failedPhase = $null
 $programData = Join-Path $env:ProgramData 'Yahad.FirstInstall'
 $programFiles = Join-Path $env:ProgramFiles 'Yahad.FirstInstall'
 $runtime = 'Yahad.Acceptance'
+$authority = 'Yahad.Acceptance.Authority'
 # Present in today's full profile; the planned single-updater design changes
 # this list, and that change must be made here deliberately.
-$installedServices = @($runtime, 'Yahad.Acceptance.Authority', 'Yahad.Acceptance.Authority.RecoveryA', 'Yahad.Acceptance.Authority.RecoveryB')
-$runningServices = @($runtime, 'Yahad.Acceptance.Authority')
+$installedServices = @($runtime, $authority, 'Yahad.Acceptance.Authority.RecoveryA', 'Yahad.Acceptance.Authority.RecoveryB')
+$runningServices = @($runtime, $authority)
 $account = $null
 $origin = $null
+$startSeconds = $null
 
 function Phase([string]$Name, [scriptblock]$Body) {
     $timer = [Diagnostics.Stopwatch]::StartNew()
@@ -121,6 +123,27 @@ try {
         $script:familyId = RequireSignedInAccount $created
         if ((SetupState) -ne 'complete') { throw 'Setup still open after the family was created' }
     }
+    Phase 'restart' {
+        # What a reboot does: the Authority (automatic start) admits and starts
+        # the Runtime (demand start); the Runtime is never admitted on its own,
+        # and stopping the Authority stops the Runtime it started. Measured
+        # from the start request to the first 200 from /health/ready, bounded
+        # by the Runtime's own five-minute admission budget.
+        Stop-Service -Name $authority, $runtime
+        foreach ($name in $runningServices) { $service = Get-Service -Name $name; if ($service.Status -ne 'Stopped') { throw "$name is $($service.Status) after stop" } }
+        $timer = [Diagnostics.Stopwatch]::StartNew()
+        Start-Service -Name $authority
+        $deadline = [TimeSpan]::FromMinutes(5)
+        while ($true) {
+            try { if ((Invoke-WebRequest -Uri "$origin/health/ready" -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200) { break } } catch { }
+            if ($timer.Elapsed -ge $deadline) { throw 'health/ready did not answer 200 within the admission budget after restart' }
+            Start-Sleep -Milliseconds 250
+        }
+        $script:startSeconds = [math]::Round($timer.Elapsed.TotalSeconds, 1)
+        Write-Output ("START {0}s" -f $startSeconds)
+        RequireInstalledAndReady $install.Result
+        if ((SetupState) -ne 'complete') { throw 'Family is missing after restart' }
+    }
     Phase 'uninstall-keep' {
         $removed = RunSetup @('--quiet-uninstall', '--data', 'keep') (Join-Path $out 'uninstall-keep-result.json')
         if ($removed.Result.DataPreserved -ne $true) { throw 'Keep-data removal did not report preserved data' }
@@ -128,6 +151,7 @@ try {
     Phase 'kept' {
         RequireRemovedServices
         if (!(Test-Path -LiteralPath $programData)) { throw "$programData was removed by a keep-data uninstall" }
+        if (Test-Path -LiteralPath $programFiles) { throw "$programFiles remains after a keep-data uninstall" }
     }
     $reinstall = $null
     Phase 'reinstall' { $script:reinstall = RunSetup @('--quiet-install', '--updates', 'notify') (Join-Path $out 'reinstall-result.json') @('--setup-link', 'stdout') }
@@ -150,7 +174,7 @@ catch { $state = 'Failed'; Write-Output "FAILED $($_.Exception.Message)"; throw 
 finally {
     $account = $null
     try { Collect } catch { Write-Output "COLLECTION_FAILED $($_.Exception.Message)" }
-    [ordered]@{ State=$state; FailedPhase=$failedPhase; Phases=$phases; TotalSeconds=[math]::Round(((Get-Date)-$started).TotalSeconds, 1);
+    [ordered]@{ State=$state; FailedPhase=$failedPhase; Phases=$phases; StartSeconds=$startSeconds; TotalSeconds=[math]::Round(((Get-Date)-$started).TotalSeconds, 1);
         NotCovered=[ordered]@{
             'upgrade-n-to-n+1'='No local upgrade path: Setup over a committed install keeps the installed version, and the updater accepts only stable releases of NehoraiHadad/yahad from api.github.com.'
             'broken-n+1-rollback'='Depends on the upgrade path above.'

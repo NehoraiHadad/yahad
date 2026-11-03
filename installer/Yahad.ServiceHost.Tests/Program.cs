@@ -146,7 +146,7 @@ foreach(var mode in new[]{"normal","bad-peer","timeout","unexpected"})
 await Check("non-listening real native job with synthetic control channel: "+mode,async()=>
 {
     var directory=Session();var fake=new FileControlFactory(directory,mode);var environment=new Dictionary<string,string>{{"HOST","127.0.0.1"},{"CONNECTOR","mock"},{"ALLOW_REAL_WHATSAPP","no"}};
-    var spec=new VerifiedProcessSpec(node,nodeHash,["-e",ChildScript.Code,directory,mode],directory,directory,node,environment);
+    var spec=new VerifiedProcessSpec(node,["-e",ChildScript.Code,directory,mode],directory,directory,node,environment);
     var launcher=new ServiceProcessLauncher(spec,fake);var barrier=new Barrier();var auth=new TestAuthorization(null!,()=>new(new("verified-test"),launcher,barrier));
     var controller=new ServiceController(auth,TimeSpan.FromSeconds(10),TimeSpan.FromMilliseconds(mode=="timeout"?1000:5000));var reports=new List<ServiceReport>();
     var before=Environment.GetEnvironmentVariable("NODE_OPTIONS");Environment.SetEnvironmentVariable("NODE_OPTIONS","--require untrusted-hook");
@@ -166,7 +166,7 @@ await Check("root exiting before readiness fails startup at once with its exit c
     // The synthetic channel never reports for this root, so only the observed
     // exit can end the wait; the old behavior held startup to the deadline.
     var directory=Session();var fake=new FileControlFactory(directory,"normal");
-    var spec=new VerifiedProcessSpec(node,nodeHash,["-e","process.exit(23)"],directory,directory,node,new Dictionary<string,string>());
+    var spec=new VerifiedProcessSpec(node,["-e","process.exit(23)"],directory,directory,node,new Dictionary<string,string>());
     var launcher=new ServiceProcessLauncher(spec,fake);var auth=new TestAuthorization(null!,()=>new(new("verified-test"),launcher,new Barrier()));
     var seen=new List<(Exception Error,StartupStep[] Steps)>();ServiceController? controller=null;
     controller=new ServiceController(auth,TimeSpan.FromSeconds(20),TimeSpan.FromSeconds(5),error=>seen.Add((error,controller!.StartupSteps)));
@@ -180,12 +180,7 @@ await Check("root exiting before readiness fails startup at once with its exit c
 await Check("unknown child environment keys refuse before opening any control endpoint",async()=>
 {
     var directory=Session();var fake=new FileControlFactory(directory,"normal");
-    var spec=new VerifiedProcessSpec(node,nodeHash,[],directory,directory,node,new Dictionary<string,string>{{"NODE_OPTIONS","--require evil"}});
-    await Reject(()=>new ServiceProcessLauncher(spec,fake).StartAsync(new("test"),default));Assert(fake.Created==0);
-});
-await Check("changed child image hash refuses before process/channel creation",async()=>
-{
-    var directory=Session();var fake=new FileControlFactory(directory,"normal");var spec=new VerifiedProcessSpec(node,new string('0',64),[],directory,directory,node,new Dictionary<string,string>());
+    var spec=new VerifiedProcessSpec(node,[],directory,directory,node,new Dictionary<string,string>{{"NODE_OPTIONS","--require evil"}});
     await Reject(()=>new ServiceProcessLauncher(spec,fake).StartAsync(new("test"),default));Assert(fake.Created==0);
 });
 await Check("observed admission checkpoints follow work and detach before terminal status",async()=>

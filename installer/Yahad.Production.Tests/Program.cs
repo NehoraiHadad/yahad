@@ -71,8 +71,6 @@ await Check("stale bootstrap digest cannot select a different protected activati
 {var binding=f.Binding with{ActivationReceiptDigest=new string('0',64)};await Reject(async()=>{using var grant=await new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,connectorProfile:RuntimeConnectorProfile.Synthetic).ResolveAsync(binding,default);},"INSTALLED_ACTIVATION_ANCHOR");});
 await Check("missing owner record refuses the concrete resolver",async()=>
 {var path=f.PathOf("owner-intent.json");var bytes=File.ReadAllBytes(path);File.Delete(path);try{await Reject(async()=>{using var grant=await f.Resolve();});}finally{File.WriteAllBytes(path,bytes);}});
-await Check("locked selected payload refuses without changing selected data",async()=>
-{using var locked=new FileStream(Path.Combine(f.Package,"runtime/caddy/caddy.exe"),FileMode.Open,FileAccess.Write,FileShare.None);await Reject(async()=>{using var grant=await f.Resolve();});});
 await Check("omitted owner expiry is not silently promoted to a persistent capability",async()=>
 {
     var document=System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllBytes(f.PathOf("owner-intent.json")))!.AsObject();document.Remove("ExpiresUnix");
@@ -91,8 +89,6 @@ await Check("protected-state binding refuses "+mutation,async()=>
 });
 await Check("owner expiration is observed again at mutable start barrier",async()=>
 {f.Reset();f.Expiry=f.Now.AddMinutes(1).ToUnixTimeSeconds();f.Publish();using var grant=await f.Resolve();f.Now=f.Now.AddMinutes(2);try{await Reject(()=>grant.Recovery.RequireStartAllowedAsync(grant.Release,default),"INSTALLED_OWNER_EXPIRED");}finally{f.Now=f.Now.AddMinutes(-2);}});
-await Check("exact pinned release bytes cannot be substituted",async()=>
-{f.Reset();var path=Path.Combine(f.Package,"runtime/caddy/caddy.exe");File.AppendAllText(path,"changed");try{await Reject(async()=>{using var grant=await f.Resolve();},"INSTALLED_RELEASE_BYTES");}finally{File.WriteAllText(path,"synthetic-caddy-not-executed");}});
 await Check("protected-control anchor cannot conceal a crash-left WAL",async()=>
 {f.Reset();File.WriteAllText(Path.Combine(f.Data,"app.sqlite-wal"),"synthetic-residue");try{await Reject(async()=>{using var grant=await f.Resolve();},"INSTALLED_WAL_RECONCILIATION_REQUIRED");Assert(File.ReadAllText(Path.Combine(f.Data,"app.sqlite-wal"))=="synthetic-residue");}finally{File.Delete(Path.Combine(f.Data,"app.sqlite-wal"));}});
 await Check("concrete production resolver launches real mutable Store through continuous handoff",async()=>
@@ -759,7 +755,7 @@ internal sealed class ProductionFixture:IDisposable
     {
         var f=new ProductionFixture(repo,allocated);
         try{
-        File.Copy(node,f.Node);Copy(helper,Path.Combine(f.Payload,"app/native"));
+        f.probe=node;f.probeDigest=Hash(File.ReadAllBytes(node));File.Copy(node,f.Node);Copy(helper,Path.Combine(f.Payload,"app/native"));
         void Put(string name,string text){var p=Path.Combine(f.Payload,name);Directory.CreateDirectory(Path.GetDirectoryName(p)!);File.WriteAllText(p,text);}
         Put("runtime/ffmpeg/ffmpeg.exe","synthetic-ffmpeg-not-executed");Put("runtime/caddy/caddy.exe","synthetic-caddy-not-executed");
         Put("app/package.json","{\"type\":\"module\"}");
@@ -791,7 +787,10 @@ internal sealed class ProductionFixture:IDisposable
     }
     internal InstallationBinding Binding=>new(InstallationId,Hash(File.ReadAllBytes(PathOf("activation.json"))));
     internal FixtureProcesses.FixtureResolver CreateResolver(InstalledStateFiles? stateFiles=null)
-        =>processes.Resolver(new(Root,new PrivateControlFiles(),Control,()=>Now,stateFiles:stateFiles,processFactory:spec=>CreateLauncher(spec)));
+        =>processes.Resolver(new(Root,new PrivateControlFiles(),Control,()=>Now,stateFiles:stateFiles??InstalledStateFiles.Private(Root,probe,probeDigest),processFactory:spec=>CreateLauncher(spec)));
+    // Like an installed machine, admission reads SQLite through a fixed probe
+    // outside the payload; the payload node is executed only by the runtime.
+    private string probe="",probeDigest="";
     internal IPrivateAppLauncher CreateLauncher(VerifiedProcessSpec spec)
         =>processes.Launcher(new ServiceProcessLauncher(spec,Control));
     internal void RetainFailure(Exception failure)=>processes.Retain(failure);
@@ -818,7 +817,7 @@ internal sealed class ProductionFixture:IDisposable
         {var destination=Path.Combine(target,Path.GetRelativePath(prepared,path));Directory.CreateDirectory(Path.GetDirectoryName(destination)!);File.Copy(path,destination);}
         actualPayload=target;Publish();
     }
-    internal VerifiedProcessSpec RawSpec(WindowsFileBoundary.DataLease lease)=>new(Path.Combine(Package,"runtime/node/node.exe"),Hash(File.ReadAllBytes(Path.Combine(Package,"runtime/node/node.exe"))),["server/main.mjs"],Path.Combine(Package,"app"),Path.Combine(Root,"temporary"),Path.Combine(Package,"runtime/ffmpeg/ffmpeg.exe"),new Dictionary<string,string>{{"DATA_DIR",Data},{"MASTER_KEY_FILE",Path.Combine(Dataset,"master-key")}},lease);
+    internal VerifiedProcessSpec RawSpec(WindowsFileBoundary.DataLease lease)=>new(Path.Combine(Package,"runtime/node/node.exe"),["server/main.mjs"],Path.Combine(Package,"app"),Path.Combine(Root,"temporary"),Path.Combine(Package,"runtime/ffmpeg/ffmpeg.exe"),new Dictionary<string,string>{{"DATA_DIR",Data},{"MASTER_KEY_FILE",Path.Combine(Dataset,"master-key")}},lease);
     internal static string Hash(byte[] value)=>Convert.ToHexStringLower(SHA256.HashData(value));
     internal static int ReadSourceSchema(string repo)
     {
