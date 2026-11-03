@@ -44,6 +44,9 @@ internal static class FullInstallerIntegrationTests
             Assert(!NativeFullService.SendsStop(3,1,false));Assert(!NativeFullService.SendsStop(1,1,false));
             Assert(!NativeFullService.Stalled(300000,TimeSpan.FromMinutes(4)));Assert(NativeFullService.Stalled(300000,TimeSpan.FromMinutes(6)));
             Assert(!NativeFullService.Stalled(0,TimeSpan.FromSeconds(59)));Assert(NativeFullService.Stalled(0,TimeSpan.FromSeconds(61)));
+            // A sent STOP moving RUNNING to STOP_PENDING is what refused removal as a generation change.
+            Assert(NativeFullService.SameGeneration(42,3,42));Assert(NativeFullService.SameGeneration(42,4,42));
+            Assert(!NativeFullService.SameGeneration(42,4,43));Assert(!NativeFullService.SameGeneration(42,2,42));
             return Task.CompletedTask;
         });
         await check("full installer parses source-bound baseline using policy protocol 2 without a fake GitHub receipt",()=>

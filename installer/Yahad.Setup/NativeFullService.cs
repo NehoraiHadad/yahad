@@ -335,6 +335,9 @@ internal sealed class NativeFullService:IDisposable
     // SCM pending protocol: a state is live while its checkpoint advances within
     // its own wait hint. A settled state gets the fixed stop bound.
     internal static bool Stalled(uint waitHint,TimeSpan unchanged)=>unchanged>TimeSpan.FromMilliseconds(Math.Max(waitHint,60000));
+    // A process opened while RUNNING is the service's own while the SCM still
+    // reports its PID; a requested STOP moving it to STOP_PENDING is expected.
+    internal static bool SameGeneration(uint pid,uint state,uint observedPid)=>state is 3 or 4&&observedPid==pid;
     private bool stopRequested;
     internal void RequestStop()
     {
@@ -359,7 +362,8 @@ internal sealed class NativeFullService:IDisposable
                     if(process is null)
                     {
                         process=Process.GetProcessById((int)state.Pid);_=process.SafeHandle;
-                        var again=Status();if(again.State!=4||again.Pid!=state.Pid)throw new IOException("UPDATE_SERVICE_GENERATION_CHANGED");
+                        var again=Status();if(again.State==1){process.Dispose();process=null;continue;}
+                        if(!SameGeneration(state.Pid,again.State,again.Pid))throw new IOException("UPDATE_SERVICE_GENERATION_CHANGED");
                     }
                     else if(process.Id!=state.Pid)throw new IOException("UPDATE_SERVICE_GENERATION_CHANGED");
                 }
