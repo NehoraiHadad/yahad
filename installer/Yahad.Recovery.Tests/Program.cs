@@ -47,8 +47,10 @@ if(args is ["--worker",var workerRoot,var workerNode,var workerHash,var workerBa
     });
     return 0;
 }
-if(args.Length is <3 or >4||args[0]!="--run")throw new IOException("EXPLICIT_PRIVATE_NODE_AND_REPORT_REQUIRED");
-var node=Path.GetFullPath(args[1]);var report=args[2];var appRoot=args.Length==4?Path.GetFullPath(args[3]):null;
+// The packaged app ships a bundled server, so the Store runs from the source checkout whose
+// schema must equal the schema the prepared payload was built with.
+if(args.Length is not (3 or 5)||args[0]!="--run")throw new IOException("EXPLICIT_PRIVATE_NODE_AND_REPORT_REQUIRED");
+var node=Path.GetFullPath(args[1]);var report=args[2];var appRoot=args.Length==5?Path.GetFullPath(args[3]):null;var sourceRepo=args.Length==5?Path.GetFullPath(args[4]):null;
 node=Path.GetFullPath(node);var nodeHash=Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(node)));
 var parent=SafeDirectory.CreatePrivateSession(Path.GetTempPath());
 var results=new List<object>();var failed=0;
@@ -191,11 +193,11 @@ var packagedSchema=Helpers.ReadPackagedSchema(appRoot);
 await Check($"actual schema-{packagedSchema} Store preserves family login session grants encrypted history media and auth",async()=>
 {
     using var f=await Make();File.Delete(Path.Combine(f.Root,"data/app.sqlite"));
-    await Helpers.Store(node,appRoot,f.Root,null);
+    await Helpers.Store(node,appRoot,sourceRepo!,f.Root,null);
     using var recovery=await f.Open();var before=f.DataDigest();var backup=await recovery.BackupAsync();
     var restored=await recovery.RestoreToNewDirectoryAsync(backup.BackupId,packagedSchema,packagedSchema);
     using(var restoredLease=WindowsFileBoundary.AcquireDataLease(Path.Combine(restored.RestoredDirectory,"data")))
-        await Helpers.Store(node,appRoot,f.Root,restored.RestoredDirectory);
+        await Helpers.Store(node,appRoot,sourceRepo!,f.Root,restored.RestoredDirectory);
     Assert(f.DataDigest()==before);
 });
 }
@@ -345,17 +347,17 @@ internal static class Helpers
 {
     [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)]
     [return:MarshalAs(UnmanagedType.Bool)]public static extern bool CreateHardLinkW(string link,string existing,IntPtr security);
-    public static async Task Store(string node,string packaged,string fixture,string? restored)
+    public static async Task Store(string node,string packaged,string repo,string fixture,string? restored)
     {
         var expectedSchema=ReadPackagedSchema(packaged);
         const string script="""
             (async()=>{
             const fs=require('node:fs'),path=require('node:path'),{pathToFileURL}=require('node:url'),assert=require('node:assert/strict');
-            const packaged=process.argv[1],fixture=process.argv[2],restored=process.argv[3],expectedSchema=Number(process.argv[4]);
-            const {Store}=await import(pathToFileURL(path.join(packaged,'app/src/store.ts')));
-            const {DATABASE_SCHEMA}=await import(pathToFileURL(path.join(packaged,'app/src/db.ts')));
+            const repo=process.argv[1],fixture=process.argv[2],restored=process.argv[3],expectedSchema=Number(process.argv[4]);
+            const {Store}=await import(pathToFileURL(path.join(repo,'src/store.ts')));
+            const {DATABASE_SCHEMA}=await import(pathToFileURL(path.join(repo,'src/db.ts')));
             assert.equal(DATABASE_SCHEMA,expectedSchema);
-            const {verifyPassword}=await import(pathToFileURL(path.join(packaged,'app/src/crypto.ts')));
+            const {verifyPassword}=await import(pathToFileURL(path.join(repo,'src/crypto.ts')));
             const masterKey=Buffer.from(fs.readFileSync(path.join(restored||fixture,restored?'identity/master-key':'master-key'),'utf8'),'base64');
             const store=new Store({dataDir:path.join(restored||fixture,'data'),masterKey,connector:'mock',realAllowed:false,host:'127.0.0.1',port:3000,origin:'http://127.0.0.1:3000',secureCookie:false,maxMedia:1048576,maxStorage:8388608,childIdleMs:900000,sessionMs:3600000});
             try{
@@ -376,8 +378,8 @@ internal static class Helpers
             }}finally{store.close();masterKey.fill(0);}
             })().catch(()=>{process.exitCode=2;});
             """;
-        var loader=new Uri(Path.Combine(packaged,"app/node_modules/tsx/dist/loader.mjs")).AbsoluteUri;
-        using var job=JobProcess.Start(node,["--import",loader,"-e",script,packaged,fixture,restored??"",expectedSchema.ToString(System.Globalization.CultureInfo.InvariantCulture)],fixture,LaunchEnvironment.Clean(fixture));
+        var loader=new Uri(Path.Combine(repo,"node_modules/tsx/dist/loader.mjs")).AbsoluteUri;
+        using var job=JobProcess.Start(node,["--import",loader,"-e",script,repo,fixture,restored??"",expectedSchema.ToString(System.Globalization.CultureInfo.InvariantCulture)],fixture,LaunchEnvironment.Clean(fixture));
         using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(30));
         try{if(await job.WaitAsync(deadline.Token)!=0)throw new IOException("REAL_STORE_FIXTURE_REFUSED");await job.WaitForTreeEmptyAsync(deadline.Token);}
         catch{using var cleanup=new CancellationTokenSource(TimeSpan.FromSeconds(10));await job.TerminateAndWaitForTreeEmptyAsync(cleanup.Token);throw;}

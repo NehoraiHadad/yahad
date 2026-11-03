@@ -62,9 +62,9 @@ the same source commit. Hashes establish consistency with the selected HTTPS
 source; this unsigned distribution does not provide independent signing-key
 publisher authentication.
 
-Declare the fixed offline migration entry `app/src/native-migrate-v1.ts`,
-supported source schemas and target schema in the application manifest. Include
-its complete existing schema-helper import closure. It imports no Store,
+Declare the fixed offline migration entry `app/server/native-migrate-v1.mjs`,
+supported source schemas and target schema in the application manifest. Its bundle
+contains only the schema-helper source closure, recorded in `legal/server-bundle.json`. It imports no Store,
 configuration, server, ChatService or messaging provider.
 
 ## Native provisioning

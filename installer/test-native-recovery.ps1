@@ -24,7 +24,7 @@ try {
     if($LASTEXITCODE -ne 0){throw 'Recovery test compilation failed'}
     New-Item -ItemType Directory -Path (Join-Path $PSScriptRoot 'artifacts') -Force | Out-Null
     $recoveryArguments=@('--run',[IO.Path]::GetFullPath($Node),(Join-Path $PSScriptRoot 'artifacts/native-recovery-tests.json'))
-    if($PreparedApp){$recoveryArguments+=[IO.Path]::GetFullPath($PreparedApp)}
+    if($PreparedApp){$recoveryArguments+=@([IO.Path]::GetFullPath($PreparedApp),(Split-Path $PSScriptRoot))}
     & (Join-Path $PSScriptRoot 'Yahad.Recovery.Tests/bin/Release/net10.0-windows/Yahad.Recovery.Tests.exe') @recoveryArguments
     if($LASTEXITCODE -ne 0){throw 'Recovery fixture tests failed'}
 } finally {

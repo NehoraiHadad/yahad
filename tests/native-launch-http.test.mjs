@@ -19,7 +19,7 @@ test('native launcher owns private FFmpeg environment and serves actual mock-app
   const key=randomBytes(32),keyPath=join(root,'master-key');writeFileSync(keyPath,key.toString('base64'));
   const server=createServer();server.listen(0,'127.0.0.1');await once(server,'listening');const port=server.address().port;await new Promise(done=>server.close(done));
   const origin=`http://127.0.0.1:${port}`,group='120363001@g.us';
-  const {Store}=await import(pathToFileURL(join(payload,'app/src/store.ts')));
+  const {Store}=await import(new URL('../src/store.ts',import.meta.url));// the payload ships only the bundle; seed with this checkout's Store
   const config={dataDir:data,masterKey:key,connector:'mock',realAllowed:false,host:'127.0.0.1',port,origin,secureCookie:false,maxMedia:1024*1024,maxStorage:64*1024*1024,childIdleMs:900000,sessionMs:3600000};
   const store=new Store(config);const family=await store.createFamily('Synthetic fixture',{name:'Fixture Parent',password:'fixture-parent-password'},{name:'Fixture Child',password:'fixture-child-password'});
   store.syncGroups(family.familyId,[{id:group,title:'Synthetic fixture group'}]);store.grant(family.familyId,family.childId,group,true);store.run('UPDATE families SET linked=1 WHERE id=?',family.familyId);
@@ -43,7 +43,7 @@ test('native launcher owns private FFmpeg environment and serves actual mock-app
     const image=await upload(readFileSync(join(payload,'app/fixtures/garden.jpg')),'image/jpeg','fixture.jpg',false);assert.equal(image.kind,'image');
     assert.equal(existsSync(marker),false);
     child.stdin.end('stop\n');assert.equal((await exited)[0],0,errors);assert.match(output,/"stopped":true/);
-    const {createPlatformFiles}=await import(pathToFileURL(join(payload,'app/src/platform-files.ts')));await(await createPlatformFiles('win32',join(payload,'app/native/Yahad.Platform.exe')).acquireDataLock(data))();
+    const {createPlatformFiles}=await import(new URL('../src/platform-files.ts',import.meta.url));await(await createPlatformFiles('win32',join(payload,'app/native/Yahad.Platform.exe')).acquireDataLock(data))();
     assert.equal(readFileSync(keyPath,'utf8'),key.toString('base64'),'existing fixture key changed');
   }finally{if(child.exitCode===null&&child.signalCode===null){child.kill();await exited;}}
  });
