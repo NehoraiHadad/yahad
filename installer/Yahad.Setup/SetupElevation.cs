@@ -21,18 +21,16 @@ internal static class SetupElevation
     {
         "install"=>TimeSpan.FromMinutes(fullProfile?48:12),
         "uninstall"=>TimeSpan.FromMinutes(fullProfile?96:12),
-        "repair-uninstall-receipt"=>TimeSpan.FromMinutes(12),
         _=>throw new IOException("SETUP_COMMAND")
     };
-    internal static string ActionName(bool uninstall,bool repairReceipt,UninstallMode mode,LanSetupRequest? lan)
+    internal static string ActionName(bool uninstall,UninstallMode mode,LanSetupRequest? lan)
     {
         UninstallChoice.Require(mode);
-        if(repairReceipt&&(!uninstall||mode!=UninstallMode.DeleteData||lan is not null))throw new IOException("SETUP_COMMAND");
-        return repairReceipt?"repair-uninstall-receipt":uninstall?"uninstall":"install";
+        return uninstall?"uninstall":"install";
     }
-    internal static async Task<SetupResult> RunAsync(bool uninstall,Action<SetupProgress> progress,CancellationToken cancellation,UninstallMode mode=UninstallMode.KeepData,LanSetupRequest? lan=null,bool repairReceipt=false,UpdateSetupChoice? update=null)
+    internal static async Task<SetupResult> RunAsync(bool uninstall,Action<SetupProgress> progress,CancellationToken cancellation,UninstallMode mode=UninstallMode.KeepData,LanSetupRequest? lan=null,UpdateSetupChoice? update=null)
     {
-        var action=ActionName(uninstall,repairReceipt,mode,lan);
+        var action=ActionName(uninstall,mode,lan);
         UninstallChoice.Require(mode);if(!uninstall&&mode!=UninstallMode.KeepData)throw new IOException("UNINSTALL_MODE_INVALID");
         lan?.Require();if(uninstall&&lan is not null)throw new IOException("LAN_ACTION_INVALID");
         if(uninstall&&update is not null)throw new IOException("UPDATE_CONSENT_INVALID");update?.Require(DateTimeOffset.UtcNow);
@@ -43,7 +41,7 @@ internal static class SetupElevation
         var start=new ProcessStartInfo(helper){UseShellExecute=true,Verb="runas",WindowStyle=ProcessWindowStyle.Hidden,WorkingDirectory=temporary};
         start.ArgumentList.Add("--elevated-"+action);start.ArgumentList.Add(nonce);start.ArgumentList.Add(Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
         using var child=Process.Start(start)??throw new IOException("ELEVATION_NOT_STARTED");_ =child.SafeHandle;
-        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancellation);deadline.CancelAfter(OperationTimeout(action,!repairReceipt&&InstallPackage.EmbeddedFullProfile()));
+        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancellation);deadline.CancelAfter(OperationTimeout(action,InstallPackage.EmbeddedFullProfile()));
         var connection=server.WaitForConnectionAsync(deadline.Token);
         var winner=await Task.WhenAny(connection,child.WaitForExitAsync(deadline.Token));if(winner!=connection){await winner;throw new IOException("ELEVATION_EXITED");}await connection;
         if(!GetNamedPipeClientProcessId(server.SafePipeHandle,out var peer)||peer!=(uint)child.Id||child.HasExited)throw new IOException("ELEVATION_PEER");
@@ -57,11 +55,11 @@ internal static class SetupElevation
             throw new IOException("SETUP_PROTOCOL");
         }
     }
-    internal static async Task<int> ElevatedAsync(bool uninstall,string nonce,int expectedUi,bool repairReceipt=false)
+    internal static async Task<int> ElevatedAsync(bool uninstall,string nonce,int expectedUi)
     {
         NativeInstallFiles.RequireAdministrator();if(!Guid.TryParseExact(nonce,"N",out _)||expectedUi<1)throw new IOException("SETUP_ARGUMENTS");
-        var operation=repairReceipt?"repair-uninstall-receipt":uninstall?"uninstall":"install";
-        var pipeName=@"\\.\pipe\Yahad.Setup."+nonce;using var deadline=new CancellationTokenSource(OperationTimeout(operation,!repairReceipt&&InstallPackage.EmbeddedFullProfile()));
+        var operation=uninstall?"uninstall":"install";
+        var pipeName=@"\\.\pipe\Yahad.Setup."+nonce;using var deadline=new CancellationTokenSource(OperationTimeout(operation,InstallPackage.EmbeddedFullProfile()));
         using var handle=CreateFileW(pipeName,0x100083,0,IntPtr.Zero,3,0x40110000,IntPtr.Zero);if(handle.IsInvalid)throw new Win32Exception();
         if(!GetNamedPipeServerProcessId(handle,out var pid)||pid!=(uint)expectedUi)throw new IOException("SETUP_UI_PEER");
         using var parent=OpenProcess(0x101000,false,pid);if(parent.IsInvalid)throw new Win32Exception();
@@ -70,23 +68,23 @@ internal static class SetupElevation
         if(request.Format!=1||request.Kind!=operation||request.Progress is not null||request.Result is not null)throw new IOException("SETUP_COMMAND");
         if(uninstall){if(request.Removal is null)throw new IOException("UNINSTALL_MODE_INVALID");UninstallChoice.Require(request.Removal.Value);}else if(request.Removal is not null)throw new IOException("UNINSTALL_MODE_INVALID");
         var mode=request.Removal??UninstallMode.KeepData;
-        _=ActionName(uninstall,repairReceipt,mode,request.Lan);
+        _=ActionName(uninstall,mode,request.Lan);
         request.Lan?.Require();if(uninstall&&request.Lan is not null)throw new IOException("LAN_ACTION_INVALID");
         if(uninstall&&request.Update is not null)throw new IOException("UPDATE_CONSENT_INVALID");request.Update?.Require(DateTimeOffset.UtcNow);
         await WriteAsync(stream,new SetupWire(1,"progress",new SetupProgress("checking",0),null),deadline.Token);
         SetupResult result;
         try
         {
-            using var installLock=new SetupInstallLock();using var payload=InstallPackage.Embedded();var host=SetupHostFactory.Create(payload,uninstall,repairReceipt,request.Update);using var cleanup=(IDisposable)host;var gate=new object();
+            using var installLock=new SetupInstallLock();using var payload=InstallPackage.Embedded();var host=SetupHostFactory.Create(payload,uninstall,request.Update);using var cleanup=(IDisposable)host;var gate=new object();
             void Progress(SetupProgress p){lock(gate){deadline.Token.ThrowIfCancellationRequested();WriteAsync(stream,new SetupWire(1,"progress",p,null),deadline.Token).GetAwaiter().GetResult();}}
-            try{result=repairReceipt?await ((NativeSetupHost)host).RepairInterruptedReceiptAsync(owner,Progress,deadline.Token):await new InstallFlow(host).RunAsync(owner,uninstall,Progress,deadline.Token,mode,request.Lan);}
+            try{result=await new InstallFlow(host).RunAsync(owner,uninstall,Progress,deadline.Token,mode,request.Lan);}
             catch(Exception failure)when(host is NativeFullSystemSetupHost){throw ((NativeFullSystemSetupHost)host).ReportFailure(failure);}
         }
         catch(Exception failure)
-        {result=FailureResult(failure,mode,repairReceipt);}
+        {result=FailureResult(failure,mode);}
         await WriteAsync(stream,new SetupWire(1,"result",null,result),deadline.Token);return result.Ok?0:1;
     }
-    internal static SetupResult FailureResult(Exception failure,UninstallMode mode,bool repairReceipt)=>new(false,Code(failure),DataPreserved:repairReceipt||mode==UninstallMode.KeepData,Failure:SetupFailureDetail.From(failure));
+    internal static SetupResult FailureResult(Exception failure,UninstallMode mode)=>new(false,Code(failure),DataPreserved:mode==UninstallMode.KeepData,Failure:SetupFailureDetail.From(failure));
     internal static string Code(Exception error)=>SetupFailureDetail.Cause(error) switch
     {
         Win32Exception w when w.NativeErrorCode==1223=>"UAC_CANCELLED",
@@ -95,7 +93,7 @@ internal static class SetupElevation
         Win32Exception w when w.NativeErrorCode==32=>"FILE_LOCKED",
         UnauthorizedAccessException=>"ACCESS_DENIED",
         OperationCanceledException=>"INSTALL_TIMEOUT",
-        IOException io when KnownCodes.Contains(io.Message)||LanCodes.Contains(io.Message)||UpdateCodes.Contains(io.Message)||io.Message is "UNINSTALL_DIAGNOSTIC_CHANGED" or "UNINSTALL_RECEIPT_RECOVERY_REFUSED"=>io.Message,
+        IOException io when KnownCodes.Contains(io.Message)||LanCodes.Contains(io.Message)||UpdateCodes.Contains(io.Message)||io.Message is "UNINSTALL_DIAGNOSTIC_CHANGED"=>io.Message,
         _=>"INSTALL_FAILED"
     };
     private static readonly HashSet<string> UpdateCodes=new(StringComparer.Ordinal){"INSTALL_STAGING_CHANGED","UPDATE_SERVICE_START_FAILED","UPDATE_SERVICE_QUIESCENCE_UNCONFIRMED","UPDATE_SERVICE_GENERATION_CHANGED","UPDATE_PREPARING_CANCEL_REFUSED","UPDATE_PREPARING_INVENTORY_CHANGED","UPDATE_PREPARING_SERVICE_CHANGED","UPDATE_PREPARING_BINARIES_PUBLISHED","UPDATE_PREPARING_ENROLLED","UPDATE_PREPARING_FILE_CHANGED","UPDATE_PREPARING_STATE_CHANGED","UPDATE_PREPARING_CANCEL_REQUIRES_DELETE","UPDATE_CONSENT_REQUIRED","UPDATE_CONSENT_ALREADY_CAPTURED","UPDATE_CONSENT_INVALID","UPDATE_FULL_PACKAGE_REQUIRED","UPDATE_LEGACY_PROFILE_REQUIRES_REMOVAL","UPDATE_MUST_FINISH_BEFORE_INSTALLER","UPDATE_INSTALL_INCOMPLETE_REPAIR_FIRST","UPDATE_RESTORE_COLLISION","INSTALL_RUNTIME_NOT_AUTHENTICATED","INSTALL_READINESS_BINDING","UPDATE_CURRENT_BINDING","UPDATE_ENROLLMENT_CHANGED","UPDATE_OWNER_BINDING","UPDATE_SERVICE_IDENTITY","UPDATE_SERVICE_NOT_OWNED","UPDATE_RECOVERY_REQUIRED","UPDATE_INSTALLER_PLAN_CHANGED","UPDATE_INSTALLER_PLAN_MISSING","UPDATE_COMPONENT_PACKAGE_BINDING","UNINSTALL_SERVICE_REAPPEARED"};

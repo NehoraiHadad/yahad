@@ -87,9 +87,8 @@ internal sealed class ProductionFixture:IDisposable
     private string? actualPayload;internal string Package=>actualPayload??Payload;
     internal string PathOf(string name)=>Path.Combine(Root,name);
     private static readonly List<ProbeOwnershipException> pendingSchemaProbes=[];
-    internal async Task<int> ReadQuiescentSchema(string node,JobProcessFaultInjection? fault=null)
+    internal async Task<int> ReadQuiescentSchema(string node)
     {
-        fault=processes.Observe(fault);
         // Call only after the seed job or admitted child has been observed
         // empty. The lease and no-write pin make the immutable read explicit.
         IDisposable? lease=WindowsFileBoundary.AcquireDataLease(Data);WindowsFileBoundary.PrivateReadLease? pin=null;
@@ -98,7 +97,7 @@ internal sealed class ProductionFixture:IDisposable
             var database=Path.Combine(Data,"app.sqlite");var sidecars=new[]{database+"-wal",database+"-shm",database+"-journal"};
             if(sidecars.Any(Path.Exists))throw new IOException("SEEDED_STORE_SIDECAR");
             pin=WindowsFileBoundary.OpenPrivateRead(database);var before=pin.Sha256(134217728);
-            var observed=await FrozenAdmissionSchema.ReadAsync(node,database,PathOf("temporary"),default,fault);
+            var observed=await FrozenAdmissionSchema.ReadAsync(node,database,PathOf("temporary"),default);
             if(sidecars.Any(Path.Exists)||pin.Sha256(134217728)!=before)throw new IOException("SEEDED_STORE_CHANGED_DURING_READBACK");
             return observed;
         }
@@ -131,10 +130,10 @@ internal sealed class ProductionFixture:IDisposable
         Write("epoch.json",new InstalledEpoch(1,InstallationId,AnchorEpoch,AnchorDigest??head));
     }
     internal InstallationBinding Binding=>new(InstallationId,Hash(File.ReadAllBytes(PathOf("activation.json"))));
-    internal FixtureProcesses.FixtureResolver CreateResolver(JobProcessFaultInjection? fault=null,FreshDataAuthorization? fresh=null,JobProcessFaultInjection? startFault=null,InstalledStateFiles? stateFiles=null)
-        =>processes.Resolver(new(Root,new PrivateControlFiles(),Control,()=>Now,processes.Observe(fault),stateFiles:stateFiles,fresh:fresh,startFault:startFault,connectorProfile:RuntimeConnectorProfile.Synthetic,processFactory:spec=>CreateLauncher(spec,startFault)));
-    internal IPrivateAppLauncher CreateLauncher(VerifiedProcessSpec spec,JobProcessFaultInjection? fault=null)
-        =>processes.Launcher(new ServiceProcessLauncher(spec,Control,processes.Observe(fault)));
+    internal FixtureProcesses.FixtureResolver CreateResolver(FreshDataAuthorization? fresh=null,InstalledStateFiles? stateFiles=null)
+        =>processes.Resolver(new(Root,new PrivateControlFiles(),Control,()=>Now,stateFiles:stateFiles,fresh:fresh,connectorProfile:RuntimeConnectorProfile.Synthetic,processFactory:spec=>CreateLauncher(spec)));
+    internal IPrivateAppLauncher CreateLauncher(VerifiedProcessSpec spec)
+        =>processes.Launcher(new ServiceProcessLauncher(spec,Control));
     internal void RetainFailure(Exception failure)=>processes.Retain(failure);
     internal FixtureProcesses.JobOwner StartJob(string image,IEnumerable<string> arguments,string directory,IReadOnlyDictionary<string,string> environment)
         =>processes.StartJob(image,arguments,directory,environment);

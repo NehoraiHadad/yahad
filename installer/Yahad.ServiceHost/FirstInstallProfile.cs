@@ -25,27 +25,3 @@ internal static class FirstInstallProfile
         if(r.Format!=2||r.Version!=ApplicationRelease.Version||r.Port is <1024 or >65535||r.Phase!="committed")throw new IOException("FIRST_INSTALL_NOT_COMMITTED");return r;
     }
 }
-internal sealed class FirstInstallInstallationReader:IInstallationReader
-{
-    public InstallationBinding Read()
-    {
-        var receipt=FirstInstallProfile.ReadReceipt();using var file=WindowsFileBoundary.OpenInstalledRead(Path.Combine(FirstInstallProfile.StateRoot,"bootstrap.json"));
-        var binding=WindowsInstallationReader.Parse(file.Small(1024));if(binding.InstallationId!=receipt.InstallationId)throw new IOException("FIRST_INSTALL_BINDING");return binding;
-    }
-}
-internal sealed class FirstInstallActivationResolver:IInstalledActivationResolver,IObservedAdmission
-{
-    public TimeSpan AdmissionBudget=>TimeSpan.FromMinutes(5);public event Action? ObservedWork;
-    public async Task<AuthorizedServiceStart> ResolveAsync(InstallationBinding binding,CancellationToken cancellation)
-    {
-        var r=FirstInstallProfile.ReadReceipt();if(r.InstallationId!=binding.InstallationId)throw new IOException("FIRST_INSTALL_IDENTITY");
-        var root=FirstInstallProfile.StateRoot;
-        using(var headFile=WindowsFileBoundary.OpenInstalledRead(Path.Combine(root,"activation.json")))
-        {var head=NativeJson.Read<InstalledActivation>(headFile.Small(16384));if(head.DataId!=r.DataId||head.ReleaseDigest!=r.ReleaseDigest||InstalledActivationResolver.Hash(headFile.Small(16384))!=binding.ActivationReceiptDigest)throw new IOException("FIRST_INSTALL_SELECTION");}
-        var fresh=FirstInstallInitialization.Read(root,r,WindowsFileBoundary.ReadInitialSeed,WindowsFileBoundary.ConsumeInitialSeed);
-        var resolver=new InstalledActivationResolver(root,new AdminInstalledControlFiles(),new LocalChildControlFactory(),()=>DateTimeOffset.UtcNow,
-            stateFiles:InstalledStateFiles.SingleService(root),fresh:fresh);
-        void Observed()=>ObservedWork?.Invoke();resolver.ObservedWork+=Observed;
-        try{return await resolver.ResolveAsync(binding,cancellation);}finally{resolver.ObservedWork-=Observed;}
-    }
-}

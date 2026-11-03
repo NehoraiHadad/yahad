@@ -8,16 +8,6 @@ namespace Yahad.Install;
 
 public enum SecretRole { MasterKey, SetupCapability }
 
-// Fixed diagnostic categories only; no installation values cross elevation.
-internal enum ReceiptRecoveryCheck
-{
-    ReceiptOwnerOrDacl, ReceiptAce, BinaryOwnerOrDacl, BinaryAce, BinaryPrincipal,
-    StateShape, StateAuthority, StateDigests, ManifestShape, ReceiptIdentity,
-    HostRecord, HostDigest, SetupDigest, PostWriteIdentity, ContentUnchanged
-}
-internal sealed class ReceiptRecoveryRefusal(ReceiptRecoveryCheck check):IOException("UNINSTALL_RECEIPT_RECOVERY_REFUSED")
-{internal ReceiptRecoveryCheck Check{get;}=Enum.IsDefined(check)?check:throw new ArgumentOutOfRangeException(nameof(check));}
-
 /// <summary>Windows app file boundary. Never changes an existing ACL to make a check pass.</summary>
 public static class WindowsFileBoundary
 {
@@ -58,8 +48,6 @@ public static class WindowsFileBoundary
 
     internal static PrivateReadLease OpenBootstrapForInstaller(string path,SecurityIdentifier expectedService)
     {var pin=Pin(path,false,true);try{ValidateAcl(Security(pin.Leaf),expectedService,true);return new(pin);}catch{pin.Dispose();throw;}}
-    internal static PrivateReadLease OpenInstallerInitialSeed(string path,SecurityIdentifier expectedService)
-    {var pin=Pin(path,false,true);try{ValidateInitialSeedAcl(Security(pin.Leaf),expectedService);return new(pin);}catch{pin.Dispose();throw;}}
     internal static PrivateReadLease OpenInstallerMetadata(string path)
     {
         var pin=Pin(path,false,true);try
@@ -105,55 +93,6 @@ public static class WindowsFileBoundary
     internal static PrivateReadLease OpenInstallerDiagnostic(string path,SecurityIdentifier owner)
     {
         var pin=Pin(path,false,true);try{ValidateInstallerDiagnosticAcl(Security(pin.Leaf),owner);return new(pin);}catch{pin.Dispose();throw;}
-    }
-    // Comparison only: this is the exact inherited ACL left by the old receipt
-    // writer before protection failed. SYSTEM/Administrators inherited Modify,
-    // not FullControl. FileSecurity shows six effective ACEs; the native handle
-    // descriptor additionally retains seven exact InheritOnly propagation ACEs.
-    // Neither representation is removal authority.
-    internal static PrivateReadLease OpenInterruptedReceiptForComparison(string path)
-    {
-        var pin=Pin(path,false,true);try{ValidateInterruptedReceiptAcl(Security(pin.Leaf));return new(pin);}catch{pin.Dispose();throw;}
-    }
-    internal static void ValidateInterruptedReceiptAcl(RawSecurityDescriptor acl)
-    {
-        var expected=new HashSet<(string Sid,int Mask,AceFlags Flags)>
-        {
-            ("S-1-5-18",0x1301bf,AceFlags.None),("S-1-5-32-544",0x1301bf,AceFlags.None),("S-1-5-32-545",0x1200a9,AceFlags.None),
-            ("S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464",0x1f01ff,AceFlags.None),
-            ("S-1-15-2-1",0x1200a9,AceFlags.None),("S-1-15-2-2",0x1200a9,AceFlags.None)
-        };
-        if(acl.DiscretionaryAcl?.Count==13)
-        {
-            var propagation=AceFlags.ObjectInherit|AceFlags.ContainerInherit|AceFlags.InheritOnly;
-            expected.UnionWith(new[]{
-                ("S-1-3-0",0x10000000,propagation),("S-1-5-18",0x10000000,propagation),("S-1-5-32-544",0x10000000,propagation),
-                ("S-1-5-32-545",unchecked((int)0xa0000000),propagation),
-                ("S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464",0x10000000,AceFlags.ContainerInherit|AceFlags.InheritOnly),
-                ("S-1-15-2-1",unchecked((int)0xa0000000),propagation),("S-1-15-2-2",unchecked((int)0xa0000000),propagation)
-            });
-        }
-        if(acl.Owner?.Value!="S-1-5-32-544"||acl.DiscretionaryAcl is null||acl.DiscretionaryAcl.Count!=expected.Count||(acl.ControlFlags&ControlFlags.DiscretionaryAclProtected)==0)throw new ReceiptRecoveryRefusal(ReceiptRecoveryCheck.ReceiptOwnerOrDacl);
-        foreach(GenericAce raw in acl.DiscretionaryAcl)
-        {
-            if(raw is not CommonAce ace||ace.IsCallback||ace.AceQualifier!=AceQualifier.AccessAllowed||!expected.Remove((ace.SecurityIdentifier.Value,ace.AccessMask,ace.AceFlags)))throw new ReceiptRecoveryRefusal(ReceiptRecoveryCheck.ReceiptAce);
-        }
-    }
-    internal static PrivateReadLease OpenInstallerBinaryForComparison(string path,SecurityIdentifier service,SecurityIdentifier owner)
-    {
-        var pin=Pin(path,false,true);try{ValidateInstallerBinaryAcl(Security(pin.Leaf),service,owner);return new(pin);}catch{pin.Dispose();throw;}
-    }
-    internal static void ValidateInstallerBinaryAcl(RawSecurityDescriptor acl,SecurityIdentifier service,SecurityIdentifier owner)
-    {
-        if(acl.Owner?.Value is not("S-1-5-18" or "S-1-5-32-544")||acl.DiscretionaryAcl is null)throw new ReceiptRecoveryRefusal(ReceiptRecoveryCheck.BinaryOwnerOrDacl);
-        foreach(GenericAce raw in acl.DiscretionaryAcl)
-        {
-            if(raw is not CommonAce ace||ace.IsCallback)throw new ReceiptRecoveryRefusal(ReceiptRecoveryCheck.BinaryAce);
-            if(ace.AceQualifier==AceQualifier.AccessDenied)continue;
-            if(ace.AceQualifier!=AceQualifier.AccessAllowed)throw new ReceiptRecoveryRefusal(ReceiptRecoveryCheck.BinaryAce);
-            if(ace.SecurityIdentifier.Value is "S-1-5-18" or "S-1-5-32-544")continue;
-            if((ace.SecurityIdentifier!=service&&ace.SecurityIdentifier!=owner)||(ace.AccessMask&~0x1200a9)!=0)throw new ReceiptRecoveryRefusal(ReceiptRecoveryCheck.BinaryPrincipal);
-        }
     }
     internal static void ValidateInstallerDiagnosticAcl(RawSecurityDescriptor acl,SecurityIdentifier owner)
     {

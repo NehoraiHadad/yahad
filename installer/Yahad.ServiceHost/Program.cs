@@ -20,9 +20,6 @@ if(args is ["--lan-service"])
 if(args is not ["--service"]){Console.Error.WriteLine("YAHAD_SERVICE_ARGUMENTS_REFUSED");return 2;}
 try
 {
-    if(WindowsInstalledRuntimeProfile.UpdaterAnchorPresent())
-    {return AdmittedServiceApplication.RunInstalled();}
-    var authorizer=new InstalledStartAuthorizer(new WindowsServiceTokenReader(),new FirstInstallInstallationReader(),new FirstInstallActivationResolver());
-    return new ServiceApplication(new NativeScmApi(),authorizer,Environment.Exit).Run();
+    return AdmittedServiceApplication.RunInstalled();
 }
 catch(Exception error){_=ServiceStartupDiagnostic.TryRecord(StartupDiagnosticRole.Runtime,error);Console.Error.WriteLine("YAHAD_SCM_DISPATCH_REFUSED");return 1;}

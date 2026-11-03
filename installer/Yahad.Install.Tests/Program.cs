@@ -67,7 +67,7 @@ if (args is ["--job-owner", var ownerPidPath])
 }
 
 var root = SafeDirectory.CreatePrivateSession(Path.GetTempPath());
-var valid = Path.Combine(root, "good.zip"); FixtureBundle.Create(valid);
+
 var results = new List<object>(); var failed = 0;
 async Task Check(string name, Func<Task> test)
 {
@@ -77,85 +77,6 @@ async Task Check(string name, Func<Task> test)
 void Assert(bool value) { if (!value) throw new Exception("assertion failed"); }
 async Task Reject(Func<Task> action)
 { try { await action(); } catch (IOException) { return; } catch (InvalidDataException) { return; } throw new Exception("expected rejection"); }
-string Session() => SafeDirectory.CreatePrivateSession(root);
-void Package(string path, BundleManifest m, params (string Name, byte[] Bytes, int? Attributes)[] files)
-{
-    using var zip = ZipFile.Open(path, ZipArchiveMode.Create);
-    using (var stream = zip.CreateEntry("manifest.json").Open()) JsonSerializer.Serialize(stream, m);
-    foreach (var f in files) { var e = zip.CreateEntry(f.Name); if (f.Attributes is not null) e.ExternalAttributes = f.Attributes.Value;
-        using var stream = e.Open(); stream.Write(f.Bytes); }
-}
-var bytes = Encoding.UTF8.GetBytes("fixture"); var hash = Convert.ToHexStringLower(SHA256.HashData(bytes));
-BundleManifest Manifest(string name = "app/file.txt") => new(1, "feasibility-fixture", "win-x64", "fixture-1", [new(name, bytes.Length, hash)]);
-await Check("valid manifest and bytes", () => { Assert(Bundle.Inspect(valid).Manifest.Files.Length == 1); return Task.CompletedTask; });
-await Check("malformed JSON is a package diagnostic", async () =>
-{
-    var p = Path.Combine(root, "bad-manifest.zip");
-    using (var zip = ZipFile.Open(p, ZipArchiveMode.Create))
-    { using var stream = zip.CreateEntry("manifest.json").Open(); stream.Write(Encoding.UTF8.GetBytes("{broken")); }
-    await Reject(() => { Bundle.Inspect(p); return Task.CompletedTask; });
-});
-foreach (var name in new[] { "../escape", "app/../../escape", "app/file:ads", "app/CON.txt", "app/LPT1", "app/folder./file", "app//file", "app/./file", "app/evil\\file", "/app/root", "data/family.sqlite" })
-    await Check("reject unsafe path " + name, async () => { var p = Path.Combine(root, Guid.NewGuid() + ".zip"); Package(p, Manifest(name), (name, bytes, null)); await Reject(() => { Bundle.Inspect(p); return Task.CompletedTask; }); });
-await Check("reject corrupt bytes", async () => { var p = Path.Combine(root, "corrupt.zip"); Package(p, Manifest(), ("app/file.txt", Encoding.UTF8.GetBytes("changed"), null)); await Reject(() => { Bundle.Inspect(p); return Task.CompletedTask; }); });
-await Check("reject case collision", async () => { var p = Path.Combine(root, "duplicate.zip"); Package(p, Manifest(), ("app/file.txt", bytes, null), ("APP/FILE.TXT", bytes, null)); await Reject(() => { Bundle.Inspect(p); return Task.CompletedTask; }); });
-await Check("reject symlink entry", async () => { var p = Path.Combine(root, "link.zip"); Package(p, Manifest(), ("app/file.txt", bytes, unchecked((int)0xA1FF0000))); await Reject(() => { Bundle.Inspect(p); return Task.CompletedTask; }); });
-await Check("reject undeclared file", async () => { var p = Path.Combine(root, "extra.zip"); Package(p, Manifest(), ("app/file.txt", bytes, null), ("app/extra", bytes, null)); await Reject(() => { Bundle.Inspect(p); return Task.CompletedTask; }); });
-await Check("refuse production payload in slice", async () => { var p = Path.Combine(root, "production.zip"); Package(p, Manifest() with { Kind = "production" }, ("app/file.txt", bytes, null)); await Reject(() => { Bundle.Inspect(p); return Task.CompletedTask; }); });
-await Check("refuse unsupported architecture", async () => { var p = Path.Combine(root, "arm64.zip"); Package(p, Manifest() with { Target = "win-arm64" }, ("app/file.txt", bytes, null)); await Reject(() => { Bundle.Inspect(p); return Task.CompletedTask; }); });
-await Check("stage and verify repeated run", async () => { var s = Session(); await FixtureInstaller.StageAsync(valid, s, default); var payload = Path.Combine(s, "payload/app/fixture.txt"); var before = File.ReadAllBytes(payload); await FixtureInstaller.StageAsync(valid, s, default); Assert(before.SequenceEqual(File.ReadAllBytes(payload))); });
-await Check("cancel and resume preserves state", async () =>
-{
-    var s = Session(); using var cancel = new CancellationTokenSource();
-    try { await FixtureInstaller.StageAsync(valid, s, cancel.Token, fault: point => { if (point == "after-journal") { cancel.Cancel(); cancel.Token.ThrowIfCancellationRequested(); } }); throw new Exception("not canceled"); }
-    catch (OperationCanceledException) { }
-    Assert(!Directory.Exists(Path.Combine(s, "payload")));
-    Assert(JsonSerializer.Deserialize<Journal>(File.ReadAllText(Path.Combine(s, "journal.json")))!.Stage == Stage.Paused);
-    await FixtureInstaller.StageAsync(valid, s, default); Assert(Directory.Exists(Path.Combine(s, "payload")));
-});
-foreach (var faultPoint in new[] { "after-journal", "before-publish", "after-publish" })
-    await Check("resume IO interruption " + faultPoint, async () =>
-    {
-        var s = Session(); await Reject(() => FixtureInstaller.StageAsync(valid, s, default, fault: p => { if (p == faultPoint) throw new IOException("injected disk/lock failure"); }));
-        Assert(File.Exists(Path.Combine(s, "journal.json")));
-        await FixtureInstaller.StageAsync(valid, s, default);
-        Assert(JsonSerializer.Deserialize<Journal>(File.ReadAllText(Path.Combine(s, "journal.json")))!.Stage == Stage.Ready);
-    });
-await Check("never replace changed published payload", async () =>
-{
-    var s = Session(); await FixtureInstaller.StageAsync(valid, s, default);
-    var p = Path.Combine(s, "payload/app/fixture.txt"); File.WriteAllText(p, "preserve this changed fixture");
-    await Reject(() => FixtureInstaller.StageAsync(valid, s, default)); Assert(File.ReadAllText(p) == "preserve this changed fixture");
-});
-await Check("refuse bundle change during resume", async () =>
-{
-    var s = Session(); await FixtureInstaller.StageAsync(valid, s, default);
-    var journal = File.ReadAllBytes(Path.Combine(s, "journal.json"));
-    var p = Path.Combine(root, "different.zip"); Package(p, Manifest(), ("app/file.txt", bytes, null));
-    await Reject(() => FixtureInstaller.StageAsync(p, s, default)); Assert(journal.SequenceEqual(File.ReadAllBytes(Path.Combine(s, "journal.json"))));
-});
-await Check("exclusive lock held by a separate process", async () =>
-{
-    var s = Session(); var readyPath = Path.Combine(s, "lock-ready");
-    using var held = FixtureJob(Environment.ProcessPath!, ["--hold-lock", Path.Combine(s, "operation.lock"), readyPath], root);
-    using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-    while (!File.Exists(readyPath)) await Task.Delay(25, deadline.Token);
-    await Reject(() => FixtureInstaller.StageAsync(valid, s, default)); Assert(!Directory.Exists(Path.Combine(s, "payload")));
-});
-await Check("refuse permissive session ACL", async () =>
-{
-    var s = Session(); var dir = new DirectoryInfo(s); var acl = dir.GetAccessControl();
-    acl.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.WorldSid, null), FileSystemRights.Read, AccessControlType.Allow)); dir.SetAccessControl(acl);
-    await Reject(() => FixtureInstaller.StageAsync(valid, s, default));
-});
-await Check("refuse junction ancestor", async () =>
-{
-    var target = Session(); var junction = Path.Combine(root, "junction");
-    var start = new ProcessStartInfo("cmd.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-    foreach (var a in new[] { "/c", "mklink", "/J", junction, target }) start.ArgumentList.Add(a);
-    using var p = Process.Start(start)!; await p.WaitForExitAsync(); Assert(p.ExitCode == 0);
-    await Reject(() => FixtureInstaller.StageAsync(valid, junction, default));
-});
 async Task WaitFor(string path)
 {
     using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));

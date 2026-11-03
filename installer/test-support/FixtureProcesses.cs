@@ -6,23 +6,20 @@ using Yahad.Service;
 internal sealed class FixtureProcesses
 {
     private readonly List<Session> sessions=[];
-    private readonly List<JobProcessFaultInjection> faults=[];
+    private readonly List<JobProcess> jobs=[];
     private readonly List<ProbeOwnershipException> probes=[];
     private readonly List<CancellationTokenSource> operations=[];
     private readonly List<GrantOwner> grants=[];
-    private readonly List<JobProcessFaultInjection> seeds=[];
     private readonly object gate=new();
     private bool closing,confirmed;
     private int starting,resolving;
     internal bool Confirmed=>confirmed;
-    internal JobProcessFaultInjection Observe(JobProcessFaultInjection? fault=null)
-    {fault??=new();lock(gate){if(closing)throw new IOException("FIXTURE_ALREADY_CLOSING");if(!faults.Contains(fault))faults.Add(fault);}return fault;}
     internal IPrivateAppLauncher Launcher(IPrivateAppLauncher inner)=>new LauncherOwner(this,inner);
     internal JobOwner StartJob(string image,IEnumerable<string> arguments,string directory,IReadOnlyDictionary<string,string> environment,
-        Action<Microsoft.Win32.SafeHandles.SafeProcessHandle,int>? beforeResume=null,JobProcessFaultInjection? fault=null)
+        Action<Microsoft.Win32.SafeHandles.SafeProcessHandle,int>? beforeResume=null)
     {
-        lock(gate){fault=Observe(fault);seeds.Add(fault);starting++;}
-        try{return new(JobProcess.StartWithFault(image,arguments,directory,environment,beforeResume,fault),fault);}
+        lock(gate){if(closing)throw new IOException("FIXTURE_ALREADY_CLOSING");starting++;}
+        try{var job=JobProcess.Start(image,arguments,directory,environment,beforeResume);lock(gate)jobs.Add(job);return new(job);}
         finally{lock(gate)starting--;}
     }
     internal Task RetrySessionAsync(IContainedAppSession inner,CancellationToken cancellation)
@@ -41,18 +38,9 @@ internal sealed class FixtureProcesses
         foreach(var operation in pending)try{operation.Cancel();}catch(ObjectDisposedException){}
         using var bound=new CancellationTokenSource(TimeSpan.FromSeconds(30));
         while(Volatile.Read(ref starting)!=0||Volatile.Read(ref resolving)!=0)await Task.Delay(10,bound.Token);
-        // End only artificial observation denials, then require real kernel
-        // observations. No production policy/ACL/identity is changed.
-        foreach(var fault in faults){fault.RootObservationUnavailable=false;fault.TreeObservationUnavailable=false;}
         foreach(var session in sessions)await session.CleanupAsync(bound.Token);
         foreach(var probe in probes)await probe.RetryCleanupAsync(bound.Token);
-        foreach(var fault in faults)
-        {
-            if(fault.FailedStartSession is {} retained&&!sessions.Any(s=>ReferenceEquals(s.Inner,retained))&&!probes.Any(p=>ReferenceEquals(p.OwnedSession,retained)))
-            {await retained.TerminateAndWaitForTreeEmptyAsync(bound.Token);await retained.DisposeAsync();}
-            if(seeds.Contains(fault)&&fault.CreatedProcess is {} job)
-            {if(!fault.RootExitObserved||!fault.TreeEmptyObserved)await job.TerminateAndWaitForTreeEmptyAsync(bound.Token);job.Dispose();}
-        }
+        foreach(var job in jobs){await job.TerminateAndWaitForTreeEmptyAsync(bound.Token);job.Dispose();}
         foreach(var grant in grants)grant.Dispose();
         confirmed=true;
     }
@@ -76,14 +64,15 @@ internal sealed class FixtureProcesses
     }
     private sealed class GrantOwner(AuthorizedServiceStart original):IDisposable
     {private bool disposed;public void Dispose(){if(disposed)return;original.Dispose();disposed=true;}}
-    internal sealed class JobOwner(JobProcess job,JobProcessFaultInjection fault):IDisposable
+    internal sealed class JobOwner(JobProcess job):IDisposable
     {
         internal JobProcess Process=>job;
         internal int ProcessId=>job.ProcessId;
         internal Task<int> WaitAsync(CancellationToken c)=>job.WaitAsync(c);
         internal Task WaitForTreeEmptyAsync(CancellationToken c)=>job.WaitForTreeEmptyAsync(c);
         internal Task TerminateAndWaitForTreeEmptyAsync(CancellationToken c)=>job.TerminateAndWaitForTreeEmptyAsync(c);
-        public void Dispose(){if(fault.RootExitObserved&&fault.TreeEmptyObserved)job.Dispose();}
+        // The owning FixtureProcesses terminates and disposes every started job at cleanup.
+        public void Dispose(){}
     }
     private sealed class LauncherOwner(FixtureProcesses owner,IPrivateAppLauncher inner):IPrivateAppLauncher
     {

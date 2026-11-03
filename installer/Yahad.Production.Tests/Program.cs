@@ -137,81 +137,6 @@ await Check("callback failure after duplicating the data lease observes root dea
     }
     finally{witness?.Dispose();}
 });
-await Check("failure before job assignment observes the separate suspended root and empty job",async()=>
-{
-    f.Reset();var fault=new JobProcessFaultInjection{FailBeforeAssignment=true};
-    await Reject(()=>{_ =f.StartJob(node,["-e",""],f.Root,LaunchEnvironment.Clean(f.Root),null,fault);return Task.CompletedTask;},"INJECTED_BEFORE_ASSIGNMENT_FAILURE");
-    Assert(fault.CreatedProcess is not null&&fault.RootExitObserved&&fault.TreeEmptyObserved);
-});
-await Check("controller releases a failed handoff reservation only after observed root and tree exit",async()=>
-{
-    f.Reset();var fault=new JobProcessFaultInjection{FailAfterHandoff=true};var resource=new StartReservation(WindowsFileBoundary.AcquireDataLease(f.Data),fault);
-    var launcher=f.CreateLauncher(f.RawSpec(resource.Lease),fault);var reports=new List<ServiceReport>();
-    try
-    {
-        var result=await new ServiceController(new StartFailureAuthorization(launcher,resource)).RunAsync(reports.Add);
-        Assert(result.Failure==ServiceFailure.StartFailed&&result.QuiescenceConfirmed&&resource.Released&&fault.RootExitObserved&&fault.TreeEmptyObserved);
-        Assert(!reports.Any(r=>r.State==ServiceState.Running)&&!File.Exists(Path.Combine(f.Data,"native-ready")));
-        using var released=WindowsFileBoundary.AcquireDataLease(f.Data);
-    }
-    finally{if(!resource.Released)resource.Dispose();}
-});
-foreach(var missing in new[]{"root","tree"})
-await Check("unobserved "+missing+" after failed handoff retains session and reservation without STOPPED",async()=>
-{
-    f.Reset();var fault=new JobProcessFaultInjection{FailAfterHandoff=true,RootObservationUnavailable=missing=="root",TreeObservationUnavailable=missing=="tree"};
-    var resource=new StartReservation(WindowsFileBoundary.AcquireDataLease(f.Data),fault);var launcher=f.CreateLauncher(f.RawSpec(resource.Lease),fault);var reports=new List<ServiceReport>();
-    try
-    {
-        var result=await new ServiceController(new StartFailureAuthorization(launcher,resource)).RunAsync(reports.Add);
-        Assert(result.Failure==ServiceFailure.QuiescenceUnknown&&!result.QuiescenceConfirmed&&!resource.Released&&fault.FailedStartSession is not null);
-        Assert(!reports.Any(r=>r.State is ServiceState.Running or ServiceState.Stopped));
-        try{using var wrong=WindowsFileBoundary.AcquireDataLease(f.Data);throw new Exception("reservation released while observation unavailable");}catch(Win32Exception e)when(e.NativeErrorCode==32){}
-        var grants=Directory.GetFiles(Path.Combine(f.Root,"temporary"),"lease.json",SearchOption.AllDirectories);Assert(grants.Length==1);
-        try{using var write=new FileStream(grants[0],FileMode.Open,FileAccess.Write,FileShare.None);throw new Exception("handoff pin released before observation");}catch(IOException){}
-    }
-    finally
-    {
-        // A separate explicit retry uses real OS observations. Clearing this
-        // failure-only hook does not inject a successful exit observation.
-        fault.RootObservationUnavailable=false;fault.TreeObservationUnavailable=false;
-        if(fault.FailedStartSession is { } session){using var bound=new CancellationTokenSource(TimeSpan.FromSeconds(5));await f.RetrySessionAsync(session,bound.Token);}
-        Assert(fault.RootExitObserved&&fault.TreeEmptyObserved);resource.Dispose();
-    }
-    using var released=WindowsFileBoundary.AcquireDataLease(f.Data);
-});
-foreach(var missing in new[]{"root","tree"})
-await Check("actual admission SQLite probe retains reservation when "+missing+" observation is unavailable",async()=>
-{
-    f.Reset();var fault=new JobProcessFaultInjection{FailAfterHandoff=true,RootObservationUnavailable=missing=="root",TreeObservationUnavailable=missing=="tree"};
-    var controller=new ServiceController(new ProbeAuthorization(f,fault));var reports=new List<ServiceReport>();
-    var result=await controller.RunAsync(reports.Add);
-    Assert(result.Failure==ServiceFailure.QuiescenceUnknown&&!result.QuiescenceConfirmed&&!reports.Any(r=>r.State is ServiceState.Running or ServiceState.Stopped));
-    try{using var wrong=WindowsFileBoundary.AcquireDataLease(f.Data);throw new Exception("probe reservation released");}catch(Win32Exception e)when(e.NativeErrorCode==32){}
-    fault.RootObservationUnavailable=false;fault.TreeObservationUnavailable=false;
-    using var bound=new CancellationTokenSource(TimeSpan.FromSeconds(5));await controller.RetryAdmissionCleanupAsync(bound.Token);
-    Assert(fault.RootExitObserved&&fault.TreeEmptyObserved);using var released=WindowsFileBoundary.AcquireDataLease(f.Data);
-});
-await Check("actual recovery probe failure retains recovery lease and private scratch until observed retry",async()=>
-{
-    f.Reset();f.ClearSignals();var fault=new JobProcessFaultInjection{FailAfterHandoff=true,TreeObservationUnavailable=true};
-    using var empty=f.StartJob(node,["-e",""],f.Root,LaunchEnvironment.Clean(f.Root));await empty.WaitAsync(default);await empty.WaitForTreeEmptyAsync(default);
-    var inspector=new NativeSqliteInspector(node,ProductionFixture.Hash(File.ReadAllBytes(node)),fault);var recovery=await NativeRecoveryFixture.OpenAsync(f.Dataset,empty.Process,inspector);ProbeOwnershipException? owned=null;
-    try
-    {
-        try{await recovery.BackupAsync();throw new Exception("unknown probe accepted");}catch(ProbeOwnershipException error){owned=error;}
-        await Reject(()=>{recovery.Dispose();return Task.CompletedTask;},"RECOVERY_PROBE_QUIESCENCE_UNCONFIRMED");
-        await Reject(()=>{inspector.Dispose();return Task.CompletedTask;},"RECOVERY_PROBE_QUIESCENCE_UNCONFIRMED");
-        try{using var wrong=WindowsFileBoundary.AcquireDataLease(f.Data);throw new Exception("recovery lease released");}catch(Win32Exception e)when(e.NativeErrorCode==32){}
-        Assert(Directory.GetFiles(Path.Combine(f.Dataset,".recovery-probes"),"app.sqlite",SearchOption.AllDirectories).Length==1);
-    }
-    finally
-    {
-        fault.TreeObservationUnavailable=false;if(owned is not null){using var bound=new CancellationTokenSource(TimeSpan.FromSeconds(5));await owned.RetryCleanupAsync(bound.Token);}
-        recovery.Dispose();inspector.Dispose();
-    }
-    Assert(!Directory.GetFiles(Path.Combine(f.Dataset,".recovery-probes"),"app.sqlite",SearchOption.AllDirectories).Any());using var released=WindowsFileBoundary.AcquireDataLease(f.Data);
-});
 NativeBackupResult? backup=null;NativeRestoreResult? restored=null;
 await Check("actual recovery output is verified but cannot start before protected commit",async()=>
 {
@@ -721,20 +646,6 @@ await Check("same bounded connection parser works in memory and refuses oversize
  using var bad=new MemoryStream(BitConverter.GetBytes(32769));await Denied(()=>AuthorityEndpointConnection.ServeAsync(bad,c.Router,AuthorityEndpointRole.Runtime,runtimePeer,default));
 });
 
-await Check("router keeps an unobserved concrete admission probe and exclusive lease for explicit cleanup",async()=>
-{
- var fault=new JobProcessFaultInjection{FailAfterHandoff=true,TreeObservationUnavailable=true};ProbeOwnershipException? witness=null;
- var c=Composition(quiesce:async cancellation=>{try{using var grant=await f.CreateResolver(fault).ResolveAsync(f.Binding,cancellation);}catch(ProbeOwnershipException owned){witness=owned;throw;}});
- await Request(c.Router,"install",(await Observe(c.Router)).Target!.Fingerprint);var view=new OwnerConfirmationState((await Observe(c.Router,true)).Confirmation!,f.InstallationId,()=>f.Now);await AnswerView(c.Router,view,true);
- try
- {
-  await c.Router.Execution!.WaitAsync(TimeSpan.FromSeconds(20));Assert(c.Router.Phase=="recovery_required"&&witness is not null&&!witness.CleanupComplete);
-  await Denied(()=>{using var blocked=WindowsFileBoundary.AcquireDataLease(f.Data);return Task.CompletedTask;});
-  await Denied(()=>c.Router.RetryOwnedCleanupAsync());Assert(!witness!.CleanupComplete);
- }
- finally{fault.TreeObservationUnavailable=false;await c.Router.RetryOwnedCleanupAsync();}
- Assert(witness!.CleanupComplete&&fault.RootExitObserved&&fault.TreeEmptyObserved&&c.Router.Phase=="recovery_required");using var released=WindowsFileBoundary.AcquireDataLease(f.Data);
-});
 await Check("synthetic installed-role projection is actually enforced at the composition boundary",async()=>
 {
  var c=Composition();Assert(c.Files.SecretClass(f.PathOf("bootstrap.json"),SecretRole.SetupCapability)==InstalledFileRole.Control);Assert(c.Files.SecretClass(f.PathOf("installation.json"),SecretRole.SetupCapability)==InstalledFileRole.Anchor);Assert(c.Files.SecretClass(f.PathOf("datasets/anything/master-key"),SecretRole.MasterKey)==InstalledFileRole.MasterKey);var bytes=File.ReadAllBytes(f.PathOf("installation.json"));
@@ -879,15 +790,15 @@ internal sealed class ProductionFixture:IDisposable
         Write("epoch.json",new InstalledEpoch(1,InstallationId,AnchorEpoch,AnchorDigest??head));
     }
     internal InstallationBinding Binding=>new(InstallationId,Hash(File.ReadAllBytes(PathOf("activation.json"))));
-    internal FixtureProcesses.FixtureResolver CreateResolver(JobProcessFaultInjection? fault=null,InstalledStateFiles? stateFiles=null)
-        =>processes.Resolver(new(Root,new PrivateControlFiles(),Control,()=>Now,processes.Observe(fault),stateFiles:stateFiles,processFactory:spec=>CreateLauncher(spec)));
-    internal IPrivateAppLauncher CreateLauncher(VerifiedProcessSpec spec,JobProcessFaultInjection? fault=null)
-        =>processes.Launcher(new ServiceProcessLauncher(spec,Control,processes.Observe(fault)));
+    internal FixtureProcesses.FixtureResolver CreateResolver(InstalledStateFiles? stateFiles=null)
+        =>processes.Resolver(new(Root,new PrivateControlFiles(),Control,()=>Now,stateFiles:stateFiles,processFactory:spec=>CreateLauncher(spec)));
+    internal IPrivateAppLauncher CreateLauncher(VerifiedProcessSpec spec)
+        =>processes.Launcher(new ServiceProcessLauncher(spec,Control));
     internal void RetainFailure(Exception failure)=>processes.Retain(failure);
     internal Task RetrySessionAsync(IContainedAppSession inner,CancellationToken cancellation)=>processes.RetrySessionAsync(inner,cancellation);
     internal FixtureProcesses.JobOwner StartJob(string image,IEnumerable<string> arguments,string directory,IReadOnlyDictionary<string,string> environment,
-        Action<Microsoft.Win32.SafeHandles.SafeProcessHandle,int>? beforeResume=null,JobProcessFaultInjection? fault=null)
-        =>processes.StartJob(image,arguments,directory,environment,beforeResume,fault);
+        Action<Microsoft.Win32.SafeHandles.SafeProcessHandle,int>? beforeResume=null)
+        =>processes.StartJob(image,arguments,directory,environment,beforeResume);
     internal Task<AuthorizedServiceStart> Resolve(CancellationToken cancellation=default)=>CreateResolver().ResolveAsync(Binding,cancellation);
     private async Task Seed(string node)
     {
@@ -932,24 +843,6 @@ internal sealed class ProductionFixture:IDisposable
         processes.CleanupAsync().GetAwaiter().GetResult();owned.Cleanup(()=>processes.Confirmed);disposed=true;
         }catch(Exception failure){cleanupFailure=failure;throw;}
     }
-}
-
-internal sealed class StartFailureAuthorization(IPrivateAppLauncher launcher,StartReservation resource):IServiceStartAuthorizer,IAppRecoveryBarrier
-{
-    public Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)=>Task.FromResult(new AuthorizedServiceStart(new("handoff-failure"),launcher,this,resource));
-    public Task RequireStartAllowedAsync(AppRelease release,CancellationToken cancellation){cancellation.ThrowIfCancellationRequested();return Task.CompletedTask;}
-}
-internal sealed class StartReservation(WindowsFileBoundary.DataLease lease,JobProcessFaultInjection fault):IDisposable
-{
-    internal WindowsFileBoundary.DataLease Lease=>lease;internal bool Released;
-    public void Dispose(){if(Released)return;if(!fault.RootExitObserved||!fault.TreeEmptyObserved)throw new Exception("reservation release before native exit observations");lease.Dispose();Released=true;}
-}
-
-internal sealed class ProbeAuthorization(ProductionFixture fixture,JobProcessFaultInjection fault):IServiceStartAuthorizer,IObservedAdmission
-{
-    private readonly FixtureProcesses.FixtureResolver resolver=fixture.CreateResolver(fault);public TimeSpan AdmissionBudget=>resolver.AdmissionBudget;
-    public event Action? ObservedWork{add=>resolver.ObservedWork+=value;remove=>resolver.ObservedWork-=value;}
-    public Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)=>Task.Run(()=>resolver.ResolveAsync(fixture.Binding,cancellation),cancellation);
 }
 
 internal sealed class ApprovedOperations(string installation,Func<DateTimeOffset> clock):IOwnerOperationAuthentication

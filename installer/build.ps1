@@ -19,7 +19,7 @@ $env:TEMP = Join-Path $installerRoot '.scratch/temp'
 $env:TMP = $env:TEMP
 New-Item -ItemType Directory $env:TEMP -Force | Out-Null
 $restoreConfig = Join-Path $installerRoot 'NuGet.Config'
-foreach ($project in @('Yahad.Install.Tests', 'Yahad.Host.Slice', 'Yahad.Setup', 'Yahad.Platform')) {
+foreach ($project in @('Yahad.Install.Tests', 'Yahad.Setup', 'Yahad.Platform')) {
     & $DotNet build (Join-Path $installerRoot "$project/$project.csproj") -c Release --nologo "-p:RestoreConfigFile=$restoreConfig"
     if ($LASTEXITCODE -ne 0) { throw "Build failed: $project" }
 }
@@ -27,7 +27,7 @@ New-Item -ItemType Directory (Join-Path $installerRoot 'artifacts') -Force | Out
 & (Join-Path $installerRoot 'Yahad.Install.Tests/bin/Release/net10.0-windows/Yahad.Install.Tests.exe') --report (Join-Path $installerRoot 'artifacts/test-results.json')
 if ($LASTEXITCODE -ne 0) { throw 'Fixture tests failed' }
 if ($Publish) {
-    foreach ($project in @('Yahad.Setup', 'Yahad.Host.Slice')) {
+    foreach ($project in @('Yahad.Setup')) {
         & $DotNet publish (Join-Path $installerRoot "$project/$project.csproj") -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -o (Join-Path $installerRoot "artifacts/$project") --nologo "-p:RestoreConfigFile=$restoreConfig"
         if ($LASTEXITCODE -ne 0) { throw "Publish failed: $project" }
     }

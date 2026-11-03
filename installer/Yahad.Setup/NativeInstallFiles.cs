@@ -23,12 +23,6 @@ internal static class NativeInstallFiles
     {SafeDirectory.NoReparseAncestors(path);var acl=new DirectorySecurity();acl.SetSecurityDescriptorSddlForm(descriptor,AccessControlSections.Owner|AccessControlSections.Access);new DirectoryInfo(path).SetAccessControl(acl);}
     internal static void SetOwnedFile(string path,string descriptor)
     {SafeDirectory.NoReparseAncestors(path);var acl=new FileSecurity();acl.SetSecurityDescriptorSddlForm(descriptor.Replace("OICI",""),AccessControlSections.Owner|AccessControlSections.Access);new FileInfo(path).SetAccessControl(acl);}
-    // Recovery only: the caller has proven the existing owner and receipt
-    // against independent protected state and holds the comparison lease.
-    // Persist only DACL; requesting unchanged ownership requires WRITE_OWNER,
-    // which the observed Modify grant does not provide.
-    internal static void ProtectInterruptedReceiptDacl(string path,string descriptor)
-    {SafeDirectory.NoReparseAncestors(path);var acl=new FileSecurity();acl.SetSecurityDescriptorSddlForm(descriptor.Replace("OICI",""),AccessControlSections.Access);new FileInfo(path).SetAccessControl(acl);}
     internal static byte[] ReadOwned(string path,string serviceSid)
     {using var file=WindowsFileBoundary.OpenBootstrapForInstaller(path,new SecurityIdentifier(serviceSid));return file.Small(16777216);}
     internal static FileStream CreateNewFile(string path)

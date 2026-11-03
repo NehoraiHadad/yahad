@@ -17,14 +17,13 @@ public sealed class ProbeOwnershipException:IOException
 internal static class SqliteProbeProcess
 {
     internal static async Task<int> ReadAsync(string node,string script,string database,string temporary,string output,
-        TimeSpan timeout,CancellationToken cancellation,JobProcessFaultInjection? fault=null,string? ownedPrivateProbe=null)
+        TimeSpan timeout,CancellationToken cancellation,string? ownedPrivateProbe=null)
     {
         Session? session=null;
         try
         {
             JobProcess job;
-            try{job=fault is null?JobProcess.Start(node,["-e",script,database,output],temporary,LaunchEnvironment.Clean(temporary)):
-                JobProcess.StartWithFault(node,["-e",script,database,output],temporary,LaunchEnvironment.Clean(temporary),null,fault);}
+            try{job=JobProcess.Start(node,["-e",script,database,output],temporary,LaunchEnvironment.Clean(temporary));}
             catch(JobStartQuiescenceUnconfirmedException e){session=new(e.OwnedProcess,output);throw;}
             session=new(job,output);
             using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancellation);deadline.CancelAfter(timeout);
@@ -39,7 +38,7 @@ internal static class SqliteProbeProcess
             if(session is null)throw;
             try{using var cleanup=new CancellationTokenSource(TimeSpan.FromSeconds(5));await session.TerminateAndWaitForTreeEmptyAsync(cleanup.Token);await session.DisposeAsync();}
             catch(Exception cleanup)
-            {var owned=new ProbeOwnershipException(session,new AggregateException(failure,cleanup));if(fault is not null)fault.FailedStartSession=session;throw owned;}
+            {var owned=new ProbeOwnershipException(session,new AggregateException(failure,cleanup));throw owned;}
             throw;
         }
     }

@@ -7,7 +7,7 @@ namespace Yahad.Install;
 public sealed class NativeSqliteInspector : IDisposable
 {
     private readonly string node;
-    private readonly FileStream pinned;private ProbeOwnershipException? pending;private readonly JobProcessFaultInjection? fault;
+    private readonly FileStream pinned;private ProbeOwnershipException? pending;
     private const string Script = """
         const {DatabaseSync}=require('node:sqlite');
         const fs=require('node:fs');
@@ -21,9 +21,8 @@ public sealed class NativeSqliteInspector : IDisposable
           fs.writeFileSync(process.argv[2],JSON.stringify({schema:versions[0].version}),{flag:'wx',mode:0o600});
         } finally {db.close();}
         """;
-    public NativeSqliteInspector(string privateNode,string expectedSha256):this(privateNode,expectedSha256,null){}
-    internal NativeSqliteInspector(string privateNode,string expectedSha256,JobProcessFaultInjection? fault)
-    {this.fault=fault;
+    public NativeSqliteInspector(string privateNode,string expectedSha256)
+    {
         node=Path.GetFullPath(privateNode); SafeDirectory.NoReparseAncestors(node);
         pinned=new FileStream(node,FileMode.Open,FileAccess.Read,FileShare.Read);
         if(Convert.ToHexStringLower(SHA256.HashData(pinned))!=expectedSha256)
@@ -49,14 +48,14 @@ public sealed class NativeSqliteInspector : IDisposable
             }finally{db.close();}
             """;
         var output=Path.Combine(privateScratch,"sqlite-observation-"+Guid.NewGuid().ToString("N")+".json");
-        try{_=await SqliteProbeProcess.ReadAsync(node,script,database,privateScratch,output,TimeSpan.FromSeconds(30),cancellation,fault,ownedPrivateProbe?privateScratch:null);}
+        try{_=await SqliteProbeProcess.ReadAsync(node,script,database,privateScratch,output,TimeSpan.FromSeconds(30),cancellation,ownedPrivateProbe?privateScratch:null);}
         catch(ProbeOwnershipException owned){pending=owned;owned.KeepAlive(this);owned.AfterCleanup(()=>pending=null);throw;}
     }
     private async Task<int> InspectCoreAsync(string database,string privateScratch,CancellationToken cancellation,bool ownedProbe)
     {
         if(pending is not null)throw new IOException("RECOVERY_PROBE_PENDING");
         var output=Path.Combine(privateScratch,"sqlite-observation-"+Guid.NewGuid().ToString("N")+".json");
-        try{return await SqliteProbeProcess.ReadAsync(node,Script,database,privateScratch,output,TimeSpan.FromSeconds(30),cancellation,fault,ownedProbe?privateScratch:null);}
+        try{return await SqliteProbeProcess.ReadAsync(node,Script,database,privateScratch,output,TimeSpan.FromSeconds(30),cancellation,ownedProbe?privateScratch:null);}
         catch(ProbeOwnershipException owned){pending=owned;owned.KeepAlive(this);owned.AfterCleanup(()=>pending=null);throw;}
         catch(IOException refused)when(refused.Message=="SQLITE_PROBE_REFUSED"){throw new IOException("RECOVERY_SQLITE_REFUSED",refused);}
     }

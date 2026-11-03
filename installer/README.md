@@ -15,9 +15,8 @@ Use Windows x64, .NET 10 SDK, Node 24 and PowerShell 7. Start with
 ./tests/windows-updater/run.ps1 -DotNet (Get-Command dotnet).Source
 ```
 
-The original `build.ps1 -Publish` publishes the small fixture/slice executables
-and Platform helper. It does **not** create the complete app/updater installer.
-Do not distribute a slice executable as a full installer.
+`build.ps1 -Publish` publishes the Setup executable and the Platform helper. It
+does **not** create the complete app/updater installer.
 
 ## Standalone app + updater installer
 

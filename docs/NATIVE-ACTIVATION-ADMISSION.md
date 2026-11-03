@@ -12,13 +12,6 @@ before any proposed machine acceptance test.
 
 ## Observations and authorization
 
-`SignedFixtureAdmissionResolver` accepts independently supplied pinned public
-keys for release, control and owner documents. The fixed
-`yahad-fixture-admission-v1` ECDSA test profile separates signature purposes and
-rejects unknown signer IDs, duplicate JSON fields and unknown properties. Test
-private signing keys exist only in memory. Synthetic data master keys remain
-inside private test directories, outside the source transfer.
-
 The resolver binds a supplied exact head digest and installation identity to the
 release, data selection, committed intent, expiring owner authorization, policy
 and update pin. A caller-supplied minimum epoch models an independent replay
@@ -92,8 +85,5 @@ service-host contract tests pass without SCM invocation or network listeners.
   current access. No SCM registration/start, machine ACL changes, network or
   certificate settings, VM setup or publication occurred here.
 
-Run `installer/test-admission.ps1` with explicit private SDK, Node and package
-cache paths. Retained JSON reports distinguish synthetic authorization and
-simulated launcher behavior from actual native file/lease/process observations.
 The source checkpoint is not family-ready or release-ready. The existing web
 family/WhatsApp onboarding remains outside this installer slice.

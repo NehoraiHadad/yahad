@@ -8,7 +8,7 @@ app-only updater package and call it the completed automatic-update profile.
 The source base includes installer commit
 `887648e4ddf10015820a809369492672b117a0e5`, merged at
 `060e241fe064e492dd8756a2172c0439bf288903`. Preserve those installer fixes.
-NativeSetupHost, receipt, Store and packaging remain owned by the installer task.
+The setup host, receipt, Store and packaging remain owned by the installer task.
 
 ## Consent and authorization
 

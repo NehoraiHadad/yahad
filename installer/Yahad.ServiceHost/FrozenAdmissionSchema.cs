@@ -19,9 +19,9 @@ internal static class FrozenAdmissionSchema
           fs.writeFileSync(process.argv[2],JSON.stringify({schema:version[0].version}),{flag:'wx',mode:0o600});
         }finally{db.close();}
         """;
-    internal static Task<int> ReadAsync(string node,string database,string privateTemporary,CancellationToken cancellation,JobProcessFaultInjection? fault=null)
+    internal static Task<int> ReadAsync(string node,string database,string privateTemporary,CancellationToken cancellation)
     {
         var output=Path.Combine(privateTemporary,"admission-schema-"+Guid.NewGuid().ToString("N")+".json");
-        return SqliteProbeProcess.ReadAsync(node,Script,database,privateTemporary,output,TimeSpan.FromSeconds(20),cancellation,fault);
+        return SqliteProbeProcess.ReadAsync(node,Script,database,privateTemporary,output,TimeSpan.FromSeconds(20),cancellation);
     }
 }

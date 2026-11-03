@@ -17,14 +17,12 @@ internal static class FailureDiagnosticTests
             Require(SetupElevation.Code(new IOException("UPDATE_SERVICE_QUIESCENCE_UNCONFIRMED"))=="UPDATE_SERVICE_QUIESCENCE_UNCONFIRMED");
             return Task.CompletedTask;
         });
-        await check("full installation and removal get measured absolute bounds; legacy and repair stay bounded",()=>
+        await check("full installation and removal get measured absolute bounds; non-full profile stays bounded",()=>
         {
             Require(SetupElevation.OperationTimeout("install",true)==TimeSpan.FromMinutes(48));
             Require(SetupElevation.OperationTimeout("uninstall",true)==TimeSpan.FromMinutes(96));
             foreach(var operation in new[]{"install","uninstall"})
                 Require(SetupElevation.OperationTimeout(operation,false)==TimeSpan.FromMinutes(12));
-            Require(SetupElevation.OperationTimeout("repair-uninstall-receipt",true)==TimeSpan.FromMinutes(12));
-            Require(SetupElevation.OperationTimeout("repair-uninstall-receipt",false)==TimeSpan.FromMinutes(12));
             var refused=false;try{SetupElevation.OperationTimeout("unknown",true);}catch(IOException){refused=true;}Require(refused);
             return Task.CompletedTask;
         });
@@ -60,23 +58,6 @@ internal static class FailureDiagnosticTests
             foreach(var changedSource in new byte[][]{[1,2,3],[1,2,3,4,9],[1,2,3,4,5,6]})
             {var refused=false;try{Verify([1,2],changedSource);}catch(IOException){refused=true;}Require(refused);}
             var canceled=false;try{Verify([1,2],source,new CancellationToken(true));}catch(OperationCanceledException){canceled=true;}Require(canceled);
-            return Task.CompletedTask;
-        });
-        await check("receipt refusal reports only fixed check names and keeps refusal code across authenticated result",()=>
-        {
-            foreach(var gate in Enum.GetValues<Yahad.Install.ReceiptRecoveryCheck>())
-            {
-                var cause=new Yahad.Install.ReceiptRecoveryRefusal(gate);
-                var error=new SetupOperationException(UninstallPhase.CompareRecoveryState,cause);
-                var result=SetupElevation.FailureResult(error,UninstallMode.DeleteData,true);
-                Require(!result.Ok&&result.DataPreserved&&result.Code=="UNINSTALL_RECEIPT_RECOVERY_REFUSED");
-                var bytes=JsonSerializer.SerializeToUtf8Bytes(new SetupWire(1,"result",null,result));
-                var copy=JsonSerializer.Deserialize<SetupWire>(bytes)!.Result!;
-                Require(copy.Failure is{Phase:"CompareRecoveryState"}&&copy.Failure.RecoveryCheck==gate.ToString()&&copy.Failure.Display().Contains(gate.ToString(),StringComparison.Ordinal));
-            }
-            var ordinary=SetupFailureDetail.From(new IOException("C:\\private-family\\connection.json"));
-            Require(ordinary.RecoveryCheck is null&&!JsonSerializer.Serialize(ordinary).Contains("private-family",StringComparison.Ordinal));
-            var unknownRefused=false;try{_=new Yahad.Install.ReceiptRecoveryRefusal((Yahad.Install.ReceiptRecoveryCheck)int.MaxValue);}catch(ArgumentOutOfRangeException){unknownRefused=true;}Require(unknownRefused);
             return Task.CompletedTask;
         });
         await check("metadata ACL changes on a synthetic owned file need no audit-policy privilege",()=>

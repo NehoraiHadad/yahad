@@ -112,7 +112,7 @@ internal sealed class LocalChildControlFactory:IChildControlFactory
     }
 }
 
-internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildControlFactory channels,JobProcessFaultInjection? fault=null):IPrivateAppLauncher
+internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildControlFactory channels):IPrivateAppLauncher
 {
     private static readonly HashSet<string> Allowed=new(StringComparer.Ordinal)
     {"HOST","PORT","APP_ORIGIN","APP_ADDITIONAL_ORIGINS","COOKIE_SECURE","DATA_DIR","MASTER_KEY_FILE","CONNECTOR","ALLOW_REAL_WHATSAPP","DIAGNOSTICS_ENABLED","SETUP_CAPABILITY_FILE","YAHAD_NATIVE_PROBATION_NONCE","YAHAD_NATIVE_PROBATION_ACTIVATION","YAHAD_NATIVE_PROBATION_OPERATION"};
@@ -142,8 +142,7 @@ internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildCont
             else if(spec.BeforeMutableStart is not null)throw new IOException("SERVICE_HANDOFF_MISSING");
             void Handoff(Microsoft.Win32.SafeHandles.SafeProcessHandle process,int pid)
             {spec.BeforeMutableStart?.Invoke();if(handoff is not null)handoff.Publish(spec.DataLease!,process,pid,spec.AppEnvironment["DATA_DIR"]);}
-            var job=fault is null?JobProcess.Start(image,spec.Arguments,spec.WorkingDirectory,environment,Handoff):
-                JobProcess.StartWithFault(image,spec.Arguments,spec.WorkingDirectory,environment,Handoff,fault);
+            var job=JobProcess.Start(image,spec.Arguments,spec.WorkingDirectory,environment,Handoff);
             return Task.FromResult<IContainedAppSession>(new Session(job,channel,pinned,handoff));
         }
         catch(JobStartQuiescenceUnconfirmedException failure)
@@ -151,7 +150,6 @@ internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildCont
             // Return ownership before reporting failed health. AppLifecycle can
             // now retry cleanup and preserve the grant/lease if still unknown.
             var failed=new Session(failure.OwnedProcess,channel!,pinned,handoff,failure);
-            if(fault is not null)fault.FailedStartSession=failed;
             return Task.FromResult<IContainedAppSession>(failed);
         }
         catch{handoff?.Dispose();channel?.Dispose();pinned.Dispose();throw;}

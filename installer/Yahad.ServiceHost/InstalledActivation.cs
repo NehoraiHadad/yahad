@@ -35,12 +35,12 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
     internal static string StateRoot=>Path.GetDirectoryName(WindowsInstallationReader.DescriptorPath)!;
     private readonly string root;private readonly IInstalledControlFiles control;private readonly IChildControlFactory channels;
     private readonly RuntimeConnectorProfile connectorProfile;private readonly FreshDataAuthorization? fresh;private readonly bool committerUnconfigured;private readonly InstalledStateFiles files;
-    private readonly Func<DateTimeOffset> clock;private readonly JobProcessFaultInjection? probeFault,startFault;
+    private readonly Func<DateTimeOffset> clock;
     private readonly Func<string,WindowsFileBoundary.DataLease>? commitInspectionLease;
     private readonly Func<VerifiedProcessSpec,IPrivateAppLauncher>? processFactory;
     internal InstalledActivationResolver():this(StateRoot,new AdminInstalledControlFiles(),new LocalChildControlFactory(),()=>DateTimeOffset.UtcNow){committerUnconfigured=true;}
-    internal InstalledActivationResolver(string root,IInstalledControlFiles control,IChildControlFactory channels,Func<DateTimeOffset> clock,JobProcessFaultInjection? probeFault=null,InstalledStateFiles? stateFiles=null,FreshDataAuthorization? fresh=null,JobProcessFaultInjection? startFault=null,RuntimeConnectorProfile connectorProfile=RuntimeConnectorProfile.Production,Func<string,WindowsFileBoundary.DataLease>? commitInspectionLease=null,Func<VerifiedProcessSpec,IPrivateAppLauncher>? processFactory=null)
-    {this.processFactory=processFactory;this.commitInspectionLease=commitInspectionLease;this.connectorProfile=connectorProfile;this.startFault=startFault;this.fresh=fresh;this.root=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(root));this.control=control;this.channels=channels;this.clock=clock;this.probeFault=probeFault;files=stateFiles??InstalledStateFiles.Private(root);}
+    internal InstalledActivationResolver(string root,IInstalledControlFiles control,IChildControlFactory channels,Func<DateTimeOffset> clock,InstalledStateFiles? stateFiles=null,FreshDataAuthorization? fresh=null,RuntimeConnectorProfile connectorProfile=RuntimeConnectorProfile.Production,Func<string,WindowsFileBoundary.DataLease>? commitInspectionLease=null,Func<VerifiedProcessSpec,IPrivateAppLauncher>? processFactory=null)
+    {this.processFactory=processFactory;this.commitInspectionLease=commitInspectionLease;this.connectorProfile=connectorProfile;this.fresh=fresh;this.root=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(root));this.control=control;this.channels=channels;this.clock=clock;files=stateFiles??InstalledStateFiles.Private(root);}
     public Task<AuthorizedServiceStart> ResolveAsync(InstallationBinding binding,CancellationToken cancellation)=>ResolveCore(binding,false,null,cancellation);
     internal Task<AuthorizedServiceStart> InspectCommitCandidateAsync(InstallationBinding binding,string? pendingDigest,CancellationToken cancellation)
         =>ResolveCore(binding,true,pendingDigest,cancellation);
@@ -110,7 +110,7 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
             else if(files.IsSingleService&&new[]{"app.sqlite-wal","app.sqlite-shm","app.sqlite-journal"}.Any(n=>Path.Exists(Path.Combine(reservation.Data,n))))
                 _=await FirstInstallWal.ReconcileAsync(probe,Path.Combine(reservation.Data,"app.sqlite"),probeTemporary,cancellation);
             reservation.CheckWal();reservation.PinData(initializing);
-            var schema=initializing?reservation.PayloadSchema:await FrozenAdmissionSchema.ReadAsync(probe,Path.Combine(reservation.Data,"app.sqlite"),probeTemporary,cancellation,probeFault);
+            var schema=initializing?reservation.PayloadSchema:await FrozenAdmissionSchema.ReadAsync(probe,Path.Combine(reservation.Data,"app.sqlite"),probeTemporary,cancellation);
             if(schema<head.MinimumSchema||schema>head.MaximumSchema||schema>reservation.PayloadSchema||head.MaximumSchema!=reservation.PayloadSchema)throw new IOException("INSTALLED_SCHEMA_INCOMPATIBLE");
             if(head.Recovery is { } recovered)
             {
@@ -157,7 +157,7 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
                 environment["APP_ADDITIONAL_ORIGINS"]=$"http://127.0.0.1:{web.Port}";
             var spec=new VerifiedProcessSpec(node,reservation.NodeDigest,["server/main.mjs"],Path.Combine(payload,"app"),temporary,
                 Path.Combine(payload,"runtime","ffmpeg","ffmpeg.exe"),environment,reservation.Lease,reservation.BeginMutableStart,files,reservation.ObserveHealthy);
-            var launcher=processFactory is null?new ServiceProcessLauncher(spec,channels,startFault):processFactory(spec)??throw new IOException("INSTALLED_PROCESS_FACTORY_NULL");
+            var launcher=processFactory is null?new ServiceProcessLauncher(spec,channels):processFactory(spec)??throw new IOException("INSTALLED_PROCESS_FACTORY_NULL");
             return new(new(head.ReleaseDigest),launcher,reservation,reservation);
         }
         catch(ProbeOwnershipException owned){owned.Retain(reservation);throw;}

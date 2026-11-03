@@ -37,16 +37,6 @@ internal static class LanIntegrationTests
             Refuse(()=>NativeNetworkProfile.RequirePrivateCategory(NativeNetworkProfile.RequireConsistentCategory([0,0])));
             return Task.CompletedTask;
         });
-        await check("LAN configuration permits never-started owned service but refuses active, failed or ambiguous stop",()=>
-        {
-            NativeServiceInstall.RequireConfigurationStop(1,0,0,0);
-            NativeServiceInstall.RequireConfigurationStop(1,1077,0,0);
-            foreach(var state in new uint[]{0,2,3,4,5,6,7})Refuse(()=>NativeServiceInstall.RequireConfigurationStop(state,1077,0,0));
-            foreach(var error in new uint[]{5,1066,1067,1072})Refuse(()=>NativeServiceInstall.RequireConfigurationStop(1,error,0,0));
-            Refuse(()=>NativeServiceInstall.RequireConfigurationStop(1,1077,1,0));
-            Refuse(()=>NativeServiceInstall.RequireConfigurationStop(1,1077,0,123));
-            return Task.CompletedTask;
-        });
         await check("new LAN service configuration accepts never-started while post-start cleanup guard stays strict",()=>
         {
             LanServiceRegistration.RequireConfigurationStop(1,0,1077,0);
