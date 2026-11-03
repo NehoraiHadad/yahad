@@ -18,7 +18,7 @@ internal sealed record LanRemovalIntent(int Format,UninstallMode Mode,LanOwnedSt
 
 // Production adapter, entered only from the elevated in-process Setup operation.
 // Nothing in a plan, test, command line or a web request invokes this class.
-internal sealed class NativeLanInstall(InstallerState application,FullInstallFiles? fullFiles=null,Func<string,string>? retainedBinarySource=null,Func<string,byte[]>? retainedPayload=null)
+internal sealed class NativeLanInstall(InstallerState application)
 {
     private static string StateFile=>Path.Combine(LanProxyPaths.State,"owner.json");
     private static string JournalFile=>Path.Combine(LanProxyPaths.State,"web-change.json");
@@ -29,8 +29,6 @@ internal sealed class NativeLanInstall(InstallerState application,FullInstallFil
     private static string Hash(byte[] bytes)=>Convert.ToHexStringLower(SHA256.HashData(bytes));
     private void Record(string path,byte[] bytes)
     {
-        if(fullFiles is not null&&Path.GetFullPath(path).StartsWith(InstallLocations.State+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))
-        {fullFiles.Publish(Path.GetRelativePath(InstallLocations.State,path),bytes,true);return;}
         if(File.Exists(path))NativeInstallFiles.ReplaceOwned(path,bytes);else NativeInstallFiles.WriteNew(path,bytes);
     }
     private bool PreparationMatches(LanSetupRequest request,bool requireSameSelection)
@@ -82,9 +80,11 @@ internal sealed class NativeLanInstall(InstallerState application,FullInstallFil
         [new(state.AdapterId,"selected",state.Address)],state.AdapterId,state.Address,state.AppPort,
         LanProxyPaths.Caddy,LanProxyPaths.Data,LanProxyPaths.PublicJoin,state.HttpHelp);
     private void Save(LanOwnedState state)=>Record(StateFile,Json(state));
-    private byte[] ReadApp(string name)=>fullFiles is null?NativeInstallFiles.ReadOwned(Path.Combine(InstallLocations.State,name),application.ServiceSid):fullFiles.Read(name);
+    // The launch file is application-read-only: written whole with its own
+    // protected descriptor, never inheriting from the state root.
+    private byte[] ReadApp(string name)=>NativeInstallFiles.ReadOwned(Path.Combine(InstallLocations.State,name),application.ServiceSid);
     private void WriteAppSnapshot(LanWebSnapshot snapshot)
-    {var parts=LanWebConfiguration.Parts(snapshot);for(var i=0;i<parts.Length;i++)if(fullFiles is null)NativeInstallFiles.ReplaceOwned(Path.Combine(InstallLocations.State,LanWebConfiguration.Names[i]),parts[i]);else fullFiles.Publish(LanWebConfiguration.Names[i],parts[i],true);}
+    {var parts=LanWebConfiguration.Parts(snapshot);for(var i=0;i<parts.Length;i++)NativeInstallFiles.PublishProtectedFile(Path.Combine(InstallLocations.State,LanWebConfiguration.Names[i]),parts[i],NativeInstallFiles.Descriptor(application.ServiceSid));}
     private void RecoverWebJournal()
     {
         if(!File.Exists(JournalFile))return;
@@ -92,37 +92,8 @@ internal sealed class NativeLanInstall(InstallerState application,FullInstallFil
         LanWebConfiguration.RequireRecoverable(journal,application,ReadApp);WriteAppSnapshot(journal.Before);
         file.Dispose();File.Delete(JournalFile);
     }
-    internal static InstallerState? PendingFullApplication(FullInstallState installation,FullInstallFiles files)
-    {
-        if(!File.Exists(JournalFile))return null;
-        using var pin=WindowsFileBoundary.OpenInstallerMetadata(JournalFile);var journal=NativeJson.Read<LanWebJournal>(pin.Small(131072));
-        var head=NativeJson.Read<InstalledActivation>(journal.Before.Activation);
-        var application=FullApplication(installation,head);
-        LanWebConfiguration.RequireRecoverable(journal,application,name=>files.Read(name));return application;
-    }
-    internal static void ClearFullInstallerPartials(FullInstallState installation,FullInstallFiles files)
-    {
-        if(PendingFullApplication(installation,files) is null)return;
-        using var journalFile=WindowsFileBoundary.OpenInstallerMetadata(JournalFile);var journal=NativeJson.Read<LanWebJournal>(journalFile.Small(131072));
-        foreach(var name in LanWebConfiguration.Names)
-        {
-            var path=files.PathOf(name);var prefix=name+".partial-";var candidates=Directory.EnumerateFileSystemEntries(InstallLocations.State,prefix+"*").Take(33).ToArray();if(candidates.Length>32)throw new IOException("LAN_JOURNAL_CHANGED");
-            foreach(var candidate in candidates)
-            {
-                var suffix=Path.GetFileName(candidate)[prefix.Length..];if(!Guid.TryParseExact(suffix,"N",out var id)||id.ToString("N")!=suffix)throw new IOException("LAN_JOURNAL_CHANGED");
-                using(var held=WindowsFileBoundary.OpenInstallerRoleRead(candidate,files.Roles,files.Role(path),administrativeOwner:true))LanWebConfiguration.RequireInstallerPartial(journal,name,held.Small(131072));
-                WindowsFileBoundary.DeleteInstallerRoleMember(candidate,false,files.Roles,files.Role(path),administrativeOwner:true);
-            }
-        }
-    }
-    internal static InstallerState FullApplication(FullInstallState installation,InstalledActivation head)
-    {
-        if(head.InstallationId!=installation.InstallationId||head.MinimumSchema!=head.MaximumSchema)throw new IOException("LAN_APP_CONFIGURATION_CHANGED");
-        InstalledActivationResolver.Id(head.DataId);InstalledActivationResolver.Digest(head.ReleaseDigest);
-        return new(1,installation.InstallationId,head.DataId,installation.PackageDigest,head.ReleaseDigest,installation.SourceCommit,installation.OwnerSid,installation.Port,"committed",installation.Files,installation.RuntimeSid!,installation.SetupSha256,head.MaximumSchema,head.Recovery);
-    }
-    // Caller retains the full-profile serial owner and has observed/fenced every
-    // Runtime/Authority/helper before entering this bounded old/new recovery.
+    // The caller has stopped the Runtime service before this bounded old/new
+    // recovery of the launch file.
     internal void RecoverConfigurationOnly()=>RecoverWebJournal();
     private void ChangeOrigin(string origin)
     {
@@ -140,8 +111,7 @@ internal sealed class NativeLanInstall(InstallerState application,FullInstallFil
     {
         var member=application.Files.SingleOrDefault(f=>f.Path=="payload/"+relative)??throw new IOException("LAN_PAYLOAD_NOT_SUPPORTED");
         if(member.Size>bound)throw new IOException("LAN_PAYLOAD_NOT_SUPPORTED");
-        if(retainedPayload is not null){var retained=retainedPayload(relative);if(retained.Length!=member.Size||retained.Length>bound||Hash(retained)!=member.Sha256)throw new IOException("LAN_PAYLOAD_CHANGED");return retained;}
-        var path=Path.Combine(InstallLocations.Binaries,"payloads",application.PayloadDigest,relative.Replace('/',Path.DirectorySeparatorChar));
+        var path=Path.Combine(InstallLocations.VersionRoot(application.Version),"payload",relative.Replace('/',Path.DirectorySeparatorChar));
         SafeDirectory.NoReparseAncestors(path);using var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read);
         if(file.Length!=member.Size)throw new IOException("LAN_PAYLOAD_CHANGED");using var memory=new MemoryStream();file.CopyTo(memory);var bytes=memory.ToArray();
         if(Hash(bytes)!=member.Sha256)throw new IOException("LAN_PAYLOAD_CHANGED");return bytes;
@@ -154,13 +124,9 @@ internal sealed class NativeLanInstall(InstallerState application,FullInstallFil
             marker.GetProperty("publicHelpTemplate").GetString()!="deploy/lan-help.html")throw new IOException("LAN_PAYLOAD_NOT_SUPPORTED");
         return new UTF8Encoding(false,true).GetString(PayloadBytes("app/deploy/lan-help.html"));
     }
-    internal static LanOwnedFile[] HostBinaryMembers(InstallMember[] files,bool fullSystem)
-    {
-        var prefix=fullSystem?"bootstrap/servicehost/":"host/";
-        return files.Where(f=>f.Path.StartsWith(prefix,StringComparison.Ordinal))
-            .Select(f=>new LanOwnedFile("host/"+f.Path[prefix.Length..],f.Size,f.Sha256)).ToArray();
-    }
-    private LanOwnedFile[] ExpectedBinaries()=>HostBinaryMembers(application.Files,fullFiles is not null).Append(CaddyMember()).ToArray();
+    internal static LanOwnedFile[] HostBinaryMembers(InstallMember[] files)=>
+        files.Where(f=>f.Path.StartsWith("host/",StringComparison.Ordinal)).Select(f=>new LanOwnedFile(f.Path,f.Size,f.Sha256)).ToArray();
+    private LanOwnedFile[] ExpectedBinaries()=>HostBinaryMembers(application.Files).Append(CaddyMember()).ToArray();
     private LanOwnedFile CaddyMember()
     {
         var member=application.Files.SingleOrDefault(f=>f.Path=="payload/runtime/caddy/caddy.exe")??throw new IOException("LAN_PAYLOAD_NOT_SUPPORTED");
@@ -174,8 +140,8 @@ internal sealed class NativeLanInstall(InstallerState application,FullInstallFil
             var target=Path.Combine(LanProxyPaths.Binaries,member.Path.Replace('/',Path.DirectorySeparatorChar));
             NativeInstallFiles.EnsureStageDirectory(LanProxyPaths.Binaries,Path.GetDirectoryName(target)!,descriptor);
             if(File.Exists(target)){VerifyBinary(target,member);continue;}
-            var source=retainedBinarySource is not null?retainedBinarySource(member.Path):member.Path=="caddy.exe"?Path.Combine(InstallLocations.Binaries,"payloads",application.PayloadDigest,"runtime","caddy","caddy.exe"):
-                Path.Combine(InstallLocations.Binaries,member.Path.Replace('/',Path.DirectorySeparatorChar));
+            var version=InstallLocations.VersionRoot(application.Version);
+            var source=member.Path=="caddy.exe"?Path.Combine(version,"payload","runtime","caddy","caddy.exe"):Path.Combine(version,member.Path.Replace('/',Path.DirectorySeparatorChar));
             SafeDirectory.NoReparseAncestors(source);using var input=new FileStream(source,FileMode.Open,FileAccess.Read,FileShare.Read);
             if(input.Length!=member.Size||Convert.ToHexStringLower(SHA256.HashData(input))!=member.Sha256)throw new IOException("LAN_PAYLOAD_CHANGED");
             input.Position=0;using(var output=NativeInstallFiles.CreateNewFile(target)){input.CopyTo(output);output.Flush(true);}VerifyBinary(target,member);

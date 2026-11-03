@@ -128,41 +128,6 @@ internal static class LanIntegrationTests
         });
 
         var state = FixtureState(); var before = FixtureSnapshot(state);
-        await check("verified payload schema accepts supported numeric revisions and refuses missing or malformed values", () =>
-        {
-            foreach (var schema in new[] { 1, 5, 6, 64 })
-                Require(PayloadSchema.Read(NativeJson.Read<JsonElement>(Json(new { databaseSchema = schema }))) == schema);
-            foreach (var malformed in new[] { "{}", "{\"databaseSchema\":null}", "{\"databaseSchema\":\"6\"}",
-                "{\"databaseSchema\":true}", "{\"databaseSchema\":false}", "{\"databaseSchema\":0}",
-                "{\"databaseSchema\":65}", "{\"databaseSchema\":5.5}" })
-                Refuse(() => PayloadSchema.Read(NativeJson.Read<JsonElement>(Encoding.UTF8.GetBytes(malformed))));
-            return Task.CompletedTask;
-        });
-        await check("legacy installer receipt without PayloadSchema retains schema five without changing other fields", () =>
-        {
-            var schemaSix = state with { PayloadSchema = 6 };
-            var legacyFields = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(Json(schemaSix))!;
-            Require(legacyFields.Remove(nameof(InstallerState.PayloadSchema)));
-            var legacy = NativeJson.Read<InstallerState>(Json(legacyFields));
-            Require(legacy.PayloadSchema == 5);
-            Require(Json(legacy).SequenceEqual(Json(schemaSix with { PayloadSchema = 5 })));
-            return Task.CompletedTask;
-        });
-        await check("schema six LAN origin transaction preserves six and refuses a silent downgrade to five", () =>
-        {
-            var schemaSix = state with { PayloadSchema = 6 };
-            var snapshot = FixtureSnapshot(schemaSix);
-            LanWebConfiguration.Require(snapshot, schemaSix);
-            var enabled = LanWebConfiguration.WithOrigin(snapshot, schemaSix, "https://192.168.4.5");
-            var activation = NativeJson.Read<InstalledActivation>(enabled.Activation);
-            Require(activation.MinimumSchema == 6 && activation.MaximumSchema == 6);
-            var disabled = LanWebConfiguration.WithOrigin(enabled, schemaSix, "http://127.0.0.1:" + schemaSix.Port);
-            Require(NativeJson.Read<InstalledActivation>(disabled.Activation).MinimumSchema == 6);
-            Refuse(() => LanWebConfiguration.Require(enabled, schemaSix with { PayloadSchema = 5 }));
-            Refuse(() => LanWebConfiguration.WithOrigin(snapshot, schemaSix with { PayloadSchema = 5 }, "https://192.168.4.5"));
-            Refuse(() => LanWebConfiguration.Require(FixtureSnapshot(schemaSix with { PayloadSchema = 5 }), schemaSix));
-            return Task.CompletedTask;
-        });
         await check("LAN preparation survives the service-created owner-not-yet-saved checkpoint without changing consent", () =>
         {
             var request = Enable();
@@ -208,19 +173,12 @@ internal static class LanIntegrationTests
             }
             return Task.CompletedTask;
         });
-        await check("LAN origin transaction preserves data, schema, key, policy and pin anchors", () =>
+        await check("LAN origin transaction rewrites only the launch origin and restores the exact loopback file", () =>
         {
             var after = LanWebConfiguration.WithOrigin(before, state, "https://192.168.4.5");
-            var previous = NativeJson.Read<InstalledActivation>(before.Activation);
-            var next = NativeJson.Read<InstalledActivation>(after.Activation);
-            Require(next with { WebDigest = previous.WebDigest } == previous);
-            Require(next.MasterKeyDigest == previous.MasterKeyDigest);
-            Require(NativeJson.Read<InstalledWeb>(after.Web) == new InstalledWeb(1, state.InstallationId, "https://192.168.4.5", state.Port));
-            var epoch = NativeJson.Read<InstalledEpoch>(after.Epoch); var boot = NativeJson.Read<JsonElement>(after.Bootstrap);
-            Require(epoch.ActivationDigest == Hash(after.Activation) && epoch.Epoch == previous.Epoch);
-            Require(boot.GetProperty("activationReceiptDigest").GetString() == Hash(after.Activation));
+            Require(InstalledLaunch.Parse(after.Installed) == new InstalledLaunchConfiguration(1, state.InstallationId, state.DataId, state.Port, "https://192.168.4.5"));
             var restored = LanWebConfiguration.WithOrigin(after, state, "http://127.0.0.1:" + state.Port);
-            Require(NativeJson.Read<InstalledActivation>(restored.Activation) == previous);
+            Require(restored.Installed.SequenceEqual(before.Installed));
             return Task.CompletedTask;
         });
         await check("LAN origin transaction refuses public, HTTP LAN, noncanonical and credential-bearing browser URLs", () =>
@@ -229,69 +187,38 @@ internal static class LanIntegrationTests
                 Refuse(() => LanWebConfiguration.WithOrigin(before, state, url));
             return Task.CompletedTask;
         });
-        await check("LAN journal validates both snapshots and every current control part before recovery", () =>
+        await check("LAN journal validates both snapshots and the current launch file before recovery", () =>
         {
             var after = LanWebConfiguration.WithOrigin(before, state, "https://192.168.4.5");
             var journal = new LanWebJournal(1, state.InstallationId, before, after);
-            var first = LanWebConfiguration.Parts(before); var second = LanWebConfiguration.Parts(after);
-            for (var mask = 0; mask < 16; mask++)
+            foreach (var current in new[] { before.Installed, after.Installed })
             {
                 var read = new List<string>();
-                LanWebConfiguration.RequireRecoverable(journal, state, name =>
-                { read.Add(name); var index = Array.IndexOf(LanWebConfiguration.Names, name); return (mask & (1 << index)) == 0 ? first[index] : second[index]; });
-                Require(read.SequenceEqual(LanWebConfiguration.Names));
+                LanWebConfiguration.RequireRecoverable(journal, state, name => { read.Add(name); return current; });
+                Require(read.SequenceEqual(LanWebConfiguration.Names) && LanWebConfiguration.Names.SequenceEqual(new[] { InstalledLaunch.FileName }));
             }
-            foreach (var changed in LanWebConfiguration.Names)
-                Refuse(() => LanWebConfiguration.RequireRecoverable(journal, state, name => name == changed ? Encoding.UTF8.GetBytes("changed current control") : first[Array.IndexOf(LanWebConfiguration.Names, name)]));
+            Refuse(() => LanWebConfiguration.RequireRecoverable(journal, state, _ => Encoding.UTF8.GetBytes("changed current control")));
             Refuse(() => LanWebConfiguration.RequireRecoverable(journal with { Format = 2 }, state, _ => throw new Exception("read before journal validation")));
             Refuse(() => LanWebConfiguration.RequireRecoverable(journal with { InstallationId = new string('f', 32) }, state, _ => throw new Exception("read before identity validation")));
-            var foreign = FixtureState() with { InstallationId = new string('f', 32) };
+            var foreign = FixtureState();
             Refuse(() => LanWebConfiguration.RequireRecoverable(journal with { After = FixtureSnapshot(foreign) }, state, _ => throw new Exception("read before snapshot validation")));
             return Task.CompletedTask;
         });
-        await check("LAN snapshot validation rejects a changed anchor or foreign data identity", () =>
+        await check("LAN snapshot validation rejects a malformed launch file or foreign data identity", () =>
         {
-            foreach (var part in Enumerable.Range(0, 4))
-            {
-                var pieces = LanWebConfiguration.Parts(before).Select(p => (byte[])p.Clone()).ToArray(); pieces[part] = Encoding.UTF8.GetBytes("{}");
-                try { LanWebConfiguration.Require(new(pieces[0], pieces[1], pieces[2], pieces[3]), state); }
-                catch (Exception failure) when (failure is IOException or JsonException or KeyNotFoundException) { continue; }
-                throw new Exception("changed anchor admitted");
-            }
-            Refuse(() => LanWebConfiguration.Require(before, state with { DataId = new string('e', 32) }));
-            Refuse(() => LanWebConfiguration.Require(before, state with { PayloadDigest = new string('f', 64) }));
-            return Task.CompletedTask;
-        });
-        await check("LAN snapshot rejects foreign control formats and bootstrap schema or service even with matching hashes", () =>
-        {
-            var activation = NativeJson.Read<InstalledActivation>(before.Activation);
-            var epoch = NativeJson.Read<InstalledEpoch>(before.Epoch);
-            LanWebSnapshot Reanchor(InstalledActivation changed)
-            {
-                var bytes = Json(changed);
-                return before with { Activation = bytes, Epoch = Json(epoch with { Epoch = changed.Epoch, ActivationDigest = Hash(bytes) }),
-                    Bootstrap = Json(new { schema = 1, service = InstallLocations.ServiceName, installationId = state.InstallationId, activationReceiptDigest = Hash(bytes) }) };
-            }
-            foreach (var changed in new[] { activation with { Format = 2 }, activation with { Epoch = 0 }, activation with { MinimumSchema = 4 }, activation with { MaximumSchema = 6 } })
-                Refuse(() => LanWebConfiguration.Require(Reanchor(changed), state));
-            Refuse(() => LanWebConfiguration.Require(before with { Epoch = Json(epoch with { Format = 2 }) }, state));
-            Refuse(() => LanWebConfiguration.Require(before with { Bootstrap = Json(new { schema = 2, service = InstallLocations.ServiceName, installationId = state.InstallationId, activationReceiptDigest = Hash(before.Activation) }) }, state));
-            Refuse(() => LanWebConfiguration.Require(before with { Bootstrap = Json(new { schema = 1, service = "Foreign.Service", installationId = state.InstallationId, activationReceiptDigest = Hash(before.Activation) }) }, state));
+            foreach (var bytes in new[] { Encoding.UTF8.GetBytes("{}"), Json(new { Format = 2, state.InstallationId, state.DataId, state.Port, Origin = "http://127.0.0.1:" + state.Port }), Array.Empty<byte>() })
+                Refuse(() => LanWebConfiguration.Require(new(bytes), state));
+            Refuse(() => LanWebConfiguration.Require(before, state with { DataId = Guid.NewGuid().ToString("N") }));
+            Refuse(() => LanWebConfiguration.Require(before, state with { InstallationId = Guid.NewGuid().ToString("N") }));
+            Refuse(() => LanWebConfiguration.Require(before, state with { Port = state.Port + 1 }));
             return Task.CompletedTask;
         });
         await check("LAN native UI renders synthetic RTL choices, explicit consent and preserved uninstall options without showing", RenderUiAsync);
     }
 
-    private static InstallerState FixtureState() => new(1, new string('a', 32), new string('b', 32), new string('c', 64),
-        new string('d', 64), new string('e', 40), Owner.Sid, 47123, "committed", [], "S-1-5-80-1-2-3-4-5", Owner.ImageSha256);
-    private static LanWebSnapshot FixtureSnapshot(InstallerState state)
-    {
-        var web = Json(new InstalledWeb(1, state.InstallationId, "http://127.0.0.1:" + state.Port, state.Port));
-        var activation = Json(new InstalledActivation(1, state.InstallationId, 7, state.PayloadDigest, state.DataId,
-            state.PayloadSchema, state.PayloadSchema, new string('1', 64), new string('2', 64), new string('3', 64), Hash(web), "committed", null));
-        return new(web, activation, Json(new InstalledEpoch(1, state.InstallationId, 7, Hash(activation))),
-            Json(new { schema = 1, service = InstallLocations.ServiceName, installationId = state.InstallationId, activationReceiptDigest = Hash(activation) }));
-    }
+    private static InstallerState FixtureState() => FullInstallerIntegrationTests.State();
+    private static LanWebSnapshot FixtureSnapshot(InstallerState state) =>
+        new(InstalledLaunch.Encode(new(1, state.InstallationId, state.DataId, state.Port, "http://127.0.0.1:" + state.Port)));
 
     private static Task RenderUiAsync()
     {

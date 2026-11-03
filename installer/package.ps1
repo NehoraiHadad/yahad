@@ -72,7 +72,7 @@ try {
     RunStep 'web' $nodeExe @($npmCli,'run','build')
     $restore = '-p:RestoreConfigFile=' + (Join-Path $PSScriptRoot 'NuGet.Config')
     $common = @('-c','Release','-r','win-x64','--self-contained','true','-p:RuntimeFrameworkVersion=10.0.14','-p:UseSharedCompilation=false','-p:DebugType=None','-p:DebugSymbols=false',$restore,'-m:1')
-    foreach ($project in @('Yahad.Platform','Yahad.Authority','Yahad.ServiceHost')) {
+    foreach ($project in @('Yahad.Platform','Yahad.ServiceHost')) {
         $destination = if ($project -eq 'Yahad.Platform') { $platform } else { Join-Path $output $project }
         RunStep $project $dotnetExe (@('publish',"installer/$project/$project.csproj") + $common + @('-o',$destination))
     }
@@ -81,7 +81,7 @@ try {
     $appZip = Join-Path $app "yahad-app-native-$version.zip"
     RunStep 'app-payload' $pythonExe @('-m','installer.windows.first_install_package','payload','--repo',$repo,'--core',"$app/core",'--vendors',"$app/vendors",'--full',"$app/full",'--node',$nodeRoot,'--dotnet',$dotnetRoot,'--npm-cache',$npmRoot,'--verified-vendor-source',$vendorRoot,'--archive',$appZip)
     $system = Join-Path $output 'system'
-    RunStep 'system-package' $pythonExe @('-m','installer.windows.full_system_package','--repo',$repo,'--payload-zip',$appZip,'--authority',"$output/Yahad.Authority",'--runtime-host',"$output/Yahad.ServiceHost",'--helper',"$output/Yahad.Authority",'--node-root',$nodeRoot,'--output',$system)
+    RunStep 'system-package' $pythonExe @('-m','installer.windows.full_system_package','--repo',$repo,'--payload-zip',$appZip,'--runtime-host',"$output/Yahad.ServiceHost",'--output',$system)
     $setup = Join-Path $output 'setup'
     RunStep 'setup-publish' $dotnetExe (@('publish','installer/Yahad.Setup/Yahad.Setup.csproj') + $common + @('-p:PublishSingleFile=true','-p:IncludeNativeLibrariesForSelfExtract=true',"-p:SetupPayloadDirectory=$system",'-o',$setup))
     Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination (Join-Path $setup 'LICENSE')

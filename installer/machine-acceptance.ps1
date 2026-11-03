@@ -2,7 +2,7 @@
 # person or administrator observes (Setup results, services, HTTP answers, the
 # account they created), so it keeps gating when the mechanism behind it changes:
 #   install -> ready -> create the first family over the app's own HTTP API ->
-#   restart the services and time it -> uninstall keeping data -> reinstall ->
+#   restart the service and time it -> uninstall keeping data -> reinstall ->
 #   the same account signs in -> uninstall deleting data -> nothing remains.
 # Changes services and machine folders, so it runs only on a disposable
 # administrator machine (CI), never a family PC. Diagnostics and summary.json
@@ -26,11 +26,13 @@ $failedPhase = $null
 $programData = Join-Path $env:ProgramData 'Yahad.FirstInstall'
 $programFiles = Join-Path $env:ProgramFiles 'Yahad.FirstInstall'
 $runtime = 'Yahad.Acceptance'
-$authority = 'Yahad.Acceptance.Authority'
-# Present in today's full profile; the planned single-updater design changes
-# this list, and that change must be made here deliberately.
-$installedServices = @($runtime, $authority, 'Yahad.Acceptance.Authority.RecoveryA', 'Yahad.Acceptance.Authority.RecoveryB')
-$runningServices = @($runtime, $authority)
+# The collapse to the single Runtime service is deliberate: an Updater service
+# is added in a later step, and that change must be made here deliberately.
+$installedServices = @($runtime)
+$runningServices = @($runtime)
+# Layout the single-service installer no longer creates; each must stay absent.
+$removedProgramFilesEntries = @('payloads', 'bootstrap', 'system-slots', '.authority', 'intake')
+$removedProgramDataEntries = @('update-authority.json', 'activation.json', 'epoch.json', 'web.json', 'bootstrap.json')
 $account = $null
 $origin = $null
 $startSeconds = $null
@@ -71,6 +73,31 @@ function RequireInstalledAndReady($Result) {
     $response = Invoke-WebRequest -Uri "$origin/health/ready" -UseBasicParsing -TimeoutSec 30
     if ($response.StatusCode -ne 200) { throw "health/ready returned $($response.StatusCode)" }
 }
+# The Runtime is the only service: automatic start, restarted by the SCM after a
+# failure (5s/30s/120s, counter reset after a day, also on non-crash exits), and
+# launched from its own versioned host folder. Read from the SCM registry keys
+# so the check does not depend on the display language of sc.exe.
+function RequireServiceConfiguration {
+    $details = Get-CimInstance -ClassName Win32_Service -Filter "Name='$runtime'"
+    if (!$details) { throw "$runtime is not registered with the SCM" }
+    if ($details.StartMode -ne 'Auto') { throw "$runtime start mode is $($details.StartMode), expected Auto" }
+    if ($details.StartName -ne "NT SERVICE\$runtime") { throw "$runtime runs as $($details.StartName), expected NT SERVICE\$runtime" }
+    $expectedImage = '^"' + [regex]::Escape($programFiles) + '\\versions\\\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\\host\\Yahad\.ServiceHost\.exe" --service$'
+    if ($details.PathName -notmatch $expectedImage) { throw "$runtime ImagePath does not match versions\<version>\host\Yahad.ServiceHost.exe --service: $($details.PathName)" }
+    $key = Get-ItemProperty -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Services\$runtime"
+    $bytes = [byte[]]$key.FailureActions
+    if (!$bytes -or $bytes.Length -lt 20) { throw "$runtime has no SCM failure actions" }
+    $reset = [BitConverter]::ToUInt32($bytes, 0)
+    $count = [BitConverter]::ToUInt32($bytes, 12)
+    $offset = [BitConverter]::ToUInt32($bytes, 16)
+    if ($reset -ne 86400) { throw "$runtime failure reset period is $reset, expected 86400" }
+    if ($count -ne 3 -or $bytes.Length -lt $offset + 8 * $count) { throw "$runtime has $count failure actions, expected 3" }
+    $actual = for ($i = 0; $i -lt $count; $i++) { '{0}:{1}' -f [BitConverter]::ToUInt32($bytes, $offset + 8 * $i), [BitConverter]::ToUInt32($bytes, $offset + 8 * $i + 4) }
+    if (($actual -join ',') -ne '1:5000,1:30000,1:120000') { throw "$runtime failure actions are $($actual -join ','), expected restart 5s/30s/120s" }
+    if ($key.FailureActionsOnNonCrashFailures -ne 1) { throw "$runtime FailureActionsOnNonCrashFailures is $($key.FailureActionsOnNonCrashFailures), expected 1" }
+    foreach ($entry in $removedProgramFilesEntries) { if (Test-Path -LiteralPath (Join-Path $programFiles $entry)) { throw "$entry exists under $programFiles; the single-service layout has none" } }
+    foreach ($entry in $removedProgramDataEntries) { if (Test-Path -LiteralPath (Join-Path $programData $entry)) { throw "$entry exists under $programData; the single-service layout has none" } }
+}
 function SetupState { (Invoke-RestMethod -Uri "$origin/api/setup/status" -TimeoutSec 30).state }
 function Json($Value) { $Value | ConvertTo-Json -Compress }
 function RequireSignedInAccount($Session) {
@@ -90,8 +117,6 @@ function Collect {
     Get-WinEvent -FilterHashtable @{ LogName='System'; ProviderName='Service Control Manager'; StartTime=$since } -ErrorAction SilentlyContinue |
         Where-Object { $_.Message -like '*Yahad*' } | ForEach-Object { '{0:o} {1} {2}' -f $_.TimeCreated, $_.Id, ($_.Message -replace "`r?`n", ' ') } |
         Set-Content -Encoding utf8NoBOM (Join-Path $out 'scm-events.txt')
-    Get-ChildItem -LiteralPath $env:ProgramFiles -Force -Filter 'Yahad.FirstInstall.*.json' -ErrorAction SilentlyContinue |
-        ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $out $_.Name) }
 }
 
 try {
@@ -105,6 +130,7 @@ try {
     Phase 'install' { $script:install = RunSetup @('--quiet-install', '--updates', 'notify') (Join-Path $out 'install-result.json') @('--setup-link', 'stdout') }
     Phase 'ready' {
         RequireInstalledAndReady $install.Result
+        RequireServiceConfiguration
         if ((SetupState) -ne 'ready') { throw 'Fresh install does not offer first-family setup' }
     }
     $familyId = $null
@@ -124,15 +150,13 @@ try {
         if ((SetupState) -ne 'complete') { throw 'Setup still open after the family was created' }
     }
     Phase 'restart' {
-        # What a reboot does: the Authority (automatic start) admits and starts
-        # the Runtime (demand start); the Runtime is never admitted on its own,
-        # and stopping the Authority stops the Runtime it started. Measured
-        # from the start request to the first 200 from /health/ready, bounded
-        # by the Runtime's own five-minute admission budget.
-        Stop-Service -Name $authority, $runtime
+        # What the SCM does for a stopped service: stop the Runtime, then start it
+        # again. Measured from the start request to the first 200 from
+        # /health/ready, bounded by the Runtime's own five-minute admission budget.
+        Stop-Service -Name $runtime
         foreach ($name in $runningServices) { $service = Get-Service -Name $name; if ($service.Status -ne 'Stopped') { throw "$name is $($service.Status) after stop" } }
         $timer = [Diagnostics.Stopwatch]::StartNew()
-        Start-Service -Name $authority
+        Start-Service -Name $runtime
         $deadline = [TimeSpan]::FromMinutes(5)
         while ($true) {
             try { if ((Invoke-WebRequest -Uri "$origin/health/ready" -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200) { break } } catch { }
@@ -157,6 +181,7 @@ try {
     Phase 'reinstall' { $script:reinstall = RunSetup @('--quiet-install', '--updates', 'notify') (Join-Path $out 'reinstall-result.json') @('--setup-link', 'stdout') }
     Phase 'persisted' {
         RequireInstalledAndReady $reinstall.Result
+        RequireServiceConfiguration
         if ($reinstall.Stdout.Trim()) { throw 'Reinstall offered a new setup link over kept data' }
         if ((SetupState) -ne 'complete') { throw 'Kept family is missing after reinstall' }
         $body = Json @{ name=$account.Name; password=$account.Password }

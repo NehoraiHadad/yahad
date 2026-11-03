@@ -51,9 +51,12 @@ internal static class NativeInstallFiles
     {
         var partial=path+".partial-"+Guid.NewGuid().ToString("N");WriteNew(partial,bytes,descriptor);
         beforeCommit?.Invoke(); // Internal synthetic crash cut; never supplied by product input.
-        // No replacement: a competing canonical record is never overwritten.
-        if(!MoveFileExW(Extended(partial),Extended(path),8))throw new Win32Exception();
+        CommitNew(partial,path);
     }
+    // No replacement: a competing canonical file is never overwritten, so a
+    // present name is always a whole, previously committed file.
+    internal static void CommitNew(string partial,string path){if(!MoveFileExW(Extended(partial),Extended(path),8))throw new Win32Exception();}
+    internal static string FileDescriptor(string? serviceSid=null,bool mutable=false)=>Descriptor(serviceSid,mutable).Replace("OICI","");
     // Control records beside Program Files must be protected at creation,
     // including the replacement partial. Never inherit that parent's Modify
     // ACL and depend on a later ownership write to make the record private.
@@ -61,7 +64,9 @@ internal static class NativeInstallFiles
     {
         ArgumentException.ThrowIfNullOrEmpty(descriptor);descriptor=descriptor.Replace("OICI","");var acl=new RawSecurityDescriptor(descriptor);
         if(acl.Owner is null||acl.DiscretionaryAcl is null||(acl.ControlFlags&ControlFlags.DiscretionaryAclProtected)==0)throw new IOException("INSTALL_METADATA_ACCESS");
-        if(File.Exists(path))ReplaceOwned(path,bytes,descriptor);else WriteNew(path,bytes,descriptor);
+        // Both branches publish through a partial, so an interruption never
+        // leaves a truncated record under the canonical name.
+        if(File.Exists(path))ReplaceOwned(path,bytes,descriptor);else PublishNewProtectedFile(path,bytes,descriptor);
     }
     internal static void ReplaceOwned(string path,byte[] bytes,string? descriptor=null)
     {

@@ -1,5 +1,4 @@
 using System.IO;
-using System.Text.Json;
 using Yahad.Install;
 namespace Yahad.Setup;
 internal static class SetupHostFactory
@@ -7,14 +6,14 @@ internal static class SetupHostFactory
     internal static ISetupHostOperations Create(InstallPackage package,bool uninstall,UpdateSetupChoice? choice)
     {
         NativeInstallFiles.RequireAdministrator();
-        if(uninstall)
+        // A retired four-service record (Formats 3-5) is refused before any
+        // step, for install and removal alike; it is never adopted.
+        foreach(var path in new[]{InstallLocations.RemovalStateFile,InstallLocations.StateFile})
         {
-            var path=File.Exists(InstallLocations.RemovalStateFile)?InstallLocations.RemovalStateFile:InstallLocations.StateFile;
-            using var pin=WindowsFileBoundary.OpenInstallerMetadata(path);using var json=JsonDocument.Parse(pin.Small(16777216));
-            return json.RootElement.GetProperty("Format").GetInt32() switch
-            {3 or 4 or 5=>new NativeFullSystemSetupHost(package,null),_=>throw new IOException("INSTALL_STATE_INVALID")};
+            if(!File.Exists(path))continue;
+            using var pin=WindowsFileBoundary.OpenInstallerMetadata(path);NativeSetupHost.RequireCurrentFormat(pin.Small(16777216));
         }
-        if(!package.FullSystem)throw new IOException("UPDATE_FULL_PACKAGE_REQUIRED");
-        return new NativeFullSystemSetupHost(package,choice);
+        if(uninstall&&!File.Exists(InstallLocations.RemovalStateFile)&&!File.Exists(InstallLocations.StateFile))throw new IOException("INSTALL_STATE_INVALID");
+        return new NativeSetupHost(package,uninstall?null:choice);
     }
 }

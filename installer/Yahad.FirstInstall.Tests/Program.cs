@@ -121,8 +121,6 @@ if(args is ["--full-installer-only"])
     {try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);}});
     await ServiceStartupFailureTests.RunAsync(async(name,run)=>
     {try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);}});
-    await PreparingCancellationTests.RunAsync(async(name,run)=>
-    {try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);}});
     Console.WriteLine(JsonSerializer.Serialize(new{suite="full-installer-integration-pure",passed,failed,nativeOperations=false}));return failed==0?0:1;
 }
 if(args is ["--version-only",var versionRepo])
@@ -224,39 +222,6 @@ await Check("user installer enables existing real connector; only explicit test 
  try{RuntimeConnectorSettings.For((RuntimeConnectorProfile)99);throw new Exception("unknown profile accepted");}catch(IOException){}
  return Task.CompletedTask;
 });
-await Check("preserved reinstall binds exact owner package activation and keys without rewriting data",async()=>
-{
- var fixture=Package();var manifest=NativeJson.Read<InstallPackageManifest>(fixture.Manifest);
- var id=Guid.NewGuid().ToString("N");var dataId=Guid.NewGuid().ToString("N");var records=new Dictionary<string,byte[]>();
- string Put<T>(string name,T value){var bytes=JsonSerializer.SerializeToUtf8Bytes(value);records[name]=bytes;return Convert.ToHexStringLower(SHA256.HashData(bytes));}
- string Raw(string name,string value){records[name]=Encoding.UTF8.GetBytes(value);return Convert.ToHexStringLower(SHA256.HashData(records[name]));}
- var key=Raw("datasets/"+dataId+"/master-key","synthetic-key");var policy=Raw("datasets/"+dataId+"/update-policy","preserved-policy");var pin=Raw("datasets/"+dataId+"/update-pin","preserved-pin");
- var web=Put("web.json",new InstalledWeb(1,id,"http://127.0.0.1:47123",47123));
- var anchor=Put("activation.json",new InstalledActivation(1,id,1,manifest.PayloadDigest,dataId,5,5,key,policy,pin,web,"committed",null));
- Put("epoch.json",new InstalledEpoch(1,id,1,anchor));Put("bootstrap.json",new{installationId=id,activationReceiptDigest=anchor});
- Put("installation.json",new FirstInstallReceipt(2,id,dataId,manifest.PayloadDigest,ApplicationRelease.Version,new string('a',64),47123,manifest.ZipSha256,"committed",new string('b',64)));
- var state=new InstallerState(1,id,dataId,manifest.ZipSha256,manifest.PayloadDigest,manifest.SourceCommit,owner.Sid,47123,"uninstalled",manifest.Files,"S-1-5-80-1-2-3-4-5",owner.ImageSha256);
- var before=records.ToDictionary(x=>x.Key,x=>Convert.ToHexStringLower(SHA256.HashData(x.Value)));
- void Verify(InstallerState value,SetupOwner principal)=>PreservedInstallation.Require(value,manifest,principal,name=>records[name]);
- Verify(state,owner);Verify(state with{Phase="reinstalling"},owner);
- var originalReceipt=records["installation.json"];var typedReceipt=NativeJson.Read<FirstInstallReceipt>(originalReceipt);
- Put("installation.json",typedReceipt with{Version="0.5.3"});await Refuse(()=>{Verify(state,owner);return Task.CompletedTask;});records["installation.json"]=originalReceipt;
- Assert(before.All(x=>x.Value==Convert.ToHexStringLower(SHA256.HashData(records[x.Key]))));
- foreach(var bad in new[]{state with{Phase="preparing"},state with{PackageDigest=new string('0',64)},state with{SourceCommit=new string('0',40)},state with{SetupSha256=new string('0',64)},state with{DataId=Guid.NewGuid().ToString("N")}})await Refuse(()=>{Verify(bad,owner);return Task.CompletedTask;});
- await Refuse(()=>{Verify(state,owner with{Sid="S-1-5-21-9-8-7-1001"});return Task.CompletedTask;});
- var old=records["epoch.json"];Put("epoch.json",new InstalledEpoch(1,id,2,anchor));await Refuse(()=>{Verify(state,owner);return Task.CompletedTask;});records["epoch.json"]=old;
- records["datasets/"+dataId+"/master-key"]=Encoding.UTF8.GetBytes("changed");await Refuse(()=>{Verify(state,owner);return Task.CompletedTask;});
- Assert(!records.ContainsKey("initial-seed.json")&&!records.ContainsKey("initial-retry.json"));
-});
-await Check("reinstall cached payload verification rejects changed missing and additional files",async()=>
-{
- var root=Path.Combine(SafeDirectory.CreatePrivateSession(Path.GetTempPath()),"payload");Directory.CreateDirectory(root);var bytes=Encoding.UTF8.GetBytes("pinned-payload");var file=Path.Combine(root,"node.exe");File.WriteAllBytes(file,bytes);
- var records=new[]{new InstallMember("payload/node.exe",bytes.Length,Convert.ToHexStringLower(SHA256.HashData(bytes)))};
- PreservedInstallation.VerifyDirectory(root,records,"payload/");
- File.WriteAllText(Path.Combine(root,"unexpected"),"keep");await Refuse(()=>{PreservedInstallation.VerifyDirectory(root,records,"payload/");return Task.CompletedTask;});File.Delete(Path.Combine(root,"unexpected"));
- File.WriteAllText(file,"changed");await Refuse(()=>{PreservedInstallation.VerifyDirectory(root,records,"payload/");return Task.CompletedTask;});File.Delete(file);
- await Refuse(()=>{PreservedInstallation.VerifyDirectory(root,records,"payload/");return Task.CompletedTask;});
-});
 await Check("removal defaults to keeping data and full removal requires exact explicit confirmation",()=>
 {
  var choice=new UninstallChoice();Assert(choice.Mode==UninstallMode.KeepData&&choice.CanBegin);
@@ -274,9 +239,9 @@ await Check("authenticated flow carries full removal mode and refuses unknown or
  var serviceSid="S-1-5-80-123-456-789-123-456";
  WindowsFileBoundary.ValidateInstallerMetadataAcl(new System.Security.AccessControl.RawSecurityDescriptor(NativeInstallFiles.Descriptor(serviceSid)));
  await Refuse(()=>{WindowsFileBoundary.ValidateInstallerMetadataAcl(new System.Security.AccessControl.RawSecurityDescriptor(NativeInstallFiles.Descriptor(serviceSid,ownerSid:owner.Sid)));return Task.CompletedTask;});
- var s=new InstallerState(1,"install","data","package","payload","source","owner",47123,"committed",[new("host/file",5,"hash")],"service","setup");
+ var s=FullInstallerIntegrationTests.State();
  Assert(UninstallChoice.SameInstallation(s,s with{Phase="removing_all_data",Files=[..s.Files]}));
- foreach(var other in new[]{s with{Port=47124},s with{PayloadDigest="changed"},s with{SetupSha256="changed"},s with{Files=[new("host/file",6,"hash")]}})Assert(!UninstallChoice.SameInstallation(s,other));
+ foreach(var other in new[]{s with{Port=47124},s with{PayloadDigest=new string('f',64)},s with{SetupSha256=new string('f',64)},s with{Files=[s.Files[0] with{Size=6},..s.Files[1..]]}})Assert(!UninstallChoice.SameInstallation(s,other));
  Assert(!InstallLocations.RemovalStateFile.StartsWith(InstallLocations.Binaries+System.IO.Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase));
 });
 await Check("full removal deletes only the inspected private synthetic tree and keeps external backup",()=>
@@ -407,7 +372,7 @@ Console.WriteLine($"{cases.Count-failures-blockedStore} passed; {failures} faile
  var records=new List<InstallMember>();using var data=new MemoryStream();string digest="";
  using(var zip=new ZipArchive(data,ZipArchiveMode.Create,true))foreach(var name in names)
  {var bytes=Encoding.UTF8.GetBytes(name=="payload/bundle.json"?JsonSerializer.Serialize(new{version=ApplicationRelease.Version}):name=="payload/app/server/main.mjs"?"synthetic-app-not-executed":"synthetic");if(name=="payload/bundle.json")digest=Convert.ToHexStringLower(SHA256.HashData(bytes));var entry=zip.CreateEntry(name);using(var stream=entry.Open())stream.Write(bytes);records.Add(new(name,bytes.Length,Convert.ToHexStringLower(SHA256.HashData(bytes))));if(duplicate&&name==names[0]){using var stream=zip.CreateEntry(name).Open();stream.Write(bytes);}}
- var archive=data.ToArray();return(archive,JsonSerializer.SerializeToUtf8Bytes(new InstallPackageManifest(1,ApplicationRelease.Version,new string('a',40),Convert.ToHexStringLower(SHA256.HashData(archive)),digest,records.ToArray())));
+ var archive=data.ToArray();return(archive,JsonSerializer.SerializeToUtf8Bytes(new InstallPackageManifest(1,ApplicationRelease.Version,ApplicationRelease.SourceCommit,Convert.ToHexStringLower(SHA256.HashData(archive)),digest,records.ToArray())));
 }
 internal sealed class FakeHost:ISetupHostOperations
 {

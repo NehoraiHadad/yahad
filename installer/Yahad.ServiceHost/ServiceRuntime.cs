@@ -277,14 +277,15 @@ internal sealed class ServiceController
     }
 }
 
-internal sealed class ServiceApplication(IScmApi api,IServiceStartAuthorizer authorizer,Action<int> unsafeExit)
+internal sealed class ServiceApplication(IScmApi api,IServiceStartAuthorizer authorizer,Action<int> unsafeExit,Action<Exception,StartupStep[]>? reportFailure=null)
 {
     internal int Run()
     {
         var result=new ServiceRunResult(ServiceFailure.StatusTransport,false);
         api.Dispatch(ServiceDefinition.Name,arguments=>
         {
-            var controller=new ServiceController(authorizer);
+            ServiceController? controller=null;
+            controller=new ServiceController(authorizer,reportFailure:reportFailure is null?null:error=>reportFailure(error,controller!.StartupSteps));
             api.Register(ServiceDefinition.Name,controller.Control);
             if(arguments.Length!=1||arguments[0]!=ServiceDefinition.Name)
             {

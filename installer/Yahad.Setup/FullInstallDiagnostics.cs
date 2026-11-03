@@ -6,11 +6,11 @@ namespace Yahad.Setup;
 internal static class FullInstallDiagnostics
 {
     private static string PathOf=>InstallLocations.Binaries+".full-install-diagnostic.json";
-    internal static bool TryRecord(FullInstallState state,SetupOperationException failure)
+    internal static bool TryRecord(InstallerState state,SetupOperationException failure)
     {
         try
         {
-            NativeFullSystemSetupHost.ValidateState(state);var owner=new SecurityIdentifier(state.OwnerSid);
+            state.Require();var owner=new SecurityIdentifier(state.OwnerSid);
             if(File.Exists(PathOf))
             {using var existing=WindowsFileBoundary.OpenInstallerDiagnostic(PathOf,owner);using var json=JsonDocument.Parse(existing.Small(8192));if(json.RootElement.GetProperty("InstallationId").GetString()!=state.InstallationId)return false;}
             var bytes=Encode(state.InstallationId,failure,DateTimeOffset.UtcNow.ToUnixTimeSeconds());
@@ -24,7 +24,7 @@ internal static class FullInstallDiagnostics
         var detail=SetupFailureDetail.From(failure);
         return JsonSerializer.SerializeToUtf8Bytes(new{Format=1,InstallationId=installationId,Stage=failure.Phase.ToString(),detail.NativeError,detail.HResult,Code=SetupOperation.Code(failure),detail.Sites,AtUnix=at});
     }
-    internal static void DeleteOwned(FullInstallState state)
+    internal static void DeleteOwned(InstallerState state)
     {
         if(!File.Exists(PathOf))return;using(var existing=WindowsFileBoundary.OpenInstallerDiagnostic(PathOf,new(state.OwnerSid)))
         {using var json=JsonDocument.Parse(existing.Small(8192));if(json.RootElement.GetProperty("InstallationId").GetString()!=state.InstallationId)throw new IOException("UNINSTALL_DIAGNOSTIC_CHANGED");}

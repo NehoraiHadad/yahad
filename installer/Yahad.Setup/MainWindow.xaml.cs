@@ -11,7 +11,7 @@ public partial class MainWindow:Window
     internal MainWindow(bool uninstall=false,IReadOnlyList<LanChoice>? lanChoices=null,bool? existingAccess=null,bool? fullSystemProfile=null,bool? existingUpdate=null)
     {
         InitializeComponent();VersionBadge.Text=ApplicationRelease.Version+" · Windows";this.uninstall=uninstall;Closing+=OnClosing;InitializeLan(lanChoices,existingAccess??(lanChoices is null&&HasExistingAccess()));
-        InitializeUpdate(fullSystemProfile??InstallPackage.EmbeddedFullProfile(),existingUpdate??HasExistingUpdateInstallation());
+        InitializeUpdate(fullSystemProfile??true,existingUpdate??HasExistingUpdateInstallation());
         if(!uninstall&&(existingAccess??(System.IO.File.Exists(InstallLocations.InstallerImage)||PendingRemoval()))||!uninstall&&fullUpdateProfile&&existingUpdateProfile)RemovalEntry.Visibility=Visibility.Visible;
         if(uninstall)
         {
@@ -84,13 +84,12 @@ public partial class MainWindow:Window
         Description.Text=code switch
         {
             "INSTALL_TIMEOUT"=>"שלב ההתקנה חרג מהזמן המותר. ההתקנה לא הושלמה; הקבצים שנוצרו נשמרו לבדיקה לפני המשך.",
-            "INSTALL_STAGING_CHANGED"=>"קובצי ההכנה אינם תואמים. ההתקנה נעצרה כדי לשמור על הנתונים.",
             "UPDATE_CONSENT_ALREADY_CAPTURED"=>"הבחירה בעדכונים כבר נשמרה בניסיון הקודם. בהמשך ההתקנה היא תישמר; אפשר לשנות אותה בהגדרות של יחד אחרי ההתקנה.",
-            "UPDATE_INSTALL_INCOMPLETE_REPAIR_FIRST"=>"ההתקנה הקודמת נקטעה לפני השלמתה. הפעלו שוב את אותו קובץ מתקין ובחרו התקנה כדי להשלים אותה בבטחה; לאחר מכן אפשר להסיר. לא מחקנו נתונים.",
             "UPDATE_CONSENT_REQUIRED"=>"יש לבחור איך לקבל עדכונים ולאשר את מנגנון העדכון לפני ההתקנה.",
-            "UPDATE_LEGACY_PROFILE_REQUIRES_REMOVAL"=>"במחשב קיימת התקנה ישנה ללא מנגנון העדכון החדש. לא שינינו את הנתונים. יש להשלים את מסלול המעבר המוסבר במדריך לפני התקנת החבילה הזו.",
-            "UPDATE_MUST_FINISH_BEFORE_INSTALLER"=>"יחד באמצע עדכון או שחזור. יש להשלים אותו בכלי השחזור של יחד לפני שינוי ההתקנה.",
-            "INSTALL_RUNTIME_NOT_AUTHENTICATED" or "INSTALL_READINESS_BINDING"=>"שירות הרקע נפתח, אבל לא אומת שיחד עצמו פועל בגרסה הנכונה. ההתקנה אינה מדווחת הצלחה ויש לבדוק את האבחון.",
+            "LEGACY_INSTALL_UNINSTALL_FIRST"=>"במחשב מותקנת גרסה ישנה של יחד. לא שינינו דבר. הסירו אותה קודם עם המתקין שלה ובחרו לשמור את הנתונים, ואז הפעילו שוב את המתקין הזה.",
+            "INSTALL_UPGRADE_REQUIRED"=>"במחשב מותקנת גרסה אחרת של יחד. כדי לעבור לגרסה הזו הסירו את יחד ובחרו לשמור את הנתונים, ואז הפעילו שוב את המתקין הזה. המשפחה והנתונים יישמרו.",
+            "INSTALL_DOWNGRADE_REFUSED"=>"במחשב מותקנת או נשמרה גרסה חדשה יותר של יחד. המתקין הזה ישן יותר ולכן לא שינינו דבר.",
+            "INSTALL_TARGET_CHANGED"=>"קובצי ההתקנה בתיקייה אינם תואמים לחבילה. ההתקנה נעצרה ולא שינתה אותם.",
             "LAN_CONSENT_REQUIRED"=>"בחרו חיבור ביתי ואשרו במפורש את פתיחת הגישה לפני ניסיון נוסף.",
             "LAN_PRIVATE_PROFILE_REQUIRED"=>"החיבור שנבחר אינו מוגדר ב-Windows כרשת ביתית פרטית. רק אם זו הרשת הביתית שלכם, אפשר לאשר ב-Windows שזו רשת פרטית. המתקין אינו משנה את סוג הרשת.",
             "NETWORK_SELECTION_CHANGED"=>"כתובת הרשת או המתאם השתנו. בחרו מחדש את החיבור הביתי; לא תיבחר רשת אחרת אוטומטית.",

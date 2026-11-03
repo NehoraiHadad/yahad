@@ -49,6 +49,8 @@ internal static class ServiceStartupDiagnostic
         "OWN_OBJECT_PUBLICATION_UNCONFIRMED" or "CUSTODY_TARGET_ACCOUNT" or "NATIVE_REPARSE_KIND_OR_HARDLINK" or "NATIVE_LOCAL_PATH"=>value,
         "RUNTIME_INSTALLATION_ANCHOR" or "RUNTIME_UPDATER_NOT_ENROLLED" or "RUNTIME_QUIESCENCE_UNCONFIRMED"=>value,
         "SERVICE_CHILD_EXITED" or "SERVICE_CHILD_EOF" or "SERVICE_CHILD_PEER" or "SERVICE_CHILD_READY"=>value,
+        "INSTALLED_LAUNCH_BOUND" or "INSTALLED_LAUNCH_FORMAT" or "INSTALLED_LAUNCH_PORT" or "INSTALLED_LAUNCH_ORIGIN" or "INSTALLED_LAUNCH_IDENTIFIER" or
+        "INSTALLED_LAUNCH_CHANGED" or "INSTALLED_LAUNCH_IMAGE_LOCATION" or "INSTALLED_ALREADY_STARTED"=>value,
         _=>null
     };
     internal static bool TryRecord(StartupDiagnosticRole role,Exception error,IReadOnlyList<StartupStep>? steps=null)=>TryRecord(role,error,Write,steps);

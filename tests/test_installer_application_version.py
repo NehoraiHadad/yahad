@@ -8,7 +8,6 @@ import unittest
 from unittest.mock import patch
 from installer.windows.application_version import package_release_version, source_release_version, require_source_release_version, require_native_build_identity
 from installer.bootstrap.payload_identity import validate_payload_pin, require_installer_description
-from installer.windows.first_install_package import setup_inputs
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -46,16 +45,6 @@ class NativeBuildIdentityTests(unittest.TestCase):
                 mixed=dict(description);mixed[field]=value
                 with self.subTest(artifact=artifact,field=field),self.assertRaises(ValueError):require_native_build_identity(mixed,artifact,'0.6.0',source)
 
-    def test_setup_inputs_refuses_a_retained_old_service_host_before_any_staging(self):
-        source='a'*40
-        stale=dict(artifact='Yahad.ServiceHost',applicationVersion='0.5.3',sourceCommit='b'*40,version='1.0.0+'+'b'*40)
-        with patch('installer.windows.first_install_package.source_release_version',return_value='0.6.0'), \
-             patch('installer.windows.first_install_package.subprocess.check_output',side_effect=[b'',source.encode()]), \
-             patch('installer.windows.first_install_package.describe_build_artifact',return_value=stale) as describe, \
-             patch.object(Path,'exists',return_value=False),patch.object(Path,'mkdir') as mkdir, \
-             patch.object(Path,'read_text') as read, self.assertRaises(ValueError):
-            setup_inputs(ROOT,ROOT/'synthetic-payload.zip',ROOT/'synthetic-host',ROOT/'synthetic-new-output')
-        describe.assert_called_once();mkdir.assert_not_called();read.assert_not_called()
 
 
 class BootstrapIdentityTests(unittest.TestCase):

@@ -22,8 +22,8 @@ internal static class QuietSetup
     private static Request? Install(string updates,string path,bool link)=>updates switch
     {"notify"=>new(false,UninstallMode.KeepData,false,Full(path),link),"auto"=>new(false,UninstallMode.KeepData,true,Full(path),link),_=>null};
     private static string Full(string path)=>Path.IsPathFullyQualified(path)?path:throw new IOException("SETUP_ARGUMENTS");
-    internal static UpdateSetupChoice? Consent(Request request,bool fullProfile,bool existing,DateTimeOffset now)
-        =>request.Uninstall||!fullProfile||existing?null:new(2,true,request.AutomaticUpdates==true,now.ToUnixTimeSeconds());
+    internal static UpdateSetupChoice? Consent(Request request,bool existing,DateTimeOffset now)
+        =>request.Uninstall||existing?null:new(2,true,request.AutomaticUpdates==true,now.ToUnixTimeSeconds());
     internal static async Task<int> RunAsync(Request request)
     {
         SetupResult result;var clock=System.Diagnostics.Stopwatch.StartNew();var phases=new List<object>();string? current=null;
@@ -31,7 +31,7 @@ internal static class QuietSetup
         void Progress(SetupProgress p){lock(phases){if(p.Phase==current)return;current=p.Phase;phases.Add(new{p.Phase,Seconds=Math.Round(clock.Elapsed.TotalSeconds,1)});}}
         try
         {
-            var update=Consent(request,InstallPackage.EmbeddedFullProfile(),MainWindow.HasExistingUpdateInstallation(),DateTimeOffset.UtcNow);
+            var update=Consent(request,MainWindow.HasExistingUpdateInstallation(),DateTimeOffset.UtcNow);
             result=await SetupOperation.RunAsync(request.Uninstall,Progress,CancellationToken.None,request.Mode,null,update:update);
             if(result.Ok&&request.Uninstall)ShortcutCleanup.TryRemove(result.Url);
         }
