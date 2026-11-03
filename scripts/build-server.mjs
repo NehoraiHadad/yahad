@@ -7,9 +7,11 @@
 // --root holds src/, tsconfig.json and a lockfile-restored node_modules (default:
 // this checkout). Writes NEW_DIR/app/server/*.mjs, NEW_DIR/legal/server-bundle.json
 // (provenance + third-party inventory) and NEW_DIR/legal/ThirdPartyNotices-server.txt.
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createRequire, isBuiltin } from 'node:module';
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -35,17 +37,28 @@ const NOTICE = /^(?:licen[cs]e|copying|notice|copyright)/i;
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const fail = message => { throw new Error('Server bundle refused: ' + message); };
 
-const esbuild = createRequire(join(root, 'package.json'))('esbuild');
+// The CLI, not the JS API: the API's service process is detached and outlives this
+// script, so a caller deleting the build tree right after exit races a still-running
+// esbuild.exe that Windows refuses to delete. The CLI shim waits for the binary.
+const cli = createRequire(join(root, 'package.json')).resolve('esbuild/bin/esbuild');
+const esbuild = args => {
+  const run = spawnSync(process.execPath, [cli, ...args], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+  if (run.error || run.status !== 0) fail(`esbuild exited ${run.status ?? run.error}`);
+  return run.stdout;
+};
+const version = esbuild(['--version']).trim();
 const pinned = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).devDependencies?.esbuild;
-if (esbuild.version !== pinned) fail(`esbuild ${esbuild.version} is not the pinned ${pinned}`);
+if (version !== pinned) fail(`esbuild ${version} is not the pinned ${pinned}`);
 const app = resolve(payload, 'app'), legal = resolve(payload, 'legal');
 if (existsSync(join(app, 'server'))) fail('app/server already exists');
-const result = await esbuild.build({
-  absWorkingDir: root, entryPoints: Object.fromEntries(Object.entries(ENTRIES).map(([source, stem]) => [stem, source])),
-  bundle: true, splitting: false, platform: 'node', format: 'esm', target: 'node24', outdir: join(app, 'server'),
-  outExtension: { '.js': '.mjs' }, external: EXTERNAL, banner: { js: BANNER }, legalComments: 'external',
-  metafile: true, write: false, logLevel: 'warning', charset: 'utf8',
-});
+const staging = mkdtempSync(join(tmpdir(), 'yahad-server-bundle-'));
+try {
+esbuild([...Object.entries(ENTRIES).map(([source, stem]) => `${stem}=${source}`),
+  '--bundle', '--platform=node', '--format=esm', '--target=node24', `--outdir=${staging}`, '--out-extension:.js=.mjs',
+  ...EXTERNAL.map(name => `--external:${name}`), `--banner:js=${BANNER}`, '--legal-comments=external',
+  `--metafile=${join(staging, 'meta.json')}`, '--log-level=warning', '--charset=utf8']);
+const result = { metafile: JSON.parse(readFileSync(join(staging, 'meta.json'), 'utf8')) };
+const built = path => readFileSync(resolve(root, path));
 
 // Every input is checked-in source or a lockfile-restored package; nothing else.
 const packages = new Map(), sources = new Map();
@@ -77,18 +90,18 @@ for (const [path, output] of Object.entries(result.metafile.outputs)) {
     if (isBuiltin(item.path) || stem === 'main' && OPTIONAL[item.path] === item.kind) continue;
     fail(`${stem} imports ${item.kind} ${item.path}`);
   }
-  const file = result.outputFiles.find(f => resolve(f.path) === resolve(root, path));
-  outputs.push({ path: 'app/server/' + stem + '.mjs', entry, size: file.contents.length, sha256: sha256(file.contents),
+  const contents = built(path);
+  outputs.push({ path: 'app/server/' + stem + '.mjs', entry, contents, size: contents.length, sha256: sha256(contents),
     sources: Object.keys(output.inputs).filter(name => sources.has(name)).sort(),
     packages: [...new Set(Object.keys(output.inputs).filter(name => !sources.has(name)).map(name => [...packages.keys()].find(p => name.startsWith(p + '/'))))].sort() });
-  const legalFile = result.outputFiles.find(f => resolve(f.path) === resolve(root, path) + '.LEGAL.txt');
+  const legalFile = existsSync(resolve(root, path) + '.LEGAL.txt') && { text: built(path + '.LEGAL.txt').toString('utf8') };
   if (legalFile) noticesByOutput.push(`Extracted legal comments in ${stem}.mjs\n\n${legalFile.text}`);
 }
 if (outputs.length !== Object.keys(ENTRIES).length) fail('missing output');
 outputs.sort((a, b) => a.path.localeCompare(b.path));
 
 mkdirSync(join(app, 'server'), { recursive: true }); mkdirSync(legal, { recursive: true });
-for (const output of outputs) writeFileSync(join(payload, output.path), result.outputFiles.find(f => resolve(f.path) === resolve(payload, output.path)).contents, { flag: 'wx' });
+for (const output of outputs) writeFileSync(join(payload, output.path), output.contents, { flag: 'wx' });
 const inventory = [...packages.values()].sort((a, b) => a.path.localeCompare(b.path));
 const rule = '='.repeat(78);
 const notices = ['Third-party software bundled into app/server/*.mjs. Each package keeps its own license;',
@@ -98,10 +111,11 @@ const notices = ['Third-party software bundled into app/server/*.mjs. Each packa
   ...noticesByOutput];
 writeFileSync(join(legal, 'ThirdPartyNotices-server.txt'), notices.join('\n') + '\n', { flag: 'wx' });
 writeFileSync(join(legal, 'server-bundle.json'), JSON.stringify({
-  format: 'yahad-server-bundle', schema: 1, bundler: { name: 'esbuild', version: esbuild.version }, external: EXTERNAL, outputs,
+  format: 'yahad-server-bundle', schema: 1, bundler: { name: 'esbuild', version }, external: EXTERNAL, outputs: outputs.map(({ contents, ...output }) => output),
   sources: Object.fromEntries([...sources].sort()),
   packages: inventory.map(({ notices, ...item }) => ({ ...item, noticeFiles: notices.map(({ name, sha256 }) => ({ name, sha256 })) })),
   notices: 'legal/ThirdPartyNotices-server.txt', completeLicenseReview: false,
   scope: 'Every npm package with code in the server bundle, with its package-root legal files; not a complete transitive legal audit.',
 }, null, 2) + '\n', { flag: 'wx' });
 console.log(JSON.stringify({ outputs: outputs.map(o => ({ path: o.path, size: o.size })), sources: sources.size, packages: inventory.length }));
+} finally { rmSync(staging, { recursive: true, force: true }); }
