@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { migrateAccountNames, DATABASE_SCHEMA } from '../src/db.js';
+import { DATABASE_MIGRATIONS_FROM } from '../src/database-schema.js';
 import { normalizeAccountName, accountNameKey } from '../src/account-name.js';
 import { Store } from '../src/store.js';
 import type { Config } from '../src/config.js';
@@ -113,6 +114,19 @@ test('failure after dropping the old table rolls back rows and schema, then a cl
     assert.deepEqual(snapshot(db), before);
     assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
   } finally { db.close(); }
+});
+
+test('every declared migration source and the current schema reach their migrations', () => {
+  assert.ok((DATABASE_MIGRATIONS_FROM as readonly number[]).includes(DATABASE_SCHEMA - 1), 'the release before this one can upgrade');
+  for (const version of [...DATABASE_MIGRATIONS_FROM, DATABASE_SCHEMA]) {
+    if (version < 2) continue; // Schema 1 is migrated by the tests above.
+    const db = legacy();
+    try {
+      db.prepare('UPDATE schema_version SET version=?').run(version);
+      migrateAccountNames(db);
+      assert.equal(db.prepare('SELECT version FROM schema_version').get()?.version, version);
+    } finally { db.close(); }
+  }
 });
 
 test('unsupported schemas and invalid references fail before committing any account migration', () => {
