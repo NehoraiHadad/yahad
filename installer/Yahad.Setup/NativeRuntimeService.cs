@@ -14,7 +14,7 @@ namespace Yahad.Setup;
 internal sealed class NativeRuntimeService:IDisposable
 {
     internal const uint DemandStart=3,AutoStart=2,Disabled=4;
-    private readonly string command;private readonly Handle manager,service;private bool stopRequested;
+    private string command;private readonly Handle manager,service;private bool stopRequested;
     private NativeRuntimeService(string command,Handle manager,Handle service){this.command=command;this.manager=manager;this.service=service;}
     internal static bool Exists()
     {
@@ -58,6 +58,25 @@ internal sealed class NativeRuntimeService:IDisposable
     {
         var value=OpenHandle(version);
         try{value.RequireOwned();RequireProtection(value.Security(),owner);return value;}catch{value.Dispose();throw;}
+    }
+    // During an upgrade the image is one of exactly two recorded versions.
+    internal static NativeRuntimeService OpenAt(string version,string other,string owner)
+    {
+        try{return Open(version,owner);}catch(IOException error)when(error.Message=="SERVICE_NOT_OWNED"){return Open(other,owner);}
+    }
+    // Repair: an image pointing anywhere else is set back to the installed
+    // release. Type and account are still required to be the Runtime's own.
+    internal static NativeRuntimeService OpenRepointed(string version,string owner,ref bool repointed)
+    {
+        var value=OpenHandle(version);
+        try
+        {
+            RequireProtection(value.Security(),owner);
+            try{value.RequireOwned();}
+            catch(IOException error)when(error.Message=="SERVICE_NOT_OWNED"){value.SetImage();value.RequireOwned();repointed=true;}
+            return value;
+        }
+        catch{value.Dispose();throw;}
     }
     internal static async Task<NativeRuntimeService?> OpenForRemovalAsync(string version,string owner,CancellationToken cancellation)
     {
@@ -179,6 +198,26 @@ internal sealed class NativeRuntimeService:IDisposable
         SetFailureActions(true);Change(4,1u);
         if(ReadConfig2(4,(p,_)=>Marshal.ReadInt32(p))!=1)throw new IOException("INSTALL_SERVICE_FAILURE_FLAGS");
         RequireStartType(AutoStart);
+    }
+    // While an upgrade moves the service nothing may restart it behind Setup's back.
+    internal void ClearFailureActions(){RequireOwned();SetFailureActions(false);Change(4,0u);}
+    internal void SwitchImage(string version)
+    {
+        RequireStoppedForSwitch();command=InstallLocations.ServiceCommand(version);SetImage();RequireOwned();
+    }
+    private void RequireStoppedForSwitch(){var observed=Status();RequireStopped(observed.State,observed.Pid);}
+    private void SetImage()
+    {if(!ChangeServiceConfigW(service,0xffffffff,0xffffffff,0xffffffff,command,null,IntPtr.Zero,null,null,null,null))throw new Win32Exception();}
+    internal bool IsStopped()=>Status().State==1;
+    internal bool IsRunning()=>Status().State==4;
+    internal bool StartupConfigured()
+    {
+        try
+        {
+            RequireOwned();RequireStartType(AutoStart);VerifyFailureActions(true);
+            return ReadConfig2(4,(p,_)=>Marshal.ReadInt32(p))==1;
+        }
+        catch(IOException){return false;}
     }
     internal void FenceForRemoval()
     {

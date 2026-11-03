@@ -58,6 +58,7 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
     {
         NativeInstallFiles.RequireAdministrator();requested?.Require(DateTimeOffset.UtcNow);
         if(File.Exists(InstallLocations.RemovalStateFile))throw new IOException("UNINSTALL_INCOMPLETE");
+        if(File.Exists(InstallLocations.UpgradeStateFile))throw new IOException("UPGRADE_INCOMPLETE");
         SafeDirectory.NoReparseAncestors(InstallLocations.State);SafeDirectory.NoReparseAncestors(InstallLocations.Binaries);
         var manifest=package.Manifest;var version=manifest.Version;InstallLocations.RequireVersion(version);
         if(File.Exists(InstallLocations.StateFile))
@@ -80,7 +81,7 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
                     if(NativeRuntimeService.Exists()||Directory.Exists(InstallLocations.Binaries)||File.Exists(InstallLocations.Binaries))throw new IOException("INSTALL_COLLISION");
                     // The family, its data, key and identity stay; only the
                     // release and the image that installs it are new.
-                    state=state with{Version=version,PackageDigest=manifest.ZipSha256,PayloadDigest=manifest.PayloadDigest,SourceCommit=manifest.SourceCommit,SetupSha256=owner.ImageSha256,Files=manifest.Files};
+                    state=state with{Version=version,PackageDigest=manifest.ZipSha256,PayloadDigest=manifest.PayloadDigest,SourceCommit=manifest.SourceCommit,SetupSha256=owner.ImageSha256,Files=manifest.Files,ReleaseKeySha256=EmbeddedKeyDigest,Previous=null};
                     Save("preparing");break;
                 case "preparing":
                     if(state.PackageDigest!=manifest.ZipSha256||state.Version!=version)throw new IOException("EXISTING_DATA_PRESERVED");break;
@@ -94,7 +95,7 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
             var listeners=IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners();var port=Enumerable.Range(47123,17).FirstOrDefault(p=>!listeners.Any(e=>e.Port==p));if(port==0)throw new IOException("NO_LOCAL_PORT");
             var installation=Guid.NewGuid().ToString("N");
             state=new(InstallerState.CurrentFormat,installation,Guid.NewGuid().ToString("N"),version,manifest.ZipSha256,manifest.PayloadDigest,manifest.SourceCommit,owner.Sid,port,"preparing",
-                owner.ImageSha256,FirstOwnerBinding.Create(installation,owner.Sid),requested,manifest.Files,InstallLocations.ServiceSid);
+                owner.ImageSha256,FirstOwnerBinding.Create(installation,owner.Sid),requested,manifest.Files,InstallLocations.ServiceSid,EmbeddedKeyDigest);
             NativeInstallFiles.NewDirectory(InstallLocations.State,Immutable);Save("preparing");diagnosticsAllowed=true;
         }
         if(new DriveInfo(Path.GetPathRoot(InstallLocations.Binaries)!).AvailableFreeSpace<checked(manifest.Files.Sum(f=>f.Size)*3+536870912L))throw new IOException("DISK_SPACE");
@@ -110,7 +111,8 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
             NativeInstallFiles.CommitNew,VerifyOwned));
     },cancellation);
 
-    private InstallMember[] Inventory()=>RemovalIntent.Inventory(state!,File.Exists(InstallLocations.InstallerImage)?new FileInfo(InstallLocations.InstallerImage).Length:0);
+    private static string? EmbeddedKeyDigest=>TrustedReleaseKey.Embedded is {} key?TrustedReleaseKey.Digest(key):null;
+    private InstallMember[] Inventory(){var image=InstallLocations.InstallerImage(state!.Version);return RemovalIntent.Inventory(state,File.Exists(image)?new FileInfo(image).Length:0);}
     private static readonly string EmptySha256=Convert.ToHexStringLower(SHA256.HashData([]));
     // A present immutable member must be administrator-owned, read-only to the
     // Runtime and byte-identical to its record.
@@ -164,14 +166,22 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
         }
         else NativeInstallFiles.PublishNewProtectedFile(InstallLocations.LaunchFile,InstalledLaunch.Encode(new(1,state.InstallationId,state.DataId,state.Port,"http://127.0.0.1:"+state.Port)),ImmutableFile);
         RenewCapability();
-        var setup=new InstallMember(RemovalIntent.SetupMember,new FileInfo(Environment.ProcessPath!).Length,state.SetupSha256);
-        if(File.Exists(InstallLocations.InstallerImage)){if(!VerifyOwned(InstallLocations.InstallerImage,setup))throw new IOException("INSTALL_TARGET_CHANGED");}
-        else CopyVerified(Environment.ProcessPath!,InstallLocations.InstallerImage,setup);
+        var image=InstallLocations.InstallerImage(state.Version);
+        var setup=new InstallMember(RemovalIntent.SetupMember(state.Version),new FileInfo(Environment.ProcessPath!).Length,state.SetupSha256);
+        if(File.Exists(image)){if(!VerifyOwned(image,setup))throw new IOException("INSTALL_TARGET_CHANGED");}
+        else CopyVerified(Environment.ProcessPath!,image,setup);
+        // The root of trust for every later upgrade. A build without a key writes none.
+        if(state.ReleaseKeySha256 is {} digest)
+        {
+            var record=new InstallMember(TrustedReleaseKey.InstalledName,TrustedReleaseKey.SpkiBytes,digest);
+            if(File.Exists(InstallLocations.ReleaseKeyFile)){if(!VerifyOwned(InstallLocations.ReleaseKeyFile,record))throw new IOException("INSTALL_TARGET_CHANGED");}
+            else NativeInstallFiles.PublishNewProtectedFile(InstallLocations.ReleaseKeyFile,TrustedReleaseKey.Embedded??throw new IOException("INSTALL_TARGET_CHANGED"),ImmutableFile);
+        }
         progress(new("installing_service",75));
         service??=NativeRuntimeService.Exists()?NativeRuntimeService.OpenForProvisioning(state.Version,state.OwnerSid):NativeRuntimeService.Create(state.Version,state.OwnerSid);
-        Register();Save("committed");progress(new("installing_service",80));
+        Register(state);Save("committed");progress(new("installing_service",80));
     },cancellation);
-    private static void CopyVerified(string source,string target,InstallMember record)
+    internal static void CopyVerified(string source,string target,InstallMember record)
     {
         var partial=target+".partial-"+Guid.NewGuid().ToString("N");
         try
@@ -191,10 +201,10 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
         setupToken=Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+','-').Replace('/','_');
         NativeInstallFiles.PublishProtectedFile(Capability,Json(new{token=setupToken,expiresAt=DateTimeOffset.UtcNow.AddMinutes(15).ToUnixTimeMilliseconds(),firstOwner=state!.FirstOwner}),ImmutableFile);
     }
-    private void Register()
+    internal static void Register(InstallerState state)
     {
-        using var key=Registry.LocalMachine.CreateSubKey(RegistryKey,true);key.SetValue("DisplayName","יחד");key.SetValue("DisplayVersion",state!.Version);key.SetValue("Publisher","Yahad");
-        key.SetValue("InstallLocation",InstallLocations.Binaries);key.SetValue("UninstallString","\""+InstallLocations.InstallerImage+"\" --uninstall");
+        using var key=Registry.LocalMachine.CreateSubKey(RegistryKey,true);key.SetValue("DisplayName","יחד");key.SetValue("DisplayVersion",state.Version);key.SetValue("Publisher","Yahad");
+        key.SetValue("InstallLocation",InstallLocations.Binaries);key.SetValue("UninstallString","\""+InstallLocations.InstallerImage(state.Version)+"\" --uninstall");
         key.SetValue("NoModify",1,RegistryValueKind.DWord);key.SetValue("NoRepair",1,RegistryValueKind.DWord);
     }
 
@@ -260,6 +270,7 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
     public async Task<SetupResult> UninstallAsync(SetupOwner owner,Action<SetupProgress> progress,CancellationToken cancellation,UninstallMode mode=UninstallMode.KeepData)
     {
         operationPhase=UninstallPhase.FullUninstall;NativeInstallFiles.RequireAdministrator();UninstallChoice.Require(mode);
+        if(File.Exists(InstallLocations.UpgradeStateFile))throw new IOException("UPGRADE_INCOMPLETE");
         RemovalIntent? intent=null;
         if(File.Exists(InstallLocations.RemovalStateFile))
         {

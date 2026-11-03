@@ -2,6 +2,7 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType><UseWPF>true</UseWPF>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <StartupObject>Yahad.Setup.SetupEntry</StartupObject>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
   <ItemGroup><ProjectReference Include="../Yahad.Install.Core/Yahad.Install.Core.csproj" /><ProjectReference Include="../Yahad.ServiceHost/Yahad.ServiceHost.csproj"/><InternalsVisibleTo Include="Yahad.FirstInstall.Tests"/></ItemGroup>

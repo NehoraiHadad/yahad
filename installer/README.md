@@ -67,6 +67,44 @@ $inputs = @{
 ./installer/package.ps1 @inputs
 ```
 
+### Release signing
+
+Upgrades (`Yahad.Setup.exe --quiet-upgrade <dir>`) accept only a release signed
+by the key the installation trusts. There is no override switch, environment
+variable or registry value. The private key stays on the maintainer's PC: it is
+never committed, never uploaded and never a CI or GitHub secret, and CI signs
+its test releases with a key generated and destroyed inside the job.
+
+Until the maintainer does the one-time step below, no build trusts any key. Such
+a Setup installs normally and refuses every upgrade; `--verify-package` reports
+`"releaseKeyId":null` and `"upgrades":"refused: built without a release key"`,
+and `package.ps1` prints a warning.
+
+One-time, on the maintainer's PC (the tool refuses a directory inside a checkout):
+
+```powershell
+node scripts/windows-release-key.mjs keygen C:/Users/<you>/yahad-release-key
+```
+
+Back up `key.pem` offline. Losing it means existing installations can never be
+upgraded again, and anyone holding it can sign their upgrades. `key.spki` is the
+public half. Pass it to every release build:
+
+```powershell
+./installer/package.ps1 @inputs -ReleaseKey C:/Users/<you>/yahad-release-key/key.spki
+```
+
+This writes `<output>/release/` with the manifest and `Yahad.Setup-<version>.exe`,
+and prints the path. Signing is then one local command:
+
+```powershell
+node scripts/windows-release-key.mjs sign C:/Users/<you>/yahad-release-key/key.pem <output>/release/yahad-windows-<version>.json
+```
+
+Installation writes the build's key to `%ProgramFiles%\Yahad.FirstInstall\release-key.spki`,
+and that file is the trust root from then on. A machine installed from a keyless
+build stays without one, so it needs a keyed reinstall before it can upgrade.
+
 Replace the example tool paths with your actual extracted tools. The Node directory
 must contain `node.exe`, `LICENSE` and `node_modules/npm/bin/npm-cli.js`; a path to
 node.exe alone is insufficient. The dotnet directory must include its legal files.

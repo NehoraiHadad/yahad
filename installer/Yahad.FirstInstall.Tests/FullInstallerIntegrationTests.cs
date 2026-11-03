@@ -127,8 +127,8 @@ internal static class FullInstallerIntegrationTests
         await check("removal intent retains owner, exact binaries and choice beyond partial root deletion",()=>
         {
             var state=State();var inventory=RemovalIntent.Inventory(state,1234);
-            Assert(inventory.Length==state.Files.Length+1&&inventory.Count(f=>f.Path==RemovalIntent.SetupMember&&f.Size==1234&&f.Sha256==state.SetupSha256)==1);
-            Assert(inventory.Where(f=>f.Path!=RemovalIntent.SetupMember).All(f=>f.Path.StartsWith("versions/"+state.Version+"/",StringComparison.Ordinal)));
+            Assert(inventory.Length==state.Files.Length+1&&inventory.Count(f=>f.Path==RemovalIntent.SetupMember(state.Version)&&f.Size==1234&&f.Sha256==state.SetupSha256)==1);
+            Assert(inventory.All(f=>f.Path.StartsWith("versions/"+state.Version+"/",StringComparison.Ordinal)));
             var intent=new RemovalIntent(6,state with{Phase="removing_all_data"},UninstallMode.DeleteData,inventory,"prepared");
             foreach(var stage in RemovalIntent.Stages){var replay=JsonSerializer.Deserialize<RemovalIntent>(Json(intent with{Stage=stage}))!;replay.Require();replay.RequireSameInstallation(state);Assert(replay.AtLeast(stage)&&replay.AtLeast("prepared"));}
             Assert(!intent.AtLeast("lan_removed"));Deny(()=>intent.AtLeast("invented"));
@@ -138,7 +138,7 @@ internal static class FullInstallerIntegrationTests
             intent.RequireSameInstallation(state with{Phase="uninstalled"});
             foreach(var path in new[]{"../unrelated.txt","versions/9.9.9/host/Yahad.ServiceHost.exe","versions/"+state.Version+"/bootstrap/authority/a.dll","payloads/x/bundle.json"})
             {var changed=inventory.ToArray();changed[1]=changed[1] with{Path=path};Deny(()=>(intent with{Binaries=changed}).Require());}
-            Deny(()=>(intent with{Binaries=inventory.Where(f=>f.Path!=RemovalIntent.SetupMember).ToArray()}).Require());
+            Deny(()=>(intent with{Binaries=inventory.Where(f=>f.Path!=RemovalIntent.SetupMember(state.Version)).ToArray()}).Require());
             Deny(()=>(intent with{Binaries=[..inventory,inventory[1]]}).Require());return Task.CompletedTask;
         });
         await check("runtime package accepts only Format 1 host and payload members anchored to its bundle",()=>
@@ -202,12 +202,12 @@ internal static class FullInstallerIntegrationTests
         });
         await check("state-only preserved installation never displays a fresh updater consent choice",()=>
         {
-            var observed=new List<string>();Assert(MainWindow.HasExistingUpdateInstallation(path=>{observed.Add(path);return path==InstallLocations.State;}));Assert(observed.SequenceEqual(new[]{InstallLocations.State}));
-            Assert(!MainWindow.HasExistingUpdateInstallation(_=>false));Assert(MainWindow.HasExistingUpdateInstallation(path=>path==InstallLocations.RemovalStateFile));return Task.CompletedTask;
+            var observed=new List<string>();Assert(ExistingInstallation.Present(path=>{observed.Add(path);return path==InstallLocations.State;}));Assert(observed.SequenceEqual(new[]{InstallLocations.State}));
+            Assert(!ExistingInstallation.Present(_=>false));Assert(ExistingInstallation.Present(path=>path==InstallLocations.RemovalStateFile));return Task.CompletedTask;
         });
         await check("installer partial cleanup recognizes only exact generated record names with canonical nonces",()=>
         {
-            Assert(FullInstallerResidue.Metadata.SequenceEqual(new[]{"installer-state.json","installed.json","lan-preparation.json","setup-capability.json","master-key"}));
+            Assert(FullInstallerResidue.Metadata.SequenceEqual(new[]{"installer-state.json","upgrade-state.json","installed.json","lan-preparation.json","setup-capability.json","master-key"}));
             foreach(var name in FullInstallerResidue.Metadata)
             {
                 Assert(FullInstallerResidue.IsOwnedName(name+".partial-"+new string('a',32)));

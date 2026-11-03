@@ -12,5 +12,8 @@ internal sealed class UninstallChoice
     internal static void Require(UninstallMode mode){if(mode is not(UninstallMode.KeepData or UninstallMode.DeleteData))throw new IOException("UNINSTALL_MODE_INVALID");}
     internal static string Phase(UninstallMode mode){Require(mode);return mode==UninstallMode.DeleteData?"removing_all_data":"removing_keep_data";}
     internal static bool SameInstallation(InstallerState expected,InstallerState actual)=>
-        expected with{Phase=actual.Phase,Files=actual.Files}==actual&&expected.Files.SequenceEqual(actual.Files);
+        expected with{Phase=actual.Phase,Files=actual.Files,Previous=actual.Previous}==actual&&expected.Files.SequenceEqual(actual.Files)&&SameRelease(expected.Previous,actual.Previous);
+    // Records compare arrays by reference, and these two were read separately.
+    private static bool SameRelease(RetainedRelease? expected,RetainedRelease? actual)=>
+        expected is null||actual is null?expected==actual:expected with{Files=actual.Files}==actual&&expected.Files.SequenceEqual(actual.Files);
 }

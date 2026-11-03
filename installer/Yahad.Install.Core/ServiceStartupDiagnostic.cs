@@ -47,13 +47,18 @@ internal static class ServiceStartupDiagnostic
     internal static bool TryRecord(StartupDiagnosticRole role,Exception error,IReadOnlyList<StartupStep>? steps=null)=>TryRecord(role,error,Write,steps);
     internal static bool TryRecord(StartupDiagnosticRole role,Exception error,Func<string,bool> write,IReadOnlyList<StartupStep>? steps=null)
     {try{return write(Encode(role,error,steps));}catch{return false;}}
-    private static bool Write(string value)
+    // The repair gave up on an upgrade; an administrator has to act. Versions and
+    // the upgrade identifier only.
+    internal static bool TryRecordUpgrade(string id,string from,string to,int attempts)
+    {try{return Write(JsonSerializer.Serialize(new{Format=1,Upgrade=id,From=from,To=to,Attempts=attempts}),3003);}catch{return false;}}
+    private static bool Write(string value)=>Write(value,1001);
+    private static bool Write(string value,uint id)
     {
         // RegisterEventSource retrieves a handle; an unregistered fixed source
         // falls back to Application. It does not create an event-source key.
         // https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-registereventsourcew
         var handle=RegisterEventSourceW(null,"Yahad");if(handle==IntPtr.Zero)return false;
-        try{return ReportEventW(handle,1,0,1001,IntPtr.Zero,1,0,[value],IntPtr.Zero);}
+        try{return ReportEventW(handle,1,0,id,IntPtr.Zero,1,0,[value],IntPtr.Zero);}
         finally{_=DeregisterEventSource(handle);}
     }
     [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)]private static extern IntPtr RegisterEventSourceW(string? server,string source);

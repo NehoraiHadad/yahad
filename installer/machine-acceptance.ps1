@@ -2,7 +2,10 @@
 # person or administrator observes (Setup results, services, HTTP answers, the
 # account they created), so it keeps gating when the mechanism behind it changes:
 #   install -> ready -> create the first family over the app's own HTTP API ->
-#   restart the service and time it -> uninstall keeping data -> reinstall ->
+#   restart the service and time it -> repair a stopped Runtime -> refuse foreign,
+#   unsigned and tampered releases -> upgrade with a schema change -> refuse a
+#   replay -> a broken release rolls back with the data restored -> an upgrade
+#   killed mid-way is undone by repair -> uninstall keeping data -> reinstall ->
 #   the same account signs in -> uninstall deleting data -> nothing remains.
 # Changes services and machine folders, so it runs only on a disposable
 # administrator machine (CI), never a family PC. Diagnostics and summary.json
@@ -11,6 +14,11 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][string]$Setup,
+    # Signed release directories from installer/ci-build-upgrade-set.ps1.
+    [Parameter(Mandatory=$true)][string]$Base,
+    [Parameter(Mandatory=$true)][string]$Upgrade,
+    [Parameter(Mandatory=$true)][string]$Broken,
+    [Parameter(Mandatory=$true)][string]$Refused,
     [Parameter(Mandatory=$true)][string]$Output,
     [switch]$Disposable
 )
@@ -36,6 +44,27 @@ $removedProgramDataEntries = @('update-authority.json', 'activation.json', 'epoc
 $account = $null
 $origin = $null
 $startSeconds = $null
+$upgradeSeconds = $null
+$rollbackSeconds = $null
+$repairSeconds = $null
+$resumeSeconds = $null
+$baseDirectory = (Resolve-Path -LiteralPath $Base).Path
+$upgradeDirectory = (Resolve-Path -LiteralPath $Upgrade).Path
+$brokenDirectory = (Resolve-Path -LiteralPath $Broken).Path
+$refusedDirectory = (Resolve-Path -LiteralPath $Refused).Path
+function ReleaseOf([string]$Directory) {
+    $file = @(Get-ChildItem -LiteralPath $Directory -Filter 'yahad-windows-*.json')
+    if ($file.Count -ne 1) { throw "Expected one release manifest in $Directory" }
+    return Get-Content -LiteralPath $file[0].FullName -Raw | ConvertFrom-Json
+}
+$baseRelease = ReleaseOf $baseDirectory
+$upgradeRelease = ReleaseOf $upgradeDirectory
+$brokenRelease = ReleaseOf $brokenDirectory
+$upgradeSetup = Join-Path $upgradeDirectory $upgradeRelease.setup.name
+$brokenSetup = Join-Path $brokenDirectory $brokenRelease.setup.name
+$baseSetup = Join-Path $baseDirectory $baseRelease.setup.name
+$upgradeState = Join-Path $programData 'upgrade-state.json'
+function RetainedSetup([string]$Version) { Join-Path $programFiles "versions\$Version\Yahad.Setup.exe" }
 
 function Phase([string]$Name, [scriptblock]$Body) {
     $timer = [Diagnostics.Stopwatch]::StartNew()
@@ -45,8 +74,8 @@ function Phase([string]$Name, [scriptblock]$Body) {
 }
 # Returns the parsed result file and anything Setup wrote to standard output.
 # Standard output is returned to the caller, never echoed.
-function RunSetup([string[]]$Arguments, [string]$Result, [string[]]$Options = @()) {
-    $start = [Diagnostics.ProcessStartInfo]::new($setupPath)
+function RunSetup([string[]]$Arguments, [string]$Result, [string[]]$Options = @(), [string]$Image = $setupPath) {
+    $start = [Diagnostics.ProcessStartInfo]::new($Image)
     $start.UseShellExecute = $false
     $start.RedirectStandardOutput = $true
     foreach ($argument in @($Arguments) + @('--result', $Result) + @($Options)) { $start.ArgumentList.Add($argument) }
@@ -61,6 +90,37 @@ function RunSetup([string[]]$Arguments, [string]$Result, [string[]]$Options = @(
     Write-Output ("SETUP {0} ok={1} code={2} exit={3} seconds={4}" -f $Arguments[0], $value.Ok, $value.Code, $exit, $value.Seconds) | Out-Host
     if (!$value.Ok -or $exit -ne 0) { throw "Setup $($Arguments[0]) failed: $($value.Code)" }
     return [pscustomobject]@{ Result=$value; Stdout=$stdout }
+}
+# A Setup expected to end in this exact outcome, success or refusal.
+function RunSetupExpecting([string]$Image, [string[]]$Arguments, [string]$Result, [string]$Code, [int]$Exit) {
+    $process = Start-Process -FilePath $Image -ArgumentList (@($Arguments | ForEach-Object { '"' + $_ + '"' }) + @('--result', ('"' + $Result + '"'))) -Wait -PassThru -WindowStyle Hidden
+    if (!(Test-Path -LiteralPath $Result)) { throw "Setup exited $($process.ExitCode) without a result" }
+    $value = Get-Content -LiteralPath $Result -Raw | ConvertFrom-Json
+    Write-Output ("SETUP {0} ok={1} code={2} exit={3} seconds={4}" -f $Arguments[0], $value.Ok, $value.Code, $process.ExitCode, $value.Seconds) | Out-Host
+    if ($value.Code -ne $Code -or $process.ExitCode -ne $Exit) { throw "Setup $($Arguments[0]) ended $($value.Code)/$($process.ExitCode), expected $Code/$Exit" }
+    return $value
+}
+function Health { Invoke-RestMethod -Uri "$origin/health/ready" -TimeoutSec 30 }
+function ImagePathOf { (Get-CimInstance -ClassName Win32_Service -Filter "Name='$runtime'").PathName }
+function SignIn {
+    $body = Json @{ name=$account.Name; password=$account.Password }
+    Invoke-RestMethod -Method Post -Uri "$origin/api/login" -Body $body -ContentType 'application/json' -SessionVariable session -TimeoutSec 60 -Headers @{ Origin=$origin } | Out-Null
+    if ((RequireSignedInAccount $session) -ne $familyId) { throw 'The acceptance parent signed in to a different family' }
+}
+# What a person sees of a whole installation at one release: it answers as that
+# release, the family is theirs, the service points at it and nothing is pending.
+function RequireInstalled([string]$Version, [int]$Schema, [string[]]$Retained) {
+    $health = Health
+    if ($health.version -ne $Version -or $health.databaseSchema -ne $Schema) { throw "Running $($health.version)/schema $($health.databaseSchema), expected $Version/schema $Schema" }
+    if ((SetupState) -ne 'complete') { throw 'Family is missing' }
+    SignIn
+    RequireServiceConfiguration
+    if ((ImagePathOf) -notlike "*\versions\$Version\host\*") { throw "ImagePath is $(ImagePathOf), expected version $Version" }
+    if (Test-Path -LiteralPath $upgradeState) { throw 'An upgrade record remains' }
+    $present = @(Get-ChildItem -LiteralPath (Join-Path $programFiles 'versions') -Directory | ForEach-Object Name | Sort-Object)
+    if (($present -join ',') -ne (($Retained | Sort-Object) -join ',')) { throw "Version directories are $($present -join ','), expected $($Retained -join ',')" }
+    $display = (Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Yahad.FirstInstall').DisplayVersion
+    if ($display -ne $Version) { throw "Apps and Features shows $display, expected $Version" }
 }
 function YahadServices { @(Get-Service -Name 'Yahad*' -ErrorAction SilentlyContinue) }
 function RequireInstalledAndReady($Result) {
@@ -107,7 +167,8 @@ function RequireSignedInAccount($Session) {
 }
 function RequireRemovedServices { if ((YahadServices).Count) { throw ('Services remain after removal: ' + ((YahadServices).Name -join ',')) } }
 function Collect {
-    YahadServices | Select-Object Name, Status, StartType | ConvertTo-Json | Set-Content -Encoding utf8NoBOM (Join-Path $out 'services.json')
+    @(YahadServices | ForEach-Object { [ordered]@{ Name=$_.Name; Status=[string]$_.Status; StartType=[string]$_.StartType; ImagePath=(Get-CimInstance -ClassName Win32_Service -Filter "Name='$($_.Name)'").PathName } }) | ConvertTo-Json | Set-Content -Encoding utf8NoBOM (Join-Path $out 'services.json')
+    if (Test-Path -LiteralPath $upgradeState) { Copy-Item -LiteralPath $upgradeState -Destination (Join-Path $out 'upgrade-state.json') }
     $since = $started.AddMinutes(-1)
     # The Yahad source exists only after a startup failure wrote to it; a
     # ProviderName filter for an unregistered source throws, so filter after.
@@ -168,6 +229,86 @@ try {
         RequireInstalledAndReady $install.Result
         if ((SetupState) -ne 'complete') { throw 'Family is missing after restart' }
     }
+    $version = $baseRelease.version
+    $schema = $baseRelease.databaseSchema
+    Phase 'repair' {
+        # A Runtime an administrator (or a crash loop) left stopped and unconfigured.
+        Stop-Service -Name $runtime
+        & sc.exe failure $runtime reset= 0 actions= '' | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Could not clear the failure actions' }
+        & sc.exe failureflag $runtime 0 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Could not clear the failure flag' }
+        $repair = RunSetupExpecting (RetainedSetup $version) @('--repair') (Join-Path $out 'repair-result.json') 'REPAIRED' 0
+        $script:repairSeconds = $repair.Seconds
+        RequireInstalled $version $schema @($version)
+        $null = RunSetupExpecting (RetainedSetup $version) @('--repair') (Join-Path $out 'repair-again-result.json') 'NOTHING_TO_REPAIR' 0
+    }
+    Phase 'refuse-release' {
+        foreach ($case in 'foreign', 'unsigned', 'tampered') {
+            $null = RunSetupExpecting $upgradeSetup @('--quiet-upgrade', (Join-Path $refusedDirectory $case)) (Join-Path $out "refuse-$case-result.json") 'RELEASE_SIGNATURE_INVALID' 2
+        }
+        $null = RunSetupExpecting (RetainedSetup $version) @('--quiet-upgrade', (Join-Path $refusedDirectory 'foreign')) (Join-Path $out 'refuse-retained-result.json') 'RELEASE_SIGNATURE_INVALID' 2
+        # A valid release is installed only by its own signed Setup.
+        $null = RunSetupExpecting $baseSetup @('--quiet-upgrade', $upgradeDirectory) (Join-Path $out 'refuse-mismatch-result.json') 'RELEASE_SETUP_MISMATCH' 2
+        RequireInstalled $version $schema @($version)
+    }
+    Phase 'upgrade' {
+        $result = RunSetupExpecting $upgradeSetup @('--quiet-upgrade', $upgradeDirectory) (Join-Path $out 'upgrade-result.json') 'UPGRADED' 0
+        if ($result.FromVersion -ne $version -or $result.ToVersion -ne $upgradeRelease.version -or $result.RolledBack) { throw 'Upgrade reported the wrong versions' }
+        $script:upgradeSeconds = $result.Seconds
+    }
+    Phase 'upgraded' {
+        if ($upgradeRelease.databaseSchema -ne $schema + 1) { throw 'The upgrade fixture does not change the schema' }
+        RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema @($version, $upgradeRelease.version)
+        $retained = (Get-FileHash -LiteralPath (RetainedSetup $upgradeRelease.version) -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($retained -ne $upgradeRelease.setup.sha256) { throw 'The retained Setup is not the signed one' }
+    }
+    Phase 'refuse-replay' {
+        $null = RunSetupExpecting $baseSetup @('--quiet-upgrade', $baseDirectory) (Join-Path $out 'refuse-downgrade-result.json') 'RELEASE_NOT_NEWER' 2
+        $null = RunSetupExpecting $upgradeSetup @('--quiet-upgrade', $upgradeDirectory) (Join-Path $out 'refuse-same-result.json') 'RELEASE_NOT_NEWER' 2
+    }
+    Phase 'broken-upgrade' {
+        $result = RunSetupExpecting $brokenSetup @('--quiet-upgrade', $brokenDirectory) (Join-Path $out 'broken-result.json') 'ROLLED_BACK_UNHEALTHY' 4
+        if (!$result.RolledBack) { throw 'A broken release did not report its rollback' }
+        $began = @($result.Phases | Where-Object Phase -eq 'rolling_back')
+        if ($began.Count -ne 1) { throw 'The result does not show the rollback' }
+        $script:rollbackSeconds = [math]::Round($result.Seconds - $began[0].Seconds, 1)
+    }
+    Phase 'rolled-back' { RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema @($version, $upgradeRelease.version) }
+    Phase 'repair-resume' {
+        # A real kill, with no help from the product: the broken release has migrated
+        # the database and is failing health when its Setup disappears.
+        $killed = Start-Process -FilePath $brokenSetup -ArgumentList @('--quiet-upgrade', ('"' + $brokenDirectory + '"'), '--result', ('"' + (Join-Path $out 'killed-result.json') + '"')) -PassThru -WindowStyle Hidden
+        try {
+            $deadline = [Diagnostics.Stopwatch]::StartNew()
+            while ($true) {
+                $seen = $null
+                # The record is replaced atomically but may be open for a moment.
+                try { if (Test-Path -LiteralPath $upgradeState) { $seen = (Get-Content -LiteralPath $upgradeState -Raw | ConvertFrom-Json).Phase } } catch { }
+                if ($seen -eq 'started') { break }
+                if ($killed.HasExited) { throw "Setup ended early with $($killed.ExitCode)" }
+                if ($deadline.Elapsed -ge [TimeSpan]::FromMinutes(6)) { throw "Upgrade never started the new release; last phase $seen" }
+                Start-Sleep -Milliseconds 200
+            }
+            # The window in which the Runtime migrates; it reaches the database first.
+            $migrated = [Diagnostics.Stopwatch]::StartNew()
+            while ($migrated.Elapsed -lt [TimeSpan]::FromSeconds(120)) {
+                $status = 0
+                try { Invoke-WebRequest -Uri "$origin/health/ready" -UseBasicParsing -TimeoutSec 5 | Out-Null } catch { if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode } }
+                if ($status -eq 503) { break }
+                Start-Sleep -Milliseconds 500
+            }
+            if ($status -ne 503) { throw 'The broken release never answered health' }
+        } finally { if (!$killed.HasExited) { $killed.Kill() }; $killed.WaitForExit() }
+        if (!(Test-Path -LiteralPath $upgradeState)) { throw 'A killed upgrade left no record' }
+        if ((Test-Path -LiteralPath (Join-Path $out 'killed-result.json'))) { throw 'The killed Setup finished before it was killed' }
+        $result = RunSetupExpecting (RetainedSetup $upgradeRelease.version) @('--repair') (Join-Path $out 'resume-result.json') 'REPAIRED' 0
+        if (!$result.RolledBack) { throw 'Repair did not roll back the interrupted upgrade' }
+        $script:resumeSeconds = $result.Seconds
+    }
+    Phase 'resumed' { RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema @($version, $upgradeRelease.version) }
+    # Removal and reinstall from here belong to the upgraded release.
+    $setupPath = $upgradeSetup
     Phase 'uninstall-keep' {
         $removed = RunSetup @('--quiet-uninstall', '--data', 'keep') (Join-Path $out 'uninstall-keep-result.json')
         if ($removed.Result.DataPreserved -ne $true) { throw 'Keep-data removal did not report preserved data' }
@@ -184,9 +325,7 @@ try {
         RequireServiceConfiguration
         if ($reinstall.Stdout.Trim()) { throw 'Reinstall offered a new setup link over kept data' }
         if ((SetupState) -ne 'complete') { throw 'Kept family is missing after reinstall' }
-        $body = Json @{ name=$account.Name; password=$account.Password }
-        Invoke-RestMethod -Method Post -Uri "$origin/api/login" -Body $body -ContentType 'application/json' -SessionVariable signedIn -TimeoutSec 60 -Headers @{ Origin=$origin } | Out-Null
-        if ((RequireSignedInAccount $signedIn) -ne $familyId) { throw 'Signed-in account belongs to a different family after reinstall' }
+        RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema @($upgradeRelease.version)
     }
     Phase 'uninstall' { RunSetup @('--quiet-uninstall', '--data', 'delete') (Join-Path $out 'uninstall-result.json') | Out-Null }
     Phase 'removed' {
@@ -199,10 +338,6 @@ catch { $state = 'Failed'; Write-Output "FAILED $($_.Exception.Message)"; throw 
 finally {
     $account = $null
     try { Collect } catch { Write-Output "COLLECTION_FAILED $($_.Exception.Message)" }
-    [ordered]@{ State=$state; FailedPhase=$failedPhase; Phases=$phases; StartSeconds=$startSeconds; TotalSeconds=[math]::Round(((Get-Date)-$started).TotalSeconds, 1);
-        NotCovered=[ordered]@{
-            'upgrade-n-to-n+1'='No local upgrade path: Setup over a committed install keeps the installed version, and the updater accepts only stable releases of NehoraiHadad/yahad from api.github.com.'
-            'broken-n+1-rollback'='Depends on the upgrade path above.'
-        } } |
+    [ordered]@{ State=$state; FailedPhase=$failedPhase; Phases=$phases; StartSeconds=$startSeconds; UpgradeSeconds=$upgradeSeconds; RollbackSeconds=$rollbackSeconds; RepairSeconds=$repairSeconds; ResumeSeconds=$resumeSeconds; TotalSeconds=[math]::Round(((Get-Date)-$started).TotalSeconds, 1) } |
         ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8NoBOM (Join-Path $out 'summary.json')
 }

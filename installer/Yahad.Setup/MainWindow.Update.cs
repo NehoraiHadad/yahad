@@ -4,18 +4,6 @@ namespace Yahad.Setup;
 public partial class MainWindow
 {
     private bool existingUpdateProfile;
-    internal static bool HasExistingUpdateInstallation()
-    {
-        // Presence through public parents only. A preserved computer-only
-        // installation has no binaries/LAN state but still has enrollment.
-        try
-        {
-            return HasExistingUpdateInstallation(path=>Directory.EnumerateFileSystemEntries(Path.GetDirectoryName(path)!,Path.GetFileName(path),SearchOption.TopDirectoryOnly).Any());
-        }
-        catch{return true;}
-    }
-    internal static bool HasExistingUpdateInstallation(Func<string,bool> present)
-        =>new[]{InstallLocations.State,InstallLocations.Binaries,InstallLocations.RemovalStateFile}.Any(present);
     private void InitializeUpdate(bool existing)
     {
         existingUpdateProfile=existing;

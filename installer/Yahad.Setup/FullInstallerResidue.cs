@@ -7,7 +7,7 @@ namespace Yahad.Setup;
 // and renamed over it. An interrupted replacement leaves only that partial.
 internal static class FullInstallerResidue
 {
-    internal static readonly string[] Metadata=["installer-state.json",InstalledLaunch.FileName,"lan-preparation.json","setup-capability.json","master-key"];
+    internal static readonly string[] Metadata=["installer-state.json","upgrade-state.json",InstalledLaunch.FileName,"lan-preparation.json","setup-capability.json","master-key"];
     internal static bool IsOwnedName(string name)
     {
         foreach(var target in Metadata)

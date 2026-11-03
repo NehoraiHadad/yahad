@@ -10,13 +10,15 @@ namespace Yahad.Setup;
 // nowhere else; without it a quiet install leaves first-family setup to the window.
 internal static class QuietSetup
 {
-    internal sealed record Request(bool Uninstall,UninstallMode Mode,bool? AutomaticUpdates,string ResultPath,bool SetupLinkToStdout=false);
+    internal sealed record Request(bool Uninstall,UninstallMode Mode,bool? AutomaticUpdates,string ResultPath,bool SetupLinkToStdout=false,string? UpgradeDirectory=null,bool Repair=false);
     internal static Request? Parse(string[] args)=>args switch
     {
         ["--quiet-install","--updates",var updates,"--result",var path,"--setup-link","stdout"]=>Install(updates,path,true),
         ["--quiet-install","--updates",var updates,"--result",var path]=>Install(updates,path,false),
         ["--quiet-uninstall","--data","keep","--result",var path]=>new(true,UninstallMode.KeepData,null,Full(path)),
         ["--quiet-uninstall","--data","delete","--result",var path]=>new(true,UninstallMode.DeleteData,null,Full(path)),
+        ["--quiet-upgrade",var directory,"--result",var path]=>new(false,UninstallMode.KeepData,null,Full(path),UpgradeDirectory:Full(directory)),
+        ["--repair","--result",var path]=>new(false,UninstallMode.KeepData,null,Full(path),Repair:true),
         _=>null
     };
     private static Request? Install(string updates,string path,bool link)=>updates switch
@@ -29,9 +31,16 @@ internal static class QuietSetup
         SetupResult result;var clock=System.Diagnostics.Stopwatch.StartNew();var phases=new List<object>();string? current=null;
         // Phase entry times only, so an operator or CI can see where time goes.
         void Progress(SetupProgress p){lock(phases){if(p.Phase==current)return;current=p.Phase;phases.Add(new{p.Phase,Seconds=Math.Round(clock.Elapsed.TotalSeconds,1)});}}
+        if(request.Repair||request.UpgradeDirectory is not null)
+        {
+            var outcome=request.Repair?await RepairHost.RunAsync(Progress):await UpgradeHost.RunAsync(request.UpgradeDirectory!,Progress);
+            var done=outcome.Result;
+            File.WriteAllBytes(request.ResultPath,JsonSerializer.SerializeToUtf8Bytes(new{done.Ok,done.Code,done.Url,done.DataPreserved,done.Failure,FromVersion=outcome.From,ToVersion=outcome.To,outcome.RolledBack,Phases=phases,Seconds=Math.Round(clock.Elapsed.TotalSeconds,1)}));
+            return outcome.Exit;
+        }
         try
         {
-            var update=Consent(request,MainWindow.HasExistingUpdateInstallation(),DateTimeOffset.UtcNow);
+            var update=Consent(request,ExistingInstallation.Present(),DateTimeOffset.UtcNow);
             result=await SetupOperation.RunAsync(request.Uninstall,Progress,CancellationToken.None,request.Mode,null,update:update);
             if(result.Ok&&request.Uninstall)ShortcutCleanup.TryRemove(result.Url);
         }

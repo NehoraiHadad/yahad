@@ -7,6 +7,11 @@ param(
     [string]$DotNet = 'dotnet',
     [string]$Python = 'python',
     [string]$PackageCache,
+    # A fully qualified new directory; the default is .local/packages/<commit>.
+    [string]$Output,
+    # The DER public key this build trusts for upgrades. Never a private key, and
+    # none is committed. Without one the Setup installs but refuses every upgrade.
+    [string]$ReleaseKey,
     [switch]$CheckOnly
 )
 $ErrorActionPreference = 'Stop'
@@ -45,7 +50,16 @@ try {
     & $pythonExe -c 'import sys; from pathlib import Path; from installer.windows import dependencies as d; p=Path(sys.argv[1]); d.validate_staged({x.relative_to(p).as_posix():x for x in p.rglob("*") if x.is_file()}); print("Verified vendor inputs")' $vendorRoot
     if ($LASTEXITCODE -ne 0) { throw 'Pinned vendor validation failed' }
     $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-    $output = Join-Path $repo ('.local/packages/' + $commit.Substring(0,12))
+    if ($Output -and ![IO.Path]::IsPathFullyQualified($Output)) { throw 'Output must be a fully qualified path' }
+    $output = if ($Output) { $Output } else { Join-Path $repo ('.local/packages/' + $commit.Substring(0,12)) }
+    $releaseKeyId = $null
+    if ($ReleaseKey) {
+        $ReleaseKey = (Resolve-Path -LiteralPath $ReleaseKey).Path
+        $keyBytes = [IO.File]::ReadAllBytes($ReleaseKey)
+        # A P-256 SubjectPublicKeyInfo is always this size; a PEM or private key is not.
+        if ($keyBytes.Length -ne 91) { throw 'ReleaseKey must be a DER P-256 public key (key.spki)' }
+        $releaseKeyId = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($keyBytes)).ToLowerInvariant().Substring(0,16)
+    }
     $platform = Join-Path $PSScriptRoot 'artifacts/Yahad.Platform.Bundle'
     if ((Test-Path -LiteralPath $output) -or (Test-Path -LiteralPath $platform)) {
         throw 'Fresh package output and installer/artifacts/Yahad.Platform.Bundle required; use a clean checkout'
@@ -72,6 +86,8 @@ try {
     RunStep 'web' $nodeExe @($npmCli,'run','build')
     $restore = '-p:RestoreConfigFile=' + (Join-Path $PSScriptRoot 'NuGet.Config')
     $common = @('-c','Release','-r','win-x64','--self-contained','true','-p:RuntimeFrameworkVersion=10.0.14','-p:UseSharedCompilation=false','-p:DebugType=None','-p:DebugSymbols=false',$restore,'-m:1')
+    # Every publish carries it, so no step can reuse a keyless Install.Core.
+    if ($ReleaseKey) { $common += "-p:YahadReleaseKey=$ReleaseKey" }
     foreach ($project in @('Yahad.Platform','Yahad.ServiceHost')) {
         $destination = if ($project -eq 'Yahad.Platform') { $platform } else { Join-Path $output $project }
         RunStep $project $dotnetExe (@('publish',"installer/$project/$project.csproj") + $common + @('-o',$destination))
@@ -109,6 +125,26 @@ try {
     $verified = $observed | ConvertFrom-Json
     $manifest = Get-Content -LiteralPath (Join-Path $system 'install-manifest.json') -Raw | ConvertFrom-Json
     if ($verified.sourceCommit -ne $commit -or $verified.setupSourceCommit -ne $commit -or $verified.coreSourceCommit -ne $commit -or $verified.embeddedZip -ne $manifest.ZipSha256 -or $verified.files -ne $manifest.Files.Count -or $verified.systemOperationsInvoked -ne $false) { throw 'Embedded source/package identity mismatch' }
+    if ($verified.windowingLoaded -ne $false) { throw 'An unattended Setup mode loaded WPF' }
+    if ($verified.releaseKeyId -ne $releaseKeyId) { throw 'Embedded release key mismatch' }
+    if ($releaseKeyId) {
+        # The unsigned release. Signing is the maintainer's own local step.
+        $schema = [regex]::Match((Get-Content src/database-schema.ts -Raw), 'export const DATABASE_SCHEMA = (\d+);')
+        if (!$schema.Success) { throw 'DATABASE_SCHEMA not found' }
+        $release = Join-Path $output 'release'
+        New-Item -ItemType Directory -Path $release | Out-Null
+        $setupName = "Yahad.Setup-$version.exe"
+        Copy-Item -LiteralPath $executable -Destination (Join-Path $release $setupName)
+        $releaseManifest = Join-Path $release "yahad-windows-$version.json"
+        $text = [ordered]@{format=1;product='yahad-windows';version=$version;sourceCommit=$commit;
+            setup=[ordered]@{name=$setupName;sha256=(Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerInvariant();bytes=(Get-Item -LiteralPath $executable).Length};
+            databaseSchema=[int]$schema.Groups[1].Value;minimumFromVersion='0.0.0';keyId=$releaseKeyId;createdUnix=[long](& git show -s --format=%ct HEAD)} | ConvertTo-Json -Compress -Depth 3
+        [IO.File]::WriteAllText($releaseManifest, $text, [Text.UTF8Encoding]::new($false))
+        Write-Output "RELEASE_UNSIGNED $releaseManifest"
+        Write-Output "SIGN_WITH node scripts/windows-release-key.mjs sign <key.pem> `"$releaseManifest`""
+    } else {
+        Write-Warning 'Built without -ReleaseKey: this Setup installs but refuses every upgrade.'
+    }
     RequireFrozenSource
     [ordered]@{sourceCommit=$commit;sourceTree=(& git rev-parse 'HEAD^{tree}').Trim();version=$version;setupSha256=(Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerInvariant();verification=$verified;installed=$false;published=$false} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'package-build.json') -Encoding utf8
     Write-Output "PACKAGE_BUILT $executable"

@@ -11,8 +11,8 @@ public partial class MainWindow:Window
     internal MainWindow(bool uninstall=false,IReadOnlyList<LanChoice>? lanChoices=null,bool? existingAccess=null,bool? existingUpdate=null)
     {
         InitializeComponent();VersionBadge.Text=ApplicationRelease.Version+" · Windows";this.uninstall=uninstall;Closing+=OnClosing;InitializeLan(lanChoices,existingAccess??(lanChoices is null&&HasExistingAccess()));
-        InitializeUpdate(existingUpdate??HasExistingUpdateInstallation());
-        if(!uninstall&&(existingAccess??(System.IO.File.Exists(InstallLocations.InstallerImage)||PendingRemoval()))||!uninstall&&existingUpdateProfile)RemovalEntry.Visibility=Visibility.Visible;
+        InitializeUpdate(existingUpdate??ExistingInstallation.Present());
+        if(!uninstall&&(existingAccess??(System.IO.Directory.Exists(InstallLocations.Binaries)||PendingRemoval()))||!uninstall&&existingUpdateProfile)RemovalEntry.Visibility=Visibility.Visible;
         if(uninstall)
         {
             Title="יחד | הסרה";Eyebrow.Text="הסרת יחד";Heading.Text="מסירים את יחד.\nמה עושים עם הנתונים?";
