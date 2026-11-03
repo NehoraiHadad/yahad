@@ -144,13 +144,13 @@ internal static class InstallerReadinessTests
             var root=SafeDirectory.CreatePrivateSession(Path.Combine(Path.GetTempPath(),"yahad-installer-readiness"));Files=InstalledStateFiles.Private(root);
             Files.EnsureDirectory(Files.PathOf(".authority"));
             Anchor=new(1,Guid.NewGuid().ToString("N"),InstalledUpdaterLayout.RuntimeServiceName,InstalledUpdaterLayout.AuthorityServiceName,
-                "S-1-5-21-1-2-3-1001",new string('1',64),new string('2',64));
+                new string('1',64),new string('2',64));
             SetActivation(1,Release);
         }
         internal void SetActivation(long epoch,AppRelease release)
         {
             var activation=new InstalledActivation(1,Anchor.InstallationId,epoch,release.Id,new string('3',32),6,6,
-                new string('4',64),new string('5',64),new string('6',64),new string('7',64),new string('8',64),"committed",null);
+                new string('4',64),new string('5',64),new string('6',64),new string('7',64),"committed",null);
             var bytes=JsonSerializer.SerializeToUtf8Bytes(activation);File.WriteAllBytes(Files.PathOf("activation.json"),bytes);
             Binding=new(Anchor.InstallationId,InstalledActivationResolver.Hash(bytes));
         }

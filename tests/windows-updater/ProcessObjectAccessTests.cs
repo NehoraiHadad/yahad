@@ -77,10 +77,10 @@ internal static class ProcessObjectAccessTests
             Assert(Mask(kernel.Process,Authority)==0x101101&&Mask(kernel.Token,Authority)==8&&kernel.PublishToken&&kernel.Disposed);
             Prefix(process,kernel.Process);Prefix(token,kernel.Token);Assert((Mask(kernel.Process,Authority)&0xc0afe)==0);return Task.CompletedTask;
         });
-        await check("own Authority process publishes read-only peer identity to Runtime and original owner",()=>
+        await check("own Authority process publishes read-only peer identity to Runtime only",()=>
         {
-            var kernel=new Kernel(Authority);InstalledProcessObjectAccess.PublishAuthorityPeerAccess(Authority,Runtime,Owner,kernel);
-            Assert(Mask(kernel.Process,Runtime)==0x101000&&Mask(kernel.Process,Owner)==0x101000&&Mask(kernel.Token,Runtime)==8&&Mask(kernel.Token,Owner)==8);return Task.CompletedTask;
+            var kernel=new Kernel(Authority);InstalledProcessObjectAccess.PublishAuthorityPeerAccess(Authority,Runtime,kernel);
+            Assert(Mask(kernel.Process,Runtime)==0x101000&&Mask(kernel.Token,Runtime)==8&&Mask(kernel.Process,Owner)==0&&Mask(kernel.Token,Owner)==0);return Task.CompletedTask;
         });
         await check("own client publication leaves token DACL untouched because peer identity uses pipe identification",()=>
         {
@@ -130,14 +130,14 @@ internal static class ProcessObjectAccessTests
                 };
                 await Reject(()=>Publish(kernel));Assert(kernel.Writes.Count==0);
             });
-        foreach(var fault in new[]{"runtime-peer","authority-peer","owner-service"})
+        foreach(var fault in new[]{"runtime-peer","authority-peer"})
             await check("own-object publisher cannot redirect immutable role "+fault,async()=>
             {
                 var kernel=new Kernel(fault=="runtime-peer"?Runtime:Authority);
                 await Reject(()=>
                 {
                     if(fault=="runtime-peer")InstalledProcessObjectAccess.PublishRuntimePeerAccess(Runtime,Other,kernel);
-                    else InstalledProcessObjectAccess.PublishAuthorityPeerAccess(Authority,fault=="authority-peer"?Other:Runtime,fault=="owner-service"?Runtime:Owner,kernel);return Task.CompletedTask;
+                    else InstalledProcessObjectAccess.PublishAuthorityPeerAccess(Authority,fault=="authority-peer"?Other:Runtime,kernel);return Task.CompletedTask;
                 });Assert(kernel.Writes.Count==0);
             });
         await check("token generation replacement prevents publishing rights onto a stale primary token",async()=>

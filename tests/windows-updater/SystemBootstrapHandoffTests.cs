@@ -54,7 +54,7 @@ internal static class SystemBootstrapHandoffTests
         {
             var f=new Fixture();f.Kernel.ReplaceOutcome=1176;f.Kernel.ForeignFile=true;var op=f.Authorize();using var journal=new SystemBootstrapJournal(f.State,op);
             await Denied(()=>f.Update().RunAsync(op,journal,default));Assert(journal.Current!.Phase==SystemBootstrapPhase.RecoveryRequired);
-            Assert(File.ReadAllText(f.Kernel.Entry(SystemComponentKind.Owner))=="foreign-unowned-by-plan");f.Kernel.AssertData();
+            Assert(File.ReadAllText(f.Kernel.Entry(SystemComponentKind.Authority))=="foreign-unowned-by-plan");f.Kernel.AssertData();
         });
         await check("helper custody loss prevents publication and native proof cannot be inferred from a journal",async()=>
         {
@@ -301,18 +301,20 @@ internal static class SystemBootstrapHandoffTests
     private static string Hash(byte[] bytes)=>Convert.ToHexStringLower(SHA256.HashData(bytes));
     private sealed class Fixture
     {
-        private readonly PolicyFixture existing=new();private readonly Resolver resolver=new();
-        internal InstalledStateFiles State=>existing.Files;internal FullSystemUpdatePolicy Policy{get;}internal Kernel Kernel{get;}
+        private readonly Resolver resolver=new();private readonly DateTimeOffset now=new(2026,10,31,20,0,0,TimeSpan.Zero);
+        internal InstalledStateFiles State{get;}internal FullSystemUpdatePolicy Policy{get;}internal Kernel Kernel{get;}
         internal string Installation{get;}private readonly string receipt=new('d',64);
         internal Fixture()
         {
-            var binding=WindowsInstallationReader.Parse(State.Read(State.PathOf("bootstrap.json"),1024));Installation=binding.InstallationId;
-            var enrollment=new FullSystemEnrollment(1,FullSystemUpdatePolicy.Profile,Guid.NewGuid().ToString("N"),Installation,existing.Owner.Sid,NativeCandidateIntake.Repository,"stable","https-github-unsigned",2,existing.Now.AddMinutes(-1).ToUnixTimeSeconds(),FullSystemUpdatePolicy.RequiredScopes.ToArray());
+            State=InstalledStateFiles.Private(SafeDirectory.CreatePrivateSession(Path.Combine(Path.GetTempPath(),"yahad-bootstrap-handoff")));
+            Directory.CreateDirectory(State.PathOf("intake"));Directory.CreateDirectory(State.PathOf("grants"));Installation=Guid.NewGuid().ToString("N");
+            File.WriteAllBytes(State.PathOf("bootstrap.json"),JsonSerializer.SerializeToUtf8Bytes(new{schema=1,service=ServiceDefinition.Name,installationId=Installation,activationReceiptDigest=new string('a',64)}));
+            var enrollment=new FullSystemEnrollment(1,FullSystemUpdatePolicy.Profile,Guid.NewGuid().ToString("N"),Installation,NativeCandidateIntake.Repository,"stable","https-github-unsigned",2,now.AddMinutes(-1).ToUnixTimeSeconds(),FullSystemUpdatePolicy.RequiredScopes.ToArray());
             var bytes=JsonSerializer.SerializeToUtf8Bytes(enrollment);File.WriteAllBytes(State.PathOf("intake/full-system-enrollment.json"),bytes);var policy=Hash(bytes);
-            var grant=new FullSystemModeGrant(1,Guid.NewGuid().ToString("N"),Installation,existing.Owner.Sid,enrollment.Id,policy,existing.Now.ToUnixTimeSeconds());
-            File.WriteAllBytes(State.PathOf("owner-ledger/system-grant-"+grant.Id+".json"),JsonSerializer.SerializeToUtf8Bytes(grant));
+            var grant=new FullSystemModeGrant(1,Guid.NewGuid().ToString("N"),Installation,enrollment.Id,policy,now.ToUnixTimeSeconds());
+            File.WriteAllBytes(State.PathOf("grants/system-grant-"+grant.Id+".json"),JsonSerializer.SerializeToUtf8Bytes(grant));
             File.WriteAllBytes(State.PathOf("intake/mode.json"),JsonSerializer.SerializeToUtf8Bytes(new{Format=2,InstallationId=Installation,Mode="auto",DelegationId=grant.Id,ModeControlAllowed=true,GrantKind="system"}));
-            Policy=FullSystemUpdatePolicy.Open(State,Installation,existing.Owner.Sid,policy,()=>existing.Now,resolver);
+            Policy=FullSystemUpdatePolicy.Open(State,Installation,policy,()=>now,resolver);
             Kernel=new(Installation);SetCandidate("0.6.1");
         }
         internal void SetCandidate(string version)
@@ -370,7 +372,7 @@ internal static class SystemBootstrapHandoffTests
             foreach(var file in component.Files)
             {
                 var target=Live(kind,file.RelativePath);
-                if(kind==SystemComponentKind.Owner&&ReplaceOutcome!=0&&++count==1)
+                if(kind==SystemComponentKind.Authority&&ReplaceOutcome!=0&&++count==1)
                 {
                     if(ReplaceOutcome is 1176 or 1177){var backup=Path.Combine(Root,"backups",Guid.NewGuid().ToString("N"));Directory.CreateDirectory(Path.GetDirectoryName(backup)!);File.Move(target,backup);}
                     if(ForeignFile)File.WriteAllText(Entry(kind),"foreign-unowned-by-plan");throw new Win32Exception(ReplaceOutcome);

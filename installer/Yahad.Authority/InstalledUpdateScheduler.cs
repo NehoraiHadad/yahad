@@ -19,9 +19,6 @@ internal sealed class InstalledUpdateScheduler
     private readonly Func<bool>? candidateFailed;
     private UpdateScheduleState state=new(1,0,null,null,0,null,null,0,null,0);
     internal UpdateScheduleState Status=>state;
-    internal InstalledUpdateScheduler(InstalledStateFiles files,Func<CancellationToken,Task<IntakeSelection?>> check,
-        Func<CancellationToken,Task<EndpointReply>> apply,Func<Task?> execution,Func<string> phase,Func<DateTimeOffset> clock,Func<bool>? candidateFailed=null)
-        :this(files,async token=>{var candidate=await check(token);return candidate is null?null:new ScheduledUpdateCandidate(candidate.Target);},apply,execution,phase,clock,candidateFailed){}
     internal InstalledUpdateScheduler(InstalledStateFiles files,Func<CancellationToken,Task<ScheduledUpdateCandidate?>> check,
         Func<CancellationToken,Task<EndpointReply>> apply,Func<Task?> execution,Func<string> phase,Func<DateTimeOffset> clock,Func<bool>? candidateFailed=null)
     {
@@ -38,7 +35,7 @@ internal sealed class InstalledUpdateScheduler
         var state=NativeJson.Read<UpdateScheduleState>(files.Read(path,8192));
         if(state.Format!=1||state.NextCheckUnix<0||state.DeferredUntilUnix<0||state.Failures is <0 or >30||state.TargetFailures is <0 or >30||
             state.LastUpdateUnix is <0||state.LastCheckUnix is <0||state.LastUpdateOperationId is not null&&state.LastUpdateUnix is null||
-            state.Error is not(null or "check_failed" or "update_failed" or "approval_required" or "quarantined" or "storage" or "maintenance"))throw new IOException("SCHEDULER_STATE");
+            state.Error is not(null or "check_failed" or "update_failed" or "quarantined" or "storage" or "maintenance"))throw new IOException("SCHEDULER_STATE");
         if(state.FailedTarget is {} f)InstalledActivationResolver.Digest(f);if(state.QuarantinedTarget is {} q)InstalledActivationResolver.Digest(q);
         if(state.LastUpdateOperationId is {} operation)InstalledActivationResolver.Id(operation);return state;
     }
@@ -62,7 +59,7 @@ internal sealed class InstalledUpdateScheduler
         var rpc=NativeJson.Read<JsonElement>(files.Read(files.PathOf(required[2]),32768));var rpcDone=NativeJson.Read<JsonElement>(files.Read(files.PathOf(required[3]),8192));
         if(rpc.GetProperty("Id").GetString()!=operationId||rpc.GetProperty("Profile").GetString()!=FullSystemUpdatePolicy.Profile||rpc.GetProperty("Action").GetString() is not("check" or "install")||rpc.GetProperty("Target").GetString()!=admission.SourceReceiptDigest||rpcDone.GetProperty("Id").GetString()!=operationId)throw new IOException("SCHEDULER_RECOVERED_RPC_BINDING");
         if(rpcDone.GetProperty("Phase").GetString()!="healthy"||rpcDone.TryGetProperty("Error",out var error)&&error.ValueKind!=JsonValueKind.Null)return Task.FromResult(false);
-        var intake=new InstalledIntakeSelection(files,anchor,()=>DateTimeOffset.UtcNow);var head=intake.Head();
+        var intake=new InstalledIntakeSelection(files,anchor);var head=intake.Head();
         if(head.ReleaseDigest!=admission.ApplicationBundleDigest||head.DataId!=(data.MigrationAttempt?.NewDataId??plan.NewDataId??plan.DataId)||head.MinimumSchema!=admission.TargetSchema||head.MaximumSchema!=admission.TargetSchema)return Task.FromResult(false);
         // The native done handle pins this exact file while its timestamp is read.
         var completedUnix=new DateTimeOffset(File.GetLastWriteTimeUtc(nativePath)).ToUnixTimeSeconds();if(completedUnix<=0)throw new IOException("SCHEDULER_RECOVERED_TIME");
@@ -102,7 +99,6 @@ internal sealed class InstalledUpdateScheduler
             // Explicit check bypasses the check cadence, never a parent's defer.
             if(now<state.DeferredUntilUnix)return;
             cancellation.ThrowIfCancellationRequested();var reply=await apply(cancellation);
-            if(reply.State=="approval_required"){state=state with{Error="approval_required"};Save();return;}
             if(reply.Mode=="notify"||reply.State!="queued")
             {if(reply.Mode=="auto"){state=state with{NextCheckUnix=clock().ToUnixTimeSeconds()+60};Save();}return;}
             var work=execution();if(work is not null)await work.WaitAsync(cancellation);

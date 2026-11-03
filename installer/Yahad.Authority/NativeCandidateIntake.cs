@@ -29,7 +29,6 @@ internal sealed class NativeCandidateIntake : IDisposable
     private const int MaximumFiles=50000,MaximumManifestBytes=8*1024*1024;
     private readonly InstalledStateFiles files;
     private readonly InstalledAuthorityAnchor anchor;
-    private readonly InstalledIntakeSelection selection;
     private readonly HttpClient client;
     private readonly Action<string>? fault;
     private readonly Func<long> availableBytes;
@@ -44,7 +43,7 @@ internal sealed class NativeCandidateIntake : IDisposable
 
     internal NativeCandidateIntake(InstalledStateFiles files,InstalledAuthorityAnchor anchor,Func<DateTimeOffset> clock,HttpMessageHandler? transport=null,Action<string>? fault=null,Func<long>? availableBytes=null)
     {
-        this.files=files;this.anchor=anchor;selection=new(files,anchor,clock);this.fault=fault;
+        this.files=files;this.anchor=anchor;this.fault=fault;
         this.availableBytes=availableBytes??(()=>new DriveInfo(Path.GetPathRoot(files.Root)!).AvailableFreeSpace);
         // The injected transport is trusted test/composition code, never IPC input.
         client=new(transport??new HttpClientHandler{AllowAutoRedirect=false,UseProxy=false,UseCookies=false,AutomaticDecompression=DecompressionMethods.None}){Timeout=Timeout.InfiniteTimeSpan};
@@ -71,68 +70,6 @@ internal sealed class NativeCandidateIntake : IDisposable
         var release=new Release(source.ReleaseId,source.Tag,source.Version,source.AssetId,source.AssetName,source.Bytes,source.ArchiveSha256,source.AssetUrl);
         requireFullPolicy();RotateArchiveCache(retained,source.ArchiveSha256,token);RequireSpace(checked(Allocated(source.Bytes-recovery.ReusableDownloadBytes(Hash(JsonSerializer.SerializeToUtf8Bytes(release)),source.ArchiveSha256,source.Bytes))+4*allocationUnit));
         await Download(release,recovery,token,requireFullPolicy);return archive;
-    }
-
-    internal async Task<IntakeSelection?> CheckAndPublishAsync(CancellationToken cancellation)
-    {
-        if(!OperatingSystem.IsWindows()||RuntimeInformation.OSArchitecture!=Architecture.X64)throw Error("PLATFORM");
-        if(files.IsSingleService)throw Error("SPLIT_AUTHORITY_REQUIRED");
-        files.ValidateRoot();var enrollment=NativeUpdateEnrollmentReader.Require(files,anchor);
-        files.EnsureDirectory(files.PathOf("intake"));files.EnsureDirectory(files.PathOf("payloads"));
-        // The existing native exclusive lease also checks no-follow, single-link and
-        // role ACLs. A second publisher cannot download or expose a partial candidate.
-        using var operation=files.Lease(files.PathOf("intake"));
-        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancellation);deadline.CancelAfter(TimeSpan.FromMinutes(10));var token=deadline.Token;
-        allocationUnit=VolumeAllocationUnit();var recovery=new NativeIntakeRecovery(files,fault:fault,requireSpace:bytes=>RequireSpace(Allocated(bytes)+allocationUnit));recovery.Reconcile(token);
-        if(Directory.EnumerateFiles(files.PathOf("intake"),"available.json.partial-*").Any())throw Error("RECONCILIATION_REQUIRED");
-        var retained=InspectRetained(token,recovery);
-        var head=selection.Head();var headDigest=Hash(files.Read(files.PathOf("activation.json"),16384));
-        InstalledActivationResolver.Digest(head.ReleaseDigest);var installedBytes=files.Read(files.PathOf("payloads/"+head.ReleaseDigest+"/bundle.json"),MaximumManifestBytes);
-        if(Hash(installedBytes)!=head.ReleaseDigest)throw Error("INSTALLED_MANIFEST");var installed=NativeJson.Read<JsonElement>(installedBytes);
-        var installedVersion=String(installed,"version");RequireVersion(installedVersion);
-        var currentBuild=ReadJson("payloads/"+head.ReleaseDigest+"/legal/build-inputs.json",65536);
-        var currentSchema=Int(currentBuild,"databaseSchema");
-        if(currentSchema is <1 or >100000||currentSchema<head.MinimumSchema||currentSchema>head.MaximumSchema)throw Error("INSTALLED_SCHEMA");
-        var metadata=await FetchMetadata(token);var release=ParseRelease(metadata);
-        if(Version.Parse(release.Version)<Version.Parse(installedVersion))throw Error("DOWNGRADE");
-        if(release.Version==installedVersion)return null;
-        var archivePath=files.PathOf("intake/archive-"+release.Sha256+".zip");
-        if(File.Exists(archivePath))
-        {
-            using var cached=new PinnedStream(files.Open(archivePath));CopyVerified(cached,Stream.Null,release.Size,release.Sha256,token);
-        }
-        else
-        {
-            // Only obsolete, completely verified archive caches may be retired.
-            // Source/receipt audit, payloads, data and interrupted residue remain.
-            if(NativeUpdateEnrollmentReader.Require(files,anchor)!=enrollment)throw Error("ENROLLMENT_CHANGED");
-            RotateArchiveCache(retained,release.Sha256,token);
-            RequireSpace(checked(Allocated(release.Size-recovery.ReusableDownloadBytes(Hash(JsonSerializer.SerializeToUtf8Bytes(release)),release.Sha256,release.Size))+4*allocationUnit));
-            await Download(release,recovery,token,()=>{if(NativeUpdateEnrollmentReader.Require(files,anchor)!=enrollment)throw Error("ENROLLMENT_CHANGED");});
-        }
-        fault?.Invoke("download_verified");
-        using var archiveBytes=new PinnedStream(files.Open(archivePath));CheckCentralDirectory(archiveBytes);
-        using var archive=new ZipArchive(archiveBytes,ZipArchiveMode.Read,leaveOpen:true);
-        var entries=ArchiveEntries(archive);var manifest=ReadEntry(entries["bundle.json"],MaximumManifestBytes,token);
-        var plan=Plan(manifest,release.Version,currentSchema,entries);var digest=Hash(manifest);
-        _=StageApplicationPlan(manifest,plan,digest,entries,token);
-        // Downloaded bytes never authorize use of a different data/key/policy head.
-        if(NativeUpdateEnrollmentReader.Require(files,anchor)!=enrollment)throw Error("ENROLLMENT_CHANGED");
-        if(selection.Head()!=head||Hash(files.Read(files.PathOf("activation.json"),16384))!=headDigest)throw Error("HEAD_CHANGED");
-        token.ThrowIfCancellationRequested();
-        var receipt=JsonSerializer.SerializeToUtf8Bytes(new IntakeReceipt(1,anchor.InstallationId,digest,release.Version,"stable",plan.Total,currentSchema,anchor.IntakePolicyDigest,anchor.IntakePinDigest));
-        var receiptDigest=Hash(receipt);
-        var source=JsonSerializer.SerializeToUtf8Bytes(new SourceEvidence(1,Repository,release.Id,release.Tag,release.AssetId,release.Name,release.Size,release.Sha256,digest));
-        WriteImmutable(files.PathOf("intake/source-"+receiptDigest+".json"),source);
-        WriteImmutable(files.PathOf("intake/receipt-"+receiptDigest+".json"),receipt);fault?.Invoke("receipt_published");
-        var temporary=recovery.Pointer("available.json",JsonSerializer.SerializeToUtf8Bytes(new IntakePointer(1,anchor.InstallationId,receiptDigest)));
-        fault?.Invoke("pointer_prepared");token.ThrowIfCancellationRequested();
-        if(NativeUpdateEnrollmentReader.Require(files,anchor)!=enrollment)throw Error("ENROLLMENT_CHANGED");
-        if(selection.Head()!=head)throw Error("HEAD_CHANGED");
-        recovery.PublishedPointer(temporary);
-        fault?.Invoke("pointer_published");return selection.Select(receiptDigest);
-        // Owned download/staging residue is retained for recovery/diagnosis. Never
-        // delete unknown files or promote residue merely because its name looks valid.
     }
 
     // Invoked only by the explicitly authorized full-system adapter. This stages

@@ -11,7 +11,6 @@ internal sealed partial class AuthorityEndpointRouter
     private Func<FullSystemInstalledState>? observeSystem;
     private Func<FullSystemDispatchRequest,CancellationToken,Task>? executeSystem;
     private Func<string>? observedSystemPhase;private Func<bool>? systemCandidateStartIssued;
-    private FullSystemGrantProposal? systemGrantProposal;private FullSystemInstallProposal? systemInstallProposal;
     private Task? systemExecution;private CancellationTokenSource? systemCancellation;private FullSystemDispatchRequest? systemRunning;
     private string? completedFullOperationId;
     internal string? FullSystemOperationId=>systemRunning?.OperationId??completedFullOperationId;
@@ -28,10 +27,10 @@ internal sealed partial class AuthorityEndpointRouter
     private EndpointReply CheckSystemScheduledLocked(string id,CancellationToken cancellation)
     {
         cancellation.ThrowIfCancellationRequested();var control=RequireSystemControl();var mode=intake.Mode();
-        if(Execution is {IsCompleted:false}||confirmation is not null||ActivationPhase=="recovery_required")return Reply(id,"pending");
+        if(Execution is {IsCompleted:false}||ActivationPhase=="recovery_required")return Reply(id,"pending");
         var target=control.Target();if(target is null){phase="idle";return Reply(id,"observed");}
         if(mode.Mode=="notify"){phase="available";return Reply(id,"observed");}
-        try{control.RequireAutomatic();}catch(UnauthorizedAccessException){phase="available";return Reply(id,"approval_required");}
+        try{control.RequireAutomatic();}catch(UnauthorizedAccessException){phase="available";return Reply(id,"observed");}
         requestId=id;WriteOnce("rpc-"+id,new{Id=id,Action="check",Target=target.Fingerprint,TargetVersion=target.Version,Profile=FullSystemUpdatePolicy.Profile});StartSystem(new(id,target.Fingerprint,null));return Reply(id,"queued");
     }
     private EndpointReply NotifySystemLocked(AuthorityRequest request)
@@ -39,9 +38,7 @@ internal sealed partial class AuthorityEndpointRouter
         var mode=intake.Mode();if(!mode.ModeControlAllowed)throw new UnauthorizedAccessException("AUTHORITY_MODE_LOCKED");
         RequireSystemControl().Notify();if(systemRunning?.ManualApproval is null)systemCancellation?.Cancel();
         WriteOnce("rpc-"+request.Id,new{request.Id,request.Action,Mode="notify",Profile=FullSystemUpdatePolicy.Profile});
-        if(confirmation?.Scope=="delegate-system")
-        {WriteOnce("cancel-"+confirmation.RequestId,new{Id=confirmation.RequestId});WriteOnce("done-"+confirmation.RequestId,new{Id=confirmation.RequestId,Phase="cancelled"});confirmation=null;systemGrantProposal=null;}
-        if(Execution is not {IsCompleted:false}&&confirmation is null&&phase!="recovery_required")phase="idle";
+        if(Execution is not {IsCompleted:false}&&phase!="recovery_required")phase="idle";
         WriteOnce("done-"+request.Id,new{Id=request.Id,Phase=phase});return Reply(request.Id,"queued");
     }
     private EndpointReply DispatchSystemLocked(AuthorityRequest request)
@@ -50,33 +47,21 @@ internal sealed partial class AuthorityEndpointRouter
         if(request.Action=="set_mode")
         {
             if(!mode.ModeControlAllowed)throw new UnauthorizedAccessException("AUTHORITY_MODE_LOCKED");
-            if(mode.Mode=="auto"&&control.Status().State=="active")
-            {WriteOnce("rpc-"+request.Id,new{request.Id,request.Action,Mode="auto",Profile=FullSystemUpdatePolicy.Profile});WriteOnce("done-"+request.Id,new{Id=request.Id,Phase=phase});return Reply(request.Id,"queued");}
-            requestId=request.Id;systemGrantProposal=control.ProposeGrant();var challenge=ledger.SystemChallenge(AuthorityProtocol.Digest(systemGrantProposal),"delegate-system");
-            WriteOnce("rpc-"+request.Id,new{request.Id,request.Action,Mode="auto",challenge.Digest,Profile=FullSystemUpdatePolicy.Profile});
-            confirmation=new(1,anchor.InstallationId,request.Id,challenge.Id,challenge.Digest,challenge.Scope,"","","", "","none",challenge.ExpiresUnix,null,control.ConsentView(systemGrantProposal));phase="awaiting_local_approval";return Reply(request.Id,"queued");
+            if(!(mode.Mode=="auto"&&control.AutomaticActive()))control.EnableAutomatic();
+            requestId=request.Id;WriteOnce("rpc-"+request.Id,new{request.Id,request.Action,Mode="auto",Profile=FullSystemUpdatePolicy.Profile});WriteOnce("done-"+request.Id,new{Id=request.Id,Phase=phase});return Reply(request.Id,"queued");
         }
         var target=control.Target()??throw new IOException("FULL_SYSTEM_NO_TARGET");
         if(request.TargetDigest is {} expected&&expected!=target.Fingerprint)throw new IOException("FULL_SYSTEM_TARGET_CHANGED");
         if(request.Action=="check")return CheckSystemScheduledLocked(request.Id,default);
-        requestId=request.Id;systemInstallProposal=null;systemGrantProposal=null;
+        requestId=request.Id;
         if(mode.Mode=="auto")
         {
             try{control.RequireAutomatic();WriteOnce("rpc-"+request.Id,new{request.Id,request.Action,Target=target.Fingerprint,TargetVersion=target.Version,Profile=FullSystemUpdatePolicy.Profile});StartSystem(new(request.Id,target.Fingerprint,null));return Reply(request.Id,"queued");}
-            catch(UnauthorizedAccessException){/* Exact one-time Owner approval remains available. */}
+            catch(UnauthorizedAccessException){/* Automatic grant unusable: this admin request is the one-time approval. */}
         }
-        systemInstallProposal=control.ProposeInstall(request.Id,target.Fingerprint,observeSystem!());var approval=ledger.SystemChallenge(AuthorityProtocol.Digest(systemInstallProposal),"activate-system");
-        WriteOnce("rpc-"+request.Id,new{request.Id,request.Action,Target=target.Fingerprint,TargetVersion=target.Version,approval.Digest,Profile=FullSystemUpdatePolicy.Profile});
-        confirmation=new(1,anchor.InstallationId,request.Id,approval.Id,approval.Digest,approval.Scope,systemInstallProposal.FromVersion,systemInstallProposal.ToVersion,"",intake.Head().DataId,"none",approval.ExpiresUnix,null);phase="awaiting_local_approval";return Reply(request.Id,"queued");
-    }
-    private EndpointReply AnswerSystemLocked(AuthorityPeer peer,OwnerAnswer answer,string replyId)
-    {
-        var control=RequireSystemControl();
-        if(systemGrantProposal is {} grant)
-        {control.AnswerGrant(peer,answer,grant);phase=answer.Approve?"idle":"cancelled";confirmation=null;systemGrantProposal=null;Done();return Reply(replyId,"queued");}
-        var proposal=systemInstallProposal??throw new IOException("AUTHORITY_SYSTEM_PROPOSAL");if(answer.Approve)control.RequireInstallUnchanged(proposal,observeSystem!());
-        ledger.ApproveSystem(peer,answer,"activate-system",AuthorityProtocol.Digest(proposal));confirmation=null;systemInstallProposal=null;
-        if(answer.Approve)StartSystem(new(proposal.OperationId,proposal.SourceReceiptDigest,proposal));else{phase="cancelled";Done();}return Reply(replyId,"queued");
+        var proposal=control.ProposeInstall(request.Id,target.Fingerprint,observeSystem!());
+        WriteOnce("rpc-"+request.Id,new{request.Id,request.Action,Target=target.Fingerprint,TargetVersion=target.Version,ProposalDigest=AuthorityProtocol.Digest(proposal),Profile=FullSystemUpdatePolicy.Profile});
+        StartSystem(new(proposal.OperationId,proposal.SourceReceiptDigest,proposal));return Reply(request.Id,"queued");
     }
     private void StartSystem(FullSystemDispatchRequest request)
     {systemCancellation=new();systemRunning=request;phase="preparing";systemExecution=schedule(()=>RunSystemAsync(request,systemCancellation.Token));}
@@ -92,7 +77,7 @@ internal sealed partial class AuthorityEndpointRouter
     private string ReconciledPhase(string fallback)
     {var observed=observedSystemPhase?.Invoke();return observed is "healthy" or "previous_restored" or "recovery_required"?observed:fallback;}
     // Replacement Authority calls only after its coordinator reconciles the
-    // protected operation. No HTTP/Owner frame can claim a completion outcome.
+    // protected operation. No HTTP frame can claim a completion outcome.
     internal async Task CompleteFullSystemRequestAsync(string operationId,string outcome,CancellationToken cancellation=default)
     {
         if(outcome is not("healthy" or "previous_restored" or "recovery_required" or "cancelled"))throw new IOException("AUTHORITY_SYSTEM_COMPLETION");

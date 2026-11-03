@@ -143,7 +143,7 @@ internal sealed class NativeFullSystemSetupHost(InstallPackage package,UpdateSet
         void Copied(){if(++copied%100==0||copied==copyCount)progress(new("installing_service",70+copied*9/copyCount));}
         NativeInstallFiles.SetOwnedDirectory(InstallLocations.State,FullUpdateInstallerPlan.Descriptor(files!.Roles,InstalledFileRole.Control,true));
         NativeInstallFiles.SetOwnedDirectory(InstallLocations.Binaries,FullUpdateInstallerPlan.Descriptor(files.Roles,InstalledFileRole.Control,true));
-        foreach(var relative in new[]{"datasets","datasets/"+state.DataId,"datasets/"+state.DataId+"/data","temporary","Secrets","intake","owner-ledger","authority-temporary",".authority",".authority/update-serial",".authority/updates"})files.EnsureDirectory(relative);
+        foreach(var relative in new[]{"datasets","datasets/"+state.DataId,"datasets/"+state.DataId+"/data","temporary","Secrets","intake","grants","authority-temporary",".authority",".authority/update-serial",".authority/updates"})files.EnsureDirectory(relative);
         if(Directory.EnumerateFileSystemEntries(files.PathOf("datasets/"+state.DataId+"/data")).Any(p=>Path.GetFileName(p)!="process.lock"))throw new IOException("EXISTING_DATA_PRESERVED");
         foreach(var member in state.Files.Where(f=>f.Path.StartsWith("payload/",StringComparison.Ordinal)))
         {cancellation.ThrowIfCancellationRequested();binaries!.CopyVerified(Path.Combine(staging,member.Path.Replace('/',Path.DirectorySeparatorChar)),"payloads/"+state.PayloadDigest+"/"+member.Path[8..],member);Copied();}
@@ -186,10 +186,9 @@ internal sealed class NativeFullSystemSetupHost(InstallPackage package,UpdateSet
         if(!File.Exists(files.PathOf(seedName)))files.Publish(seedName,Json(new FirstInstallSeed(1,state.InstallationId,state.DataId,state.PayloadDigest,Guid.NewGuid().ToString("N"))));
         if(!File.Exists(files.PathOf(retryName)))files.Publish(retryName,Json(new FirstInstallSeed(1,state.InstallationId,state.DataId,state.PayloadDigest,Guid.NewGuid().ToString("N"))));
         RenewCapability();
-        var intent=Json(new InstalledOwnerIntent(1,state.InstallationId,1,Guid.NewGuid().ToString("N"),state.PayloadDigest,state.DataId,"activate",state.OwnerSid,DateTimeOffset.UtcNow.ToUnixTimeSeconds(),null));
         var web=Json(new InstalledWeb(1,state.InstallationId,"http://127.0.0.1:"+state.Port,state.Port));
-        var activation=Json(new InstalledActivation(1,state.InstallationId,1,state.PayloadDigest,state.DataId,state.Schema,state.Schema,Hash(key),Hash(policy),Hash(pin),Hash(intent),Hash(web),"committed",null));
-        files.Publish("owner-intent.json",intent,true);files.Publish("web.json",web,true);files.Publish("activation.json",activation,true);files.Publish("epoch.json",Json(new InstalledEpoch(1,state.InstallationId,1,Hash(activation))),true);
+        var activation=Json(new InstalledActivation(1,state.InstallationId,1,state.PayloadDigest,state.DataId,state.Schema,state.Schema,Hash(key),Hash(policy),Hash(pin),Hash(web),"committed",null));
+        files.Publish("web.json",web,true);files.Publish("activation.json",activation,true);files.Publish("epoch.json",Json(new InstalledEpoch(1,state.InstallationId,1,Hash(activation))),true);
         files.Publish("bootstrap.json",Json(new{schema=1,service=InstallLocations.ServiceName,installationId=state.InstallationId,activationReceiptDigest=Hash(activation)}),true);
         files.Publish("installation.json",Json(new FirstInstallReceipt(2,state.InstallationId,state.DataId,state.PayloadDigest,package.Manifest.Version,Hash(files.Read(seedName)),state.Port,state.PackageDigest,"committed",Hash(files.Read(retryName)))));
         Register();Save("committed");progress(new("installing_service",80));
@@ -199,7 +198,7 @@ internal sealed class NativeFullSystemSetupHost(InstallPackage package,UpdateSet
     private void RequireExistingEnrollment()
     {
         var s=state!;var anchor=InstalledAuthorityReader.Parse(files!.Read(InstalledUpdaterLayout.AnchorFile,4096));
-        if(anchor.InstallationId!=s.InstallationId||anchor.OwnerSid!=s.OwnerSid||anchor.FullSystemPolicyDigest!=s.PolicyDigest||Hash(files.Read("intake/full-system-enrollment.json"))!=s.PolicyDigest)throw new IOException("UPDATE_ENROLLMENT_CHANGED");
+        if(anchor.InstallationId!=s.InstallationId||anchor.FullSystemPolicyDigest!=s.PolicyDigest||Hash(files.Read("intake/full-system-enrollment.json"))!=s.PolicyDigest)throw new IOException("UPDATE_ENROLLMENT_CHANGED");
         var enrollment=NativeJson.Read<NativeUpdateEnrollment>(files.Read("intake/enrollment.json"));
         if(enrollment.InstallationId!=s.InstallationId||enrollment.FamilyId!=s.FirstOwner.familyId||enrollment.UserId!=s.FirstOwner.parentUserId||enrollment.PolicyDigest!=anchor.IntakePolicyDigest||enrollment.PinDigest!=anchor.IntakePinDigest)throw new IOException("UPDATE_OWNER_BINDING");
     }
@@ -216,7 +215,7 @@ internal sealed class NativeFullSystemSetupHost(InstallPackage package,UpdateSet
     private SystemBootstrapSnapshot CurrentBootstrap()
     {
         var current=NativeJson.Read<SystemBootstrapSnapshot>(files!.Read("system-bootstrap-current.json",8*1024*1024));
-        if(current.Format!=1||current.InstallationId!=state!.InstallationId||current.Epoch<1||current.PolicyDigest!=state.PolicyDigest||current.OperationalProbeDigest!=current.ManifestDigest||current.Components.Length!=5||current.Components.Select(c=>c.Kind).Distinct().Count()!=5)throw new IOException("UPDATE_CURRENT_BOOTSTRAP");
+        if(current.Format!=1||current.InstallationId!=state!.InstallationId||current.Epoch<1||current.PolicyDigest!=state.PolicyDigest||current.OperationalProbeDigest!=current.ManifestDigest||current.Components.Length!=4||current.Components.Select(c=>c.Kind).Distinct().Count()!=4)throw new IOException("UPDATE_CURRENT_BOOTSTRAP");
         return current;
     }
     private void RequireCurrent()

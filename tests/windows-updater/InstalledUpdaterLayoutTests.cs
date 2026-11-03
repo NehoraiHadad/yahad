@@ -28,32 +28,31 @@ internal static class InstalledUpdaterLayoutTests
             Denied(()=>InstalledUpdaterLayout.AnchorPresent(()=>kind switch
             {"access"=>throw new UnauthorizedAccessException(),"sharing"=>throw new IOException("sharing violation"),"reparse"=>FileAttributes.ReparsePoint,_=>FileAttributes.Directory}));return Task.CompletedTask;
         });
-        foreach(var kind in new[]{"receipt_format","missing_probe","wrong_service","wrong_owner","noncanonical_id","extra_field"})await check("present updater anchor refuses "+kind+" and cannot become legacy receipt",()=>
+        foreach(var kind in new[]{"receipt_format","missing_probe","wrong_service","noncanonical_id","extra_field"})await check("present updater anchor refuses "+kind+" and cannot become legacy receipt",()=>
         {
             var fields=Anchor();
             if(kind=="receipt_format")fields["Format"]=2;
             if(kind=="missing_probe")fields["ProbeSha256"]=null;
             if(kind=="wrong_service")fields["RuntimeService"]="Unrelated.Service";
-            if(kind=="wrong_owner")fields["OwnerSid"]="S-1-5-18";
             if(kind=="noncanonical_id")fields["InstallationId"]=new string('A',32);
             if(kind=="extra_field")fields["PackageDigest"]=new string('b',64);
             Assert(InstalledUpdaterLayout.AnchorPresent(()=>FileAttributes.Normal));Denied(()=>InstalledUpdaterLayout.RequireInstalledAnchor(JsonSerializer.SerializeToUtf8Bytes(fields)));return Task.CompletedTask;
         });
         await check("separate updater anchor preserves Format-2 first-install receipt and both anchor roles",()=>
         {
-            var f=new PolicyFixture();var id=Guid.NewGuid().ToString("N");var hash=new string('a',64);
+            var files=InstalledStateFiles.Private(SafeDirectory.CreatePrivateSession(Path.Combine(Path.GetTempPath(),"yahad-updater-layout")));var id=Guid.NewGuid().ToString("N");var hash=new string('a',64);
             var receipt=new FirstInstallReceipt(2,id,Guid.NewGuid().ToString("N"),hash,ApplicationRelease.Version,hash,32000,hash,"committed",hash);
             Assert(FirstInstallProfile.ValidateReceipt(receipt)==receipt);
-            var path=f.Files.PathOf("installation.json");var bytes=JsonSerializer.SerializeToUtf8Bytes(receipt);File.WriteAllBytes(path,bytes);
-            var anchor=JsonSerializer.SerializeToUtf8Bytes(Anchor());File.WriteAllBytes(f.Files.PathOf(InstalledUpdaterLayout.AnchorFile),anchor);InstalledUpdaterLayout.RequireInstalledAnchor(anchor);
-            Assert(f.Files.Role(path)==InstalledFileRole.Anchor&&f.Files.Role(f.Files.PathOf(InstalledUpdaterLayout.AnchorFile))==InstalledFileRole.Anchor);
+            var path=files.PathOf("installation.json");var bytes=JsonSerializer.SerializeToUtf8Bytes(receipt);File.WriteAllBytes(path,bytes);
+            var anchor=JsonSerializer.SerializeToUtf8Bytes(Anchor());File.WriteAllBytes(files.PathOf(InstalledUpdaterLayout.AnchorFile),anchor);InstalledUpdaterLayout.RequireInstalledAnchor(anchor);
+            Assert(files.Role(path)==InstalledFileRole.Anchor&&files.Role(files.PathOf(InstalledUpdaterLayout.AnchorFile))==InstalledFileRole.Anchor);
             Assert(File.ReadAllBytes(path).SequenceEqual(bytes));return Task.CompletedTask;
         });
     }
     private static Dictionary<string,object?> Anchor()=>new()
     {
         ["Format"]=1,["InstallationId"]=new string('a',32),["RuntimeService"]=InstalledUpdaterLayout.RuntimeServiceName,
-        ["AuthorityService"]=InstalledUpdaterLayout.AuthorityServiceName,["OwnerSid"]="S-1-5-21-100-101-102-1001",
+        ["AuthorityService"]=InstalledUpdaterLayout.AuthorityServiceName,
         ["IntakePolicyDigest"]=new string('b',64),["IntakePinDigest"]=new string('c',64),["ProbeSha256"]=new string('d',64)
     };
     private static void Assert(bool value){if(!value)throw new Exception("UPDATER_LAYOUT_ASSERTION");}

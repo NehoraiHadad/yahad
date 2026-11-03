@@ -14,7 +14,7 @@ export type LocalUpdateRequest = {
   previousModeId?: string;
 };
 
-const activePhases = new Set(['awaiting_runtime','starting_runtime','quiescing_runtime','awaiting_local_approval','checking', 'downloading', 'verifying', 'building', 'preparing',
+const activePhases = new Set(['awaiting_runtime','starting_runtime','quiescing_runtime','checking', 'downloading', 'verifying', 'building', 'preparing',
   'stopping', 'backing_up', 'activating', 'checking_health', 'rolling_back', 'waiting_for_idle',
   'updating_components', 'restarting_updater', 'preparing_data', 'releasing_effects', 'recovering']);
 const repairPhases = new Set(['recovery_required', 'rollback_pending_health']);
@@ -31,7 +31,6 @@ export const updatePhases: Record<string, string> = {
   starting_runtime: 'מפעילים ובודקים את היישום',
   quiescing_runtime: 'ממתינים לסיום בטוח של התהליכים',
   cancelled: 'הפעלת היישום בוטלה',
-  awaiting_local_approval: 'ממתינים לאישור במחשב הביתי',
   idle: 'אין עדכון ממתין', available: 'גרסה חדשה זמינה', checking: 'בודקים גרסה חדשה ב־GitHub',
   downloading: 'מורידים את קובצי הגרסה', verifying: 'מאמתים את קובצי הגרסה',
   building: 'מכינים ובודקים את האפליקציה החדשה', preparing: 'מכינים את העדכון',
@@ -51,13 +50,6 @@ const fullPhaseDetails: Partial<Record<ConfiguredUpdate['phase'], string>> = {
   releasing_effects: 'הגרסה החדשה עוברת בדיקות אחרונות לפני חזרה מלאה לפעילות.',
   recovering: 'בודקים את הפעולה שנקטעה ואת מצב המידע. ממתינים לתוצאה לפני ניסיון נוסף.',
 };
-
-/** Native authority supplies the one meaningful confirmation; legacy web workers keep theirs. */
-export function requiresWebUpdateConfirmation(data: ConfiguredUpdate) { return data.confirmation !== 'native'; }
-export function nativeNotifyAllowed(data: ConfiguredUpdate | null, unavailable: boolean, busy: boolean) {
-  return !!data && data.confirmation === 'native' && data.mode === 'auto' && data.modeControlAllowed &&
-    data.enabled && !data.stale && !unavailable && !busy;
-}
 
 export function sameUpdateTarget(a: UpdateTarget | null | undefined, b: UpdateTarget | null | undefined) {
   return !!a && !!b && a.version === b.version && a.fingerprint === b.fingerprint;
@@ -126,9 +118,6 @@ export function updateProgress(data: ConfiguredUpdate, local: LocalUpdateRequest
 
   if (data.phase === 'cancelled') return { kind: 'failure', active: false, title: updatePhases.cancelled, action: undefined,
     detail: 'ההפעלה בוטלה לאחר סיום התהליכים. לא נשלחה בקשה נוספת באופן אוטומטי.' } as const;
-  if (data.phase === 'awaiting_local_approval') return { kind: 'queued', active: true,
-    title: updatePhases.awaiting_local_approval, action: undefined,
-    detail: 'פתחו את כלי האישור של יחד במחשב הביתי כדי לבדוק ולאשר את הפעולה. הבקשה נשמרה; אין צורך לשלוח אותה שוב.' } as const;
 
   // A timer-driven run may be newer than the retained manual-request journal.
   const last = data.lastRequest && (data.lastRequest.state === 'running' || !data.checkedAt ||

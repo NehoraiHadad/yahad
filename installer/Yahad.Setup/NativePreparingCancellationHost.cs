@@ -53,7 +53,7 @@ internal sealed class NativePreparingCancellationHost:IPreparingCancellationHost
         }
         var requiredDirectories=parents.ToHashSet(StringComparer.OrdinalIgnoreCase);
         if(state.RuntimeSid is not null)
-            foreach(var directory in new[]{"datasets","datasets/"+state.DataId,"datasets/"+state.DataId+"/data","temporary","Secrets","intake","owner-ledger","authority-temporary",".authority",".authority/update-serial",".authority/updates"})parents.Add(directory);
+            foreach(var directory in new[]{"datasets","datasets/"+state.DataId,"datasets/"+state.DataId+"/data","temporary","Secrets","intake","grants","authority-temporary",".authority",".authority/update-serial",".authority/updates"})parents.Add(directory);
         if(files.Distinct(StringComparer.OrdinalIgnoreCase).Count()!=files.Count||directories.Distinct(StringComparer.OrdinalIgnoreCase).Count()!=directories.Count||
             files.Any(p=>!expected.Contains(p))||directories.Any(p=>!parents.Contains(p))||complete&&(!required.IsSubsetOf(files)||!requiredDirectories.IsSubsetOf(directories)))
             throw new IOException("UPDATE_PREPARING_INVENTORY_CHANGED");

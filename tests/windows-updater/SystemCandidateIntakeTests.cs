@@ -40,13 +40,13 @@ internal static class SystemCandidateIntakeTests
                 if(mutation=="security")root["components"]![0]!["files"]![0]!["path"]="enrollment.json";
             });var source=await Source(artifact);await Refused(()=>Task.FromResult(SystemCandidateManifest.Validate(artifact.Manifest,artifact.Application,source,Environment())));
         });
-        await check("full system stages app plus five component folders without live binaries/data/legacy-pointer mutation",async()=>
+        await check("full system stages app plus four component folders without live binaries/data/legacy-pointer mutation",async()=>
         {
             using var f=new Fixture();var artifact=Build();var source=await Source(artifact);f.Cache(artifact,source);var legacy=Json(new{fixture="legacy pointer"});File.WriteAllBytes(f.App.Files.PathOf("intake/available.json"),legacy);
             Directory.CreateDirectory(f.Binary.PathOf("host"));var oldHost=f.Binary.PathOf("host/Yahad.ServiceHost.exe");File.WriteAllBytes(oldHost,[1,2,3]);Directory.CreateDirectory(f.App.Files.PathOf("datasets/fixture/data"));var data=f.App.Files.PathOf("datasets/fixture/data/app.sqlite");File.WriteAllBytes(data,[7,8,9]);
             var staged=await f.Intake.StageVerifiedArchiveAsync(source,f.CachePath(source),Environment(),default);var facts=f.Intake.RequireVerified(staged.SourceReceiptDigest);
-            Assert(facts.Components.Count==5&&facts.TargetSchema==7&&facts.MigrationSources.Contains(6)&&facts.SourceCommit==Commit);
-            Assert(File.Exists(Path.Combine(staged.SystemSlotRoot,"bootstrap","owner","Yahad.Owner.exe"))&&File.Exists(Path.Combine(staged.ApplicationPayloadRoot,"app","server","main.mjs")));
+            Assert(facts.Components.Count==4&&facts.TargetSchema==7&&facts.MigrationSources.Contains(6)&&facts.SourceCommit==Commit);
+            Assert(File.Exists(Path.Combine(staged.SystemSlotRoot,"bootstrap","servicehost","Yahad.ServiceHost.exe"))&&File.Exists(Path.Combine(staged.ApplicationPayloadRoot,"app","server","main.mjs")));
             Assert(File.ReadAllBytes(oldHost).SequenceEqual(new byte[]{1,2,3})&&File.ReadAllBytes(data).SequenceEqual(new byte[]{7,8,9})&&legacy.SequenceEqual(File.ReadAllBytes(f.App.Files.PathOf("intake/available.json"))));
             Assert(f.App.Before.SequenceEqual(File.ReadAllBytes(f.App.Files.PathOf("activation.json")))&&f.PolicyChecks>=5);
         });
@@ -65,17 +65,17 @@ internal static class SystemCandidateIntakeTests
         await check("system descriptor defensively copies manifests and exposes immutable inventory",async()=>
         {
             var artifact=Build();var source=await Source(artifact);var descriptor=SystemCandidateManifest.Validate(artifact.Manifest,artifact.Application,source,Environment());var digest=descriptor.SystemManifestDigest;var copy=descriptor.ManifestBytes;copy[0]^=1;
-            Assert(SystemCandidateManifest.Hash(descriptor.ManifestBytes)==digest&&descriptor.Components.Count==5&&descriptor.DatabaseMigrationsFrom.SequenceEqual(new[]{1,2,3,4,5,6}));
+            Assert(SystemCandidateManifest.Hash(descriptor.ManifestBytes)==digest&&descriptor.Components.Count==4&&descriptor.DatabaseMigrationsFrom.SequenceEqual(new[]{1,2,3,4,5,6}));
         });
-        foreach(var mutation in new[]{"component_commit","clr_missing","extra_member","private_path","bad_app_schema"})await check("full system intake refuses "+mutation+" before publication",async()=>
+        foreach(var mutation in new[]{"component_commit","clr_missing","extra_member","symlink_member","private_path","bad_app_schema"})await check("full system intake refuses "+mutation+" before publication",async()=>
         {
             using var f=new Fixture();var artifact=Build(changeFiles:files=>
             {
                 if(mutation=="component_commit"){var key="bootstrap/authority/build-identity.json";var identity=JsonNode.Parse(files[key])!.AsObject();identity["sourceCommit"]=new string('b',40);files[key]=Json(identity);}
                 if(mutation=="clr_missing")files.Remove("bootstrap/authority/coreclr.dll");
-                if(mutation=="private_path")files["bootstrap/owner/Secrets/master-key"]=[1];
+                if(mutation=="private_path")files["bootstrap/authority/Secrets/master-key"]=[1];
                 if(mutation=="bad_app_schema"){var key="payload/legal/build-inputs.json";var build=JsonNode.Parse(files[key])!.AsObject();build["databaseSchema"]=8;build["databaseMigrationsFrom"]=new JsonArray(6);files[key]=Json(build);}
-            },extraMember:mutation=="extra_member"?"bootstrap/authority/undeclared.txt":null);var source=await Source(artifact);f.Cache(artifact,source);
+            },extraMember:mutation=="extra_member"?"bootstrap/authority/undeclared.txt":null,symlinkMember:mutation=="symlink_member"?"payload/app/server/main.mjs":null);var source=await Source(artifact);f.Cache(artifact,source);
             await Refused(()=>f.Intake.StageVerifiedArchiveAsync(source,f.CachePath(source),Environment(),default));Assert(!File.Exists(f.App.Files.PathOf("intake/system-available.json"))&&f.App.Before.SequenceEqual(File.ReadAllBytes(f.App.Files.PathOf("activation.json"))));
         });
         await check("full intake requires current explicit policy and never stages through a revoked callback",async()=>
@@ -97,7 +97,7 @@ internal static class SystemCandidateIntakeTests
             await Refused(()=>Task.FromResult(f.Slots.Stage(descriptor.SystemManifestDigest,artifact.Manifest,descriptor.Components,path=>new MemoryStream(artifact.Files[path],false),default)));Assert(Directory.Exists(residue));
         });
     }
-    private static SystemCandidateEnvironment Environment()=>new("0.6.0",6,99999,new Dictionary<string,int>{{"system",1},{"handoff",1},{"authorityRuntime",1},{"ownerAuthority",1},{"activation",1},{"journal",1},{"recovery",1},{"policy",2}});
+    private static SystemCandidateEnvironment Environment()=>new("0.6.0",6,99999,new Dictionary<string,int>{{"system",1},{"handoff",1},{"authorityRuntime",1},{"activation",1},{"journal",1},{"recovery",1},{"policy",2}});
     private static async Task Refused(Func<Task> test)
     {try{await test();}catch(Exception error)when(error is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException or KeyNotFoundException or ArgumentException or FormatException or OverflowException){return;}throw new Exception("SYSTEM_INTAKE_UNEXPECTED_ADMISSION");}
     private static void Assert(bool value){if(!value)throw new Exception("SYSTEM_INTAKE_ASSERTION");}
@@ -118,18 +118,18 @@ internal static class SystemCandidateIntakeTests
         };
     }
     private sealed record Artifact(string Version,byte[] Zip,byte[] Manifest,byte[] Application,Dictionary<string,byte[]> Files);
-    private static Artifact Build(string version="0.6.1",Action<JsonObject>? changeManifest=null,Action<Dictionary<string,byte[]>>? changeFiles=null,string? extraMember=null)
+    private static Artifact Build(string version="0.6.1",Action<JsonObject>? changeManifest=null,Action<Dictionary<string,byte[]>>? changeFiles=null,string? extraMember=null,string? symlinkMember=null)
     {
         var app=NativeCandidateIntakeTests.Build(version,7);
         var files=new Dictionary<string,byte[]>(StringComparer.Ordinal);byte[] image;
         using(var input=new MemoryStream(app.Zip))using(var zip=new ZipArchive(input,ZipArchiveMode.Read)){foreach(var entry in zip.Entries){using var source=entry.Open();using var output=new MemoryStream();source.CopyTo(output);files["payload/"+entry.FullName]=output.ToArray();}image=files["payload/runtime/node/node.exe"];}
         foreach(var kind in Enum.GetValues<SystemComponentKind>())
         {
-            var prefix=FixedSystemComponents.SlotPrefix(kind);var entry=FixedSystemComponents.EntryPoint(kind);var stem=Path.GetFileNameWithoutExtension(entry);var artifact=kind switch{SystemComponentKind.RuntimeHost=>"Yahad.ServiceHost",SystemComponentKind.Owner=>"Yahad.Owner",SystemComponentKind.Probe=>"Node",_=>"Yahad.Authority"};files[prefix+"/"+entry]=image.ToArray();
+            var prefix=FixedSystemComponents.SlotPrefix(kind);var entry=FixedSystemComponents.EntryPoint(kind);var stem=Path.GetFileNameWithoutExtension(entry);var artifact=kind switch{SystemComponentKind.RuntimeHost=>"Yahad.ServiceHost",SystemComponentKind.Probe=>"Node",_=>"Yahad.Authority"};files[prefix+"/"+entry]=image.ToArray();
             if(kind!=SystemComponentKind.Probe)
             {
                 foreach(var name in new[]{stem+".dll","coreclr.dll","hostfxr.dll","hostpolicy.dll","System.Private.CoreLib.dll"})files[prefix+"/"+name]=image.ToArray();
-                var frameworks=new List<object>{new{name="Microsoft.NETCore.App",version="10.0.14"}};if(kind==SystemComponentKind.Owner)frameworks.Add(new{name="Microsoft.WindowsDesktop.App",version="10.0.14"});
+                var frameworks=new List<object>{new{name="Microsoft.NETCore.App",version="10.0.14"}};
                 files[prefix+"/"+stem+".runtimeconfig.json"]=Json(new{runtimeOptions=new{includedFrameworks=frameworks}});
                 var runtimeAssets=new Dictionary<string,object>{{stem+".dll",new{}}};var nativeAssets=new Dictionary<string,object>{{"coreclr.dll",new{}},{"hostfxr.dll",new{}},{"hostpolicy.dll",new{}}};
                 var libraries=new Dictionary<string,object>{{"runtimepack",new{runtime=runtimeAssets,native=nativeAssets}}};
@@ -142,9 +142,9 @@ internal static class SystemCandidateIntakeTests
             var prefix=FixedSystemComponents.SlotPrefix(kind);var entry=FixedSystemComponents.EntryPoint(kind);
             return new{kind=kind.ToString(),prefix,entryPoint=entry,entrySha256=SystemCandidateManifest.Hash(files[prefix+"/"+entry]),files=files.Where(p=>p.Key.StartsWith(prefix+"/",StringComparison.Ordinal)).Select(p=>new{path=p.Key[(prefix.Length+1)..],size=p.Value.Length,sha256=SystemCandidateManifest.Hash(p.Value)}).ToArray()};
         }).ToArray();
-        var protocols=new[]{"system","handoff","authorityRuntime","ownerAuthority","activation","journal","recovery","policy"}.ToDictionary(name=>name,name=>new{minimumReader=name=="policy"?2:1,maximumReader=name=="policy"?2:1,writer=name=="policy"?2:1});
+        var protocols=new[]{"system","handoff","authorityRuntime","activation","journal","recovery","policy"}.ToDictionary(name=>name,name=>new{minimumReader=name=="policy"?2:1,maximumReader=name=="policy"?2:1,writer=name=="policy"?2:1});
         var root=JsonNode.Parse(Json(new{format=2,kind="windows-system-candidate",profile="full-system-v1",target="win-x64",version,sourceCommit=Commit,minimumWindowsBuild=19045,applicationManifestSha256=SystemCandidateManifest.Hash(files["payload/bundle.json"]),database=new{targetSchema=7,migrationsFrom=new[]{1,2,3,4,5,6}},protocols,components}))!.AsObject();changeManifest?.Invoke(root);var manifest=Json(root);files["system-manifest.json"]=manifest;
-        using var outputZip=new MemoryStream();using(var zip=new ZipArchive(outputZip,ZipArchiveMode.Create,true)){foreach(var pair in files){var entry=zip.CreateEntry(pair.Key,CompressionLevel.Fastest);entry.ExternalAttributes=0x81a4<<16;using var stream=entry.Open();stream.Write(pair.Value);}if(extraMember is not null){using var stream=zip.CreateEntry(extraMember).Open();stream.WriteByte(1);}}
+        using var outputZip=new MemoryStream();using(var zip=new ZipArchive(outputZip,ZipArchiveMode.Create,true)){foreach(var pair in files){var entry=zip.CreateEntry(pair.Key,CompressionLevel.Fastest);entry.ExternalAttributes=(pair.Key==symlinkMember?0xa1ff:0x81a4)<<16;using var stream=entry.Open();stream.Write(pair.Value);}if(extraMember is not null){using var stream=zip.CreateEntry(extraMember).Open();stream.WriteByte(1);}}
         return new(version,outputZip.ToArray(),manifest,files["payload/bundle.json"],files);
     }
     private sealed class Fixture:IDisposable

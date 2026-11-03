@@ -11,67 +11,52 @@ using Yahad.Service;
 
 // Synthetic private-root intake only. Every HTTP response and candidate PE is a
 // fixture. No network, process launch, installed service, or real data is involved.
+// The fixed-source archive transport/cache and the application payload stager are
+// driven directly: the full-system adapter (SystemCandidateIntakeTests) owns the
+// source check, system manifest and pointer publication around them.
 internal static class NativeCandidateIntakeTests
 {
     internal static async Task Run(Func<string,Func<Task>,Task> check)
     {
-        foreach(var mutation in new[]{"missing","repository","channel","pattern","trust","installation","policy","pins","identity"})
-            await check("native intake requires protected enrollment before network: "+mutation,async()=>
-            {
-                var f=new Fixture(enroll:false);var artifact=Build("0.6.1");var calls=0;
-                if(mutation!="missing")
-                {
-                    var enrollment=new NativeUpdateEnrollment(1,f.Anchor.InstallationId,NativeCandidateIntake.Repository,"stable","yahad-app-native-{version}.zip","https-github-unsigned","synthetic-family","synthetic-parent",f.Anchor.IntakePolicyDigest,f.Anchor.IntakePinDigest);
-                    enrollment=mutation switch{"repository"=>enrollment with{Repository="other/repo"},"channel"=>enrollment with{Channel="preview"},"pattern"=>enrollment with{AssetPattern="yachad-app.zip"},"trust"=>enrollment with{Trust="signature"},"installation"=>enrollment with{InstallationId=Guid.NewGuid().ToString("N")},"policy"=>enrollment with{PolicyDigest=new string('0',64)},"pins"=>enrollment with{PinDigest=new string('0',64)},_=>enrollment with{UserId=""}};
-                    File.WriteAllBytes(f.Files.PathOf("intake/enrollment.json"),Json(enrollment));
-                }
-                using var intake=f.Intake(artifact,new Handler(_=>{calls++;return Task.FromResult(Ok(Metadata(artifact)));}));
-                await Refused(()=>intake.CheckAndPublishAsync(default));Assert(calls==0&&!File.Exists(f.Files.PathOf("intake/available.json")));
-            });
-        foreach(var version in new[]{"0.5.9","0.6.0"})
-            await check("native intake never downloads an older or already installed version: "+version,async()=>
-            {
-                var f=new Fixture();var artifact=Build(version);var calls=0;
-                using var intake=f.Intake(artifact,new Handler(_=>{calls++;return Task.FromResult(Ok(Metadata(artifact)));}));
-                if(version=="0.5.9")await Refused(()=>intake.CheckAndPublishAsync(default));else Assert(await intake.CheckAndPublishAsync(default) is null);
-                Assert(calls==1&&!File.Exists(f.Files.PathOf("intake/available.json"))&&!Directory.EnumerateFiles(f.Files.PathOf("intake"),"archive-*.zip").Any());
-            });
+        await check("native intake requires the current full policy before archive network",async()=>
+        {
+            var f=new Fixture();var artifact=Build("0.6.1");var calls=0;var source=await Source(artifact);
+            using var intake=f.Intake(artifact,new Handler(_=>{calls++;return Task.FromResult(Ok(artifact.Zip));}));
+            await Refused(()=>intake.AcquireSystemArchiveAsync(source,()=>throw new UnauthorizedAccessException("FULL_POLICY_REQUIRED"),default));
+            Assert(calls==0&&!Directory.EnumerateFiles(f.Files.PathOf("intake"),"*.zip*").Any());
+        });
         await check("native intake reserves application free space before downloading",async()=>
         {
             foreach(var free in new[]{-1L,NativeCandidateIntake.MinimumFreeBytes})
             {
                 var f=new Fixture();var artifact=Build("0.6.1");var calls=0;
-                using var intake=f.Intake(artifact,new Handler(request=>{calls++;return Task.FromResult(Ok(Metadata(artifact)));}),availableBytes:()=>free);
-                await RefusedWithCode(()=>intake.CheckAndPublishAsync(default),"NATIVE_INTAKE_DISK_SPACE");
-                Assert(calls==1&&!Directory.EnumerateFiles(f.Files.PathOf("intake"),"*.zip*").Any()&&!Directory.EnumerateFileSystemEntries(f.Files.PathOf("payloads"),".intake-*").Any());
+                using var intake=f.Intake(artifact,new Handler(request=>{calls++;return Task.FromResult(Ok(artifact.Zip));}),availableBytes:()=>free);
+                await RefusedWithCode(()=>f.Acquire(intake,artifact),"NATIVE_INTAKE_DISK_SPACE");
+                Assert(calls==0&&!Directory.EnumerateFiles(f.Files.PathOf("intake"),"*.zip*").Any()&&!Directory.EnumerateFileSystemEntries(f.Files.PathOf("payloads"),".intake-*").Any());
                 Assert(f.Before.SequenceEqual(File.ReadAllBytes(f.Files.PathOf("activation.json"))));
             }
         });
         await check("native intake rechecks actual extraction space without allocating another cache on retries",async()=>
         {
             var f=new Fixture();var artifact=Build("0.6.1");var free=long.MaxValue;var calls=0;
-            Handler Transport()=>new(request=>{calls++;return Task.FromResult(Ok(request.RequestUri!.AbsoluteUri==NativeCandidateIntake.Latest?Metadata(artifact):artifact.Zip));});
-            using(var intake=f.Intake(artifact,Transport(),phase=>{if(phase=="download_verified")free=NativeCandidateIntake.MinimumFreeBytes;},()=>free))await RefusedWithCode(()=>intake.CheckAndPublishAsync(default),"NATIVE_INTAKE_DISK_SPACE");
-            for(var i=0;i<3;i++){using var retry=f.Intake(artifact,Transport(),availableBytes:()=>free);await RefusedWithCode(()=>retry.CheckAndPublishAsync(default),"NATIVE_INTAKE_DISK_SPACE");}
-            Assert(calls==5&&Directory.EnumerateFiles(f.Files.PathOf("intake"),"archive-*.zip").Count()==1&&!Directory.EnumerateFileSystemEntries(f.Files.PathOf("payloads"),".intake-*").Any()&&!File.Exists(f.Files.PathOf("intake/available.json")));
+            Handler Transport()=>new(request=>{calls++;return Task.FromResult(Ok(artifact.Zip));});
+            using(var intake=f.Intake(artifact,Transport(),availableBytes:()=>free)){await f.Acquire(intake,artifact);free=NativeCandidateIntake.MinimumFreeBytes;await RefusedWithCode(()=>Task.FromResult(f.Stage(intake,artifact)),"NATIVE_INTAKE_DISK_SPACE");}
+            for(var i=0;i<3;i++){using var retry=f.Intake(artifact,Transport(),availableBytes:()=>free);await RefusedWithCode(async()=>{await f.Acquire(retry,artifact);f.Stage(retry,artifact);},"NATIVE_INTAKE_DISK_SPACE");}
+            Assert(calls==1&&Directory.EnumerateFiles(f.Files.PathOf("intake"),"archive-*.zip").Count()==1&&!Directory.EnumerateFileSystemEntries(f.Files.PathOf("payloads"),".intake-*").Any()&&!Directory.Exists(f.Files.PathOf("payloads/"+Hash(artifact.Manifest))));
         });
         await check("native intake stops mid-download space loss then retries owned partial after space recovers",async()=>
         {
             var f=new Fixture();var artifact=Build("0.6.1");var free=long.MaxValue;var calls=0;
-            var transport=new Handler(request=>
-            {
-                calls++;if(request.RequestUri!.AbsoluteUri==NativeCandidateIntake.Latest)return Task.FromResult(Ok(Metadata(artifact)));
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK){Content=new StreamContent(new ReadNotificationStream(artifact.Zip,()=>free=NativeCandidateIntake.MinimumFreeBytes))});
-            });
-            using(var intake=f.Intake(artifact,transport,availableBytes:()=>free))await RefusedWithCode(()=>intake.CheckAndPublishAsync(default),"NATIVE_INTAKE_DISK_SPACE");
+            var transport=new Handler(request=>{calls++;return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK){Content=new StreamContent(new ReadNotificationStream(artifact.Zip,()=>free=NativeCandidateIntake.MinimumFreeBytes))});});
+            using(var intake=f.Intake(artifact,transport,availableBytes:()=>free))await RefusedWithCode(()=>f.Acquire(intake,artifact),"NATIVE_INTAKE_DISK_SPACE");
             var residue=Directory.GetFiles(f.Files.PathOf("intake"),"download-*.zip.partial");Assert(residue.Length==1);var length=new FileInfo(residue[0]).Length;
             for(var i=0;i<3;i++)
             {
-                using var retry=f.Intake(artifact,new Handler(_=>{calls++;return Task.FromResult(Ok(Metadata(artifact)));}),availableBytes:()=>free);
-                await RefusedWithCode(()=>retry.CheckAndPublishAsync(default),"NATIVE_INTAKE_DISK_SPACE");
+                using var retry=f.Intake(artifact,new Handler(_=>{calls++;return Task.FromResult(Ok(artifact.Zip));}),availableBytes:()=>free);
+                await RefusedWithCode(()=>f.Acquire(retry,artifact),"NATIVE_INTAKE_DISK_SPACE");
             }
-            Assert(calls==5&&Directory.GetFiles(f.Files.PathOf("intake"),"download-*.zip.partial").Length==1&&new FileInfo(residue[0]).Length==length&&!File.Exists(f.Files.PathOf("intake/available.json")));
-            free=long.MaxValue;using var recovered=f.Intake(artifact,availableBytes:()=>free);f.Verify(artifact,(await recovered.CheckAndPublishAsync(default))!);Assert(!File.Exists(residue[0]));
+            Assert(calls==1&&Directory.GetFiles(f.Files.PathOf("intake"),"download-*.zip.partial").Length==1&&new FileInfo(residue[0]).Length==length&&!Directory.EnumerateFiles(f.Files.PathOf("intake"),"archive-*.zip").Any());
+            free=long.MaxValue;using var recovered=f.Intake(artifact,availableBytes:()=>free);f.Verify(artifact,await f.Publish(recovered,artifact));Assert(!File.Exists(residue[0]));
         });
         foreach(var kind in new[]{"download","staging","cache_limit"})
             await check("native intake bounds existing "+kind+" residue before more network or allocation",async()=>
@@ -83,30 +68,30 @@ internal static class NativeCandidateIntakeTests
                 var before=Directory.EnumerateFileSystemEntries(f.Files.Root,"*",SearchOption.AllDirectories).Count();
                 for(var i=0;i<3;i++)
                 {
-                    using var intake=f.Intake(artifact,new Handler(_=>{calls++;return Task.FromResult(Ok(Metadata(artifact)));}));
-                    await RefusedWithCode(()=>intake.CheckAndPublishAsync(default),"NATIVE_INTAKE_MAINTENANCE_REQUIRED");
+                    using var intake=f.Intake(artifact,new Handler(_=>{calls++;return Task.FromResult(Ok(artifact.Zip));}));
+                    await RefusedWithCode(()=>f.Acquire(intake,artifact),"NATIVE_INTAKE_MAINTENANCE_REQUIRED");
                 }
                 // The exclusive operation creates its one persistent process.lock.
-                Assert(calls==0&&Directory.EnumerateFileSystemEntries(f.Files.Root,"*",SearchOption.AllDirectories).Count()==before+1&&!File.Exists(f.Files.PathOf("intake/available.json")));
+                Assert(calls==0&&Directory.EnumerateFileSystemEntries(f.Files.Root,"*",SearchOption.AllDirectories).Count()==before+1);
             });
         await check("native intake rotates only oldest verified archive for third candidate and preserves all payload/data/audit",async()=>
         {
             var f=new Fixture();var first=Build("0.6.1");var second=Build("0.6.2");var third=Build("0.6.3");
-            foreach(var artifact in new[]{first,second}){using var intake=f.Intake(artifact);await intake.CheckAndPublishAsync(default);}
+            foreach(var artifact in new[]{first,second}){using var intake=f.Intake(artifact);await f.Publish(intake,artifact);}
             var oldest=f.Files.PathOf("intake/archive-"+Hash(first.Zip)+".zip");var retained=f.Files.PathOf("intake/archive-"+Hash(second.Zip)+".zip");
             File.SetCreationTimeUtc(oldest,new DateTime(2020,1,1,0,0,0,DateTimeKind.Utc));File.SetCreationTimeUtc(retained,new DateTime(2021,1,1,0,0,0,DateTimeKind.Utc));
             Directory.CreateDirectory(f.Files.PathOf("datasets/fixture/data"));Directory.CreateDirectory(f.Files.PathOf("backups/fixture"));
             File.WriteAllBytes(f.Files.PathOf("datasets/fixture/data/synthetic.sqlite"),[1,2,3]);File.WriteAllBytes(f.Files.PathOf("backups/fixture/synthetic.backup"),[4,5,6]);File.WriteAllBytes(f.Files.PathOf("intake/unknown-preserved.txt"),[7,8,9]);
-            var preserved=Directory.EnumerateFiles(f.Files.Root,"*",SearchOption.AllDirectories).Where(path=>path!=oldest&&!Path.GetFileName(path).StartsWith("archive-",StringComparison.Ordinal)&&Path.GetFileName(path)!="available.json").ToDictionary(path=>path,File.ReadAllBytes,StringComparer.Ordinal);
+            var preserved=Directory.EnumerateFiles(f.Files.Root,"*",SearchOption.AllDirectories).Where(path=>path!=oldest&&!Path.GetFileName(path).StartsWith("archive-",StringComparison.Ordinal)).ToDictionary(path=>path,File.ReadAllBytes,StringComparer.Ordinal);
             var replacementDenied=false;
             using(var intake=f.Intake(third,fault:phase=>
             {
                 if(phase=="cache_rotation_verified")try{File.WriteAllBytes(oldest,[42]);}catch(IOException){replacementDenied=true;}
-            }))f.Verify(third,(await intake.CheckAndPublishAsync(default))!);
+            }))f.Verify(third,await f.Publish(intake,third));
             Assert(replacementDenied&&!File.Exists(oldest)&&File.Exists(retained)&&File.Exists(f.Files.PathOf("intake/archive-"+Hash(third.Zip)+".zip")));
-            Assert(Directory.EnumerateFiles(f.Files.PathOf("intake"),"archive-*.zip").Count()==NativeCandidateIntake.MaximumRetainedCandidates&&Directory.EnumerateFiles(f.Files.PathOf("intake"),"source-*.json").Count()==3&&Directory.EnumerateFiles(f.Files.PathOf("intake"),"receipt-*.json").Count()==3);
+            Assert(Directory.EnumerateFiles(f.Files.PathOf("intake"),"archive-*.zip").Count()==NativeCandidateIntake.MaximumRetainedCandidates&&Directory.EnumerateFiles(f.Files.PathOf("intake"),"system-source-*.json").Count()==3&&Directory.EnumerateFiles(f.Files.PathOf("intake"),"receipt-*.json").Count()==3);
             foreach(var pair in preserved)Assert(File.Exists(pair.Key)&&pair.Value.SequenceEqual(File.ReadAllBytes(pair.Key)));
-            using var repeat=f.Intake(third);f.Verify(third,(await repeat.CheckAndPublishAsync(default))!);
+            using var repeat=f.Intake(third);f.Verify(third,await f.Publish(repeat,third));
         });
         foreach(var mutation in new[]{"tampered","unpublished","changed_after_inventory","open_reader"})
             await check("native intake cannot rotate cache with "+mutation+" evidence",async()=>
@@ -115,70 +100,44 @@ internal static class NativeCandidateIntakeTests
                 foreach(var artifact in new[]{first,second})
                 {
                     if(mutation=="unpublished")File.WriteAllBytes(f.Files.PathOf("intake/archive-"+Hash(artifact.Zip)+".zip"),artifact.Zip);
-                    else{using var intake=f.Intake(artifact);await intake.CheckAndPublishAsync(default);}
+                    else{using var intake=f.Intake(artifact);await f.Publish(intake,artifact);}
                 }
                 var oldest=f.Files.PathOf("intake/archive-"+Hash(first.Zip)+".zip");var recent=f.Files.PathOf("intake/archive-"+Hash(second.Zip)+".zip");
                 File.SetCreationTimeUtc(oldest,new DateTime(2020,1,1,0,0,0,DateTimeKind.Utc));File.SetCreationTimeUtc(recent,new DateTime(2021,1,1,0,0,0,DateTimeKind.Utc));
-                if(mutation=="tampered")File.AppendAllText(oldest,"tampered synthetic cache");
-                var pointerPath=f.Files.PathOf("intake/available.json");var pointer=File.Exists(pointerPath)?File.ReadAllBytes(pointerPath):null;var calls=0;
+                if(mutation=="tampered")File.AppendAllText(oldest,"tampered synthetic cache");var calls=0;
                 using var reader=mutation=="open_reader"?new FileStream(oldest,FileMode.Open,FileAccess.Read,FileShare.Read):null;
-                using var attempted=f.Intake(third,new Handler(request=>{calls++;return Task.FromResult(Ok(request.RequestUri!.AbsoluteUri==NativeCandidateIntake.Latest?Metadata(third):third.Zip));}),phase=>{if(mutation=="changed_after_inventory"&&phase=="cache_rotation_opening"){var changed=File.ReadAllBytes(oldest);changed[0]^=1;File.WriteAllBytes(oldest,changed);}});
-                await RefusedWithCode(()=>attempted.CheckAndPublishAsync(default),"NATIVE_INTAKE_MAINTENANCE_REQUIRED");
-                Assert(calls==(mutation=="tampered"?0:1)&&File.Exists(oldest)&&File.Exists(recent)&&!File.Exists(f.Files.PathOf("intake/archive-"+Hash(third.Zip)+".zip")));
-                Assert(pointer is null?!File.Exists(pointerPath):pointer.SequenceEqual(File.ReadAllBytes(pointerPath)));
+                using var attempted=f.Intake(third,new Handler(request=>{calls++;return Task.FromResult(Ok(third.Zip));}),phase=>{if(mutation=="changed_after_inventory"&&phase=="cache_rotation_opening"){var changed=File.ReadAllBytes(oldest);changed[0]^=1;File.WriteAllBytes(oldest,changed);}});
+                await RefusedWithCode(()=>f.Acquire(attempted,third),"NATIVE_INTAKE_MAINTENANCE_REQUIRED");
+                Assert(calls==0&&File.Exists(oldest)&&File.Exists(recent)&&!File.Exists(f.Files.PathOf("intake/archive-"+Hash(third.Zip)+".zip")));
                 Assert(f.Before.SequenceEqual(File.ReadAllBytes(f.Files.PathOf("activation.json"))));
             });
         await check("native intake rejects unknown archive names without retiring any file",async()=>
         {
             var f=new Fixture();var artifact=Build("0.6.1");var unknown=f.Files.PathOf("intake/archive-unknown.zip");File.WriteAllBytes(unknown,[5,6,7]);var calls=0;
-            using var intake=f.Intake(artifact,new Handler(_=>{calls++;return Task.FromResult(Ok(Metadata(artifact)));}));
-            await RefusedWithCode(()=>intake.CheckAndPublishAsync(default),"NATIVE_INTAKE_MAINTENANCE_REQUIRED");Assert(calls==0&&File.ReadAllBytes(unknown).SequenceEqual(new byte[]{5,6,7}));
+            using var intake=f.Intake(artifact,new Handler(_=>{calls++;return Task.FromResult(Ok(artifact.Zip));}));
+            await RefusedWithCode(()=>f.Acquire(intake,artifact),"NATIVE_INTAKE_MAINTENANCE_REQUIRED");Assert(calls==0&&File.ReadAllBytes(unknown).SequenceEqual(new byte[]{5,6,7}));
         });
-        await check("native intake publishes two successive compatible fixture candidates through existing selection",async()=>
+        await check("native intake stages two successive compatible fixture candidates",async()=>
         {
-            var f=new Fixture();var a=Build("0.6.1");using(var intake=f.Intake(a)){var selected=await intake.CheckAndPublishAsync(default);Assert(selected?.Catalog.Facts.TargetVersion=="0.6.1");f.Verify(a,selected!);}
-            var b=Build("0.6.2");using(var intake=f.Intake(b)){var selected=await intake.CheckAndPublishAsync(default);Assert(selected?.Catalog.Facts.TargetVersion=="0.6.2");f.Verify(b,selected!);}
+            var f=new Fixture();var a=Build("0.6.1");using(var intake=f.Intake(a))f.Verify(a,await f.Publish(intake,a));
+            var b=Build("0.6.2");using(var intake=f.Intake(b))f.Verify(b,await f.Publish(intake,b));
             Assert(f.Before.SequenceEqual(File.ReadAllBytes(f.Files.PathOf("activation.json"))));
             Assert(f.Roles.Contains(InstalledFileRole.Payload)&&f.Roles.Contains(InstalledFileRole.Recovery));
         });
         await check("native intake repeat check revalidates immutable existing candidate",async()=>
         {
-            var f=new Fixture();var artifact=Build("0.6.1");string target;
-            using(var intake=f.Intake(artifact))target=(await intake.CheckAndPublishAsync(default))!.Target;
-            using(var intake=f.Intake(artifact))Assert((await intake.CheckAndPublishAsync(default))!.Target==target);
+            var f=new Fixture();var artifact=Build("0.6.1");string root;
+            using(var intake=f.Intake(artifact))root=await f.Publish(intake,artifact);
+            using(var intake=f.Intake(artifact)){await f.Acquire(intake,artifact);Assert(f.Stage(intake,artifact)==root&&intake.VerifyStagedApplicationCandidate(artifact.Manifest,artifact.Version,6,default)==root);}
             File.AppendAllText(f.Files.PathOf("payloads/"+Hash(artifact.Manifest)+"/app/server/main.mjs"),"changed");
-            using(var intake=f.Intake(artifact))await Refused(()=>intake.CheckAndPublishAsync(default));
-            Assert(NativeJson.Read<IntakePointer>(File.ReadAllBytes(f.Files.PathOf("intake/available.json"))).ReceiptDigest==target);
+            using(var intake=f.Intake(artifact)){await Refused(()=>Task.FromResult(f.Stage(intake,artifact)));await Refused(()=>Task.FromResult(intake.VerifyStagedApplicationCandidate(artifact.Manifest,artifact.Version,6,default)));}
         });
-        foreach(var mutation in new[]{"repository","digest_missing","digest_mismatch","size","duplicate","draft","prerelease","version","asset_url","state","linux_only","duplicate_json"})
-            await check("native intake rejects source metadata "+mutation,async()=>
-            {
-                var f=new Fixture();var artifact=Build("0.6.1");var calls=0;
-                var raw=Metadata(artifact);var root=JsonNode.Parse(raw)!.AsObject();var asset=root["assets"]![0]!.AsObject();
-                switch(mutation)
-                {
-                    case "repository":root["url"]="https://api.github.com/repos/other/repo/releases/1";break;
-                    case "digest_missing":asset.Remove("digest");break;
-                    case "digest_mismatch":asset["digest"]="sha256:"+new string('0',64);break;
-                    case "size":asset["size"]=NativeCandidateIntake.MaximumArchiveBytes+1;break;
-                    case "duplicate":root["assets"]!.AsArray().Add(asset.DeepClone());break;
-                    case "draft":root["draft"]=true;break;
-                    case "prerelease":root["prerelease"]=true;break;
-                    case "version":root["tag_name"]="v0.06.1";break;
-                    case "asset_url":asset["url"]="https://api.github.com/repos/other/repo/releases/assets/2";break;
-                    case "state":asset["state"]="starter";break;
-                    case "linux_only":asset["name"]="yachad-app.zip";break;
-                }
-                raw=JsonSerializer.SerializeToUtf8Bytes(root);if(mutation=="duplicate_json")raw=Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(raw).Replace("\"draft\":false","\"draft\":false,\"draft\":false",StringComparison.Ordinal));
-                using var intake=f.Intake(artifact,new Handler(request=>{calls++;return Task.FromResult(Ok(request.RequestUri!.AbsoluteUri==NativeCandidateIntake.Latest?raw:artifact.Zip));}));
-                await Refused(()=>intake.CheckAndPublishAsync(default));Assert(!File.Exists(f.Files.PathOf("intake/available.json")));Assert(calls==(mutation=="digest_mismatch"?2:1));
-            });
         foreach(var destination in new[]{"http://github.com/unsafe","https://github.com.evil.invalid/payload","https://127.0.0.1/payload","https://user@github.com/payload","https://github.com:444/payload","https://release-assets.githubusercontent.com/file#fragment"})
             await check("native intake rejects download redirect "+destination,async()=>
             {
                 var f=new Fixture();var artifact=Build("0.6.1");var calls=0;
-                using var intake=f.Intake(artifact,new Handler(request=>{calls++;if(request.RequestUri!.AbsoluteUri==NativeCandidateIntake.Latest)return Task.FromResult(Ok(Metadata(artifact)));var response=new HttpResponseMessage(HttpStatusCode.Found);response.Headers.Location=new(destination);return Task.FromResult(response);}));
-                await Refused(()=>intake.CheckAndPublishAsync(default));Assert(calls==2&&!File.Exists(f.Files.PathOf("intake/available.json")));
+                using var intake=f.Intake(artifact,new Handler(request=>{calls++;var response=new HttpResponseMessage(HttpStatusCode.Found);response.Headers.Location=new(destination);return Task.FromResult(response);}));
+                await Refused(()=>f.Acquire(intake,artifact));Assert(calls==1&&!Directory.EnumerateFiles(f.Files.PathOf("intake"),"archive-*.zip").Any());
             });
         await check("native intake allows bounded public CDN redirect without credentials",async()=>
         {
@@ -186,19 +145,19 @@ internal static class NativeCandidateIntakeTests
             using var intake=f.Intake(artifact,new Handler(request=>
             {
                 calls++;Assert(request.Headers.Authorization is null);
-                if(request.RequestUri!.AbsoluteUri==NativeCandidateIntake.Latest)return Task.FromResult(Ok(Metadata(artifact)));
-                if(request.RequestUri.Host=="api.github.com"){var response=new HttpResponseMessage(HttpStatusCode.Found);response.Headers.Location=new("https://release-assets.githubusercontent.com/fixture?sig=synthetic");return Task.FromResult(response);}
+                if(request.RequestUri!.Host=="api.github.com"){var response=new HttpResponseMessage(HttpStatusCode.Found);response.Headers.Location=new("https://release-assets.githubusercontent.com/fixture?sig=synthetic");return Task.FromResult(response);}
                 return Task.FromResult(Ok(artifact.Zip));
             }));
-            Assert((await intake.CheckAndPublishAsync(default)) is not null&&calls==3);
+            Assert(File.Exists(await f.Acquire(intake,artifact))&&calls==2);
         });
         await check("native intake refuses redirect loops and metadata redirects",async()=>
         {
             foreach(var metadataRedirect in new[]{true,false})
             {
                 var f=new Fixture();var artifact=Build("0.6.1");var calls=0;
-                using var intake=f.Intake(artifact,new Handler(request=>{calls++;if(!metadataRedirect&&request.RequestUri!.AbsoluteUri==NativeCandidateIntake.Latest)return Task.FromResult(Ok(Metadata(artifact)));var response=new HttpResponseMessage(HttpStatusCode.Found);response.Headers.Location=new("https://github.com/loop");return Task.FromResult(response);}));
-                await Refused(()=>intake.CheckAndPublishAsync(default));Assert(calls<=7&&!File.Exists(f.Files.PathOf("intake/available.json")));
+                using var intake=f.Intake(artifact,new Handler(request=>{calls++;var response=new HttpResponseMessage(HttpStatusCode.Found);response.Headers.Location=new("https://github.com/loop");return Task.FromResult(response);}));
+                await Refused(()=>metadataRedirect?intake.CheckSystemSourceAsync(()=>{},default):f.Acquire(intake,artifact));
+                Assert((metadataRedirect?calls==1:calls<=6)&&!Directory.EnumerateFiles(f.Files.PathOf("intake"),"archive-*.zip").Any());
             }
         });
         foreach(var path in new[]{"../escape","app/../escape","app/dist/a:b","app/dist/CON.txt","app/dist/trailing.","app/dist/back\\slash","app/dist/.env.local","app/dist/Data/app.sqlite","app/dist/data/file.txt","runtime/authority/tool.exe","app/dist/a/file.txt/child",
@@ -206,9 +165,11 @@ internal static class NativeCandidateIntakeTests
             await check("native intake refuses unsafe declared path "+path,async()=>
             {
                 var f=new Fixture();var artifact=Build("0.6.1",changeFiles:items=>{items[path]=[1];if(path=="app/dist/a/file.txt/child")items["app/dist/a/file.txt"]=[2];});
-                using var intake=f.Intake(artifact);await Refused(()=>intake.CheckAndPublishAsync(default));Assert(!File.Exists(f.Files.PathOf("intake/available.json")));
+                using var intake=f.Intake(artifact);await f.Acquire(intake,artifact);await Refused(()=>Task.FromResult(f.Stage(intake,artifact)));f.AssertNotStaged(artifact);
             });
-        foreach(var mutation in new[]{"schema","arch","profile","launch","checksum","extra","symlink","collision","directory_case","private_clr","package","source","server_bundle","server_record"})
+        // Archive member types (symlinks, attributes) are owned by the full-system
+        // archive reader before the application stager is entered.
+        foreach(var mutation in new[]{"schema","arch","profile","launch","checksum","extra","collision","directory_case","private_clr","package","source","server_bundle","server_record"})
             await check("native intake refuses candidate mismatch "+mutation,async()=>
             {
                 var f=new Fixture();var artifact=Build("0.6.1",schema:mutation=="schema"?7:6,changeFiles:items=>
@@ -222,32 +183,34 @@ internal static class NativeCandidateIntakeTests
                     if(mutation=="source")items["legal/build-inputs.json"]=Json(new{databaseSchema=6,appSourceCommit=new string('a',40),helperSourceCommit=new string('b',40),packagerSourceCommit=new string('a',40)});
                 },changeManifest:manifest=>{if(mutation=="profile")manifest["profile"]="core-fixture";if(mutation=="launch")manifest["launch"]!["node"]="runtime/caddy/caddy.exe";},alterZip:mutation,
                 changeBundle:record=>{if(mutation=="server_bundle")record["outputs"]![0]!["sha256"]=new string('0',64);});
-                using var intake=f.Intake(artifact);await Refused(()=>intake.CheckAndPublishAsync(default));Assert(!File.Exists(f.Files.PathOf("intake/available.json")));
+                using var intake=f.Intake(artifact);await f.Acquire(intake,artifact);await Refused(()=>Task.FromResult(f.Stage(intake,artifact)));f.AssertNotStaged(artifact);
             });
-        foreach(var phase in new[]{"download_verified","payload_verified","payload_published","receipt_published","pointer_prepared","pointer_published"})
+        foreach(var phase in new[]{"download_bytes_flushed","payload_verified","payload_published"})
             await check("native intake crash boundary "+phase+" cannot expose incomplete bytes",async()=>
             {
-                var f=new Fixture();var artifact=Build("0.6.1");using(var intake=f.Intake(artifact,fault:point=>{if(point==phase)throw new IOException("SYNTHETIC_CRASH");}))await Refused(()=>intake.CheckAndPublishAsync(default));
-                Assert(File.Exists(f.Files.PathOf("intake/available.json"))==(phase=="pointer_published"));
-                if(phase=="pointer_published")f.Verify(artifact,f.Selection.Select());
-                else{using var retry=f.Intake(artifact);f.Verify(artifact,(await retry.CheckAndPublishAsync(default))!);}
+                var f=new Fixture();var artifact=Build("0.6.1");
+                using(var intake=f.Intake(artifact,fault:point=>{if(point==phase)throw new IOException("SYNTHETIC_CRASH");}))await Refused(()=>f.Publish(intake,artifact));
+                Assert(File.Exists(f.Files.PathOf("intake/archive-"+Hash(artifact.Zip)+".zip"))==(phase!="download_bytes_flushed"));
+                Assert(Directory.Exists(f.Files.PathOf("payloads/"+Hash(artifact.Manifest)))==(phase=="payload_published"));
+                using var retry=f.Intake(artifact);f.Verify(artifact,await f.Publish(retry,artifact));
             });
         foreach(var sameRelease in new[]{true,false})await check("native interrupted body then successful "+(sameRelease?"same":"next")+" release preserves protected data",async()=>
         {
             var f=new Fixture();var artifact=Build("0.6.1");
-            using(var interrupted=f.Intake(artifact,new Handler(request=>Task.FromResult(request.RequestUri!.AbsoluteUri==NativeCandidateIntake.Latest?Ok(Metadata(artifact)):new HttpResponseMessage(HttpStatusCode.OK){Content=new StreamContent(new InterruptedBody(artifact.Zip))}))))await Refused(()=>interrupted.CheckAndPublishAsync(default));
+            using(var interrupted=f.Intake(artifact,new Handler(request=>Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK){Content=new StreamContent(new InterruptedBody(artifact.Zip))}))))await Refused(()=>f.Acquire(interrupted,artifact));
             var partial=Directory.GetFiles(f.Files.PathOf("intake"),"download-*.zip.partial").Single();var prefix=File.ReadAllBytes(partial);Assert(prefix.Length>0&&prefix.Length<artifact.Zip.Length);
-            var next=sameRelease?artifact:Build("0.6.2");using var retry=f.Intake(next);f.Verify(next,(await retry.CheckAndPublishAsync(default))!);
+            var next=sameRelease?artifact:Build("0.6.2");using var retry=f.Intake(next);f.Verify(next,await f.Publish(retry,next));
             Assert(sameRelease?!File.Exists(partial):File.ReadAllBytes(partial).SequenceEqual(prefix));
             Assert(f.Before.SequenceEqual(File.ReadAllBytes(f.Files.PathOf("activation.json"))));
         });
-        await check("native intake cancellation and offline failure preserve protected head and prior pointer",async()=>
+        await check("native intake cancellation and offline failure preserve protected head and cache",async()=>
         {
             foreach(var cancel in new[]{true,false})
             {
-                var f=new Fixture();var artifact=Build("0.6.1");var prior=Json(new{fixture="prior pointer"});File.WriteAllBytes(f.Files.PathOf("intake/available.json"),prior);
+                var f=new Fixture();var artifact=Build("0.6.1");
                 using var source=new CancellationTokenSource();using var intake=f.Intake(artifact,new Handler(request=>{if(cancel){source.Cancel();return Task.FromCanceled<HttpResponseMessage>(source.Token);}throw new HttpRequestException("SYNTHETIC_OFFLINE");}));
-                await Refused(()=>intake.CheckAndPublishAsync(source.Token));Assert(prior.SequenceEqual(File.ReadAllBytes(f.Files.PathOf("intake/available.json")))&&f.Before.SequenceEqual(File.ReadAllBytes(f.Files.PathOf("activation.json"))));
+                await Refused(()=>f.Acquire(intake,artifact,source.Token));
+                Assert(!Directory.EnumerateFiles(f.Files.PathOf("intake"),"archive-*.zip").Any()&&f.Before.SequenceEqual(File.ReadAllBytes(f.Files.PathOf("activation.json"))));
             }
         });
         await check("native intake rejects interrupted and oversized bodies without publication",async()=>
@@ -255,29 +218,22 @@ internal static class NativeCandidateIntakeTests
             foreach(var overflow in new[]{true,false})
             {
                 var f=new Fixture();var artifact=Build("0.6.1");var bytes=overflow?artifact.Zip.Concat(new byte[]{0}).ToArray():artifact.Zip[..^1];
-                using var intake=f.Intake(artifact,new Handler(request=>Task.FromResult(Ok(request.RequestUri!.AbsoluteUri==NativeCandidateIntake.Latest?Metadata(artifact):bytes))));
-                await Refused(()=>intake.CheckAndPublishAsync(default));Assert(!File.Exists(f.Files.PathOf("intake/available.json")));
+                using var intake=f.Intake(artifact,new Handler(request=>Task.FromResult(Ok(bytes))));
+                await Refused(()=>f.Acquire(intake,artifact));Assert(!Directory.EnumerateFiles(f.Files.PathOf("intake"),"archive-*.zip").Any());
             }
         });
-        await check("native intake head race cannot publish a downloaded candidate",async()=>
+        await check("native intake rechecks full policy after downloading and before archive publication",async()=>
         {
-            var f=new Fixture();var artifact=Build("0.6.1");using var intake=f.Intake(artifact,fault:phase=>{if(phase=="payload_published")File.AppendAllText(f.Files.PathOf("activation.json")," ");});
-            await Refused(()=>intake.CheckAndPublishAsync(default));Assert(!File.Exists(f.Files.PathOf("intake/available.json")));
-        });
-        await check("native intake rechecks enrollment after downloading and before pointer publication",async()=>
-        {
-            foreach(var phase in new[]{"payload_published","pointer_prepared"})
-            {
-                var f=new Fixture();var artifact=Build("0.6.1");using var intake=f.Intake(artifact,fault:point=>
-                {if(point==phase){var path=f.Files.PathOf("intake/enrollment.json");var enrollment=NativeJson.Read<NativeUpdateEnrollment>(File.ReadAllBytes(path));File.WriteAllBytes(path,Json(enrollment with{UserId="changed-parent"}));}});
-                await Refused(()=>intake.CheckAndPublishAsync(default));Assert(!File.Exists(f.Files.PathOf("intake/available.json")));
-            }
+            var f=new Fixture();var artifact=Build("0.6.1");var revoked=false;var source=await Source(artifact);
+            using var intake=f.Intake(artifact,fault:point=>{if(point=="download_bytes_flushed")revoked=true;});
+            await Refused(()=>intake.AcquireSystemArchiveAsync(source,()=>{if(revoked)throw new UnauthorizedAccessException("FULL_POLICY_REQUIRED");},default));
+            Assert(revoked&&!Directory.EnumerateFiles(f.Files.PathOf("intake"),"archive-*.zip").Any());
         });
         await check("native intake serializes separate instances before duplicate network work",async()=>
         {
             var f=new Fixture();var artifact=Build("0.6.1");var entered=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);var resume=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);var calls=0;
-            using var first=f.Intake(artifact,new Handler(async request=>{calls++;if(request.RequestUri!.AbsoluteUri==NativeCandidateIntake.Latest){entered.SetResult();await resume.Task;return Ok(Metadata(artifact));}return Ok(artifact.Zip);}));
-            var running=first.CheckAndPublishAsync(default);await entered.Task;using(var second=f.Intake(artifact))await Refused(()=>second.CheckAndPublishAsync(default));resume.SetResult();Assert((await running) is not null&&calls==2);
+            using var first=f.Intake(artifact,new Handler(async request=>{calls++;entered.SetResult();await resume.Task;return Ok(artifact.Zip);}));
+            var running=f.Acquire(first,artifact);await entered.Task;using(var second=f.Intake(artifact))await Refused(()=>f.Acquire(second,artifact));resume.SetResult();Assert(File.Exists(await running)&&calls==1);
         });
     }
     private static async Task Refused(Func<Task> action)
@@ -288,7 +244,14 @@ internal static class NativeCandidateIntakeTests
     private static byte[] Json(object value)=>JsonSerializer.SerializeToUtf8Bytes(value);
     private static string Hash(byte[] bytes)=>Convert.ToHexStringLower(SHA256.HashData(bytes));
     private static HttpResponseMessage Ok(byte[] bytes)=>new(HttpStatusCode.OK){Content=new ByteArrayContent(bytes)};
-    private static byte[] Metadata(Artifact artifact)=>Json(new{id=1,url="https://api.github.com/repos/"+NativeCandidateIntake.Repository+"/releases/1",tag_name="v"+artifact.Version,draft=false,prerelease=false,assets=new[]{new{id=2,name="yahad-app-native-"+artifact.Version+".zip",state="uploaded",size=artifact.Zip.Length,digest="sha256:"+Hash(artifact.Zip),url="https://api.github.com/repos/"+NativeCandidateIntake.Repository+"/releases/assets/2"}}});
+    // Fixed-source facts for the artifact through the production metadata parser; no network.
+    private static Task<SystemSourceRelease> Source(Artifact artifact)
+    {
+        var api=SystemSourceRelease.Api;var tag="v"+artifact.Version;var commit=new string('a',40);
+        return SystemSourceRelease.CheckAsync((uri,_,_)=>Task.FromResult(uri.AbsoluteUri==api+"/releases/latest"
+            ?Json(new{id=1,url=api+"/releases/1",tag_name=tag,draft=false,prerelease=false,assets=new[]{new{id=2,name="yahad-system-native-"+artifact.Version+".zip",state="uploaded",size=artifact.Zip.Length,digest="sha256:"+Hash(artifact.Zip),url=api+"/releases/assets/2"}}})
+            :Json(new{@ref="refs/tags/"+tag,url=api+"/git/refs/tags/"+tag,@object=new{type="commit",sha=commit,url=api+"/git/commits/"+commit}})),default);
+    }
     private sealed class Handler(Func<HttpRequestMessage,Task<HttpResponseMessage>> response):HttpMessageHandler
     {protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken cancellationToken)=>response(request);}
     private sealed class InterruptedBody(byte[] bytes):MemoryStream(bytes,false)
@@ -330,24 +293,46 @@ internal static class NativeCandidateIntakeTests
     }
     internal sealed class Fixture
     {
-        internal InstalledStateFiles Files;internal InstalledAuthorityAnchor Anchor;internal InstalledIntakeSelection Selection;internal byte[] Before;internal List<InstalledFileRole> Roles=[];
-        internal Fixture(bool enroll=true)
+        internal InstalledStateFiles Files;internal InstalledAuthorityAnchor Anchor;internal byte[] Before;internal List<InstalledFileRole> Roles=[];
+        internal Fixture()
         {
             var root=SafeDirectory.CreatePrivateSession(Path.GetTempPath());Files=InstalledStateFiles.Private(root,projection:(_,role)=>Roles.Add(role));
             Directory.CreateDirectory(Files.PathOf("intake"));Directory.CreateDirectory(Files.PathOf("payloads"));var installation=Guid.NewGuid().ToString("N");var digest=new string('a',64);
-            Anchor=new(1,installation,ServiceDefinition.Name,InstalledAuthorityReader.AuthorityService,"S-1-5-21-100-200-300-1001",digest,digest);Selection=new(Files,Anchor,()=>DateTimeOffset.UtcNow);
-            if(enroll)File.WriteAllBytes(Files.PathOf("intake/enrollment.json"),Json(new NativeUpdateEnrollment(1,installation,NativeCandidateIntake.Repository,"stable","yahad-app-native-{version}.zip","https-github-unsigned","synthetic-family","synthetic-parent",digest,digest)));
+            Anchor=new(1,installation,ServiceDefinition.Name,InstalledAuthorityReader.AuthorityService,digest,digest);
             var manifest=Json(new{version="0.6.0"});var release=Hash(manifest);Directory.CreateDirectory(Files.PathOf("payloads/"+release+"/legal"));File.WriteAllBytes(Files.PathOf("payloads/"+release+"/bundle.json"),manifest);File.WriteAllBytes(Files.PathOf("payloads/"+release+"/legal/build-inputs.json"),Json(new{databaseSchema=6}));
             var web=Json(new InstalledWeb(1,installation,"https://yahad.invalid",32000));File.WriteAllBytes(Files.PathOf("web.json"),web);
-            Before=Json(new InstalledActivation(1,installation,1,release,Guid.NewGuid().ToString("N"),6,6,digest,digest,digest,digest,Hash(web),"committed",null));File.WriteAllBytes(Files.PathOf("activation.json"),Before);File.WriteAllBytes(Files.PathOf("epoch.json"),Json(new InstalledEpoch(1,installation,1,Hash(Before))));File.WriteAllBytes(Files.PathOf("bootstrap.json"),Json(new{schema=1,service=ServiceDefinition.Name,installationId=installation,activationReceiptDigest=Hash(Before)}));
+            Before=Json(new InstalledActivation(1,installation,1,release,Guid.NewGuid().ToString("N"),6,6,digest,digest,digest,Hash(web),"committed",null));File.WriteAllBytes(Files.PathOf("activation.json"),Before);File.WriteAllBytes(Files.PathOf("epoch.json"),Json(new InstalledEpoch(1,installation,1,Hash(Before))));File.WriteAllBytes(Files.PathOf("bootstrap.json"),Json(new{schema=1,service=ServiceDefinition.Name,installationId=installation,activationReceiptDigest=Hash(Before)}));
         }
-        internal NativeCandidateIntake Intake(Artifact artifact,HttpMessageHandler? handler=null,Action<string>? fault=null,Func<long>? availableBytes=null)=>new(Files,Anchor,()=>DateTimeOffset.UtcNow,handler??new Handler(request=>Task.FromResult(Ok(request.RequestUri!.AbsoluteUri==NativeCandidateIntake.Latest?Metadata(artifact):artifact.Zip))),fault,availableBytes??(()=>long.MaxValue));
-        internal void Verify(Artifact artifact,IntakeSelection selected)
+        internal NativeCandidateIntake Intake(Artifact artifact,HttpMessageHandler? handler=null,Action<string>? fault=null,Func<long>? availableBytes=null)=>new(Files,Anchor,()=>DateTimeOffset.UtcNow,handler??new Handler(_=>Task.FromResult(Ok(artifact.Zip))),fault,availableBytes??(()=>long.MaxValue));
+        internal async Task<string> Acquire(NativeCandidateIntake intake,Artifact artifact,CancellationToken token=default)=>await intake.AcquireSystemArchiveAsync(await Source(artifact),()=>{},token);
+        internal string Stage(NativeCandidateIntake intake,Artifact artifact,int schema=6)
         {
-            var observed=Selection.Select(selected.Target);Assert(observed.Target==selected.Target&&observed.Catalog.Operation.ReleaseDigest==Hash(artifact.Manifest));
-            Assert(File.ReadAllBytes(Files.PathOf("payloads/"+Hash(artifact.Manifest)+"/bundle.json")).SequenceEqual(artifact.Manifest));
-            var receipt=NativeJson.Read<IntakeReceipt>(File.ReadAllBytes(Files.PathOf("intake/receipt-"+selected.Target+".json")));Assert(receipt.BundleDigest==Hash(artifact.Manifest)&&receipt.Channel=="stable"&&receipt.Schema==6);
-            Assert(File.Exists(Files.PathOf("intake/source-"+selected.Target+".json"))&&Before.SequenceEqual(File.ReadAllBytes(Files.PathOf("activation.json"))));
+            using var archive=ZipFile.OpenRead(Files.PathOf("intake/archive-"+Hash(artifact.Zip)+".zip"));
+            var entries=archive.Entries.ToDictionary(entry=>entry.FullName,entry=>entry,StringComparer.Ordinal);
+            return intake.StageApplicationCandidate(artifact.Manifest,artifact.Version,schema,entries,default);
+        }
+        // The archive, payload and the two receipts the full-system adapter records:
+        // the retained-cache inventory needs that evidence before it may rotate.
+        internal async Task<string> Publish(NativeCandidateIntake intake,Artifact artifact)
+        {
+            var source=await Source(artifact);await intake.AcquireSystemArchiveAsync(source,()=>{},default);var root=Stage(intake,artifact);
+            long bytes=0;foreach(var file in NativeJson.Read<JsonElement>(artifact.Manifest).GetProperty("files").EnumerateArray())bytes+=file.GetProperty("size").GetInt64();
+            var app=Json(new IntakeReceipt(1,Anchor.InstallationId,Hash(artifact.Manifest),artifact.Version,"stable",bytes,6,Anchor.IntakePolicyDigest,Anchor.IntakePinDigest));
+            var receipt=Json(new SystemSourceReceipt(2,"full-system-v1",Anchor.InstallationId,NativeCandidateIntake.Repository,source.ReleaseId,source.Tag,source.AssetId,source.AssetName,source.Bytes,source.ArchiveSha256,source.SourceCommit,source.SourceProofDigest,Hash(artifact.Manifest),Hash(artifact.Manifest),Hash(app),6,artifact.Version));
+            foreach(var (path,contents) in new[]{(Files.PathOf("intake/receipt-"+Hash(app)+".json"),app),(Files.PathOf("intake/system-source-"+Hash(receipt)+".json"),receipt)})
+                if(!File.Exists(path))intake.WriteIntakeRecord(path,contents);
+            return root;
+        }
+        internal void Verify(Artifact artifact,string root)
+        {
+            Assert(root==Files.PathOf("payloads/"+Hash(artifact.Manifest))&&File.ReadAllBytes(Path.Combine(root,"bundle.json")).SequenceEqual(artifact.Manifest));
+            using var intake=new NativeCandidateIntake(Files,Anchor,()=>DateTimeOffset.UtcNow,new Handler(_=>throw new HttpRequestException("NO_NETWORK")));
+            Assert(intake.VerifyStagedApplicationCandidate(artifact.Manifest,artifact.Version,6,default)==root&&Before.SequenceEqual(File.ReadAllBytes(Files.PathOf("activation.json"))));
+        }
+        internal void AssertNotStaged(Artifact artifact)
+        {
+            Assert(!Directory.Exists(Files.PathOf("payloads/"+Hash(artifact.Manifest))));
+            Assert(Before.SequenceEqual(File.ReadAllBytes(Files.PathOf("activation.json"))));
         }
     }
 }

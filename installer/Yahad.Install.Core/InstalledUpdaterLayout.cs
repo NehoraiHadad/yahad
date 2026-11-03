@@ -40,7 +40,6 @@ internal static class InstalledUpdaterLayout
         var value=NativeJson.Read<UpdaterAnchorDocument>(bytes);
         if(value.Format!=1||value.RuntimeService!=RuntimeServiceName||value.AuthorityService!=AuthorityServiceName||
             !Guid.TryParseExact(value.InstallationId,"N",out var id)||id.ToString("N")!=value.InstallationId||
-            value.OwnerSid is null||!value.OwnerSid.StartsWith("S-1-5-21-",StringComparison.Ordinal)||!new SecurityIdentifier(value.OwnerSid).IsAccountSid()||
             !Digest(value.IntakePolicyDigest)||!Digest(value.IntakePinDigest)||!Digest(value.ProbeSha256)||value.FullSystemPolicyDigest is not null&&!Digest(value.FullSystemPolicyDigest))throw new IOException("INSTALLED_TOKEN_ANCHOR");
     }
     internal static (InstalledFileRoles Roles,byte[] Bytes) ReadRoles(SecurityIdentifier authority,SecurityIdentifier runtime)
@@ -56,12 +55,12 @@ internal static class InstalledUpdaterLayout
         if(!legacy.Small(4096).AsSpan().SequenceEqual(bytes))throw new IOException("INSTALLED_TOKEN_ANCHOR_CHANGED");
         return(roles,bytes);
     }
-    internal static bool AllowsOwnerLoopback(byte[] bytes,string installation)
+    internal static bool AllowsLoopbackOrigin(byte[] bytes,string installation)
     {
         RequireInstalledAnchor(bytes);var anchor=NativeJson.Read<UpdaterAnchorDocument>(bytes);
         if(anchor.InstallationId!=installation)throw new IOException("INSTALLED_TOKEN_ANCHOR");
         return anchor.FullSystemPolicyDigest is not null;
     }
     private static bool Digest(string? value)=>value is not null&&System.Text.RegularExpressions.Regex.IsMatch(value,"^[a-f0-9]{64}$");
-    private sealed record UpdaterAnchorDocument(int Format,string InstallationId,string RuntimeService,string AuthorityService,string OwnerSid,string IntakePolicyDigest,string IntakePinDigest,string? ProbeSha256=null,string? FullSystemPolicyDigest=null);
+    private sealed record UpdaterAnchorDocument(int Format,string InstallationId,string RuntimeService,string AuthorityService,string IntakePolicyDigest,string IntakePinDigest,string? ProbeSha256=null,string? FullSystemPolicyDigest=null);
 }

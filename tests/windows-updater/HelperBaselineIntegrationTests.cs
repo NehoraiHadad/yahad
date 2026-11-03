@@ -18,7 +18,7 @@ internal static class HelperBaselineIntegrationTests
                 var components=op.Components.Select(c=>new SystemBootstrapComponentState(c.Kind,c.EntryPoint,c.EntrySha256,
                     c.Files.Select(x=>new SystemBootstrapFileState(x.RelativePath,x.Size,x.Sha256)).ToArray())).ToArray();
                 Assert(SystemBootstrapNative.FixedActiveComponents(components).Select(c=>c.Kind).Order().SequenceEqual(
-                    new[]{SystemComponentKind.Authority,SystemComponentKind.RuntimeHost,SystemComponentKind.Owner}.Order()));
+                    new[]{SystemComponentKind.Authority,SystemComponentKind.RuntimeHost}.Order()));
                 Assert(!Directory.Exists(Path.Combine(f.Root,"bootstrap","handoff")));
                 f.Observed.Clear();await SystemBootstrapNative.RequirePublishedHelpersAsync(f.Files,op,f.Verify,default);
                 Assert(f.Observed.Order().SequenceEqual(new[]{RecoveryHelperSlot.A,RecoveryHelperSlot.B}.Order()));

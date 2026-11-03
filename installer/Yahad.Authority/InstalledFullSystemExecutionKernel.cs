@@ -52,7 +52,7 @@ internal sealed class InstalledFullSystemExecutionKernel:IFullSystemExecutionKer
     internal static void RequireInstallerQuiescence(InstalledStateFiles files,InstalledStateFiles binaries,InstalledAuthorityAnchor anchor,WindowsFileBoundary.DataLease serial)
     {
         using var retained=serial.DuplicateForDirectory(files.PathOf(".authority/update-serial"));
-        var policy=FullSystemUpdatePolicy.Open(files,anchor.InstallationId,anchor.OwnerSid,anchor.FullSystemPolicyDigest,()=>DateTimeOffset.UtcNow,new InspectionCandidates());
+        var policy=FullSystemUpdatePolicy.Open(files,anchor.InstallationId,anchor.FullSystemPolicyDigest,()=>DateTimeOffset.UtcNow,new InspectionCandidates());
         var inspection=new InstalledFullSystemExecutionKernel(files,binaries,anchor,policy,
             ()=>throw new IOException("INSTALLER_INSPECTION_ONLY"),()=>throw new IOException("INSTALLER_INSPECTION_ONLY"),_=>throw new IOException("INSTALLER_INSPECTION_ONLY"),()=>DateTimeOffset.UtcNow);
         if(Directory.EnumerateFileSystemEntries(files.Root).Any(p=>Path.GetFileName(p)=="pending.json"||Path.GetFileName(p).Contains(".partial-",StringComparison.Ordinal))||inspection.PendingOperation() is not null||inspection.UnadmittedRequests().Count!=0)
@@ -301,10 +301,10 @@ internal sealed class InstalledFullSystemExecutionKernel:IFullSystemExecutionKer
         var paths=Directory.EnumerateFileSystemEntries(files.Root).Where(path=>Path.GetFileName(path)=="pending.json"||Path.GetFileName(path).StartsWith("pending.json.partial-",StringComparison.Ordinal)).Take(3).ToArray();
         if(paths.Length!=1)throw new IOException("FULL_SYSTEM_WAITING_PENDING_REQUIRED");
         var pending=NativeJson.Read<ProtectedPending>(files.Read(paths[0],128*1024));var digest=AuthorityProtocol.Digest(pending.Operation);
-        if(pending.Format!=1||!saved.Any(op=>AuthorityProtocol.Digest(op)==digest)||pending.Operation.InstallationId!=anchor.InstallationId||pending.Owner.InstallationId!=anchor.InstallationId||pending.Owner.Subject!=anchor.OwnerSid||pending.Owner.OperationDigest!=digest||pending.Owner.Scope!=pending.Operation.Kind||pending.Owner.ApprovedUnix<=0||pending.Owner.ValidUntilUnix<=pending.Owner.ApprovedUnix)
+        if(pending.Format!=1||!saved.Any(op=>AuthorityProtocol.Digest(op)==digest)||pending.Operation.InstallationId!=anchor.InstallationId||pending.Approval.InstallationId!=anchor.InstallationId||pending.Approval.Subject!=policy.Subject||pending.Approval.OperationDigest!=digest||pending.Approval.Scope!=pending.Operation.Kind||pending.Approval.ApprovedUnix<=0||pending.Approval.ValidUntilUnix<=pending.Approval.ApprovedUnix)
             throw new IOException("FULL_SYSTEM_WAITING_PENDING_BINDING");
         if(Path.GetFileName(paths[0])!="pending.json"&&Path.GetFileName(paths[0])!="pending.json.partial-"+pending.Operation.Nonce)throw new IOException("FULL_SYSTEM_WAITING_PENDING_NONCE");
-        string[] records=["owner-intent.json","web.json","activation.json","epoch.json","bootstrap.json"];
+        string[] records=["web.json","activation.json","epoch.json","bootstrap.json"];
         if(!pending.Before.Keys.Order(StringComparer.Ordinal).SequenceEqual(records.Order(StringComparer.Ordinal))||!pending.After.Keys.Order(StringComparer.Ordinal).SequenceEqual(records.Order(StringComparer.Ordinal)))throw new IOException("FULL_SYSTEM_WAITING_RECORD_SET");
         foreach(var name in records)
         {

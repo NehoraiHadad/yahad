@@ -54,7 +54,7 @@ internal sealed class InstalledStateFiles
         var relative=Relative(path);
         if(relative is "installation.json" or InstalledUpdaterLayout.AnchorFile||relative.StartsWith("Secrets/",StringComparison.Ordinal))return InstalledFileRole.Anchor;
         if(relative.StartsWith("payloads/",StringComparison.Ordinal))return InstalledFileRole.Payload;
-        if(relative.StartsWith(".authority",StringComparison.Ordinal)||relative.StartsWith("owner-ledger",StringComparison.Ordinal)||relative.StartsWith("intake",StringComparison.Ordinal)||relative.StartsWith("authority-temporary",StringComparison.Ordinal)||relative.StartsWith("pending.json",StringComparison.Ordinal))return InstalledFileRole.Recovery;
+        if(relative.StartsWith(".authority",StringComparison.Ordinal)||relative.StartsWith("grants",StringComparison.Ordinal)||relative.StartsWith("intake",StringComparison.Ordinal)||relative.StartsWith("authority-temporary",StringComparison.Ordinal)||relative.StartsWith("pending.json",StringComparison.Ordinal))return InstalledFileRole.Recovery;
         if(relative.StartsWith("temporary",StringComparison.Ordinal))return InstalledFileRole.Data;
         if(relative.StartsWith("datasets/",StringComparison.Ordinal))
         {

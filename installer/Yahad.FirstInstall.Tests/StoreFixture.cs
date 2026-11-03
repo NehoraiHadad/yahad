@@ -40,7 +40,7 @@ internal sealed class ProductionFixture:IDisposable
     private bool disposed,modulesReleased;
     private bool cleanupAttempted;private Exception? cleanupFailure;
     internal readonly string Root,Dataset,OriginalDataId=Guid.NewGuid().ToString("N"),InstallationId=Guid.NewGuid().ToString("N"),Payload,Node,Repo;
-    internal string DataId,Phase="committed";internal long AnchorEpoch=1;internal string? AnchorDigest,OwnerRelease;internal long? Expiry;
+    internal string DataId,Phase="committed";internal long AnchorEpoch=1;internal string? AnchorDigest;
     internal int Schema {get;}
     internal InstalledRecovery? Recovery;internal DateTimeOffset Now=DateTimeOffset.UtcNow;internal readonly FileControl Control;
     internal string Data=>Recovery is null?Path.Combine(Dataset,"data"):Path.Combine(Dataset,"restore-"+Recovery.OperationId,"completed","data");
@@ -119,14 +119,13 @@ internal sealed class ProductionFixture:IDisposable
         // Callers clear only after the previous child is observed quiescent.
         if(File.Exists(PathOf("worker-error.json")))File.Delete(PathOf("worker-error.json"));
     }
-    internal void Reset(){Recovery=null;DataId=OriginalDataId;Phase="committed";AnchorEpoch=1;AnchorDigest=null;OwnerRelease=null;Expiry=null;if(File.Exists(PathOf("PENDING.JSON")))File.Delete(PathOf("PENDING.JSON"));File.WriteAllText(Policy,"synthetic-policy");File.WriteAllText(Path.Combine(Dataset,"update-pin"),"synthetic-pin");ClearSignals();Publish();}
+    internal void Reset(){Recovery=null;DataId=OriginalDataId;Phase="committed";AnchorEpoch=1;AnchorDigest=null;if(File.Exists(PathOf("PENDING.JSON")))File.Delete(PathOf("PENDING.JSON"));File.WriteAllText(Policy,"synthetic-policy");File.WriteAllText(Path.Combine(Dataset,"update-pin"),"synthetic-pin");ClearSignals();Publish();}
     internal void ResetRecovery(NativeBackupResult b,NativeRestoreResult restore){Reset();DataId=Guid.NewGuid().ToString("N");Recovery=new(OriginalDataId,b.BackupId,restore.OperationId,b.ReceiptDigest);Phase="recovered";Publish();}
     internal void Publish()
     {
         string Write<T>(string name,T value){var bytes=JsonSerializer.SerializeToUtf8Bytes(value);File.WriteAllBytes(PathOf(name),bytes);return Hash(bytes);}
-        var owner=Write("owner-intent.json",new InstalledOwnerIntent(1,InstallationId,1,Guid.NewGuid().ToString("N"),OwnerRelease??release,DataId,Recovery is not null?"recover":"activate","synthetic-owner",Now.AddSeconds(-1).ToUnixTimeSeconds(),Expiry));
         var web=Write("web.json",new InstalledWeb(1,InstallationId,"https://yahad.invalid",32000));
-        var head=Write("activation.json",new InstalledActivation(1,InstallationId,1,release,DataId,Schema,Schema,Hash(File.ReadAllBytes(Path.Combine(Dataset,"master-key"))),Hash(File.ReadAllBytes(Policy)),Hash(File.ReadAllBytes(Path.Combine(Dataset,"update-pin"))),owner,web,Phase,Recovery));
+        var head=Write("activation.json",new InstalledActivation(1,InstallationId,1,release,DataId,Schema,Schema,Hash(File.ReadAllBytes(Path.Combine(Dataset,"master-key"))),Hash(File.ReadAllBytes(Policy)),Hash(File.ReadAllBytes(Path.Combine(Dataset,"update-pin"))),web,Phase,Recovery));
         Write("epoch.json",new InstalledEpoch(1,InstallationId,AnchorEpoch,AnchorDigest??head));
     }
     internal InstallationBinding Binding=>new(InstallationId,Hash(File.ReadAllBytes(PathOf("activation.json"))));

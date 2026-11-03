@@ -86,7 +86,7 @@ internal sealed class SystemCandidateDescriptor
     internal static SystemCandidateDescriptor ValidateInstaller(byte[] manifest,byte[] application,string version,string sourceCommit,int schema,int windowsBuild)
     {
         if(version!=ApplicationRelease.Version||sourceCommit!=ApplicationRelease.SourceCommit)throw Error("INSTALLER_SOURCE");
-        var protocols=new[]{"system","handoff","authorityRuntime","ownerAuthority","activation","journal","recovery","policy"}.ToDictionary(x=>x,x=>x=="policy"?2:1,StringComparer.Ordinal);
+        var protocols=new[]{"system","handoff","authorityRuntime","activation","journal","recovery","policy"}.ToDictionary(x=>x,x=>x=="policy"?2:1,StringComparer.Ordinal);
         return ValidateCore(manifest,application,version,sourceCommit,new(version,schema,windowsBuild,protocols),false);
     }
     private static SystemCandidateDescriptor ValidateCore(byte[] manifest,byte[] application,string version,string sourceCommit,SystemCandidateEnvironment environment,bool requireNewer)
@@ -101,13 +101,13 @@ internal sealed class SystemCandidateDescriptor
         if(schema is <1 or >100000||schema<environment.ObservedSchema||from.ValueKind!=JsonValueKind.Array||from.GetArrayLength()>1024)throw Error("SCHEMA");
         var migrations=from.EnumerateArray().Select(v=>v.GetInt32()).ToArray();
         if(migrations.Any(v=>v<1||v>=schema)||!migrations.SequenceEqual(migrations.Distinct().Order())||schema!=environment.ObservedSchema&&!migrations.Contains(environment.ObservedSchema))throw Error("MIGRATION_PATH");
-        var protocolJson=root.GetProperty("protocols");Fields(protocolJson,"system","handoff","authorityRuntime","ownerAuthority","activation","journal","recovery","policy");var protocols=new Dictionary<string,SystemProtocolRange>(StringComparer.Ordinal);
+        var protocolJson=root.GetProperty("protocols");Fields(protocolJson,"system","handoff","authorityRuntime","activation","journal","recovery","policy");var protocols=new Dictionary<string,SystemProtocolRange>(StringComparer.Ordinal);
         foreach(var pair in protocolJson.EnumerateObject())
         {
             Fields(pair.Value,"minimumReader","maximumReader","writer");var range=new SystemProtocolRange(Number(pair.Value,"minimumReader"),Number(pair.Value,"maximumReader"),Number(pair.Value,"writer"));
             if(range.MinimumReader<1||range.MaximumReader<range.MinimumReader||range.MaximumReader>1000||range.Writer<range.MinimumReader||range.Writer>range.MaximumReader||!environment.Protocols.TryGetValue(pair.Name,out var current)||current<range.MinimumReader||current>range.MaximumReader||range.Writer!=current)throw Error("PROTOCOL");protocols.Add(pair.Name,range);
         }
-        var list=root.GetProperty("components");if(list.ValueKind!=JsonValueKind.Array||list.GetArrayLength()!=5)throw Error("COMPONENTS");var components=new List<SystemComponentDescriptor>();var seen=new HashSet<SystemComponentKind>();long total=0;var fileCount=0;
+        var list=root.GetProperty("components");if(list.ValueKind!=JsonValueKind.Array||list.GetArrayLength()!=4)throw Error("COMPONENTS");var components=new List<SystemComponentDescriptor>();var seen=new HashSet<SystemComponentKind>();long total=0;var fileCount=0;
         foreach(var item in list.EnumerateArray())
         {
             Fields(item,"kind","prefix","entryPoint","entrySha256","files");var name=Text(item,"kind");if(!Enum.TryParse<SystemComponentKind>(name,false,out var kind)||!Enum.IsDefined(kind)||!seen.Add(kind))throw Error("COMPONENT_KIND");
@@ -144,6 +144,6 @@ internal static class SystemCandidateManifest
     internal static void ComponentMember(string name)
     {
         FixedSystemComponents.Member(name);if(name.Split('/').Length>64||Regex.IsMatch(name,@"\.(key|pem|sqlite(?:-wal|-shm)?|backup)$",RegexOptions.IgnoreCase|RegexOptions.CultureInvariant))throw new IOException("SYSTEM_CANDIDATE_COMPONENT_PATH");
-        foreach(var part in name.Split('/'))if(part.StartsWith(".env",StringComparison.OrdinalIgnoreCase)||new[]{"data","datasets","backups","secrets",".git",".authority","owner-ledger","enrollment.json","installation.json","update-authority.json","activation.json","bootstrap.json","owner-intent.json","master-key","update-policy","update-pin"}.Contains(part,StringComparer.OrdinalIgnoreCase)||Regex.IsMatch(part,@"^(COM|LPT)[0-9](?:\..*)?$",RegexOptions.IgnoreCase|RegexOptions.CultureInvariant))throw new IOException("SYSTEM_CANDIDATE_SECURITY_PATH");
+        foreach(var part in name.Split('/'))if(part.StartsWith(".env",StringComparison.OrdinalIgnoreCase)||new[]{"data","datasets","backups","secrets",".git",".authority","grants","enrollment.json","installation.json","update-authority.json","activation.json","bootstrap.json","owner-intent.json","master-key","update-policy","update-pin"}.Contains(part,StringComparer.OrdinalIgnoreCase)||Regex.IsMatch(part,@"^(COM|LPT)[0-9](?:\..*)?$",RegexOptions.IgnoreCase|RegexOptions.CultureInvariant))throw new IOException("SYSTEM_CANDIDATE_SECURITY_PATH");
     }
 }

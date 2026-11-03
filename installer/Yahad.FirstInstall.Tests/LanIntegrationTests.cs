@@ -208,13 +208,13 @@ internal static class LanIntegrationTests
             }
             return Task.CompletedTask;
         });
-        await check("LAN origin transaction preserves data, schema, key, policy, pin and owner intent anchors", () =>
+        await check("LAN origin transaction preserves data, schema, key, policy and pin anchors", () =>
         {
             var after = LanWebConfiguration.WithOrigin(before, state, "https://192.168.4.5");
             var previous = NativeJson.Read<InstalledActivation>(before.Activation);
             var next = NativeJson.Read<InstalledActivation>(after.Activation);
             Require(next with { WebDigest = previous.WebDigest } == previous);
-            Require(next.MasterKeyDigest == previous.MasterKeyDigest && next.OwnerIntentDigest == previous.OwnerIntentDigest);
+            Require(next.MasterKeyDigest == previous.MasterKeyDigest);
             Require(NativeJson.Read<InstalledWeb>(after.Web) == new InstalledWeb(1, state.InstallationId, "https://192.168.4.5", state.Port));
             var epoch = NativeJson.Read<InstalledEpoch>(after.Epoch); var boot = NativeJson.Read<JsonElement>(after.Bootstrap);
             Require(epoch.ActivationDigest == Hash(after.Activation) && epoch.Epoch == previous.Epoch);
@@ -288,7 +288,7 @@ internal static class LanIntegrationTests
     {
         var web = Json(new InstalledWeb(1, state.InstallationId, "http://127.0.0.1:" + state.Port, state.Port));
         var activation = Json(new InstalledActivation(1, state.InstallationId, 7, state.PayloadDigest, state.DataId,
-            state.PayloadSchema, state.PayloadSchema, new string('1', 64), new string('2', 64), new string('3', 64), new string('4', 64), Hash(web), "committed", null));
+            state.PayloadSchema, state.PayloadSchema, new string('1', 64), new string('2', 64), new string('3', 64), Hash(web), "committed", null));
         return new(web, activation, Json(new InstalledEpoch(1, state.InstallationId, 7, Hash(activation))),
             Json(new { schema = 1, service = InstallLocations.ServiceName, installationId = state.InstallationId, activationReceiptDigest = Hash(activation) }));
     }

@@ -71,7 +71,7 @@ internal static class RecoveredUpdateScheduleTests
             Write(".authority/rpc-"+Operation+".json",new{Id=Operation,Action="check",Profile=FullSystemUpdatePolicy.Profile,Target=new string('b',64)});
             Write(".authority/done-"+Operation+".json",new{Id=Operation,Phase=rpcPhase});
         }
-        internal InstalledUpdateScheduler Scheduler()=>new(App.Files,_=>Task.FromResult<IntakeSelection?>(null),_=>throw new IOException("NO_DISPATCH"),()=>null,()=>"idle",()=>DateTimeOffset.UtcNow);
+        internal InstalledUpdateScheduler Scheduler()=>new(App.Files,_=>Task.FromResult<ScheduledUpdateCandidate?>(null),_=>throw new IOException("NO_DISPATCH"),()=>null,()=>"idle",()=>DateTimeOffset.UtcNow);
         internal string Write<T>(string relative,T value){var path=App.Files.PathOf(relative);Directory.CreateDirectory(Path.GetDirectoryName(path)!);var bytes=JsonSerializer.SerializeToUtf8Bytes(value);File.WriteAllBytes(path,bytes);return Hash(bytes);}
         private static string Hash(byte[] bytes)=>Convert.ToHexStringLower(SHA256.HashData(bytes));
     }

@@ -25,7 +25,7 @@ internal static class InstalledOperationalProbe
         FixedSystemComponents.Digest(value.ManifestDigest);
         if(value.Format!=1||value.InstallationId!=installationId||value.Epoch<Math.Max(1,minimumEpoch)||value.PolicyDigest!=immutableFullPolicyDigest||
             value.OperationalProbeDigest!=value.ManifestDigest||value.SourceCommit is null||!Regex.IsMatch(value.SourceCommit,"^[a-f0-9]{40}$")||
-            !Regex.IsMatch(value.Version,"^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")||value.Components is null||value.Components.Length!=5||value.Components.Select(c=>c.Kind).Distinct().Count()!=5)throw new IOException("OPERATIONAL_PROBE_SELECTION");
+            !Regex.IsMatch(value.Version,"^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")||value.Components is null||value.Components.Length!=4||value.Components.Select(c=>c.Kind).Distinct().Count()!=4)throw new IOException("OPERATIONAL_PROBE_SELECTION");
         var descriptors=value.Components.Select(c=>new SystemComponentDescriptor(c.Kind,FixedSystemComponents.SlotPrefix(c.Kind),c.EntryPoint,c.EntrySha256,
             c.Files.Select(f=>new SystemComponentFile(f.RelativePath,f.Size,f.Sha256)))).ToArray();
         var slot=binaries.PathOf("system-slots/"+value.ManifestDigest);var manifestBytes=binaries.Read(Path.Combine(slot,"system-manifest.json"),8*1024*1024);
@@ -33,7 +33,7 @@ internal static class InstalledOperationalProbe
         var manifest=NativeJson.Read<JsonElement>(manifestBytes);
         if(manifest.GetProperty("format").GetInt32()!=2||manifest.GetProperty("kind").GetString()!="windows-system-candidate"||manifest.GetProperty("profile").GetString()!="full-system-v1"||
             manifest.GetProperty("target").GetString()!="win-x64"||manifest.GetProperty("version").GetString()!=value.Version||manifest.GetProperty("sourceCommit").GetString()!=value.SourceCommit)throw new IOException("OPERATIONAL_PROBE_SOURCE");
-        var components=manifest.GetProperty("components");if(components.GetArrayLength()!=5)throw new IOException("OPERATIONAL_PROBE_COMPONENTS");
+        var components=manifest.GetProperty("components");if(components.GetArrayLength()!=4)throw new IOException("OPERATIONAL_PROBE_COMPONENTS");
         var seen=new HashSet<SystemComponentKind>();
         foreach(var component in components.EnumerateArray())
         {

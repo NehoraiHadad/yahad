@@ -13,11 +13,9 @@ internal sealed record InstalledRecovery(string SourceDataId,string BackupId,str
     {InstalledActivationResolver.Id(SourceDataId);if(SourceRestoreOperationId is {} previous){InstalledActivationResolver.Id(previous);if(previous==OperationId)throw new IOException("INSTALLED_RECOVERY_SOURCE_ALIAS");return Path.Combine(root,"datasets",SourceDataId,"restore-"+previous,"completed","data");}return Path.Combine(root,"datasets",SourceDataId,"data");}
 }
 internal sealed record InstalledActivation(int Format,string InstallationId,long Epoch,string ReleaseDigest,string DataId,
-    int MinimumSchema,int MaximumSchema,string MasterKeyDigest,string PolicyDigest,string PinDigest,string OwnerIntentDigest,
+    int MinimumSchema,int MaximumSchema,string MasterKeyDigest,string PolicyDigest,string PinDigest,
     string WebDigest,string Phase,InstalledRecovery? Recovery,[property:JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)]InstalledMigration? Migration=null);
 internal sealed record InstalledEpoch(int Format,string InstallationId,long Epoch,string ActivationDigest);
-internal sealed record InstalledOwnerIntent(int Format,string InstallationId,long Epoch,string Nonce,string ReleaseDigest,
-    string DataId,string Operation,string Subject,long ApprovedUnix,long? ExpiresUnix);
 internal sealed record InstalledWeb(int Format,string InstallationId,string Origin,int Port);
 internal interface IInstalledControlFiles
 {byte[] Read(string path,int maximum,ICollection<IDisposable> retained);}
@@ -53,7 +51,7 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
             if(System.Diagnostics.Stopwatch.GetElapsedTime(Interlocked.Read(ref last),now)<TimeSpan.FromSeconds(1))return;
             Interlocked.Exchange(ref last,now);ObservedWork?.Invoke();
         }
-        var reservation=new InstalledReservation(root,clock,Work,cancellation,pendingDigest,files);
+        var reservation=new InstalledReservation(root,Work,cancellation,pendingDigest,files);
         try
         {
             cancellation.ThrowIfCancellationRequested();reservation.Hold(files.PinDirectory(root));reservation.CheckPending();
@@ -63,21 +61,16 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
             Id(binding.InstallationId);Id(head.DataId);Digest(head.ReleaseDigest);
             if(head.Format!=1||head.InstallationId!=binding.InstallationId||head.Epoch<1||floor.Format!=1||floor.InstallationId!=binding.InstallationId||
                 floor.Epoch!=head.Epoch||floor.ActivationDigest!=binding.ActivationReceiptDigest||head.MinimumSchema<1||head.MaximumSchema<head.MinimumSchema||head.MaximumSchema>100000)throw new IOException("INSTALLED_EPOCH_OR_IDENTITY");
-            var ownerBytes=Protected("owner-intent.json");if(Hash(ownerBytes)!=head.OwnerIntentDigest)throw new IOException("INSTALLED_OWNER_ANCHOR");
-            var owner=NativeJson.Read<InstalledOwnerIntent>(ownerBytes);Id(owner.Nonce);
-            if(owner.Format!=1||owner.InstallationId!=binding.InstallationId||owner.Epoch!=head.Epoch||owner.ReleaseDigest!=head.ReleaseDigest||owner.DataId!=head.DataId||
-                owner.Operation!=(head.Migration is not null?"migrate":head.Recovery is not null?"recover":"activate")||string.IsNullOrWhiteSpace(owner.Subject)||owner.Subject.Length>128||owner.ApprovedUnix<=0)throw new IOException("INSTALLED_OWNER_SCOPE");
-            reservation.Owner=owner;reservation.CheckOwner();
             var webBytes=Protected("web.json");if(Hash(webBytes)!=head.WebDigest)throw new IOException("INSTALLED_WEB_ANCHOR");
             var web=NativeJson.Read<InstalledWeb>(webBytes);
             if(web.Format!=1||web.InstallationId!=binding.InstallationId||web.Port is <1024 or >65535||!Uri.TryCreate(web.Origin,UriKind.Absolute,out var origin)||origin.UserInfo!=""||origin.Query!=""||origin.Fragment!=""||origin.AbsolutePath!="/")throw new IOException("INSTALLED_WEB_CONFIGURATION");
             if(origin.Scheme!="https")
             {
-                // Only the exact local Owner bootstrap of an explicitly pinned
+                // Only the exact local loopback bootstrap of an explicitly pinned
                 // full profile. This never admits HTTP on a LAN/public address
                 // or treats absent/malformed/inaccessible enrollment as legacy.
                 var local=origin.Scheme=="http"&&origin.Host=="127.0.0.1"&&origin.Port==web.Port;
-                if(!local||!files.IsSingleService&&(files.Roles is null||!InstalledUpdaterLayout.AllowsOwnerLoopback(Protected(InstalledUpdaterLayout.AnchorFile,4096),binding.InstallationId)))throw new IOException("INSTALLED_WEB_CONFIGURATION");
+                if(!local||!files.IsSingleService&&(files.Roles is null||!InstalledUpdaterLayout.AllowsLoopbackOrigin(Protected(InstalledUpdaterLayout.AnchorFile,4096),binding.InstallationId)))throw new IOException("INSTALLED_WEB_CONFIGURATION");
             }
             if(head.Phase is not("committed" or "recovered" or "migrated")||head.Phase=="recovered"&&head.Recovery is null||head.Migration is not null&&head.Recovery is null||head.Phase=="migrated"&&head.Migration is null)throw new IOException("INSTALLED_INCOMPLETE_ACTIVATION");
             var selected=Path.Combine(root,"datasets",head.DataId);var key=Path.Combine(selected,"master-key");var policy=Path.Combine(selected,"update-policy");var pins=Path.Combine(selected,"update-pin");
@@ -150,7 +143,7 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
             var environment=new Dictionary<string,string>{{"HOST","127.0.0.1"},{"PORT",web.Port.ToString(System.Globalization.CultureInfo.InvariantCulture)},
                 {"APP_ORIGIN",origin.GetLeftPart(UriPartial.Authority)},{"COOKIE_SECURE",origin.Scheme=="https"?"true":"false"},{"DATA_DIR",reservation.Data},{"MASTER_KEY_FILE",key},
                 {"CONNECTOR",RuntimeConnectorSettings.For(connectorProfile).Connector},{"ALLOW_REAL_WHATSAPP",RuntimeConnectorSettings.For(connectorProfile).Approval},{"SETUP_CAPABILITY_FILE",Path.Combine(root,"Secrets","setup-capability.json")}};
-            // LAN HTTPS keeps Secure cookies. Only the fixed local owner origin
+            // LAN HTTPS keeps Secure cookies. Only the fixed local loopback origin
             // is added for bootstrap; remote origins are never inferred here.
             if(origin.Scheme=="https"&&NetworkPlan.IsPrivateLanV4(origin.Host))
                 environment["APP_ADDITIONAL_ORIGINS"]=$"http://127.0.0.1:{web.Port}";
@@ -167,14 +160,13 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
     {using var h=IncrementalHash.CreateHash(HashAlgorithmName.SHA256);var b=new byte[1024*1024];long offset=0;try{int n;while((n=file.Read(offset,b))>0){h.AppendData(b,0,n);offset+=n;work();}return Convert.ToHexStringLower(h.GetHashAndReset());}finally{CryptographicOperations.ZeroMemory(b);}}
     internal static void Id(string id){if(!Guid.TryParseExact(id,"N",out var parsed)||parsed.ToString("N")!=id)throw new IOException("INSTALLED_IDENTIFIER");}
     internal static void Digest(string digest){if(!System.Text.RegularExpressions.Regex.IsMatch(digest,"^[a-f0-9]{64}$"))throw new IOException("INSTALLED_DIGEST");}
-    private sealed class InstalledReservation(string root,Func<DateTimeOffset> clock,Action work,CancellationToken admissionCancellation,string? expectedPendingDigest,InstalledStateFiles files):IAppRecoveryBarrier,IDisposable
+    private sealed class InstalledReservation(string root,Action work,CancellationToken admissionCancellation,string? expectedPendingDigest,InstalledStateFiles files):IAppRecoveryBarrier,IDisposable
     {
         internal readonly List<IDisposable> Resources=[],DataPins=[];private bool disposed,mutable;
-        internal WindowsFileBoundary.DataLease Lease=null!;internal InstalledOwnerIntent Owner=null!;internal string Data="",Release="";
+        internal WindowsFileBoundary.DataLease Lease=null!;internal string Data="",Release="";
         private string[] dataMembers=[];
         internal void Hold(IDisposable item)=>Resources.Add(item);
         internal string PinDigest(string path){var file=files.Open(path);Hold(file);return FileHash(file,work);}
-        internal void CheckOwner(){var now=clock().ToUnixTimeSeconds();if(Owner.ApprovedUnix>now||Owner.ExpiresUnix is { } expiry&&(expiry<=now||expiry<=Owner.ApprovedUnix))throw new IOException("INSTALLED_OWNER_EXPIRED");}
         internal void CheckPending()
         {
             string? nonce=null;
@@ -186,7 +178,7 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
             }
             foreach(var path in Directory.EnumerateFileSystemEntries(root))
             {
-                var name=Path.GetFileName(path);var control=new[]{"activation.json","epoch.json","owner-intent.json","web.json","bootstrap.json","pending.json"};
+                var name=Path.GetFileName(path);var control=new[]{"activation.json","epoch.json","web.json","bootstrap.json","pending.json"};
                 if(name.Equals("pending.json",StringComparison.OrdinalIgnoreCase)){if(nonce is null)throw new IOException("INSTALLED_PENDING_ACTIVATION");continue;}
                 if(control.Any(n=>name.StartsWith(n+".partial",StringComparison.OrdinalIgnoreCase))&&
                     !(nonce is not null&&control.Where(n=>n!="pending.json").Any(n=>name.Equals(n+".partial-"+nonce,StringComparison.Ordinal))))throw new IOException("INSTALLED_PENDING_ACTIVATION");
@@ -210,7 +202,7 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
         private void CheckStart(AppRelease release,CancellationToken cancellation)
         {
             cancellation.ThrowIfCancellationRequested();ObjectDisposedException.ThrowIf(disposed,this);if(mutable||release.Id!=Release)throw new IOException("INSTALLED_ALREADY_STARTED");
-            CheckOwner();CheckPending();CheckWal();if(!Names(Data,100001,cancellation).Where(n=>n!="process.lock").SequenceEqual(dataMembers))throw new IOException("INSTALLED_SELECTION_CHANGED");
+            CheckPending();CheckWal();if(!Names(Data,100001,cancellation).Where(n=>n!="process.lock").SequenceEqual(dataMembers))throw new IOException("INSTALLED_SELECTION_CHANGED");
         }
         internal void BeginMutableStart()
         {

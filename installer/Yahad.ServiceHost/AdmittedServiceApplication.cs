@@ -85,7 +85,7 @@ internal static class AdmittedServiceApplication
         if(!GetProcessTimes(GetCurrentProcess(),out var created,out _,out _,out _))throw new System.ComponentModel.Win32Exception();
         return new(Environment.ProcessId,created);
     }
-    private sealed record RuntimeAnchor(int Format,string InstallationId,string RuntimeService,string AuthorityService,string OwnerSid,string IntakePolicyDigest,string IntakePinDigest,string? ProbeSha256=null,string? FullSystemPolicyDigest=null);
+    private sealed record RuntimeAnchor(int Format,string InstallationId,string RuntimeService,string AuthorityService,string IntakePolicyDigest,string IntakePinDigest,string? ProbeSha256=null,string? FullSystemPolicyDigest=null);
     private sealed class RoleInstallationReader(InstalledStateFiles files,string installation):IInstallationReader
     {
         public InstallationBinding Read()

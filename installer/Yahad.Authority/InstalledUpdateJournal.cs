@@ -15,7 +15,7 @@ internal sealed record InstalledUpdateRecord(int Format,int Sequence,string Prev
     UpdateCheckpoint Checkpoint,string? BackupId,string? BackupReceiptDigest,string? RestoreOperationId,string? MigrationReceiptDigest=null,MigrationAttempt? MigrationAttempt=null);
 
 // Protected, append-only transaction evidence, independent of the replaceable
-// five-record activation transaction. The kernel lease serializes every update
+// four-record activation transaction. The kernel lease serializes every update
 // and is retained across the whole operation, including offline backup/recovery.
 internal sealed class InstalledUpdateJournal:IDisposable
 {

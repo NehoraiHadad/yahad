@@ -38,75 +38,31 @@ internal static class AuthorityServiceApplication
         WindowsScmRuntimeLifecycle MakeRuntime(){var value=new WindowsScmRuntimeLifecycle(()=>new NativeScmRuntimeSession());runtimes.Add(value);return value;}
         var current=MakeRuntime();InstalledAuthorityComposition? composition=null;
         var clock=()=>DateTimeOffset.UtcNow;
-        IAuthorityRuntimeLifecycle Next()
-        {
-            var previous=current;var next=MakeRuntime();
-            return new TrackedRuntime(next,()=>{current=next;previous.ReleaseStoppedResources();});
-        }
-        var currentPreparation=new CurrentPreparation(()=>current);
-        composition=InstalledAuthorityComposition.Installed(()=>current.RetainedGate,c=>current.StopAsync(c),new LocalChildControlFactory(),Next,
-            currentPreparation,currentPreparation,clock);
+        composition=InstalledAuthorityComposition.Installed();
         var files=composition.Files;var anchor=composition.Anchor;
         var processRoles=files.Roles??throw new IOException("AUTHORITY_NATIVE_ROLES_REQUIRED");
-        InstalledProcessObjectAccess.PublishAuthorityPeerAccess(processRoles.Authority.Value,processRoles.Runtime.Value,anchor.OwnerSid);
+        InstalledProcessObjectAccess.PublishAuthorityPeerAccess(processRoles.Authority.Value,processRoles.Runtime.Value);
         InstalledProcessObjectAccess.PublishAuthorityCustodyAccess(processRoles);
         void TrackFullRuntime(WindowsScmRuntimeLifecycle next)
         {
             var previous=current;current=next;
             if(!ReferenceEquals(previous,next)&&previous.OwnsRuntimeResources&&previous.Phase is "stopped" or "offline_recovery_ready")previous.ReleaseStoppedResources();
         }
-        using var full=anchor.FullSystemPolicyDigest is null?null:FullSystemAuthorityApplication.Create(composition,()=>current,MakeRuntime,TrackFullRuntime,clock);
-        async Task CompleteFullRequest(string operation,string outcome,CancellationToken token)
-        {
-            await composition.Router.CompleteFullSystemRequestAsync(operation,outcome,token);
-            if(outcome=="healthy")_=await InstalledUpdateScheduler.RecordRecoveredUpdateAsync(files,anchor,operation,token);
-        }
-        async Task<RetainedRuntimeQuiescence> Offline(InstallationBinding recoveryBinding,AppRelease release,CancellationToken token)
-        {
-            // An existing healthy runtime still needs its actual app idle fence.
-            // A new waiting host is never used to excuse an occupied old runtime.
-            if(current.Phase=="healthy")
-            {
-                var id=Guid.NewGuid().ToString("N");var stopped=false;
-                try
-                {
-                    if(!await current.PrepareUpdateAsync(id,token))throw new IOException("OWNER_RECOVERY_RUNTIME_BUSY");
-                    await current.StopAsync(token);stopped=true;
-                }
-                finally
-                {
-                    if(!stopped&&current.Phase=="healthy")
-                    {using var undo=new CancellationTokenSource(TimeSpan.FromSeconds(5));await current.CancelUpdateAsync(id,undo.Token);}
-                }
-            }
-            else if(current.CleanupReconciliationRequired&&current.OwnsRuntimeResources)
-                throw new IOException("OWNER_RECOVERY_OLD_OWNERSHIP_UNCONFIRMED");
-            var previous=current;var offline=MakeRuntime();await offline.PrepareOfflineRecoveryAsync(recoveryBinding,release,token);current=offline;
-            var observation=offline.AcquireRecoveryQuiescence();
-            try{if(previous.OwnsRuntimeResources)previous.ReleaseStoppedResources();return observation;}
-            catch{observation.Dispose();throw;}
-        }
-        if(full is null)composition.Router.ConfigureRecovery(new OwnerRecoveryEndpoint(files,anchor,composition.Ledger,
-            Offline,()=>current.RetainedGate,Next,new LocalChildControlFactory(),clock));
-        else composition.Router.ConfigureRecovery(new FullSystemOwnerRecoveryEndpoint(files,anchor,composition.Ledger,
-            full.Kernel.PendingOperation,full.Coordinator.ResumeAsync,()=>full.Coordinator.Phase,CompleteFullRequest,clock));
+        using var full=FullSystemAuthorityApplication.Create(composition,()=>current,MakeRuntime,TrackFullRuntime,clock);
         Task[] workers=[];var running=false;
         using var workStop=CancellationTokenSource.CreateLinkedTokenSource(cancellation);
-        using var intake=new NativeCandidateIntake(files,anchor,clock);
         try
         {
             // A bounded wait hint is not invented progress. Do not advance SCM
             // checkpoints merely because time passes while admission is pending.
             api.Publish(new(ServiceState.StartPending,0,1,300000,0,0));
-            var boot=FullSystemBootDisposition.NoPending;
-            if(full is not null)boot=await full.BootBeforeRuntimeAsync(cancellation);
-            else try{InstalledUpdateTransaction.RequireNoUnfinished(files,anchor);}catch(IOException){composition.Router.MarkBootRecoveryRequired();}
-            if(boot==FullSystemBootDisposition.Healthy&&full?.Coordinator.CurrentOperationId is {} recoveredOperation)
+            var boot=await full.BootBeforeRuntimeAsync(cancellation);
+            if(boot==FullSystemBootDisposition.Healthy&&full.Coordinator.CurrentOperationId is {} recoveredOperation)
                 _=await InstalledUpdateScheduler.RecordRecoveredUpdateAsync(files,anchor,recoveredOperation,cancellation);
             if(boot==FullSystemBootDisposition.NoPending&&composition.Router.Phase!="recovery_required")
             {
                 // Recovery runs before ordinary admission: an interrupted
-                // five-record publication may temporarily have mixed records.
+                // four-record publication may temporarily have mixed records.
                 var binding=WindowsInstallationReader.Parse(files.Read(files.PathOf("bootstrap.json"),1024));
                 var bytes=files.Read(files.PathOf("activation.json"),16384);var activation=NativeJson.Read<InstalledActivation>(bytes);
                 if(binding.InstallationId!=anchor.InstallationId||activation.InstallationId!=anchor.InstallationId||InstalledActivationResolver.Hash(bytes)!=binding.ActivationReceiptDigest||activation.Phase!="committed")
@@ -120,8 +76,7 @@ internal static class AuthorityServiceApplication
             InstalledUpdateScheduler? scheduler=null;
             try
             {
-                Func<CancellationToken,Task<ScheduledUpdateCandidate?>> checkSource=full is not null?full.CheckSourceAsync:async c=>
-                {_=NativeUpdateEnrollmentReader.Require(files,anchor);var candidate=await intake.CheckAndPublishAsync(c);return candidate is null?null:new(candidate.Target);};
+                Func<CancellationToken,Task<ScheduledUpdateCandidate?>> checkSource=full.CheckSourceAsync;
                 scheduler=new InstalledUpdateScheduler(files,checkSource,
                     composition.Router.CheckScheduledAsync,()=>composition.Router.Execution,()=>composition.Router.ActivationPhase,clock,()=>composition.Router.CandidateStartIssued);
                 composition.Router.ConfigureDeferral(scheduler.DeferUntil);
@@ -133,9 +88,9 @@ internal static class AuthorityServiceApplication
                     await composition.Router.CompleteSourceCheckAsync(id,requested.Status.Error);
                 });
             }
-            catch{composition.Router.MarkBootRecoveryRequired();} // Keep native owner/status available; never erase partial state.
+            catch{composition.Router.MarkBootRecoveryRequired();} // Keep native status available; never erase partial state.
             InstallerReadiness.Publish(files,anchor,current);
-            var listeners=new List<Task>{ServeAsync(composition,AuthorityEndpointRole.Runtime,workStop.Token),ServeAsync(composition,AuthorityEndpointRole.Owner,workStop.Token)};
+            var listeners=new List<Task>{ServeAsync(composition,workStop.Token)};
             if(scheduler is not null)listeners.Add(scheduler.RunAsync(workStop.Token));workers=listeners.ToArray();
             api.Publish(new(ServiceState.Running,0x1|0x4,0,0,0,0));running=true;
             var cancelled=Task.Delay(Timeout.Infinite,cancellation);var ended=await Task.WhenAny(workers.Append(cancelled));
@@ -161,30 +116,13 @@ internal static class AuthorityServiceApplication
         }
         return running&&runtimes.All(r=>!r.OwnsRuntimeResources);
     }
-    private static async Task ServeAsync(InstalledAuthorityComposition composition,AuthorityEndpointRole role,CancellationToken cancellation)
+    private static async Task ServeAsync(InstalledAuthorityComposition composition,CancellationToken cancellation)
     {
         while(!cancellation.IsCancellationRequested)
         {
-            try{await WindowsAuthorityEndpoint.ServeOnceAsync(composition,role,cancellation);}
+            try{await WindowsAuthorityEndpoint.ServeOnceAsync(composition,cancellation);}
             catch(Exception error)when(error is IOException or UnauthorizedAccessException)
             {await Task.Delay(100,cancellation);} // Bound invalid-client retries; native listener collisions fail the worker.
         }
-    }
-    private sealed class CurrentPreparation(Func<WindowsScmRuntimeLifecycle> current):IAuthorityRuntimeUpdatePreparation,IAuthorityRuntimeRecoveryObservation
-    {
-        public Task<bool> PrepareUpdateAsync(string id,CancellationToken c)=>current().PrepareUpdateAsync(id,c);
-        public Task CancelUpdateAsync(string id,CancellationToken c)=>current().CancelUpdateAsync(id,c);
-        public RetainedRuntimeQuiescence AcquireRecoveryQuiescence()
-            =>current().AcquireRecoveryQuiescence();
-    }
-    private sealed class TrackedRuntime(WindowsScmRuntimeLifecycle runtime,Action started):IAuthorityRuntimeLifecycle,IAuthorityRuntimeUpdatePreparation
-    {
-        public string Phase=>runtime.Phase;public bool CleanupReconciliationRequired=>runtime.CleanupReconciliationRequired;
-        public async Task StartCommittedAsync(InstallationBinding binding,AppRelease expected,CancellationToken cancellation=default)
-        {await runtime.StartCommittedAsync(binding,expected,cancellation);started();}
-        public Task StopAsync(CancellationToken c=default)=>runtime.StopAsync(c);
-        public Task RetryCleanupAsync(CancellationToken c=default)=>runtime.RetryCleanupAsync(c);
-        public Task<bool> PrepareUpdateAsync(string id,CancellationToken c)=>runtime.PrepareUpdateAsync(id,c);
-        public Task CancelUpdateAsync(string id,CancellationToken c)=>runtime.CancelUpdateAsync(id,c);
     }
 }

@@ -67,9 +67,6 @@ public partial class MainWindow:Window
             NoticeText.Text=uninstall?(result.DataPreserved?"נבחרה שמירת נתונים. הנתונים המקומיים לא נמחקו.":"המחיקה המקומית הושלמה. לא בוצע שינוי במכשירים אחרים או ברשת."):"אפשר לסגור את המתקין. השירות ימשיך לפעול במחשב.";
             ShowLanResult(result.Lan);
             UpdatePanel.Visibility=Visibility.Collapsed;
-            if(uninstall&&result.FullProfileInstallationId is {} removedInstallation)OwnerShortcuts.TryRemove(removedInstallation);
-            if(!uninstall&&result.FullProfileInstallationId is {} installation)
-            {if(!OwnerShortcuts.TryCreate(installation))NoticeText.Text+=" לא נוצרו קיצורי העדכון והשחזור; אפשר להפעיל את כלי האישור מתפריט ההגדרות של יחד.";}
             if(uninstall)ShortcutCleanup.TryRemove(result.Url);
             else try{OpenBrowser(result);}catch{Status.Text="הדפדפן לא נפתח. אפשר לנסות שוב בלחיצה על פתיחת יחד.";}
         }

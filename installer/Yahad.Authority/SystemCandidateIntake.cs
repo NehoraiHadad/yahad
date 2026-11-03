@@ -46,9 +46,9 @@ internal sealed class SystemCandidateIntake(InstalledStateFiles files,InstalledA
     }
     private SystemCandidateEnvironment ObservedEnvironment()
     {
-        var head=new InstalledIntakeSelection(files,anchor,()=>DateTimeOffset.UtcNow).Head();var bytes=files.Read(files.PathOf("payloads/"+head.ReleaseDigest+"/bundle.json"),8*1024*1024);if(SystemCandidateManifest.Hash(bytes)!=head.ReleaseDigest)throw Error("CURRENT_MANIFEST");
+        var head=new InstalledIntakeSelection(files,anchor).Head();var bytes=files.Read(files.PathOf("payloads/"+head.ReleaseDigest+"/bundle.json"),8*1024*1024);if(SystemCandidateManifest.Hash(bytes)!=head.ReleaseDigest)throw Error("CURRENT_MANIFEST");
         var version=NativeJson.Read<JsonElement>(bytes).GetProperty("version").GetString()??throw Error("CURRENT_VERSION");
-        return new(version,head.MaximumSchema,Math.Max(1,Environment.OSVersion.Version.Build),new Dictionary<string,int>{{"system",1},{"handoff",1},{"authorityRuntime",1},{"ownerAuthority",1},{"activation",1},{"journal",1},{"recovery",1},{"policy",2}});
+        return new(version,head.MaximumSchema,Math.Max(1,Environment.OSVersion.Version.Build),new Dictionary<string,int>{{"system",1},{"handoff",1},{"authorityRuntime",1},{"activation",1},{"journal",1},{"recovery",1},{"policy",2}});
     }
     internal Task<StagedSystemCandidate> StageVerifiedArchiveAsync(SystemSourceRelease source,string archivePath,SystemCandidateEnvironment environment,CancellationToken cancellation)
     {
@@ -115,7 +115,7 @@ internal sealed class SystemCandidateIntake(InstalledStateFiles files,InstalledA
     private static void VerifyComponentIdentity(SystemComponentDescriptor component,SystemCandidateDescriptor descriptor,Dictionary<string,ZipArchiveEntry> entries,CancellationToken cancellation)
     {
         var bytes=NativeCandidateIntake.ReadEntry(entries[component.SlotRelativeDirectory+"/build-identity.json"],65536,cancellation);var identity=NativeJson.Read<JsonElement>(bytes);
-        var artifact=component.Kind switch{SystemComponentKind.RuntimeHost=>"Yahad.ServiceHost",SystemComponentKind.Owner=>"Yahad.Owner",SystemComponentKind.Probe=>"Node",_=>"Yahad.Authority"};
+        var artifact=component.Kind switch{SystemComponentKind.RuntimeHost=>"Yahad.ServiceHost",SystemComponentKind.Probe=>"Node",_=>"Yahad.Authority"};
         if(identity.GetProperty("format").GetInt32()!=1||identity.GetProperty("component").GetString()!=component.Kind.ToString()||identity.GetProperty("artifact").GetString()!=artifact||identity.GetProperty("version").GetString()!=descriptor.Version||identity.GetProperty("sourceCommit").GetString()!=descriptor.SourceCommit||identity.GetProperty("target").GetString()!="win-x64"||identity.GetProperty("entry").GetString()!=component.EntryPoint||identity.GetProperty("entrySha256").GetString()!=component.EntrySha256)throw Error("COMPONENT_SOURCE_IDENTITY");
         if(component.Kind==SystemComponentKind.Probe)
         {
@@ -129,8 +129,7 @@ internal sealed class SystemCandidateIntake(InstalledStateFiles files,InstalledA
         var runtimeVersion=identity.GetProperty("runtimeVersion").GetString()??"";var frameworks=new HashSet<string>(StringComparer.Ordinal);
         if(!Regex.IsMatch(runtimeVersion,@"^(1[0-9]|[2-9][0-9])\.[0-9]{1,5}\.[0-9]{1,5}$",RegexOptions.CultureInvariant))throw Error("PRIVATE_RUNTIME");
         foreach(var framework in runtime.GetProperty("includedFrameworks").EnumerateArray())
-        {var name=framework.GetProperty("name").GetString()??"";if(name is not("Microsoft.NETCore.App" or "Microsoft.WindowsDesktop.App")||!frameworks.Add(name)||framework.GetProperty("version").GetString()!=runtimeVersion)throw Error("PRIVATE_RUNTIME");}
-        if(component.Kind==SystemComponentKind.Owner&&!frameworks.Contains("Microsoft.WindowsDesktop.App"))throw Error("PRIVATE_RUNTIME");
+        {var name=framework.GetProperty("name").GetString()??"";if(name is not"Microsoft.NETCore.App"||!frameworks.Add(name)||framework.GetProperty("version").GetString()!=runtimeVersion)throw Error("PRIVATE_RUNTIME");}
         var deps=NativeJson.Read<JsonElement>(NativeCandidateIntake.ReadEntry(depsFile,8*1024*1024,cancellation));var target=deps.GetProperty("runtimeTarget").GetProperty("name").GetString()??"";
         if(!target.EndsWith("/win-x64",StringComparison.Ordinal))throw Error("PRIVATE_RUNTIME");
         foreach(var library in deps.GetProperty("targets").GetProperty(target).EnumerateObject())foreach(var kind in new[]{"runtime","native"})if(library.Value.TryGetProperty(kind,out var files))foreach(var file in files.EnumerateObject())

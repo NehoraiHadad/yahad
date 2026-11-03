@@ -23,9 +23,9 @@ internal sealed class FullSystemAuthorityApplication:IDisposable
         try
         {
             systemIntake=new(files,anchor,new InstalledSystemSlots(binaries),intake,()=>{if(policy is null)throw new IOException("FULL_SYSTEM_POLICY_NOT_READY");_=policy.Enrollment;},ObserveCandidateEnvironment);
-            Policy=policy=FullSystemUpdatePolicy.Open(files,anchor.InstallationId,anchor.OwnerSid,anchor.FullSystemPolicyDigest,clock,systemIntake);
-            Kernel=new(files,binaries,anchor,Policy,current,create,track,clock);Coordinator=new(Policy,composition.Ledger,Kernel);
-            Control=new(files,anchor,composition.Ledger,Policy,systemIntake,clock);
+            Policy=policy=FullSystemUpdatePolicy.Open(files,anchor.InstallationId,anchor.FullSystemPolicyDigest,clock,systemIntake);
+            Kernel=new(files,binaries,anchor,Policy,current,create,track,clock);Coordinator=new(Policy,Kernel);
+            Control=new(files,anchor,Policy,systemIntake,clock);
             composition.Router.ConfigureFullSystem(Control,Kernel.PublishedStateForProposal,Coordinator.ExecuteAsync,()=>Coordinator.Phase=="recovery_required"?"recovery_required":
                 Coordinator.CurrentOperationId==composition.Router.FullSystemOperationId?(Coordinator.Phase=="healthy"&&current().Phase!="healthy"?"recovery_required":Coordinator.Phase):"idle",
                 ()=>Coordinator.CurrentOperationId==composition.Router.FullSystemOperationId&&Coordinator.CandidateStartIssued);
@@ -76,14 +76,14 @@ internal sealed class FullSystemAuthorityApplication:IDisposable
         // A recovery's immutable source/previous payload cannot be rotated out
         // by another download while its native/data journals are unfinished.
         if(Kernel.PendingOperation() is not null)throw new IOException("FULL_SYSTEM_SOURCE_RECOVERY_PENDING");
-        return await Control.CheckSourceAsync(intake,systemIntake,ObserveCandidateEnvironment,cancellation);
+        return await Control.CheckSourceAsync(systemIntake,ObserveCandidateEnvironment,cancellation);
     }
     private SystemCandidateEnvironment ObserveCandidateEnvironment()
         =>ObserveCandidateEnvironment(composition.Files,composition.Anchor);
     internal static SystemCandidateEnvironment ObserveCandidateEnvironment(InstalledStateFiles files,InstalledAuthorityAnchor anchor)
     {
         // Receipt revalidation during recovery must also work between the
-        // five-record writer's publication boundaries. The final execution
+        // four-record writer's publication boundaries. The final execution
         // admission separately observes the fully committed head and real DB.
         var head=NativeJson.Read<InstalledActivation>(files.Read(files.PathOf("activation.json"),16384));
         if(head.InstallationId!=anchor.InstallationId||head.MinimumSchema<1||head.MaximumSchema<head.MinimumSchema||head.MaximumSchema>100000)throw new IOException("FULL_SYSTEM_SOURCE_ENVIRONMENT");
@@ -91,7 +91,7 @@ internal sealed class FullSystemAuthorityApplication:IDisposable
         if(InstalledActivationResolver.Hash(bytes)!=head.ReleaseDigest)throw new IOException("FULL_SYSTEM_SOURCE_CURRENT_PAYLOAD");
         var version=NativeJson.Read<JsonElement>(bytes).GetProperty("version").GetString()!;
         return new(version,head.MaximumSchema,Math.Max(1,Environment.OSVersion.Version.Build),new Dictionary<string,int>
-        {{"system",1},{"handoff",1},{"authorityRuntime",1},{"ownerAuthority",1},{"activation",1},{"journal",1},{"recovery",1},{"policy",2}});
+        {{"system",1},{"handoff",1},{"authorityRuntime",1},{"activation",1},{"journal",1},{"recovery",1},{"policy",2}});
     }
     public void Dispose()=>intake.Dispose();
 }
@@ -118,7 +118,7 @@ internal sealed class FullSystemHelperComposition:IDisposable
         {
             var source=new SystemCandidateIntake(files,anchor,new InstalledSystemSlots(binaries),intake,()=>{if(opening is null)throw new IOException("FULL_HELPER_POLICY_NOT_READY");_=opening.Enrollment;},
                 ()=>FullSystemAuthorityApplication.ObserveCandidateEnvironment(files,anchor));
-            policy=opening=FullSystemUpdatePolicy.Open(files,anchor.InstallationId,anchor.OwnerSid,anchor.FullSystemPolicyDigest,()=>DateTimeOffset.UtcNow,source);
+            policy=opening=FullSystemUpdatePolicy.Open(files,anchor.InstallationId,anchor.FullSystemPolicyDigest,()=>DateTimeOffset.UtcNow,source);
             Hooks=new(policy,(op,previous,c)=>Channel(op).ObserveAuthorityAsync(op,previous,c),(op,c)=>Channel(op).ObserveRuntimeAsync(op,c),
                 RequireDataUnchangedAsync,(op,c)=>SystemBootstrapCandidateProbe.VerifyAsync(files,binaries,op,policy,c),CaptureCustodyAsync,
                 async(op,c)=>{policy.RequireCurrent(op);await RequireDataUnchangedAsync(op,c);policy.RequireCurrent(op);},

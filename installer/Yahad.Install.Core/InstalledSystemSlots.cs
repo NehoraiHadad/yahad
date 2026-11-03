@@ -3,7 +3,7 @@ using System.Security.Cryptography;
 
 namespace Yahad.Install;
 
-// Versioned staging only. Live service/Owner/helper paths, activation, source
+// Versioned staging only. Live service/helper paths, activation, source
 // enrollment and family data are outside this writer's fixed relative namespace.
 internal sealed class InstalledSystemSlots
 {
@@ -71,7 +71,7 @@ internal sealed class InstalledSystemSlots
         foreach(var pair in expected){using var input=new PinnedStream(files.Open(Child(root,pair.Key)));Copy(input,Stream.Null,pair.Value.Size,pair.Value.Sha256,cancellation);}
     }
     private static void RequireComponents(IReadOnlyList<SystemComponentDescriptor> components)
-    {if(components.Count!=5||components.Select(c=>c.Kind).Distinct().Count()!=5||components.Sum(c=>c.Files.Count)>50000||components.Sum(c=>c.Files.Sum(f=>f.Size))>2L*1024*1024*1024)throw Error("COMPONENTS");}
+    {if(components.Count!=4||components.Select(c=>c.Kind).Distinct().Count()!=4||components.Sum(c=>c.Files.Count)>50000||components.Sum(c=>c.Files.Sum(f=>f.Size))>2L*1024*1024*1024)throw Error("COMPONENTS");}
     private string Child(string root,string relative)
     {
         var path=files.PathOf(Path.GetRelativePath(files.Root,Path.Combine(root,relative.Replace('/',Path.DirectorySeparatorChar))));

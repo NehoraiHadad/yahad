@@ -13,7 +13,7 @@ internal static class FullSystemCoordinatorTests
             var f=new Fixture();await f.Run();Assert(f.Coordinator.Phase=="healthy"&&f.Kernel.Starts==1&&f.Kernel.Releases==1);
             f.PolicyFixture.Candidate=f.PolicyFixture.Candidate with{Version="0.6.2",ManifestDigest=new('b',64),ApplicationBundleDigest=new('c',64)};
             await f.Run();Assert(f.Coordinator.Phase=="healthy"&&f.Kernel.Starts==2&&f.Kernel.Releases==2&&f.PolicyFixture.Observed.Version=="0.6.2");
-            Assert(f.Kernel.Acquisitions==2&&Directory.GetFiles(f.PolicyFixture.Files.PathOf("owner-ledger"),"usage-*").Length==0);
+            Assert(f.Kernel.Acquisitions==2&&Directory.GetFiles(f.PolicyFixture.Files.PathOf("grants"),"usage-*").Length==0);
         });
         await check("Notify never acquires, stops, backs up or applies a scheduled full update",async()=>
         {
@@ -58,7 +58,7 @@ internal static class FullSystemCoordinatorTests
     {
         internal readonly FullSystemPolicyTests.Fixture PolicyFixture=new();internal readonly FullSystemUpdatePolicy Policy;
         internal readonly Kernel Kernel;internal readonly FullSystemUpdateCoordinator Coordinator;internal string LastOperation="";
-        internal Fixture(){Policy=PolicyFixture.Open();Kernel=new(PolicyFixture);Coordinator=new(Policy,new OwnerApprovalLedger(PolicyFixture.Files,PolicyFixture.Installation,PolicyFixture.Owner,()=>PolicyFixture.Now),Kernel);}
+        internal Fixture(){Policy=PolicyFixture.Open();Kernel=new(PolicyFixture);Coordinator=new(Policy,Kernel);}
         internal Task Run()=>Run(CancellationToken.None);
         internal Task Run(CancellationToken token){LastOperation=Guid.NewGuid().ToString("N");return Coordinator.ExecuteAsync(new(LastOperation,PolicyFixture.Receipt,null),token);}
     }

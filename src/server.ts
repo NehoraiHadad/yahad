@@ -872,7 +872,6 @@ export async function createApp(
     if (state === 'unavailable') throw new AppError(409, 'UPDATES_UNAVAILABLE');
     if (state === 'target_changed') throw new AppError(409, 'UPDATES_TARGET_CHANGED');
     if (state === 'mode_locked') throw new AppError(409, 'UPDATES_MODE_LOCKED');
-    if (state === 'approval_required') throw new AppError(409, 'UPDATES_APPROVAL_REQUIRED');
     return { state };
   });
   app.get('/api/parent/diagnostics', async (req, reply) => {

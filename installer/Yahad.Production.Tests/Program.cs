@@ -69,26 +69,17 @@ await Check("production admin boundary rejects current-user fixture records",asy
 await Check("production resolver refuses absent protected activation state",async()=>{var binding=f.Binding;var bytes=File.ReadAllBytes(f.PathOf("activation.json"));File.Delete(f.PathOf("activation.json"));try{await Reject(async()=>{using var grant=await new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,connectorProfile:RuntimeConnectorProfile.Synthetic).ResolveAsync(binding,default);});}finally{File.WriteAllBytes(f.PathOf("activation.json"),bytes);}});
 await Check("stale bootstrap digest cannot select a different protected activation",async()=>
 {var binding=f.Binding with{ActivationReceiptDigest=new string('0',64)};await Reject(async()=>{using var grant=await new InstalledActivationResolver(f.Root,new PrivateControlFiles(),f.Control,()=>f.Now,connectorProfile:RuntimeConnectorProfile.Synthetic).ResolveAsync(binding,default);},"INSTALLED_ACTIVATION_ANCHOR");});
-await Check("missing owner record refuses the concrete resolver",async()=>
-{var path=f.PathOf("owner-intent.json");var bytes=File.ReadAllBytes(path);File.Delete(path);try{await Reject(async()=>{using var grant=await f.Resolve();});}finally{File.WriteAllBytes(path,bytes);}});
-await Check("omitted owner expiry is not silently promoted to a persistent capability",async()=>
-{
-    var document=System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllBytes(f.PathOf("owner-intent.json")))!.AsObject();document.Remove("ExpiresUnix");
-    await Reject(()=>{NativeJson.Read<InstalledOwnerIntent>(JsonSerializer.SerializeToUtf8Bytes(document));return Task.CompletedTask;});
-});
 await Check($"same concrete resolver reads fixture capabilities and observes actual Store schema {f.Schema}",async()=>{using var grant=await f.Resolve();await grant.Recovery.RequireStartAllowedAsync(grant.Release,default);Assert(f.Control.Creates==0);});
-foreach(var mutation in new[]{"epoch","head","owner","policy","pin","pending","phase"})
+foreach(var mutation in new[]{"epoch","head","policy","pin","pending","phase"})
 await Check("protected-state binding refuses "+mutation,async()=>
 {
     f.Reset();try
     {
-        if(mutation=="epoch")f.AnchorEpoch=2;if(mutation=="head")f.AnchorDigest=new string('0',64);if(mutation=="owner")f.OwnerRelease=new string('0',64);if(mutation=="phase")f.Phase="prepared";
+        if(mutation=="epoch")f.AnchorEpoch=2;if(mutation=="head")f.AnchorDigest=new string('0',64);if(mutation=="phase")f.Phase="prepared";
         f.Publish();if(mutation=="policy")File.AppendAllText(f.Policy,"changed");if(mutation=="pin")File.AppendAllText(Path.Combine(f.Dataset,"update-pin"),"changed");if(mutation=="pending")File.WriteAllText(f.PathOf("PENDING.JSON"),"interrupted");
         await Reject(async()=>{using var grant=await f.Resolve();});
     }finally{f.Reset();}
 });
-await Check("owner expiration is observed again at mutable start barrier",async()=>
-{f.Reset();f.Expiry=f.Now.AddMinutes(1).ToUnixTimeSeconds();f.Publish();using var grant=await f.Resolve();f.Now=f.Now.AddMinutes(2);try{await Reject(()=>grant.Recovery.RequireStartAllowedAsync(grant.Release,default),"INSTALLED_OWNER_EXPIRED");}finally{f.Now=f.Now.AddMinutes(-2);}});
 await Check("protected-control anchor cannot conceal a crash-left WAL",async()=>
 {f.Reset();File.WriteAllText(Path.Combine(f.Data,"app.sqlite-wal"),"synthetic-residue");try{await Reject(async()=>{using var grant=await f.Resolve();},"INSTALLED_WAL_RECONCILIATION_REQUIRED");Assert(File.ReadAllText(Path.Combine(f.Data,"app.sqlite-wal"))=="synthetic-residue");}finally{File.Delete(Path.Combine(f.Data,"app.sqlite-wal"));}});
 await Check("concrete production resolver launches real mutable Store through continuous handoff",async()=>
@@ -181,20 +172,20 @@ ProtectedOperation Operation(string kind="activate")
     return new(1,kind,f.InstallationId,head.Epoch,f.Binding.ActivationReceiptDigest,head.ReleaseDigest,head.DataId,head.MinimumSchema,head.MaximumSchema,head.MasterKeyDigest,head.PolicyDigest,head.PinDigest,web,null,f.Now.AddMinutes(2).ToUnixTimeSeconds(),Guid.NewGuid().ToString("N"));
 }
 async Task Denied(Func<Task> run){try{await run();}catch(Exception e)when(e is ServiceStartDenied or IOException or Win32Exception or UnauthorizedAccessException or JsonException or OperationCanceledException){return;}throw new Exception("transaction unexpectedly accepted");}
-ProtectedStateTransactionWriter Writer(IOwnerOperationAuthentication auth,JobProcess? job=null)=>new(f.Root,f.InstallationId,job??writerJob.Process,auth,f.Control,()=>f.Now);
-await Check("protected transaction publishes authenticated owner and coherent records consumed by actual resolver",async()=>
+ProtectedStateTransactionWriter Writer(IOperationAuthentication auth,JobProcess? job=null)=>new(f.Root,f.InstallationId,job??writerJob.Process,auth,f.Control,()=>f.Now);
+await Check("protected transaction publishes coherent records consumed by actual resolver",async()=>
 {
     PrepareState();var op=Operation();var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);var binding=await Writer(auth).CommitAsync(op);
-    Assert(binding==f.Binding);using var grant=await f.Resolve();var owner=NativeJson.Read<InstalledOwnerIntent>(File.ReadAllBytes(f.PathOf("owner-intent.json")));
-    Assert(owner.Subject=="boundary-owner"&&owner.Nonce==op.Nonce&&NativeJson.Read<InstalledEpoch>(File.ReadAllBytes(f.PathOf("epoch.json"))).Epoch==2&&!File.Exists(f.PathOf("pending.json")));
+    Assert(binding==f.Binding);using var grant=await f.Resolve();
+    Assert(NativeJson.Read<InstalledEpoch>(File.ReadAllBytes(f.PathOf("epoch.json"))).Epoch==2&&!File.Exists(f.PathOf("pending.json")));
 });
 await Check("transaction nonce is single-use even for a newly authenticated replay",async()=>
 {
     PrepareState();var op=Operation();var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);var writer=Writer(auth);await writer.CommitAsync(op);await Denied(()=>writer.CommitAsync(op));
 });
-await Check("client cannot supply owner principal or grant scope fields",async()=>
+await Check("client cannot supply approval principal or grant scope fields",async()=>
 {
-    PrepareState();var document=System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.SerializeToUtf8Bytes(Operation()))!.AsObject();document["Subject"]="client-owner";await Denied(()=>{NativeJson.Read<ProtectedOperation>(JsonSerializer.SerializeToUtf8Bytes(document));return Task.CompletedTask;});
+    PrepareState();var document=System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.SerializeToUtf8Bytes(Operation()))!.AsObject();document["Subject"]="client-principal";await Denied(()=>{NativeJson.Read<ProtectedOperation>(JsonSerializer.SerializeToUtf8Bytes(document));return Task.CompletedTask;});
 });
 foreach(var kind in new[]{"scope","principal-installation","operation-digest","stale-epoch","stale-digest","expired","release","data"})
 await Check("transaction refuses bound-operation mismatch: "+kind,async()=>
@@ -218,7 +209,7 @@ await Check("actual selected-data lease blocks publication",async()=>
 {
     PrepareState();var op=Operation();var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);using var lease=WindowsFileBoundary.AcquireDataLease(f.Data);await Denied(()=>Writer(auth).CommitAsync(op));Assert(!File.Exists(f.PathOf("pending.json")));
 });
-foreach(var point in new[]{"pending-published","nonce-reserved","record-owner-intent.json","record-web.json","partial-activation.json","record-activation.json","record-epoch.json","record-bootstrap.json","commit-receipt"})
+foreach(var point in new[]{"pending-published","nonce-reserved","record-web.json","partial-activation.json","record-activation.json","record-epoch.json","record-bootstrap.json","commit-receipt"})
 await Check("interrupted protected transaction stays blocked then consistently resumes: "+point,async()=>
 {
     PrepareState();var op=Operation();var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);var writer=Writer(auth);
@@ -244,7 +235,7 @@ await Check("install operation requires fresh control state and authenticated in
 {
     var fresh=await ProductionFixture.Create(node,repo,helper);Exception? freshFailure=null;try{var head=NativeJson.Read<InstalledActivation>(File.ReadAllBytes(fresh.PathOf("activation.json")));var web=NativeJson.Read<InstalledWeb>(File.ReadAllBytes(fresh.PathOf("web.json")));
     var op=new ProtectedOperation(1,"install",fresh.InstallationId,0,"",head.ReleaseDigest,head.DataId,fresh.Schema,fresh.Schema,head.MasterKeyDigest,head.PolicyDigest,head.PinDigest,web,null,fresh.Now.AddMinutes(2).ToUnixTimeSeconds(),Guid.NewGuid().ToString("N"));
-    foreach(var name in new[]{"activation.json","epoch.json","owner-intent.json","web.json","bootstrap.json"})File.Delete(fresh.PathOf(name));
+    foreach(var name in new[]{"activation.json","epoch.json","web.json","bootstrap.json"})File.Delete(fresh.PathOf(name));
     var auth=new ApprovedOperations(fresh.InstallationId,()=>fresh.Now);auth.Approve(op);await new ProtectedStateTransactionWriter(fresh.Root,fresh.InstallationId,writerJob.Process,auth,fresh.Control,()=>fresh.Now).CommitAsync(op);
     using var grant=await fresh.Resolve();Assert(NativeJson.Read<InstalledEpoch>(File.ReadAllBytes(fresh.PathOf("epoch.json"))).Epoch==1);
     }catch(Exception failure){freshFailure=failure;fresh.RetainFailure(failure);}
@@ -254,7 +245,7 @@ await Check("install operation requires fresh control state and authenticated in
 await Check("install cannot reset an authority root with existing committed history",async()=>
 {
     PrepareState();var op=Operation("install") with{ExpectedEpoch=0,ExpectedActivationDigest=""};var before=new Dictionary<string,byte[]>();
-    foreach(var name in new[]{"activation.json","epoch.json","owner-intent.json","web.json","bootstrap.json"}){before[name]=File.ReadAllBytes(f.PathOf(name));File.Delete(f.PathOf(name));}
+    foreach(var name in new[]{"activation.json","epoch.json","web.json","bootstrap.json"}){before[name]=File.ReadAllBytes(f.PathOf(name));File.Delete(f.PathOf(name));}
     try{var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);await Denied(()=>Writer(auth).CommitAsync(op));}finally{foreach(var item in before)File.WriteAllBytes(f.PathOf(item.Key),item.Value);}
 });
 await Check("full partial pending record resumes only after reauthentication and old-state validation",async()=>
@@ -288,7 +279,7 @@ await Check("completed receipt still revalidates selected data before clearing p
 });
 await Check("unconfigured authentication boundary cannot publish protected state",async()=>
 {
-    PrepareState();var before=f.Binding;await Denied(()=>Writer(new UnconfiguredOwnerOperationAuthentication()).CommitAsync(Operation()));
+    PrepareState();var before=f.Binding;await Denied(()=>Writer(new UnconfiguredOperationAuthentication()).CommitAsync(Operation()));
     Assert(before==f.Binding&&!File.Exists(f.PathOf("pending.json")));
 });
 await Check("recovery commit is bound to actual backup receipt and verified restored plaintext",async()=>
@@ -303,13 +294,8 @@ await Check("recovery commit is bound to actual backup receipt and verified rest
 await Check("production default still denies while real committer/channel is unconfigured",async()=>
 {await Denied(()=>new InstalledActivationResolver().ResolveAsync(f.Binding,default));});
 
-const string OwnerSid="S-1-5-21-100-101-102-1001",RuntimeSid="S-1-5-80-1-2-3-4-5",AuthoritySid="S-1-5-80-6-7-8-9-10";
-var ownerPeer=new AuthorityPeer(OwnerSid,111,123,1,true);var runtimePeer=new AuthorityPeer(RuntimeSid,222,124,0,false);
-OwnerApprovalLedger Ledger()=>new(f.Root,f.InstallationId,OwnerSid,()=>f.Now);
-OperationFacts Facts()=>new("0.5.2","0.5.3","stable",Operation().Web.Origin,1000,Operation().PolicyDigest,Operation().PinDigest);
-RoutineDelegation Policy(int count=2)=>new(1,Guid.NewGuid().ToString("N"),f.InstallationId,OwnerSid,Operation().DataId,Operation().PolicyDigest,Operation().PinDigest,Operation().MasterKeyDigest,"stable",Operation().Web.Origin,null,"0.5.3","0.5.9",f.Schema,f.Now.AddDays(2).ToUnixTimeSeconds(),count,10000000);
-void Approve(OwnerApprovalLedger ledger,ProtectedOperation op,bool reconcile=false){var c=ledger.Challenge(op,reconcile);ledger.Approve(ownerPeer,new(1,c.Id,c.Digest,true));}
-void Delegate(OwnerApprovalLedger ledger,RoutineDelegation d){var c=ledger.DelegationChallenge(d);ledger.Delegate(d,ownerPeer,new(1,c.Id,c.Digest,true));}
+const string ForeignSid="S-1-5-21-100-101-102-1001",RuntimeSid="S-1-5-80-1-2-3-4-5",AuthoritySid="S-1-5-80-6-7-8-9-10";
+var foreignPeer=new AuthorityPeer(ForeignSid,111,123,1,true);var runtimePeer=new AuthorityPeer(RuntimeSid,222,124,0,false);
 await Check("actual role validator allows only the exact authority/runtime file class",()=>
 {
  var roles=new InstalledFileRoles(new(AuthoritySid),new(RuntimeSid));
@@ -328,96 +314,39 @@ await Check("runtime-created inherited directories are accepted only in runtime-
  {try{roles.Validate(inherited,role);throw new Exception("unprotected "+role+" directory accepted");}catch(IOException){}}
  var widened=new RawSecurityDescriptor($"O:{RuntimeSid}D:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;{RuntimeSid})");
  try{roles.Validate(widened,InstalledFileRole.Data);throw new Exception("widened inherited data accepted");}catch(IOException){}
- var foreign=new RawSecurityDescriptor($"O:{RuntimeSid}D:(A;OICIID;FA;;;SY)(A;OICIID;0x1200a9;;;{OwnerSid})");
+ var foreign=new RawSecurityDescriptor($"O:{RuntimeSid}D:(A;OICIID;FA;;;SY)(A;OICIID;0x1200a9;;;{ForeignSid})");
  try{roles.Validate(foreign,InstalledFileRole.Data);throw new Exception("foreign inherited data accepted");}catch(IOException){}return Task.CompletedTask;
 });
-await Check("bounded protocol refuses oversized duplicate and forged owner fields",async()=>
+await Check("bounded protocol refuses oversized duplicate and forged principal fields",async()=>
 {
  await Denied(()=>{AuthorityProtocol.Request(new byte[32769]);return Task.CompletedTask;});
- foreach(var text in new[]{"{\"Format\":1,\"Format\":1}","{\"Format\":1,\"Id\":\""+Guid.NewGuid().ToString("N")+"\",\"Action\":\"install\",\"TargetDigest\":\""+new string('a',64)+"\",\"Mode\":null,\"Subject\":\"owner\"}"})await Denied(()=>{AuthorityProtocol.Request(System.Text.Encoding.UTF8.GetBytes(text));return Task.CompletedTask;});
-});
-await Check("single native approval authorizes actual writer and survives ledger reconstruction",async()=>
-{
- PrepareState();var op=Operation();var l=Ledger();Approve(l,op);_ =await l.AuthenticateAsync(AuthorityProtocol.Digest(op),op.Kind,default);
- var reopened=Ledger();await Writer(reopened).CommitAsync(op);using var grant=await f.Resolve();
-});
-await Check("owner confirmation rejects runtime wrong user changed digest and replay",async()=>
-{
- PrepareState();var l=Ledger();var c=l.Challenge(Operation());
- foreach(var peer in new[]{runtimePeer,ownerPeer with{Sid="S-1-5-21-100-101-102-1002"},ownerPeer with{Interactive=false}})await Denied(()=>{l.Approve(peer,new(1,c.Id,c.Digest,true));return Task.CompletedTask;});
- await Denied(()=>{l.Approve(ownerPeer,new(1,c.Id,new string('0',64),true));return Task.CompletedTask;});
- l.Approve(ownerPeer,new(1,c.Id,c.Digest,true));await Denied(()=>{l.Approve(ownerPeer,new(1,c.Id,c.Digest,true));return Task.CompletedTask;});
-});
-await Check("native denial and expiry never become approval",async()=>
-{
- PrepareState();var l=Ledger();var op=Operation();var c=l.Challenge(op);l.Approve(ownerPeer,new(1,c.Id,c.Digest,false));await Denied(()=>l.AuthenticateAsync(c.Digest,op.Kind,default));
- c=l.Challenge(op);f.Now=f.Now.AddMinutes(11);await Denied(()=>{l.Approve(ownerPeer,new(1,c.Id,c.Digest,true));return Task.CompletedTask;});
+ foreach(var text in new[]{"{\"Format\":1,\"Format\":1}","{\"Format\":1,\"Id\":\""+Guid.NewGuid().ToString("N")+"\",\"Action\":\"install\",\"TargetDigest\":\""+new string('a',64)+"\",\"Mode\":null,\"Subject\":\"principal\"}"})await Denied(()=>{AuthorityProtocol.Request(System.Text.Encoding.UTF8.GetBytes(text));return Task.CompletedTask;});
 });
 await Check("revocation during publication is rechecked before further protected writes",async()=>
 {
- PrepareState();var op=Operation();var l=Ledger();Approve(l,op);
- await Denied(()=>Writer(l).CommitAsync(op,p=>{if(p=="record-owner-intent.json")l.Revoke(ownerPeer,AuthorityProtocol.Digest(op),false);}));
- Assert(File.Exists(f.PathOf("pending.json")));await Denied(()=>f.Resolve());await Denied(()=>Writer(l).ResumeAsync(op));
+ PrepareState();var op=Operation();var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);
+ await Denied(()=>Writer(auth).CommitAsync(op,p=>{if(p=="record-web.json")auth.Revoke(op);}));
+ Assert(File.Exists(f.PathOf("pending.json")));await Denied(()=>f.Resolve());await Denied(()=>Writer(auth).ResumeAsync(op));
 });
-await Check("interrupted manual commit requires fresh native reconcile with original approval identity",async()=>
-{
- PrepareState();var op=Operation();var l=Ledger();Approve(l,op);await Denied(()=>Writer(l).CommitAsync(op,p=>{if(p=="record-epoch.json")throw new IOException("interrupt");}));
- await Denied(()=>Writer(Ledger()).ResumeAsync(op));f.Now=f.Now.AddMinutes(3);Approve(l,op,true);await Writer(Ledger()).ResumeAsync(op);using var grant=await f.Resolve();
-});
-await Check("native delegation approval cannot replace existing policy pin or key anchors",async()=>
-{
- PrepareState();var l=Ledger();var d=Policy();foreach(var altered in new[]{d with{PolicyDigest=new string('0',64)},d with{PinDigest=new string('0',64)},d with{MasterKeyDigest=new string('0',64)}})
- await Denied(()=>{l.DelegationChallenge(altered);return Task.CompletedTask;});
-});
-await Check("bounded delegation allows routine updates without repeated native confirmation",async()=>
-{
- PrepareState();var l=Ledger();var d=Policy();Delegate(l,d);var op=Operation();l.AuthorizeRoutine(op,Facts(),d.Id);var challengeCount=Directory.GetFiles(Path.Combine(f.Root,"owner-ledger"),"challenge-*.json").Length;
- await Writer(l).CommitAsync(op);var next=Operation() with{ExpiresUnix=f.Now.AddMinutes(2).ToUnixTimeSeconds()};
- Ledger().AuthorizeRoutine(next,Facts() with{CurrentVersion="0.5.3",TargetVersion="0.5.4"},d.Id);await Writer(Ledger()).CommitAsync(next);
- Assert(challengeCount==Directory.GetFiles(Path.Combine(f.Root,"owner-ledger"),"challenge-*.json").Length);using var grant=await f.Resolve();
- await Denied(()=>{l.AuthorizeRoutine(Operation(),Facts() with{CurrentVersion="0.5.4",TargetVersion="0.5.5"},d.Id);return Task.CompletedTask;});
-});
-foreach(var mismatch in new[]{"downgrade","channel","policy","pins","key","origin","bytes","schema","data","recovery","expired"})await Check("delegation rejects scope expansion: "+mismatch,async()=>
-{
- PrepareState();var l=Ledger();var d=Policy();Delegate(l,d);var op=Operation();var facts=Facts();
- if(mismatch=="downgrade")facts=facts with{TargetVersion="0.5.1"};if(mismatch=="channel")facts=facts with{Channel="preview"};if(mismatch=="policy")op=op with{PolicyDigest=new string('0',64)};if(mismatch=="pins")facts=facts with{IntakePinDigest=new string('0',64)};
- if(mismatch=="key")op=op with{MasterKeyDigest=new string('0',64)};if(mismatch=="origin")facts=facts with{Origin="https://other.invalid"};if(mismatch=="bytes")facts=facts with{PayloadBytes=d.MaximumPayloadBytes+1};if(mismatch=="schema")op=op with{MaximumSchema=f.Schema+1};if(mismatch=="data")op=op with{DataId=Guid.NewGuid().ToString("N")};if(mismatch=="recovery")op=op with{Kind="recover"};if(mismatch=="expired")f.Now=f.Now.AddDays(3);
- await Denied(()=>{l.AuthorizeRoutine(op,facts,d.Id);return Task.CompletedTask;});Assert(!File.Exists(f.PathOf("pending.json")));
-});
-await Check("routine delegated update retains actual committed recovery selection without authorizing another restore",async()=>
+await Check("committed update retains actual recovery selection without authorizing another restore",async()=>
 {
  PrepareState();NativeBackupResult saved;NativeRestoreResult recovered;
  using(var inspector=new NativeSqliteInspector(node,ProductionFixture.Hash(File.ReadAllBytes(node))))using(var recovery=await NativeRecoveryFixture.OpenAsync(f.Dataset,writerJob.Process,inspector))
  {saved=await recovery.BackupAsync();recovered=await recovery.RestoreToNewDirectoryAsync(saved.BackupId,f.Schema,f.Schema);}
  f.ResetRecovery(saved,recovered);f.Phase="committed";f.Publish();File.WriteAllBytes(f.PathOf("bootstrap.json"),JsonSerializer.SerializeToUtf8Bytes(new{schema=1,service=ServiceDefinition.Name,installationId=f.InstallationId,activationReceiptDigest=f.Binding.ActivationReceiptDigest}));
  f.ClearSignals();var controller=new ServiceController(new DirectAuthorization(f));var result=await controller.RunAsync(r=>{if(r.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);});Assert(result.Failure==ServiceFailure.None,"recovered routine startup failure="+result.Failure+" stop="+f.Control.StopError);
- var op=Operation() with{Recovery=f.Recovery};var d=Policy() with{Recovery=f.Recovery};var l=Ledger();Delegate(l,d);l.AuthorizeRoutine(op,Facts(),d.Id);
- var before=File.ReadAllBytes(Path.Combine(f.Data,"app.sqlite"));await Writer(l).CommitAsync(op);using(var grant=await f.Resolve()){}
+ var op=Operation() with{Recovery=f.Recovery};var auth=new ApprovedOperations(f.InstallationId,()=>f.Now);auth.Approve(op);
+ var before=File.ReadAllBytes(Path.Combine(f.Data,"app.sqlite"));await Writer(auth).CommitAsync(op);using(var grant=await f.Resolve()){}
  Assert(before.SequenceEqual(File.ReadAllBytes(Path.Combine(f.Data,"app.sqlite"))));
- await Denied(()=>{l.AuthorizeRoutine(Operation() with{Recovery=f.Recovery! with{ReceiptDigest=new string('0',64)}},Facts(),d.Id);return Task.CompletedTask;});
+ var unapproved=Operation() with{Recovery=f.Recovery! with{ReceiptDigest=new string('0',64)}};
+ await Denied(()=>Writer(auth).CommitAsync(unapproved));
  await Denied(()=>Writer(new ApprovedOperations(f.InstallationId,()=>f.Now)).CommitAsync(Operation()));
-});
-await Check("delegated operation remains revocable after reservation without resetting budget",async()=>
-{
- PrepareState();var l=Ledger();var d=Policy(1);Delegate(l,d);var op=Operation();l.AuthorizeRoutine(op,Facts(),d.Id);l.AuthorizeRoutine(op,Facts(),d.Id);
- l.Revoke(ownerPeer,d.Id,true);await Denied(()=>Writer(l).CommitAsync(op));Assert(Directory.GetFiles(Path.Combine(f.Root,"owner-ledger"),"usage-"+d.Id+"-*.json").Length==1);
-});
-await Check("delegated interrupted update reconciles within original bounds without another native prompt",async()=>
-{
- PrepareState();var l=Ledger();var d=Policy(1);Delegate(l,d);var op=Operation();l.AuthorizeRoutine(op,Facts(),d.Id);var count=Directory.GetFiles(Path.Combine(f.Root,"owner-ledger"),"challenge-*.json").Length;
- await Denied(()=>Writer(l).CommitAsync(op,p=>{if(p=="record-web.json")throw new IOException("interrupt");}));f.Now=f.Now.AddMinutes(3);
- l.AuthorizeRoutine(op,Facts(),d.Id,true);await Writer(Ledger()).ResumeAsync(op);using var grant=await f.Resolve();
- Assert(count==Directory.GetFiles(Path.Combine(f.Root,"owner-ledger"),"challenge-*.json").Length);
 });
 await Check("runtime launch gate wraps the actual service controller and mutable Store path",async()=>
 {
  PrepareState();f.ClearSignals();var kernel=new FakeRuntimeKernel();var gate=new RuntimeAuthorityGate(kernel);gate.Admit(kernel.Generation);
  var controller=new ServiceController(new GatedRuntimeStartAuthorizer(new DirectAuthorization(f),gate,kernel.Generation));
  var result=await controller.RunAsync(r=>{if(r.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);});Assert(result.Failure==ServiceFailure.None&&f.Control.HeldAfterClose);
-});
-await Check("partial approval ledger is refused rather than inferred after restart",async()=>
-{
- PrepareState();var op=Operation();var l=Ledger();Approve(l,op);var path=Path.Combine(f.Root,"owner-ledger","approval-"+AuthorityProtocol.Digest(op)+".json");File.WriteAllText(path,"{");await Denied(()=>Writer(Ledger()).CommitAsync(op));Assert(!File.Exists(f.PathOf("pending.json")));
 });
 await Check("runtime gate denies launch before assignment and requires observed tree and host exit",async()=>
 {
@@ -432,17 +361,9 @@ await Check("runtime gate preserves uncertain state after assignment failure",as
 await Check("peer adapter reverts on exceptions and refuses failed identification or token reversion",async()=>
 {
  using var noPipe=new Microsoft.Win32.SafeHandles.SafePipeHandle(IntPtr.Zero,false);
- var api=new FakePeerApi(ownerPeer){ThrowIdentity=true};await Denied(()=>{new WindowsAuthorityPeer(api,()=>{}).Read(noPipe);return Task.CompletedTask;});Assert(api.Reverts==1);
- api=new(ownerPeer){IdentifyAllowed=false};await Denied(()=>{new WindowsAuthorityPeer(api,()=>{}).Read(noPipe);return Task.CompletedTask;});Assert(api.Reverts==0);
- var fatal=false;api=new(ownerPeer){RevertAllowed=false};await Denied(()=>{new WindowsAuthorityPeer(api,()=>fatal=true).Read(noPipe);return Task.CompletedTask;});Assert(fatal);
-});
-await Check("concrete catalog request coordinator uses ledger gate writer and consumer",async()=>
-{
- PrepareState();var op=Operation();var l=Ledger();var catalog=SafeDirectory.CreatePrivateSession(f.Root);File.WriteAllBytes(Path.Combine(catalog,op.ReleaseDigest+".json"),JsonSerializer.SerializeToUtf8Bytes(new CatalogOperation(1,op,Facts())));
- var kernel=new FakeRuntimeKernel{Empty=true};var gate=new RuntimeAuthorityGate(kernel);gate.Admit(kernel.Generation);kernel.Exit=true;
- var coordinator=new AuthorityCoordinator(RuntimeSid,new(catalog),l,Writer(l),gate);
- var c=coordinator.Submit(runtimePeer,JsonSerializer.SerializeToUtf8Bytes(new AuthorityRequest(1,Guid.NewGuid().ToString("N"),"install",op.ReleaseDigest,null)))!;
- Assert(coordinator.Phase=="awaiting_local_approval");await Denied(()=>coordinator.CommitAsync());l.Approve(ownerPeer,new(1,c.Id,c.Digest,true));await coordinator.CommitAsync();Assert(coordinator.Phase=="awaiting_runtime");using var grant=await f.Resolve();
+ var api=new FakePeerApi(foreignPeer){ThrowIdentity=true};await Denied(()=>{new WindowsAuthorityPeer(api,()=>{}).Read(noPipe);return Task.CompletedTask;});Assert(api.Reverts==1);
+ api=new(foreignPeer){IdentifyAllowed=false};await Denied(()=>{new WindowsAuthorityPeer(api,()=>{}).Read(noPipe);return Task.CompletedTask;});Assert(api.Reverts==0);
+ var fatal=false;api=new(foreignPeer){RevertAllowed=false};await Denied(()=>{new WindowsAuthorityPeer(api,()=>fatal=true).Read(noPipe);return Task.CompletedTask;});Assert(fatal);
 });
 
 
@@ -456,211 +377,43 @@ await Check("shared typed job accounting reads active at 40 and ignores nonzero 
  using var job=f.StartJob(node,["-e",""],f.Root,LaunchEnvironment.Clean(f.Root));await job.WaitAsync(default);await job.WaitForTreeEmptyAsync(default);
  var actual=job.Process.ObserveAccounting();Assert(actual.TotalProcesses>0&&actual.ActiveProcesses==0&&actual.TreeEmpty);
 });
-ProtectedOperation? selectedHealthOperation=null;
-AuthorityCoordinator HealthCoordinator(RuntimeHealthCoordinator health)
-{
- PrepareState();var op=Operation();selectedHealthOperation=op;var l=Ledger();var catalog=SafeDirectory.CreatePrivateSession(f.Root);
- File.WriteAllBytes(Path.Combine(catalog,op.ReleaseDigest+".json"),JsonSerializer.SerializeToUtf8Bytes(new CatalogOperation(1,op,Facts())));
- var kernel=new FakeRuntimeKernel{Empty=true};var oldGate=new RuntimeAuthorityGate(kernel);oldGate.Admit(kernel.Generation);kernel.Exit=true;
- var coordinator=new AuthorityCoordinator(RuntimeSid,new(catalog),l,Writer(l),oldGate,health);
- var challenge=coordinator.Submit(runtimePeer,JsonSerializer.SerializeToUtf8Bytes(new AuthorityRequest(1,Guid.NewGuid().ToString("N"),"install",op.ReleaseDigest,null)))!;
- l.Approve(ownerPeer,new(1,challenge.Id,challenge.Digest,true));return coordinator;
-}
-IServiceStartAuthorizer InstalledHealth(InstallationBinding binding)=>new InstalledBindingStartAuthorizer(f.CreateResolver(),binding);
-await Check("commit remains awaiting runtime until actual admitted Store health and holds its lease",async()=>
-{
- var health=new RuntimeHealthCoordinator(InstalledHealth);var c=HealthCoordinator(health);f.ClearSignals();
- await c.CommitAsync();Assert(c.Phase=="awaiting_runtime");await c.StartRuntimeAsync();
- try{Assert(c.Phase=="healthy");await Denied(()=>{using var lease=WindowsFileBoundary.AcquireDataLease(f.Data);return Task.CompletedTask;});}
- finally{await c.StopRuntimeAsync();}
- Assert(c.Phase=="stopped"&&f.Control.HeldAfterClose);using var admitted=await f.Resolve();
-});
-foreach(var failure in new[]{"admission","start","health","timeout","wrong-release"})await Check("committed runtime refuses premature healthy after "+failure,async()=>
-{
- var faults=new RuntimeHealthFaults(failure);var health=new RuntimeHealthCoordinator(b=>new FaultHealthAuthorizer(InstalledHealth(b),faults),TimeSpan.FromSeconds(10),TimeSpan.FromMilliseconds(100));
- var c=HealthCoordinator(health);f.ClearSignals();await c.CommitAsync();await Denied(()=>c.StartRuntimeAsync());
- Assert(c.Phase=="failed"&&!health.CleanupReconciliationRequired);using var lease=WindowsFileBoundary.AcquireDataLease(f.Data);
- if(failure=="admission"||failure=="start"||failure=="wrong-release")Assert(faults.Starts==0);
-});
-await Check("cancellation during actual runtime health cleans ownership and never marks healthy",async()=>
-{
- var faults=new RuntimeHealthFaults("cancel");var health=new RuntimeHealthCoordinator(b=>new FaultHealthAuthorizer(InstalledHealth(b),faults),TimeSpan.FromSeconds(10),TimeSpan.FromSeconds(5));
- var c=HealthCoordinator(health);f.ClearSignals();await c.CommitAsync();using var cancelled=new CancellationTokenSource();var starting=c.StartRuntimeAsync(cancelled.Token);
- await faults.HealthEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));cancelled.Cancel();await Denied(()=>starting);
- Assert(c.Phase=="cancelled"&&!health.CleanupReconciliationRequired);using var lease=WindowsFileBoundary.AcquireDataLease(f.Data);
-});
-await Check("uncertain health cleanup retains actual session and data grant until observed retry",async()=>
-{
- var faults=new RuntimeHealthFaults("timeout"){DenyCleanup=true};var health=new RuntimeHealthCoordinator(b=>new FaultHealthAuthorizer(InstalledHealth(b),faults),TimeSpan.FromSeconds(10),TimeSpan.FromMilliseconds(100));
- var c=HealthCoordinator(health);f.ClearSignals();await c.CommitAsync();await Denied(()=>c.StartRuntimeAsync());
- Assert(c.Phase=="recovery_required"&&health.CleanupReconciliationRequired);await Denied(()=>{using var lease=WindowsFileBoundary.AcquireDataLease(f.Data);return Task.CompletedTask;});
- faults.DenyCleanup=false;await c.RetryRuntimeCleanupAsync();Assert(c.Phase=="failed"&&!health.CleanupReconciliationRequired);using var lease=WindowsFileBoundary.AcquireDataLease(f.Data);
-});
-await Check("late admission after timeout remains owned and explicitly releases its eventual grant",async()=>
-{
- var late=new LateHealthAuthorizer();var health=new RuntimeHealthCoordinator(_=>late,TimeSpan.FromMilliseconds(40),TimeSpan.FromMilliseconds(40),TimeSpan.FromMilliseconds(350));
- var c=HealthCoordinator(health);await c.CommitAsync();await Denied(()=>c.StartRuntimeAsync());Assert(c.Phase=="recovery_required"&&health.CleanupReconciliationRequired);
- var observed=new DisposalObservation();late.Result.SetResult(new(new(Operation().ReleaseDigest),new NeverHealthLauncher(),new PassHealthBarrier(),observed));
- await c.RetryRuntimeCleanupAsync();Assert(observed.Disposed&&c.Phase=="failed"&&!health.CleanupReconciliationRequired);
-});
-await Check("interrupted commit reconciliation still awaits real new-runtime health",async()=>
-{
- var health=new RuntimeHealthCoordinator(InstalledHealth);var c=HealthCoordinator(health);
- var selected=selectedHealthOperation??throw new Exception("no selected operation");
- // Use the same concrete operation and ledger as the coordinator; simulate interrupted publication.
- await Denied(()=>Writer(Ledger()).CommitAsync(selected,p=>{if(p=="record-web.json")throw new IOException("interrupt");}));
- Approve(Ledger(),selected,true);await c.ReconcileAsync();Assert(c.Phase=="awaiting_runtime");f.ClearSignals();await c.StartRuntimeAsync();Assert(c.Phase=="healthy");await c.StopRuntimeAsync();
-});
 
 endpointChecks=true;
 int projectedRoles=0;
-string StageCandidate(string version)
-{
- var manifest=System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllBytes(Path.Combine(f.Package,"bundle.json")))!.AsObject();manifest["version"]=version;
- var bytes=JsonSerializer.SerializeToUtf8Bytes(manifest);var digest=ProductionFixture.Hash(bytes);var destination=f.PathOf("payloads/"+digest);
- if(!Directory.Exists(destination))
- {
-  Directory.CreateDirectory(destination);
-  foreach(var path in Directory.EnumerateFiles(f.Package,"*",SearchOption.AllDirectories))
-  {var name=Path.GetRelativePath(f.Package,path);if(name=="bundle.json")continue;var target=Path.Combine(destination,name);Directory.CreateDirectory(Path.GetDirectoryName(target)!);File.Copy(path,target);}
-  File.WriteAllBytes(Path.Combine(destination,"bundle.json"),bytes);
- }
- var head=NativeJson.Read<InstalledActivation>(File.ReadAllBytes(f.PathOf("activation.json")));
- var total=manifest["files"]!.AsArray().Sum(v=>v!["size"]!.GetValue<long>());
-  var receipt=JsonSerializer.SerializeToUtf8Bytes(new IntakeReceipt(1,f.InstallationId,digest,version,"stable",total,f.Schema,head.PolicyDigest,head.PinDigest));
- var receiptDigest=ProductionFixture.Hash(receipt);File.WriteAllBytes(f.PathOf("intake/receipt-"+receiptDigest+".json"),receipt);
- File.WriteAllBytes(f.PathOf("intake/available.json"),JsonSerializer.SerializeToUtf8Bytes(new IntakePointer(1,f.InstallationId,receiptDigest)));return receiptDigest;
-}
-InstalledAuthorityComposition Composition(bool reset=true,Func<CancellationToken,Task>? quiesce=null)
+InstalledAuthorityComposition Composition(bool reset=true)
 {
  if(reset)
  {
   PrepareState();Directory.CreateDirectory(f.PathOf("intake"));Directory.CreateDirectory(f.PathOf(".authority"));
   foreach(var pattern in new[]{"rpc-*.json","done-*.json","cancel-*.json"})foreach(var path in Directory.GetFiles(f.PathOf(".authority"),pattern))File.Delete(path);
   foreach(var path in Directory.GetFiles(f.PathOf("intake"),"mode.json.partial-*"))File.Delete(path);
-  File.WriteAllBytes(f.PathOf("intake/mode.json"),JsonSerializer.SerializeToUtf8Bytes(new NativeUpdateMode(1,f.InstallationId,"notify",null,true)));
-  StageCandidate("0.5.3");
+  File.WriteAllBytes(f.PathOf("intake/mode.json"),JsonSerializer.SerializeToUtf8Bytes(new NativeUpdateMode(2,f.InstallationId,"notify",null,true,"system")));
  }
- var op=Operation();var anchor=new InstalledAuthorityAnchor(1,f.InstallationId,ServiceDefinition.Name,InstalledAuthorityReader.AuthorityService,OwnerSid,op.PolicyDigest,op.PinDigest,ProductionFixture.Hash(File.ReadAllBytes(node)));
+ var op=Operation();var anchor=new InstalledAuthorityAnchor(1,f.InstallationId,ServiceDefinition.Name,InstalledAuthorityReader.AuthorityService,op.PolicyDigest,op.PinDigest,ProductionFixture.Hash(File.ReadAllBytes(node)),new string('d',64));
  var bytes=JsonSerializer.SerializeToUtf8Bytes(anchor);File.WriteAllBytes(f.PathOf("installation.json"),bytes);
- InstalledAuthorityComposition? composition=null;
- RuntimeAuthorityGate EmptyGate(){var kernel=new FakeRuntimeKernel{Empty=true};var gate=new RuntimeAuthorityGate(kernel);gate.Admit(kernel.Generation);kernel.Exit=true;return gate;}
- composition=InstalledAuthorityComposition.PrivateFixture(f.Root,ProductionFixture.Hash(bytes),RuntimeSid,node,anchor.ProbeSha256!,(_,_)=>projectedRoles++,EmptyGate,quiesce??(_=>Task.CompletedTask),f.Control,
-  b=>{f.ClearSignals();return new InstalledBindingStartAuthorizer(f.CreateResolver(stateFiles:composition!.Files),b);},()=>f.Now,prepareUpdate:(_,_)=>Task.FromResult(true)); // Synthetic worker has no user interaction.
- return composition;
+ return InstalledAuthorityComposition.PrivateFixture(f.Root,ProductionFixture.Hash(bytes),RuntimeSid,node,anchor.ProbeSha256!,(_,_)=>projectedRoles++);
 }
 byte[] Frame(string id,string method,object body)=>JsonSerializer.SerializeToUtf8Bytes(new AuthorityFrame(1,id,method,JsonSerializer.SerializeToElement(body)));
-Task<EndpointReply> Request(AuthorityEndpointRouter router,string action,string? target=null,string? mode=null,string? id=null)
-{id??=Guid.NewGuid().ToString("N");return router.DispatchAsync(AuthorityEndpointRole.Runtime,runtimePeer,Frame(id,"request",new AuthorityRequest(1,id,action,target,mode)));}
-Task<EndpointReply> Observe(AuthorityEndpointRouter router,bool owner=false)=>router.DispatchAsync(owner?AuthorityEndpointRole.Owner:AuthorityEndpointRole.Runtime,owner?ownerPeer:runtimePeer,Frame(Guid.NewGuid().ToString("N"),owner?"confirmation":"status",new{}));
-Task<EndpointReply> AnswerView(AuthorityEndpointRouter router,OwnerConfirmationState view,bool approve)=>view.AnswerAsync(approve,(frame,c)=>router.DispatchAsync(AuthorityEndpointRole.Owner,ownerPeer,JsonSerializer.SerializeToUtf8Bytes(frame),c));
-async Task WaitPositiveRouter(AuthorityEndpointRouter router,string label)
+await Check("router rejects every peer but the one runtime service and client authority fields",async()=>
 {
- var elapsed=System.Diagnostics.Stopwatch.StartNew();
- try{await router.Execution!.WaitAsync(TimeSpan.FromMinutes(2));}
- catch(TimeoutException){Console.WriteLine("POSITIVE_ROUTER_TIMEOUT "+label+" phase="+router.Phase+" seconds="+elapsed.Elapsed.TotalSeconds.ToString("F3",System.Globalization.CultureInfo.InvariantCulture));throw;}
- Console.WriteLine("POSITIVE_ROUTER_COMPLETED "+label+" phase="+router.Phase+" seconds="+elapsed.Elapsed.TotalSeconds.ToString("F3",System.Globalization.CultureInfo.InvariantCulture));
-}
-await Check("complete composition routes exact intake through one owner view to actual Store health",async()=>
-{
- var c=Composition();var available=await Request(c.Router,"check");Assert(available.Phase=="available"&&available.Target!.Version=="0.5.3");
- await Request(c.Router,"install",available.Target!.Fingerprint);var pending=await Observe(c.Router,true);Assert(pending.Phase=="awaiting_local_approval"&&pending.Confirmation is not null);
- var view=new OwnerConfirmationState(pending.Confirmation!,f.InstallationId,()=>f.Now);var count=Directory.GetFiles(f.PathOf("owner-ledger"),"challenge-*.json").Length;
- await AnswerView(c.Router,view,true);try{await WaitPositiveRouter(c.Router,"composition");Assert(c.Router.Phase=="healthy");Assert(Directory.GetFiles(f.PathOf("owner-ledger"),"challenge-*.json").Length==count);Assert(projectedRoles>20);await Denied(()=>{using var blocked=WindowsFileBoundary.AcquireDataLease(f.Data);return Task.CompletedTask;});}
- finally{await c.Router.StopAsync();}Assert(c.Router.Phase=="stopped");
-});
-await Check("router rejects wrong endpoint role wrong owner and client authority fields",async()=>
-{
- var c=Composition();var frame=Frame(Guid.NewGuid().ToString("N"),"confirmation",new{});
- await Denied(()=>c.Router.DispatchAsync(AuthorityEndpointRole.Owner,runtimePeer,frame));await Denied(()=>c.Router.DispatchAsync(AuthorityEndpointRole.Owner,ownerPeer with{Sid=RuntimeSid},frame));
- await Denied(()=>c.Router.DispatchAsync(AuthorityEndpointRole.Runtime,runtimePeer,frame));
- var id=Guid.NewGuid().ToString("N");await Denied(()=>c.Router.DispatchAsync(AuthorityEndpointRole.Runtime,runtimePeer,Frame(id,"request",new{Format=1,Id=id,Action="check",TargetDigest=(string?)null,Mode=(string?)null,Subject=OwnerSid})));
-});
-await Check("confirmation view is bound expires and never resends an uncertain answer",async()=>
-{
- var c=Composition();await Request(c.Router,"install",(await Observe(c.Router)).Target!.Fingerprint);var snapshot=(await Observe(c.Router,true)).Confirmation!;
- await Denied(()=>{new OwnerConfirmationState(snapshot,Guid.NewGuid().ToString("N"),()=>f.Now);return Task.CompletedTask;});
- await Denied(()=>{new OwnerConfirmationState(snapshot,f.InstallationId,()=>f.Now.AddHours(1));return Task.CompletedTask;});
- var calls=0;var view=new OwnerConfirmationState(snapshot,f.InstallationId,()=>f.Now);
- await Denied(()=>view.AnswerAsync(true,(_,_)=>{calls++;throw new IOException("uncertain");}));
- await Denied(()=>view.AnswerAsync(true,(_,_)=>{calls++;throw new Exception("resent");}));Assert(calls==1&&view.State=="outcome_unknown");
- var closed=new OwnerConfirmationState(snapshot,f.InstallationId,()=>f.Now);closed.Close();await Denied(()=>AnswerView(c.Router,closed,true));
-});
-await Check("changed intake between summary and approval cannot mint approval or mutate head",async()=>
-{
- var c=Composition();await Request(c.Router,"install",(await Observe(c.Router)).Target!.Fingerprint);var snapshot=(await Observe(c.Router,true)).Confirmation!;var head=f.Binding;
- StageCandidate("0.5.4");await Denied(()=>AnswerView(c.Router,new(snapshot,f.InstallationId,()=>f.Now),true));Assert(head==f.Binding&&!File.Exists(f.PathOf("owner-ledger/approval-"+snapshot.Digest+".json")));
-});
-await Check("request replay cannot substitute a mode or selected release",async()=>
-{
- var c=Composition();var id=Guid.NewGuid().ToString("N");await Request(c.Router,"set_mode",mode:"notify",id:id);await Denied(()=>Request(c.Router,"set_mode",mode:"auto",id:id));
- id=Guid.NewGuid().ToString("N");await Request(c.Router,"install",(await Observe(c.Router)).Target!.Fingerprint,id:id);await Denied(()=>Request(c.Router,"install",new string('0',64),id:id));
-});
-await Check("cancelled confirmation is durable and restart does not infer unfinished approval",async()=>
-{
- var c=Composition();var id=Guid.NewGuid().ToString("N");await Request(c.Router,"install",(await Observe(c.Router)).Target!.Fingerprint,id:id);var snapshot=(await Observe(c.Router,true)).Confirmation!;
- await c.Router.DispatchAsync(AuthorityEndpointRole.Runtime,runtimePeer,Frame(Guid.NewGuid().ToString("N"),"cancel",new{RequestId=id}));
- await Denied(()=>AnswerView(c.Router,new(snapshot,f.InstallationId,()=>f.Now),true));Assert(Composition(false).Router.Phase=="idle");
- c=Composition();await Request(c.Router,"install",(await Observe(c.Router)).Target!.Fingerprint);Assert(Composition(false).Router.Phase=="recovery_required");
-});
-await Check("automatic mode uses one bounded owner approval for two actual routine launches",async()=>
-{
- var c=Composition();var d=Policy() with{MaximumPayloadBytes=2147483648};File.WriteAllBytes(f.PathOf("intake/delegation-template.json"),JsonSerializer.SerializeToUtf8Bytes(d));
- await Request(c.Router,"set_mode",mode:"auto");var snapshot=(await Observe(c.Router,true)).Confirmation!;Assert(snapshot.Scope=="delegate");await AnswerView(c.Router,new(snapshot,f.InstallationId,()=>f.Now),true);d=snapshot.Delegation!;
- var challenges=Directory.GetFiles(f.PathOf("owner-ledger"),"challenge-*.json").Length;
- async Task Apply(string label)
- {
-  var elapsed=System.Diagnostics.Stopwatch.StartNew();await Request(c.Router,"check");
-  try{await c.Router.Execution!.WaitAsync(TimeSpan.FromMinutes(2));}
-  catch(TimeoutException){Console.WriteLine("SYNTHETIC_UPDATE_TIMEOUT "+label+" phase="+c.Router.Phase+" seconds="+elapsed.Elapsed.TotalSeconds.ToString("F3",System.Globalization.CultureInfo.InvariantCulture));throw;}
-  Console.WriteLine("SYNTHETIC_UPDATE_COMPLETED "+label+" phase="+c.Router.Phase+" seconds="+elapsed.Elapsed.TotalSeconds.ToString("F3",System.Globalization.CultureInfo.InvariantCulture));Assert(c.Router.Phase=="healthy");
- }
- try
- {
-  await Apply("first");
-  StageCandidate("0.5.4");await Apply("second");
-  Assert(challenges==Directory.GetFiles(f.PathOf("owner-ledger"),"challenge-*.json").Length);
- }finally{await c.Router.StopAsync();}
- StageCandidate("0.5.5");var exhausted=await Request(c.Router,"check");Assert(exhausted.State=="approval_required"&&exhausted.Phase=="available"&&exhausted.Delegation?.RemainingOperations==0);Assert(Directory.GetFiles(f.PathOf("owner-ledger"),"usage-"+d.Id+"-*.json").Length==2);
-});
-await Check("intake rejects corrupt receipt and inconsistent schema policy payload",async()=>
-{
- var c=Composition();var target=(await Observe(c.Router)).Target!.Fingerprint;var path=f.PathOf("intake/receipt-"+target+".json");var bytes=File.ReadAllBytes(path);
- File.AppendAllText(path," ");await Denied(()=>Request(c.Router,"install",target));File.WriteAllBytes(path,bytes);
- foreach(var mutation in new[]{"schema","policy","payload"})
- {
-   var r=NativeJson.Read<IntakeReceipt>(bytes);r=mutation=="schema"?r with{Schema=r.Schema+1}:mutation=="policy"?r with{PolicyDigest=new string('0',64)}:r with{PayloadBytes=r.PayloadBytes+1};
-  var encoded=JsonSerializer.SerializeToUtf8Bytes(r);var digest=ProductionFixture.Hash(encoded);File.WriteAllBytes(f.PathOf("intake/receipt-"+digest+".json"),encoded);File.WriteAllBytes(f.PathOf("intake/available.json"),JsonSerializer.SerializeToUtf8Bytes(new IntakePointer(1,f.InstallationId,digest)));await Denied(()=>Request(c.Router,"install",digest));
- }
- File.WriteAllBytes(f.PathOf("intake/mode.json.partial-test"),"{}"u8.ToArray());await Denied(()=>Observe(c.Router));
+ var c=Composition();var frame=Frame(Guid.NewGuid().ToString("N"),"status",new{});
+ foreach(var peer in new[]{foreignPeer,runtimePeer with{Sid=AuthoritySid},runtimePeer with{Interactive=true},runtimePeer with{Session=1},runtimePeer with{ProcessId=0},runtimePeer with{Created=0}})await Denied(()=>c.Router.DispatchAsync(peer,frame));
+ Assert((await c.Router.DispatchAsync(runtimePeer,frame)).State=="observed");
+ var id=Guid.NewGuid().ToString("N");await Denied(()=>c.Router.DispatchAsync(runtimePeer,Frame(id,"request",new{Format=1,Id=id,Action="check",TargetDigest=(string?)null,Mode=(string?)null,Subject=ForeignSid})));
 });
 await Check("same bounded connection parser works in memory and refuses oversized frame",async()=>
 {
  var c=Composition();var bytes=Frame(Guid.NewGuid().ToString("N"),"status",new{});var encoded=new byte[bytes.Length+4];System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(encoded,bytes.Length);bytes.CopyTo(encoded,4);
- using var stream=new MemoryStream();stream.Write(encoded);stream.Position=0;await AuthorityEndpointConnection.ServeAsync(stream,c.Router,AuthorityEndpointRole.Runtime,runtimePeer,default);
+ using var stream=new MemoryStream();stream.Write(encoded);stream.Position=0;await AuthorityEndpointConnection.ServeAsync(stream,c.Router,runtimePeer,default);
  stream.Position=encoded.Length;var header=new byte[4];stream.ReadExactly(header);var n=System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(header);var reply=new byte[n];stream.ReadExactly(reply);Assert(NativeJson.Read<EndpointReply>(reply).State=="observed");
- using var bad=new MemoryStream(BitConverter.GetBytes(32769));await Denied(()=>AuthorityEndpointConnection.ServeAsync(bad,c.Router,AuthorityEndpointRole.Runtime,runtimePeer,default));
+ using var bad=new MemoryStream(BitConverter.GetBytes(32769));await Denied(()=>AuthorityEndpointConnection.ServeAsync(bad,c.Router,runtimePeer,default));
 });
 
 await Check("synthetic installed-role projection is actually enforced at the composition boundary",async()=>
 {
  var c=Composition();Assert(c.Files.SecretClass(f.PathOf("bootstrap.json"),SecretRole.SetupCapability)==InstalledFileRole.Control);Assert(c.Files.SecretClass(f.PathOf("installation.json"),SecretRole.SetupCapability)==InstalledFileRole.Anchor);Assert(c.Files.SecretClass(f.PathOf("datasets/anything/master-key"),SecretRole.MasterKey)==InstalledFileRole.MasterKey);var bytes=File.ReadAllBytes(f.PathOf("installation.json"));
- await Denied(()=>{InstalledAuthorityComposition.PrivateFixture(f.Root,ProductionFixture.Hash(bytes),RuntimeSid,node,ProductionFixture.Hash(File.ReadAllBytes(node)),(_,_)=>throw new IOException("synthetic role denied"),()=>throw new Exception("not reached"),_=>Task.CompletedTask,f.Control,InstalledHealth,()=>f.Now);return Task.CompletedTask;});
- await Denied(()=>{InstalledAuthorityComposition.PrivateFixture(f.Root,new string('0',64),RuntimeSid,node,ProductionFixture.Hash(File.ReadAllBytes(node)),(_,_)=>{},()=>throw new Exception("not reached"),_=>Task.CompletedTask,f.Control,InstalledHealth,()=>f.Now);return Task.CompletedTask;});
-});
-
-await Check("cancelled replacement keeps the actual running generation owned for the next update",async()=>
-{
- var c=Composition();
- async Task Install()
- {await Request(c.Router,"install",(await Observe(c.Router)).Target!.Fingerprint);var snapshot=(await Observe(c.Router,true)).Confirmation!;await AnswerView(c.Router,new(snapshot,f.InstallationId,()=>f.Now),true);await WaitPositiveRouter(c.Router,"cancelled-replacement");Assert(c.Router.Phase=="healthy");}
- await Install();try
- {
-  StageCandidate("0.5.4");var id=Guid.NewGuid().ToString("N");await Request(c.Router,"install",(await Observe(c.Router)).Target!.Fingerprint,id:id);
-  await c.Router.DispatchAsync(AuthorityEndpointRole.Runtime,runtimePeer,Frame(Guid.NewGuid().ToString("N"),"cancel",new{RequestId=id}));
-  await Denied(()=>{using var held=WindowsFileBoundary.AcquireDataLease(f.Data);return Task.CompletedTask;});
-  await Install();Assert(c.Router.Phase=="healthy");
- }finally{await c.Router.StopAsync();}using var released=WindowsFileBoundary.AcquireDataLease(f.Data);
+ await Denied(()=>{InstalledAuthorityComposition.PrivateFixture(f.Root,ProductionFixture.Hash(bytes),RuntimeSid,node,ProductionFixture.Hash(File.ReadAllBytes(node)),(_,_)=>throw new IOException("synthetic role denied"));return Task.CompletedTask;});
+ await Denied(()=>{InstalledAuthorityComposition.PrivateFixture(f.Root,new string('0',64),RuntimeSid,node,ProductionFixture.Hash(File.ReadAllBytes(node)),(_,_)=>{});return Task.CompletedTask;});
 });
 
 if(preparedPayload is not null)await Check("exact rebuilt full payload passes installed release and runtime admission without app launch",async()=>
@@ -734,7 +487,7 @@ internal sealed class ProductionFixture:IDisposable
     private bool disposed;
     private bool cleanupAttempted;private Exception? cleanupFailure;
     internal readonly string Root,Dataset,OriginalDataId=Guid.NewGuid().ToString("N"),InstallationId=Guid.NewGuid().ToString("N"),Payload,Node,Repo;
-    internal string DataId,Phase="committed";internal long AnchorEpoch=1;internal string? AnchorDigest,OwnerRelease;internal long? Expiry;
+    internal string DataId,Phase="committed";internal long AnchorEpoch=1;internal string? AnchorDigest;
     internal int Schema {get;}
     internal InstalledRecovery? Recovery;internal DateTimeOffset Now=DateTimeOffset.UtcNow;internal readonly FileControl Control;
     internal string Data=>Recovery is null?Path.Combine(Dataset,"data"):Path.Combine(Dataset,"restore-"+Recovery.OperationId,"completed","data");
@@ -775,14 +528,13 @@ internal sealed class ProductionFixture:IDisposable
     private string? actualPayload;internal string Package=>actualPayload??Payload;
     internal string PathOf(string name)=>Path.Combine(Root,name);
     internal void ClearSignals(){foreach(var name in new[]{"native-ready","native-stop","native-closed","native-exit"})if(File.Exists(Path.Combine(Data,name)))File.Delete(Path.Combine(Data,name));}
-    internal void Reset(){Recovery=null;DataId=OriginalDataId;Phase="committed";AnchorEpoch=1;AnchorDigest=null;OwnerRelease=null;Expiry=null;if(File.Exists(PathOf("PENDING.JSON")))File.Delete(PathOf("PENDING.JSON"));File.WriteAllText(Policy,"synthetic-policy");File.WriteAllText(Path.Combine(Dataset,"update-pin"),"synthetic-pin");ClearSignals();Publish();}
+    internal void Reset(){Recovery=null;DataId=OriginalDataId;Phase="committed";AnchorEpoch=1;AnchorDigest=null;if(File.Exists(PathOf("PENDING.JSON")))File.Delete(PathOf("PENDING.JSON"));File.WriteAllText(Policy,"synthetic-policy");File.WriteAllText(Path.Combine(Dataset,"update-pin"),"synthetic-pin");ClearSignals();Publish();}
     internal void ResetRecovery(NativeBackupResult b,NativeRestoreResult restore){Reset();DataId=Guid.NewGuid().ToString("N");Recovery=new(OriginalDataId,b.BackupId,restore.OperationId,b.ReceiptDigest);Phase="recovered";Publish();}
     internal void Publish()
     {
         string Write<T>(string name,T value){var bytes=JsonSerializer.SerializeToUtf8Bytes(value);File.WriteAllBytes(PathOf(name),bytes);return Hash(bytes);}
-        var owner=Write("owner-intent.json",new InstalledOwnerIntent(1,InstallationId,1,Guid.NewGuid().ToString("N"),OwnerRelease??release,DataId,Recovery is not null?"recover":"activate","synthetic-owner",Now.AddSeconds(-1).ToUnixTimeSeconds(),Expiry));
         var web=Write("web.json",new InstalledWeb(1,InstallationId,"https://yahad.invalid",32000));
-        var head=Write("activation.json",new InstalledActivation(1,InstallationId,1,release,DataId,Schema,Schema,Hash(File.ReadAllBytes(Path.Combine(Dataset,"master-key"))),Hash(File.ReadAllBytes(Policy)),Hash(File.ReadAllBytes(Path.Combine(Dataset,"update-pin"))),owner,web,Phase,Recovery));
+        var head=Write("activation.json",new InstalledActivation(1,InstallationId,1,release,DataId,Schema,Schema,Hash(File.ReadAllBytes(Path.Combine(Dataset,"master-key"))),Hash(File.ReadAllBytes(Policy)),Hash(File.ReadAllBytes(Path.Combine(Dataset,"update-pin"))),web,Phase,Recovery));
         Write("epoch.json",new InstalledEpoch(1,InstallationId,AnchorEpoch,AnchorDigest??head));
     }
     internal InstallationBinding Binding=>new(InstallationId,Hash(File.ReadAllBytes(PathOf("activation.json"))));
@@ -844,14 +596,17 @@ internal sealed class ProductionFixture:IDisposable
     }
 }
 
-internal sealed class ApprovedOperations(string installation,Func<DateTimeOffset> clock):IOwnerOperationAuthentication
+internal sealed class ApprovedOperations(string installation,Func<DateTimeOffset> clock):IOperationAuthentication
 {
     private readonly Dictionary<string,long> approved=new(StringComparer.Ordinal);internal string? Wrong;internal bool AllowReconcile=true;
+    private readonly HashSet<string> revoked=new(StringComparer.Ordinal);
+    internal void Revoke(ProtectedOperation op)=>revoked.Add(InstalledActivationResolver.Hash(JsonSerializer.SerializeToUtf8Bytes(op)));
+    public void RequireCurrent(VerifiedOperation approval){if(revoked.Contains(approval.OperationDigest))throw new UnauthorizedAccessException("SYNTHETIC_APPROVAL_REVOKED");}
     internal void Approve(ProtectedOperation op)=>approved[InstalledActivationResolver.Hash(JsonSerializer.SerializeToUtf8Bytes(op))]=clock().AddSeconds(-1).ToUnixTimeSeconds();
-    public Task<VerifiedOperationOwner> AuthenticateAsync(string digest,string scope,CancellationToken cancellation)
+    public Task<VerifiedOperation> AuthenticateAsync(string digest,string scope,CancellationToken cancellation)
     {
         cancellation.ThrowIfCancellationRequested();if(!approved.TryGetValue(digest,out var time)||scope=="reconcile"&&!AllowReconcile)throw new UnauthorizedAccessException("SYNTHETIC_AUTH_REFUSED");
-        return Task.FromResult(new VerifiedOperationOwner("boundary-owner",Wrong=="principal-installation"?Guid.NewGuid().ToString("N"):installation,Wrong=="operation-digest"?new string('0',64):digest,Wrong=="scope"?"child":scope,time,time+3600));
+        return Task.FromResult(new VerifiedOperation("boundary-approver",Wrong=="principal-installation"?Guid.NewGuid().ToString("N"):installation,Wrong=="operation-digest"?new string('0',64):digest,Wrong=="scope"?"child":scope,time,time+3600));
     }
 }
 
@@ -869,39 +624,3 @@ internal sealed class FakePeerApi(AuthorityPeer peer):IAuthorityPeerApi
  public AuthorityPeer ThreadIdentity(int p,long c){if(ThrowIdentity)throw new IOException("synthetic token failure");return peer;}
  public bool Revert(){Reverts++;return RevertAllowed;}private sealed class Noop:IDisposable{public void Dispose(){}}
 }
-
-internal sealed class RuntimeHealthFaults(string mode)
-{
- internal string Mode=mode;internal bool DenyCleanup;internal int Starts;
- internal TaskCompletionSource HealthEntered=new(TaskCreationOptions.RunContinuationsAsynchronously);
-}
-internal sealed class FaultHealthAuthorizer(IServiceStartAuthorizer inner,RuntimeHealthFaults faults):IServiceStartAuthorizer
-{
- public async Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)
- {
-  if(faults.Mode=="admission")throw new ServiceStartDenied(ServiceFailure.ActivationUnavailable);
-  var grant=await inner.AuthorizeAsync(cancellation);return new(faults.Mode=="wrong-release"?new(new string('0',64)):grant.Release,new Launcher(grant.Launcher,faults),grant.Recovery,grant);
- }
- private sealed class Launcher(IPrivateAppLauncher inner,RuntimeHealthFaults faults):IPrivateAppLauncher
- {
-  public async Task<IContainedAppSession> StartAsync(AppRelease release,CancellationToken cancellation)
-  {if(faults.Mode=="start")throw new IOException("INJECTED_START_FAILURE");faults.Starts++;return new Session(await inner.StartAsync(release,cancellation),faults);}
-  public async Task WaitForHealthyAsync(IContainedAppSession session,CancellationToken cancellation)
-  {faults.HealthEntered.TrySetResult();if(faults.Mode=="health")throw new IOException("INJECTED_HEALTH_FAILURE");if(faults.Mode is "timeout" or "cancel")await Task.Delay(Timeout.Infinite,cancellation);else await inner.WaitForHealthyAsync(((Session)session).Inner,cancellation);}
- }
- private sealed class Session(IContainedAppSession inner,RuntimeHealthFaults faults):IContainedAppSession
- {
-  internal IContainedAppSession Inner=>inner;
-  public Task RequestGracefulStopAsync(CancellationToken cancellation)=>inner.RequestGracefulStopAsync(cancellation);
-  public Task<int> WaitForRootExitAsync(CancellationToken cancellation)=>inner.WaitForRootExitAsync(cancellation);
-  public Task WaitForTreeEmptyAsync(CancellationToken cancellation)=>inner.WaitForTreeEmptyAsync(cancellation);
-  public async Task TerminateAndWaitForTreeEmptyAsync(CancellationToken cancellation){await inner.TerminateAndWaitForTreeEmptyAsync(cancellation);if(faults.DenyCleanup)throw new IOException("INJECTED_CLEANUP_OBSERVATION_UNKNOWN");}
-  public ValueTask DisposeAsync(){if(faults.DenyCleanup)throw new IOException("INJECTED_DISPOSAL_DENIED");return inner.DisposeAsync();}
- }
-}
-internal sealed class LateHealthAuthorizer:IServiceStartAuthorizer
-{internal TaskCompletionSource<AuthorizedServiceStart> Result=new(TaskCreationOptions.RunContinuationsAsynchronously);public Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken c)=>Result.Task;}
-internal sealed class DisposalObservation:IDisposable{internal bool Disposed;public void Dispose(){Disposed=true;}}
-internal sealed class NeverHealthLauncher:IPrivateAppLauncher
-{public Task<IContainedAppSession> StartAsync(AppRelease r,CancellationToken c)=>throw new Exception("cancelled admission launched a process");public Task WaitForHealthyAsync(IContainedAppSession s,CancellationToken c)=>throw new Exception("no session expected");}
-internal sealed class PassHealthBarrier:IAppRecoveryBarrier{public Task RequireStartAllowedAsync(AppRelease r,CancellationToken c)=>Task.CompletedTask;}

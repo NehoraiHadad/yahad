@@ -169,8 +169,8 @@ public static class WindowsFileBoundary
         return observed.Count==actual.DiscretionaryAcl.Count&&expected.Count==wanted.DiscretionaryAcl.Count&&observed.SetEquals(expected);
     }
     // Installer-owned full-profile reads/deletion. This does not relax the
-    // ordinary role boundary. Only the fixed live Owner closure/Setup image
-    // may carry the explicitly selected original Owner's additional RX ACE.
+    // ordinary role boundary. Only the fixed Setup image may carry the
+    // explicitly selected installing user's additional RX ACE.
     internal static void ValidateInstallerRoleAcl(RawSecurityDescriptor descriptor,InstalledFileRoles roles,InstalledFileRole role,bool directory,SecurityIdentifier? readonlyOwner=null,bool seed=false)
     {
         if(seed){if(directory||readonlyOwner is not null)throw new IOException("UPDATE_SEED_KIND");ValidateInitialSeedAcl(descriptor,roles.Runtime);return;}

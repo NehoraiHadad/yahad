@@ -36,7 +36,7 @@ public static class RuntimeUpdateBridge
         }
         else throw new IOException("RUNTIME_UPDATE_KIND");
         var reply=await WindowsAuthorityEndpoint.SendRuntimeAsync(binding.InstallationId,frame,cancellation);
-        if(kind is "submit" or "defer")return JsonSerializer.SerializeToElement(new{state=reply.State switch{"queued" or "pending" or "approval_required"=>reply.State,"observed" or "recorded"=>"queued",_=>throw new IOException("RUNTIME_UPDATE_RESULT")}});
+        if(kind is "submit" or "defer")return JsonSerializer.SerializeToElement(new{state=reply.State switch{"queued" or "pending"=>reply.State,"observed" or "recorded"=>"queued",_=>throw new IOException("RUNTIME_UPDATE_RESULT")}});
         return Status(reply);
     }
     internal static JsonElement Status(EndpointReply reply)
@@ -45,13 +45,11 @@ public static class RuntimeUpdateBridge
         return JsonSerializer.SerializeToElement(new
         {
             enabled=view.Enabled,mode=reply.Mode,modeControlAllowed=view.ModeControlAllowed,
-            profile=reply.SystemGrant?.Profile,systemGrant=reply.SystemGrant is{} system?new{state=system.State,untilRevoked=system.UntilRevoked,scopes=system.Scopes}:null,
-            delegation=reply.Delegation is{} d?new{state=d.State,expiresUnix=d.ExpiresUnix,remainingOperations=d.RemainingOperations}:null,
             @operator=new{familyId=view.FamilyId,userId=view.UserId},phase=reply.Phase=="stopped"?"idle":reply.Phase,
             currentVersion=view.CurrentVersion,latestVersion=reply.Target?.Version,
             installTarget=reply.Target is{} t?new{version=t.Version,fingerprint=t.Fingerprint}:null,
             lastRequest=reply.LastRequest,lastModeRequest=reply.LastModeRequest,lastUpdateAt=view.LastUpdateUnix*1000,deferredUntil=view.DeferredUntilUnix*1000,
-            checkedAt=view.CheckedAt,updatedAt=view.UpdatedAt,error=view.Error switch{"update_failed" or "quarantined"=>"health","approval_required"=>"configuration","storage"=>"storage","maintenance"=>"maintenance",null=>null,_=>"internal"}
+            checkedAt=view.CheckedAt,updatedAt=view.UpdatedAt,error=view.Error switch{"update_failed" or "quarantined"=>"health","storage"=>"storage","maintenance"=>"maintenance",null=>null,_=>"internal"}
         });
     }
 }

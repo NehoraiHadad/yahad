@@ -1,6 +1,6 @@
 namespace Yahad.Install;
 
-internal enum SystemComponentKind {Authority,RuntimeHost,Owner,Probe,Helper}
+internal enum SystemComponentKind {Authority,RuntimeHost,Probe,Helper}
 
 // Fixed archive prefixes and live destinations are distinct. Probe is selected
 // from its verified operational slot; the immutable baseline probe is untouched.
@@ -10,17 +10,17 @@ internal static class FixedSystemComponents
     internal static string SlotPrefix(SystemComponentKind kind)=>kind switch
     {
         SystemComponentKind.Authority=>"bootstrap/authority",SystemComponentKind.RuntimeHost=>"bootstrap/servicehost",
-        SystemComponentKind.Owner=>"bootstrap/owner",SystemComponentKind.Probe=>"bootstrap/probe",SystemComponentKind.Helper=>"bootstrap/handoff",
+        SystemComponentKind.Probe=>"bootstrap/probe",SystemComponentKind.Helper=>"bootstrap/handoff",
         _=>throw new IOException("SYSTEM_COMPONENT_KIND")
     };
     internal static string EntryPoint(SystemComponentKind kind)=>kind switch
     {
         SystemComponentKind.Authority or SystemComponentKind.Helper=>"Yahad.Authority.exe",SystemComponentKind.RuntimeHost=>"Yahad.ServiceHost.exe",
-        SystemComponentKind.Owner=>"Yahad.Owner.exe",SystemComponentKind.Probe=>"node/node.exe",_=>throw new IOException("SYSTEM_COMPONENT_KIND")
+        SystemComponentKind.Probe=>"node/node.exe",_=>throw new IOException("SYSTEM_COMPONENT_KIND")
     };
     internal static string? ActiveDirectory(SystemComponentKind kind)=>kind switch
     {
-        SystemComponentKind.Authority=>"bootstrap/authority",SystemComponentKind.RuntimeHost=>"host",SystemComponentKind.Owner=>"bootstrap/owner",
+        SystemComponentKind.Authority=>"bootstrap/authority",SystemComponentKind.RuntimeHost=>"host",
         SystemComponentKind.Helper=>"bootstrap/handoff",SystemComponentKind.Probe=>null,_=>throw new IOException("SYSTEM_COMPONENT_KIND")
     };
     internal static void Digest(string value)

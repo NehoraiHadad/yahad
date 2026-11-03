@@ -171,62 +171,6 @@ internal static class InstalledRecoveryTests
             var refused=false;try{using var contender=f.Files.Lease(data);}catch(Exception error)when(error is IOException or System.ComponentModel.Win32Exception){refused=true;}Assert(refused);
             duplicate.Dispose();using var next=f.Files.Lease(data);
         });
-        await check("Actual owner restore retries partial promotion and failed commit with exact output and lease",async()=>
-        {
-            var f=new Fixture(prefix:"tr",probe:nodePath,probeDigest:nodeDigest);var now=DateTimeOffset.UtcNow;DateTimeOffset Clock()=>now;
-            var dataset=f.Files.PathOf("datasets/"+f.Data);var data=Path.Combine(dataset,"data");Directory.CreateDirectory(data);
-            string Put(string relative,object value){var bytes=JsonSerializer.SerializeToUtf8Bytes(value);var path=f.Files.PathOf(relative);Directory.CreateDirectory(Path.GetDirectoryName(path)!);File.WriteAllBytes(path,bytes);return Hash(bytes);}
-            var key=System.Text.Encoding.UTF8.GetBytes(Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)));File.WriteAllBytes(Path.Combine(dataset,"master-key"),key);
-            var policy=System.Text.Encoding.UTF8.GetBytes("policy");var pin=System.Text.Encoding.UTF8.GetBytes("pin");File.WriteAllBytes(Path.Combine(dataset,"update-policy"),policy);File.WriteAllBytes(Path.Combine(dataset,"update-pin"),pin);
-            string Payload(string version)
-            {var bytes=JsonSerializer.SerializeToUtf8Bytes(new{version,files=new[]{new{path="runtime/node/node.exe",size=new FileInfo(nodePath).Length,sha256=nodeDigest}}});var hash=Hash(bytes);Directory.CreateDirectory(f.Files.PathOf("payloads/"+hash));File.WriteAllBytes(f.Files.PathOf("payloads/"+hash+"/bundle.json"),bytes);return hash;}
-            var previous=Payload("0.6.0");var candidate=Payload("0.6.1");var web=new InstalledWeb(1,f.Installation,"https://yahad.invalid",32000);var webDigest=Put("web.json",web);
-            var head=new InstalledActivation(1,f.Installation,1,previous,f.Data,6,6,Hash(key),Hash(policy),Hash(pin),new('d',64),webDigest,"committed",null);
-            void Publish(InstalledActivation current)
-            {
-                var owner=Put("owner-intent.json",new InstalledOwnerIntent(1,f.Installation,current.Epoch,Guid.NewGuid().ToString("N"),current.ReleaseDigest,current.DataId,current.Recovery is null?"activate":"recover","S-1-5-21-1-2-3-1001",now.ToUnixTimeSeconds(),null));
-                var hash=Put("activation.json",current with{OwnerIntentDigest=owner});Put("epoch.json",new InstalledEpoch(1,f.Installation,current.Epoch,hash));Put("bootstrap.json",new{schema=1,service=ServiceDefinition.Name,installationId=f.Installation,activationReceiptDigest=hash});
-            }
-            Publish(head);var anchor=new InstalledAuthorityAnchor(1,f.Installation,ServiceDefinition.Name,InstalledAuthorityReader.AuthorityService,"S-1-5-21-1-2-3-1001",Hash(policy),Hash(pin));
-            using var original=JobProcess.Start(nodePath,["-e","const{DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(process.argv[1]);db.exec('CREATE TABLE schema_version(version INTEGER);INSERT INTO schema_version VALUES(6);CREATE TABLE messages(value INTEGER);INSERT INTO messages VALUES(1)');db.close();",Path.Combine(data,"app.sqlite")],dataset,LaunchEnvironment.Clean(dataset));
-            using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(60));if(await original.WaitAsync(deadline.Token)!=0)throw new IOException("RECOVERY_TEST_WRITER");await original.WaitForTreeEmptyAsync(deadline.Token);
-            var operation=new ProtectedOperation(1,"activate",f.Installation,1,Hash(f.Files.Read(f.Files.PathOf("activation.json"),16384)),candidate,f.Data,6,6,Hash(key),Hash(policy),Hash(pin),web,null,now.AddMinutes(10).ToUnixTimeSeconds(),Guid.NewGuid().ToString("N"));
-            var catalog=new CatalogOperation(1,operation,new("0.6.0","0.6.1","stable",web.Origin,1,Hash(policy),Hash(pin)));
-            var update=InstalledUpdateTransaction.Begin(f.Files,anchor,catalog,Guid.NewGuid().ToString("N"),original.AcquireRecoveryQuiescence(),Clock);
-            await update.BackupAfterQuiescenceAsync(deadline.Token);update.ActivationIntent();Publish(head with{Epoch=2,ReleaseDigest=candidate});
-            Assert(!update.CanRestartPreviousUnchanged);
-            Reject(()=>update.PreparePreviousRestart(Clock),"UPDATE_PREVIOUS_RESTART_CANDIDATE_MAY_HAVE_RUN");
-            update.CandidateStartIntent();
-            using var later=JobProcess.Start(nodePath,["-e","const{DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(process.argv[1]);db.exec('INSERT INTO messages VALUES(2)');db.close();",Path.Combine(data,"app.sqlite")],dataset,LaunchEnvironment.Clean(dataset));
-            if(await later.WaitAsync(deadline.Token)!=0)throw new IOException("RECOVERY_TEST_LATER_WRITER");await later.WaitForTreeEmptyAsync(deadline.Token);var newerBytes=Hash(File.ReadAllBytes(Path.Combine(data,"app.sqlite")));
-            update.Failure();var operationId=update.Evidence.Plan.OperationId;
-            update=await InstalledUpdateTransaction.ResumeAsync(f.Files,anchor,operationId,later.AcquireRecoveryQuiescence(),Clock,deadline.Token);
-            var ledger=new OwnerApprovalLedger(f.Files,f.Installation,anchor.OwnerSid,Clock);var owner=new AuthorityPeer(anchor.OwnerSid,123,1,1,true);
-            CatalogOperation Approve(){var selected=update.PrepareProtectedRecover(Clock);var challenge=ledger.Challenge(selected.Operation);ledger.Approve(owner,new(1,challenge.Id,challenge.Digest,true));return selected;}
-            var approved=Approve();var promotionFailed=false;
-            try{await update.RestoreNewAsync(ledger,approved,deadline.Token,stage=>{if(stage=="recovery-role-published"&&!promotionFailed){promotionFailed=true;throw new IOException("SYNTHETIC_TRANSACTION_PROMOTION_CRASH");}});}
-            catch(IOException failure)when(failure.Message=="SYNTHETIC_TRANSACTION_PROMOTION_CRASH"){}
-            Assert(promotionFailed&&Hash(File.ReadAllBytes(Path.Combine(data,"app.sqlite")))==newerBytes);
-            update.Failure();update=await InstalledUpdateTransaction.ResumeAsync(f.Files,anchor,operationId,later.AcquireRecoveryQuiescence(),Clock,deadline.Token);
-            approved=Approve();var first=await update.RestoreNewAsync(ledger,approved,deadline.Token);var restoredData=Path.Combine(first.RestoredDirectory,"data");
-            // This fixture's prior manifest deliberately omits the native bundle
-            // contract. The actual writer borrows the real held data lease, then
-            // refuses that candidate during preflight before publishing head.
-            var commit=new ProtectedStateTransactionWriter(f.Files,f.Installation,later.WaitForTreeEmptyAsync,ledger,new UnusedChannels(),Clock);
-            commit.UseCommitDataLease(update.DuplicateLease);var refusedCommit=false;
-            try{await commit.CommitAsync(approved.Operation,cancellation:deadline.Token);}catch(KeyNotFoundException){refusedCommit=true;}
-            Assert(refusedCommit&&Hash(f.Files.Read(f.Files.PathOf("activation.json"),16384))==approved.Operation.ExpectedActivationDigest);
-            update.Failure();update=await InstalledUpdateTransaction.ResumeAsync(f.Files,anchor,operationId,later.AcquireRecoveryQuiescence(),Clock,deadline.Token);
-            approved=Approve();var second=await update.RestoreNewAsync(ledger,approved,deadline.Token);
-            Assert(first.OperationId==second.OperationId&&first.RestoredDirectory==second.RestoredDirectory&&Hash(File.ReadAllBytes(Path.Combine(data,"app.sqlite")))==newerBytes);
-            var blocked=false;try{using var other=f.Files.Lease(restoredData);}catch(Exception e)when(e is IOException or System.ComponentModel.Win32Exception){blocked=true;}Assert(blocked);
-            // Private control fixture stands in for the separately tested writer;
-            // this assertion targets retry ownership, not installed acceptance.
-            var recovered=approved.Operation;Publish(head with{Epoch=3,DataId=recovered.DataId,Recovery=recovered.Recovery});
-            var binding=WindowsInstallationReader.Parse(f.Files.Read(f.Files.PathOf("bootstrap.json"),1024));update.ReleaseForRollbackStart(binding);
-            using var verify=JobProcess.Start(nodePath,["-e","const{DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(process.argv[1],{readOnly:true});if(db.prepare('SELECT COUNT(*) AS n FROM messages').get().n!==1)process.exitCode=2;db.close();",Path.Combine(restoredData,"app.sqlite")],dataset,LaunchEnvironment.Clean(dataset));
-            if(await verify.WaitAsync(deadline.Token)!=0)throw new IOException("RECOVERY_TEST_RESTORED_BYTES");await verify.WaitForTreeEmptyAsync(deadline.Token);update.MarkRollbackComplete(binding);
-        });
     }
     private static string Hash(byte[] bytes)=>Convert.ToHexStringLower(SHA256.HashData(bytes));
     private sealed class UnusedChannels:IChildControlFactory{public IChildControl Create()=>throw new IOException("RECOVERY_TEST_UNEXPECTED_CHANNEL");}

@@ -149,7 +149,7 @@ internal sealed class SystemBootstrapJournal:IDisposable
                 SystemBootstrapPhase.RollbackIntent=>true,
                 SystemBootstrapPhase.RolledBack=>last.Phase==SystemBootstrapPhase.RollbackIntent,
                 SystemBootstrapPhase.CustodyConfirmed=>last.Phase==SystemBootstrapPhase.Prepared,
-                SystemBootstrapPhase.ComponentIntent=>last.Phase==SystemBootstrapPhase.CustodyConfirmed&&value.Component==SystemComponentKind.RuntimeHost||last.Phase==SystemBootstrapPhase.ComponentPublished&&(last.Component,value.Component) is (SystemComponentKind.RuntimeHost,SystemComponentKind.Owner) or (SystemComponentKind.Owner,SystemComponentKind.Probe) or (SystemComponentKind.Probe,SystemComponentKind.Authority),
+                SystemBootstrapPhase.ComponentIntent=>last.Phase==SystemBootstrapPhase.CustodyConfirmed&&value.Component==SystemComponentKind.RuntimeHost||last.Phase==SystemBootstrapPhase.ComponentPublished&&(last.Component,value.Component) is (SystemComponentKind.RuntimeHost,SystemComponentKind.Probe) or (SystemComponentKind.Probe,SystemComponentKind.Authority),
                 SystemBootstrapPhase.ComponentPublished=>last.Phase==SystemBootstrapPhase.ComponentIntent&&last.Component==value.Component,
                 SystemBootstrapPhase.AuthorityStartIntent=>last.Phase==SystemBootstrapPhase.ComponentPublished&&last.Component==SystemComponentKind.Authority,
                 SystemBootstrapPhase.AuthorityHealthy=>last.Phase==SystemBootstrapPhase.AuthorityStartIntent,
@@ -214,7 +214,7 @@ internal sealed class SystemBootstrapHandoff(ISystemBootstrapKernel kernel,Func<
             helperAttempted=true;await kernel.VerifyHelperCandidateAsync(operation,cancellation);
             await kernel.RequireCustodyAsync(operation,cancellation);await kernel.RequireDataUnchangedAsync(operation,cancellation);
             journal.Append(SystemBootstrapPhase.CustodyConfirmed,before,fault:fault);disrupted=true;
-            foreach(var kind in new[]{SystemComponentKind.RuntimeHost,SystemComponentKind.Owner,SystemComponentKind.Probe,SystemComponentKind.Authority})
+            foreach(var kind in new[]{SystemComponentKind.RuntimeHost,SystemComponentKind.Probe,SystemComponentKind.Authority})
             {
                 await requireCurrent(operation,cancellation);journal.Append(SystemBootstrapPhase.ComponentIntent,before,kind,fault);
                 await kernel.PublishComponentAsync(operation,before,kind,cancellation);journal.Append(SystemBootstrapPhase.ComponentPublished,before,kind,fault);

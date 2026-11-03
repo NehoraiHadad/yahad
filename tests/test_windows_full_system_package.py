@@ -72,7 +72,6 @@ class FullSystemPackageTests(unittest.TestCase):
         root=self.root/artifact;root.mkdir()
         for name in (artifact+'.exe',artifact+'.dll','coreclr.dll','hostfxr.dll','hostpolicy.dll','System.Private.CoreLib.dll'):self.put(root,name,image())
         frameworks=[dict(name='Microsoft.NETCore.App',version=full.RUNTIME_VERSION)]
-        if artifact=='Yahad.Owner':frameworks.append(dict(name='Microsoft.WindowsDesktop.App',version=full.RUNTIME_VERSION))
         self.put(root,artifact+'.runtimeconfig.json',json.dumps(dict(runtimeOptions=dict(includedFrameworks=frameworks))))
         libraries={'runtimepack.Microsoft.NETCore.App.Runtime.win-x64/'+full.RUNTIME_VERSION:dict(runtime={artifact+'.dll':{},'System.Private.CoreLib.dll':{}},native={'coreclr.dll':{},'hostfxr.dll':{},'hostpolicy.dll':{}})}
         self.put(root,artifact+'.deps.json',json.dumps(dict(runtimeTarget=dict(name='net10.0/win-x64'),targets={'net10.0/win-x64':libraries})))
@@ -173,14 +172,6 @@ class FullSystemPackageTests(unittest.TestCase):
             files=full.validate_native(root,'Yahad.Authority',VERSION,SOURCE,self.repo)
             self.assertIn('coreclr.dll',files);audit.assert_called_once_with(root/'Yahad.Authority.exe','--describe',self.repo)
         with patch.object(full,'describe_build_artifact',return_value=dict(description,sourceCommit='b'*40)),self.assertRaises(ValueError):full.validate_native(root,'Yahad.Authority',VERSION,SOURCE,self.repo)
-
-    def test_owner_needs_private_desktop_runtime_and_exact_runtime_version(self):
-        root=self.native('Yahad.Owner');path=root/'Yahad.Owner.runtimeconfig.json';valid=json.loads(path.read_text())
-        with patch.object(full,'describe_build_artifact',return_value=self.audit('Yahad.Owner')):full.validate_native(root,'Yahad.Owner',VERSION,SOURCE,self.repo)
-        for frameworks in ([dict(name='Microsoft.NETCore.App',version=full.RUNTIME_VERSION)], [dict(name='Microsoft.NETCore.App',version=full.RUNTIME_VERSION),dict(name='Microsoft.WindowsDesktop.App',version='10.0.13')]):
-            path.write_text(json.dumps(dict(runtimeOptions=dict(includedFrameworks=frameworks))))
-            with self.subTest(frameworks=frameworks),self.assertRaisesRegex(full.PackageError,'framework closure'):full.validate_native(root,'Yahad.Owner',VERSION,SOURCE,self.repo)
-        path.write_text(json.dumps(valid))
 
     def test_missing_dependency_and_nonprivate_native_import_fail_before_audit(self):
         root=self.native();(root/'coreclr.dll').unlink()

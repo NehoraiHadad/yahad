@@ -33,10 +33,9 @@ internal interface IFullSystemExecutionKernel
 }
 
 // The existing protected router/scheduler calls this single execution path for
-// full enrollments. Legacy routine approval, source transport and scheduling are
-// retained. A successful helper handoff ends this Authority's work; the new
+// full enrollments. Source transport and scheduling are retained. A successful helper handoff ends this Authority's work; the new
 // Authority resumes from the SAME protected admission and native journals.
-internal sealed class FullSystemUpdateCoordinator(FullSystemUpdatePolicy policy,OwnerApprovalLedger ledger,IFullSystemExecutionKernel kernel)
+internal sealed class FullSystemUpdateCoordinator(FullSystemUpdatePolicy policy,IFullSystemExecutionKernel kernel)
 {
     private readonly SemaphoreSlim serial=new(1,1);
     private string phase="idle";private bool candidateStartIssued;
@@ -57,7 +56,7 @@ internal sealed class FullSystemUpdateCoordinator(FullSystemUpdatePolicy policy,
             await kernel.RequireNoOtherUnfinishedAsync(request.OperationId,cancellation);
             while(session is null)
             {
-                await RequireAdmissionAsync(request,cancellation);
+                RequireAdmission(request,cancellation);
                 session=await kernel.TryAcquireIdleAsync(request.OperationId,cancellation);
                 if(session is null){phase="waiting_for_idle";await Task.Delay(TimeSpan.FromSeconds(5),cancellation);}
             }
@@ -67,7 +66,7 @@ internal sealed class FullSystemUpdateCoordinator(FullSystemUpdatePolicy policy,
                 if(manual.OperationId!=request.OperationId||manual.SourceReceiptDigest!=request.SourceReceiptDigest||
                     observed!=new FullSystemInstalledState(manual.FromVersion,manual.BootstrapEpoch,manual.ActivationDigest,manual.SourceSchema,manual.BootstrapVersion))
                     throw new UnauthorizedAccessException("FULL_SYSTEM_MANUAL_SOURCE_CHANGED");
-                operation=await policy.AuthorizeManualAsync(manual,ledger,cancellation);
+                operation=policy.AuthorizeManual(manual);
             }
             else operation=policy.Authorize(request.OperationId,request.SourceReceiptDigest,observed);
             phase="backing_up";await session.PrepareBootstrapAndBackupAsync(operation,cancellation);
@@ -106,12 +105,10 @@ internal sealed class FullSystemUpdateCoordinator(FullSystemUpdatePolicy policy,
         }
         finally{try{if(session is not null)await DisposeOwnedAsync(session,request.OperationId);}finally{serial.Release();}}
     }
-    private async Task RequireAdmissionAsync(FullSystemDispatchRequest request,CancellationToken cancellation)
+    private void RequireAdmission(FullSystemDispatchRequest request,CancellationToken cancellation)
     {
         cancellation.ThrowIfCancellationRequested();_=policy.Enrollment;
-        if(request.ManualApproval is {} manual)
-        {var proof=await ledger.AuthenticateAsync(AuthorityProtocol.Digest(manual),"activate-system",cancellation);ledger.RequireCurrent(proof);}
-        else _=policy.CurrentGrant();
+        if(request.ManualApproval is null)_=policy.CurrentGrant();
     }
     private async Task CompleteCandidateAsync(IFullSystemExecutionSession session,VerifiedSystemOperation operation,CancellationToken cancellation)
     {

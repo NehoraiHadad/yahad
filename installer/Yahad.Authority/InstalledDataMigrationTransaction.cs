@@ -42,7 +42,7 @@ internal sealed class InstalledDataMigrationTransaction:IDisposable,IProbationEf
         policy.RequireCurrent(system);var complete=bootstrap.Current??throw new IOException("DATA_MIGRATION_BOOTSTRAP_REQUIRED");
         if(complete.Phase is not(SystemBootstrapPhase.Prepared or SystemBootstrapPhase.CustodyConfirmed or SystemBootstrapPhase.Complete)||complete.OperationId!=system.OperationId||complete.InstallationId!=system.InstallationId||complete.ManifestDigest!=system.ManifestDigest||
             complete.GrantId!=system.GrantId||complete.GrantBindingDigest!=system.GrantBindingDigest||system.TargetSchema<system.SourceSchema)throw new IOException("DATA_MIGRATION_BOOTSTRAP_BINDING");
-        var head=new InstalledIntakeSelection(files,anchor,clock).Head();var originalBytes=files.Read(files.PathOf("activation.json"),16384);var headDigest=InstalledActivationResolver.Hash(originalBytes);
+        var head=new InstalledIntakeSelection(files,anchor).Head();var originalBytes=files.Read(files.PathOf("activation.json"),16384);var headDigest=InstalledActivationResolver.Hash(originalBytes);
         if(headDigest!=system.PreviousActivationDigest||head.InstallationId!=system.InstallationId||system.SourceSchema<head.MinimumSchema||system.SourceSchema>head.MaximumSchema)throw new IOException("DATA_MIGRATION_SOURCE_HEAD");
         _=RequirePayload(files,system);
         if(string.IsNullOrEmpty(files.ProbeExecutable)||string.IsNullOrEmpty(files.ProbeDigest))throw new IOException("DATA_MIGRATION_IMMUTABLE_PROBE_REQUIRED");
@@ -150,18 +150,18 @@ internal sealed class InstalledDataMigrationTransaction:IDisposable,IProbationEf
         if(paths.Count==0)return;if(paths.Count!=1)throw new IOException("FULL_DATA_PENDING_AMBIGUOUS");
         var pending=NativeJson.Read<ProtectedPending>(files.Read(paths[0],128*1024));
         var exact=candidates.SingleOrDefault(x=>AuthorityProtocol.Digest(x)==AuthorityProtocol.Digest(pending.Operation))??throw new IOException("FULL_DATA_PENDING_UNKNOWN_OPERATION");
-        IOwnerOperationAuthentication auth;
+        IOperationAuthentication auth;
         if(exact==operation)
         {
             var compatible=RequiresMigration?null:new FullCompatibleClone(exact.Nonce,sourceDataId,exact.Recovery!.OperationId,exact.DataId,backup!.BackupId,backup.ReceiptDigest,sourceRestore);
-            auth=new FullSystemOperationAuthentication(policy,system,exact,anchor.OwnerSid,clock,beforeBytes,compatible,pending.Owner);
+            auth=new FullSystemOperationAuthentication(policy,system,exact,clock,beforeBytes,compatible,pending.Approval);
         }
         else
         {
             if(!pending.Before.TryGetValue("activation.json",out var encoded))throw new IOException("FULL_DATA_RETURN_BEFORE_REQUIRED");
-            auth=new FullSystemSelectionAuthentication(policy,system,journal,beforeBytes,Convert.FromBase64String(encoded),exact,clock,pending.Owner);
+            auth=new FullSystemSelectionAuthentication(policy,system,journal,beforeBytes,Convert.FromBase64String(encoded),exact,clock,pending.Approval);
         }
-        var head=new InstalledActivation(1,exact.InstallationId,exact.ExpectedEpoch,exact.ReleaseDigest,exact.DataId,exact.MinimumSchema,exact.MaximumSchema,exact.MasterKeyDigest,exact.PolicyDigest,exact.PinDigest,"","","committed",exact.Recovery,exact.Migration);
+        var head=new InstalledActivation(1,exact.InstallationId,exact.ExpectedEpoch,exact.ReleaseDigest,exact.DataId,exact.MinimumSchema,exact.MaximumSchema,exact.MasterKeyDigest,exact.PolicyDigest,exact.PinDigest,"","committed",exact.Recovery,exact.Migration);
         var directory=SourceDirectory(files,head);using var lease=VerifiedMigrationSpec.Same(directory,SourceDirectory(files,before))?sourceLease.DuplicateForDirectory(directory):cloneLease?.DuplicateForDirectory(directory)??files.Lease(directory);
         var writer=new ProtectedStateTransactionWriter(files,anchor.InstallationId,(recoveryGeneration??sourceGeneration).RequireAsync,auth,channels,clock);
         writer.UseCommitDataLease(path=>lease.DuplicateForDirectory(path));await writer.ResumeAsync(exact,cancellation:cancellation);
@@ -257,7 +257,7 @@ internal sealed class InstalledDataMigrationTransaction:IDisposable,IProbationEf
     {
         var selected=operation??PrepareOperation();policy.RequireCurrent(system);await sourceGeneration.RequireAsync(cancellation);journal.Append(UpdateCheckpoint.ActivationIntent);
         var compatible=RequiresMigration?null:new FullCompatibleClone(selected.Nonce,sourceDataId,compatibleClone!.OperationId,selected.DataId,backup!.BackupId,backup.ReceiptDigest,sourceRestore);
-        var auth=new FullSystemOperationAuthentication(policy,system,selected,anchor.OwnerSid,clock,beforeBytes,compatible);
+        var auth=new FullSystemOperationAuthentication(policy,system,selected,clock,beforeBytes,compatible);
         var writer=new ProtectedStateTransactionWriter(files,anchor.InstallationId,sourceGeneration.RequireAsync,auth,channels,clock);
         writer.UseCommitDataLease(path=>(cloneLease??throw new IOException("DATA_MIGRATION_CLONE_LEASE_REQUIRED")).DuplicateForDirectory(path));
         return await writer.CommitAsync(selected,cancellation:cancellation);
@@ -381,9 +381,9 @@ internal sealed class InstalledDataMigrationTransaction:IDisposable,IProbationEf
         {if(Evidence.Checkpoint is not(UpdateCheckpoint.Healthy or UpdateCheckpoint.FullRollbackComplete or UpdateCheckpoint.Aborted))throw new IOException("TERMINAL_RESTART_NOT_TERMINAL");}
         else if(!journal.EffectsMayHaveBeenReleased||Evidence.Checkpoint is not(UpdateCheckpoint.EffectsReleaseIntent or UpdateCheckpoint.RecoveryRequired or UpdateCheckpoint.ForwardRepairEffectsIntent or UpdateCheckpoint.CurrentAvailabilityStartIntent))throw new IOException("CURRENT_RESTART_EFFECTS_REQUIRED");
         if(expected.InstallationId!=anchor.InstallationId||Path.Exists(files.PathOf("pending.json"))||Directory.EnumerateFileSystemEntries(files.Root).Any(p=>Path.GetFileName(p).Contains(".partial-",StringComparison.Ordinal)))throw new IOException("TERMINAL_RESTART_PENDING_CONTROL");
-        var bytes=files.Read(files.PathOf("activation.json"),16384);var digest=InstalledActivationResolver.Hash(bytes);var head=new InstalledIntakeSelection(files,anchor,clock).Head();
+        var bytes=files.Read(files.PathOf("activation.json"),16384);var digest=InstalledActivationResolver.Hash(bytes);var head=new InstalledIntakeSelection(files,anchor).Head();
         if(digest!=expected.ActivationReceiptDigest||head.MasterKeyDigest!=before.MasterKeyDigest||head.PolicyDigest!=before.PolicyDigest||head.PinDigest!=before.PinDigest)throw new IOException("TERMINAL_RESTART_HEAD_CHANGED");
-        if(InstalledActivationResolver.Hash(files.Read(files.PathOf("owner-intent.json"),16384))!=head.OwnerIntentDigest||InstalledActivationResolver.Hash(files.Read(files.PathOf("web.json"),16384))!=head.WebDigest)throw new IOException("TERMINAL_RESTART_CONTROL_IDENTITY");
+        if(InstalledActivationResolver.Hash(files.Read(files.PathOf("web.json"),16384))!=head.WebDigest)throw new IOException("TERMINAL_RESTART_CONTROL_IDENTITY");
         if(!terminal||Evidence.Checkpoint==UpdateCheckpoint.Healthy)
         {
             var selected=operation??throw new IOException("TERMINAL_RESTART_CANDIDATE_REQUIRED");

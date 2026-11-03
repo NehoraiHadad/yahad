@@ -33,8 +33,6 @@ internal static class QuietSetup
         {
             var update=Consent(request,InstallPackage.EmbeddedFullProfile(),MainWindow.HasExistingUpdateInstallation(),DateTimeOffset.UtcNow);
             result=await SetupElevation.RunAsync(request.Uninstall,Progress,CancellationToken.None,request.Mode,null,update:update);
-            if(result.Ok&&result.FullProfileInstallationId is {} installation)
-            {if(request.Uninstall)OwnerShortcuts.TryRemove(installation);else OwnerShortcuts.TryCreate(installation);}
             if(result.Ok&&request.Uninstall)ShortcutCleanup.TryRemove(result.Url);
         }
         catch(Exception error){result=new(false,SetupElevation.Code(error),Failure:SetupFailureDetail.From(error));}

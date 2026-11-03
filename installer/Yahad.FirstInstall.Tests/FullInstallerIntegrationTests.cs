@@ -66,7 +66,7 @@ internal static class FullInstallerIntegrationTests
         });
         await check("full installer parses source-bound baseline using policy protocol 2 without a fake GitHub receipt",()=>
         {
-            var system=System();Assert(system.Components.Count==5&&system.Protocols["policy"].Writer==2&&system.SourceCommit==ApplicationRelease.SourceCommit);
+            var system=System();Assert(system.Components.Count==4&&system.Protocols["policy"].Writer==2&&system.SourceCommit==ApplicationRelease.SourceCommit);
             Deny(()=>SystemCandidateDescriptor.ValidateInstaller(system.ManifestBytes,system.ApplicationManifestBytes,system.Version,new string('a',40),6,19045));
             return Task.CompletedTask;
         });
@@ -77,8 +77,8 @@ internal static class FullInstallerIntegrationTests
             var state=State(system,installation,owner,choice);FullUpdateInstallerPlan.ValidatePinned(plan,state,system,new string('b',64),new string('c',64));
             var encoded=Json(plan);var reread=JsonSerializer.Deserialize<FullUpdateInstallPlan>(encoded)!;FullUpdateInstallerPlan.ValidatePinned(reread,state,system,new string('b',64),new string('c',64));Assert(Json(reread).SequenceEqual(encoded));
             var binding=JsonSerializer.Deserialize<NativeUpdateEnrollment>(plan.Enrollment.OperatorBinding)!;Assert(binding.FamilyId==owner.familyId&&binding.UserId==owner.parentUserId);
-            Assert(plan.Records.Any(r=>r.Path.StartsWith("owner-ledger/system-grant-",StringComparison.Ordinal))==automatic);
-            foreach(var changed in new[]{state with{OwnerSid="S-1-5-21-1-2-3-1002"},state with{FirstOwner=owner with{familyId=Guid.NewGuid().ToString("D")}},state with{Consent=choice with{Automatic=!automatic}}})Deny(()=>FullUpdateInstallerPlan.ValidatePinned(plan,changed,system,new string('b',64),new string('c',64)));
+            Assert(plan.Records.Any(r=>r.Path.StartsWith("grants/system-grant-",StringComparison.Ordinal))==automatic);
+            foreach(var changed in new[]{state with{FirstOwner=owner with{familyId=Guid.NewGuid().ToString("D")}},state with{Consent=choice with{Automatic=!automatic}}})Deny(()=>FullUpdateInstallerPlan.ValidatePinned(plan,changed,system,new string('b',64),new string('c',64)));
             var records=plan.Records.ToArray();records[0]=records[0] with{Bytes=[1,2,3]};Deny(()=>FullUpdateInstallerPlan.ValidatePinned(plan with{Records=records},state,system,new string('b',64),new string('c',64)));
             return Task.CompletedTask;
         });
@@ -162,10 +162,10 @@ internal static class FullInstallerIntegrationTests
             var state=State(System(),Guid.NewGuid().ToString("N"),null,null);
             var recovery=new InstalledRecovery(Guid.NewGuid().ToString("N"),Guid.NewGuid().ToString("N"),Guid.NewGuid().ToString("N"),new string('f',64),Guid.NewGuid().ToString("N"));
             var web=Json(new InstalledWeb(1,state.InstallationId,"http://127.0.0.1:"+state.Port,state.Port));
-            var head=new InstalledActivation(1,state.InstallationId,3,state.PayloadDigest,Guid.NewGuid().ToString("N"),6,6,new string('a',64),new string('b',64),new string('c',64),new string('d',64),Hash(web),"committed",recovery);
+            var head=new InstalledActivation(1,state.InstallationId,3,state.PayloadDigest,Guid.NewGuid().ToString("N"),6,6,new string('a',64),new string('b',64),new string('c',64),Hash(web),"committed",recovery);
             var bytes=Json(head);var before=new LanWebSnapshot(web,bytes,Json(new InstalledEpoch(1,state.InstallationId,3,Hash(bytes))),Json(new{schema=1,service=InstallLocations.ServiceName,installationId=state.InstallationId,activationReceiptDigest=Hash(bytes)}));
             var application=NativeLanInstall.FullApplication(state,head);var after=LanWebConfiguration.WithOrigin(before,application,"https://192.168.4.5");
-            var observed=JsonSerializer.Deserialize<InstalledActivation>(after.Activation)!;Assert(observed.Recovery==recovery&&observed.DataId==head.DataId&&observed.OwnerIntentDigest==head.OwnerIntentDigest);
+            var observed=JsonSerializer.Deserialize<InstalledActivation>(after.Activation)!;Assert(observed.Recovery==recovery&&observed.DataId==head.DataId);
             Assert(NativeFullSystemSetupHost.CurrentDataPath(head)==Path.Combine(InstallLocations.State,"datasets",recovery.SourceDataId,"restore-"+recovery.OperationId,"completed","data"));
             Assert(NativeFullSystemSetupHost.CurrentDataPath(head)!=recovery.SourceDirectory(InstallLocations.State));
             Deny(()=>LanWebConfiguration.Require(before,application with{CurrentRecovery=null}));
@@ -179,18 +179,18 @@ internal static class FullInstallerIntegrationTests
             }
             Deny(()=>LanWebConfiguration.RequireInstallerPartial(journal,"owner-intent.json",[]));return Task.CompletedTask;
         });
-        await check("local Owner bootstrap requires its exact immutable full-profile installation anchor",()=>
+        await check("local loopback bootstrap requires its exact immutable full-profile installation anchor",()=>
         {
             var id=Guid.NewGuid().ToString("N");
-            byte[] Anchor(string? full)=>Json(new{Format=1,InstallationId=id,RuntimeService=InstalledUpdaterLayout.RuntimeServiceName,AuthorityService=InstalledUpdaterLayout.AuthorityServiceName,OwnerSid=Owner,IntakePolicyDigest=new string('a',64),IntakePinDigest=new string('b',64),ProbeSha256=new string('c',64),FullSystemPolicyDigest=full});
-            Assert(InstalledUpdaterLayout.AllowsOwnerLoopback(Anchor(new string('d',64)),id));Assert(!InstalledUpdaterLayout.AllowsOwnerLoopback(Anchor(null),id));
-            Deny(()=>InstalledUpdaterLayout.AllowsOwnerLoopback(Anchor(new string('d',64)),Guid.NewGuid().ToString("N")));Deny(()=>InstalledUpdaterLayout.AllowsOwnerLoopback(Anchor("bad"),id));return Task.CompletedTask;
+            byte[] Anchor(string? full)=>Json(new{Format=1,InstallationId=id,RuntimeService=InstalledUpdaterLayout.RuntimeServiceName,AuthorityService=InstalledUpdaterLayout.AuthorityServiceName,IntakePolicyDigest=new string('a',64),IntakePinDigest=new string('b',64),ProbeSha256=new string('c',64),FullSystemPolicyDigest=full});
+            Assert(InstalledUpdaterLayout.AllowsLoopbackOrigin(Anchor(new string('d',64)),id));Assert(!InstalledUpdaterLayout.AllowsLoopbackOrigin(Anchor(null),id));
+            Deny(()=>InstalledUpdaterLayout.AllowsLoopbackOrigin(Anchor(new string('d',64)),Guid.NewGuid().ToString("N")));Deny(()=>InstalledUpdaterLayout.AllowsLoopbackOrigin(Anchor("bad"),id));return Task.CompletedTask;
         });
-        await check("full-profile consent crosses authenticated elevation framing without changing Owner or LAN selection",()=>
+        await check("full-profile consent crosses authenticated elevation framing without changing LAN selection",()=>
         {
             var choice=new UpdateSetupChoice(2,true,true,DateTimeOffset.UtcNow.ToUnixTimeSeconds());var wire=new SetupWire(1,"install",null,null,Update:choice);
             var observed=JsonSerializer.Deserialize<SetupWire>(Json(wire))!;Assert(observed.Update==choice&&observed.Lan is null&&observed.Removal is null);
-            Assert(OwnerShortcuts.Arguments("confirm",new string('a',32))=="--confirm "+new string('a',32));Deny(()=>OwnerShortcuts.Arguments("run",new string('a',32)));Deny(()=>OwnerShortcuts.Arguments("recover","../path"));return Task.CompletedTask;
+            return Task.CompletedTask;
         });
         await check("state-only preserved installation never displays a fresh updater consent choice",()=>
         {
@@ -239,7 +239,7 @@ internal static class FullInstallerIntegrationTests
     private static InstallPackage LayoutPackage(bool full,bool duplicate,bool missing)
     {
         var names=new List<string>{"payload/bundle.json","payload/runtime/node/node.exe","payload/runtime/ffmpeg/ffmpeg.exe","payload/runtime/caddy/caddy.exe","payload/app/server/main.mjs","payload/app/dist/index.html","payload/app/native/Yahad.Platform.exe","payload/legal/fixture.json"};
-        names.AddRange(full?new[]{"system-manifest.json","bootstrap/authority/Yahad.Authority.exe","bootstrap/owner/Yahad.Owner.exe","bootstrap/servicehost/Yahad.ServiceHost.exe","bootstrap/servicehost/Yahad.ServiceHost.runtimeconfig.json","bootstrap/probe/node/node.exe","bootstrap/handoff/Yahad.Authority.exe"}:new[]{"host/Yahad.ServiceHost.exe","host/Yahad.ServiceHost.runtimeconfig.json"});
+        names.AddRange(full?new[]{"system-manifest.json","bootstrap/authority/Yahad.Authority.exe","bootstrap/servicehost/Yahad.ServiceHost.exe","bootstrap/servicehost/Yahad.ServiceHost.runtimeconfig.json","bootstrap/probe/node/node.exe","bootstrap/handoff/Yahad.Authority.exe"}:new[]{"host/Yahad.ServiceHost.exe","host/Yahad.ServiceHost.runtimeconfig.json"});
         if(duplicate)names.Add("host/Yahad.ServiceHost.exe");if(missing)names.Remove("bootstrap/servicehost/Yahad.ServiceHost.runtimeconfig.json");
         var stream=new MemoryStream();using(var zip=new ZipArchive(stream,ZipArchiveMode.Create,true))foreach(var name in names){using var entry=zip.CreateEntry(name).Open();entry.WriteByte(1);}
         var bytes=stream.ToArray();stream.Position=0;var sha=Hash([1]);
@@ -255,7 +255,7 @@ internal static class FullInstallerIntegrationTests
     {
         var application=Json(new{schema=1,kind="windows-runtime-candidate",profile="full",target="win-x64",version=ApplicationRelease.Version,authority="application-updater"});var sha=new string('a',64);
         var components=Enum.GetValues<SystemComponentKind>().Select(kind=>new{kind=kind.ToString(),prefix=FixedSystemComponents.SlotPrefix(kind),entryPoint=FixedSystemComponents.EntryPoint(kind),entrySha256=sha,files=new[]{new{path=FixedSystemComponents.EntryPoint(kind),size=10,sha256=sha},new{path="build-identity.json",size=10,sha256=sha}}});
-        var protocols=new[]{"system","handoff","authorityRuntime","ownerAuthority","activation","journal","recovery","policy"}.ToDictionary(n=>n,n=>new{minimumReader=n=="policy"?2:1,maximumReader=n=="policy"?2:1,writer=n=="policy"?2:1});
+        var protocols=new[]{"system","handoff","authorityRuntime","activation","journal","recovery","policy"}.ToDictionary(n=>n,n=>new{minimumReader=n=="policy"?2:1,maximumReader=n=="policy"?2:1,writer=n=="policy"?2:1});
         var manifest=Json(new{format=2,kind="windows-system-candidate",profile="full-system-v1",target="win-x64",version=ApplicationRelease.Version,sourceCommit=ApplicationRelease.SourceCommit,minimumWindowsBuild=19045,applicationManifestSha256=Hash(application),database=new{targetSchema=6,migrationsFrom=new[]{1,2,3,4,5}},protocols,components});
         return SystemCandidateDescriptor.ValidateInstaller(manifest,application,ApplicationRelease.Version,ApplicationRelease.SourceCommit,6,19045);
     }

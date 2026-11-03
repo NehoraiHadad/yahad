@@ -29,7 +29,7 @@ internal sealed class SystemBootstrapNative:ISystemBootstrapKernel
     {if(helperQuiescence is not null||oldHelper is null||value.RootProcessId!=(int)GetProcessId(oldHelper))throw new IOException("SYSTEM_HELPER_TREE_BINDING");helperQuiescence=value;}
     internal void ConfigureHelperPublication(ISystemBootstrapHelperPublication value)
     {if(helperPublication is not null)throw new IOException("SYSTEM_HELPER_PUBLICATION_ALREADY_CONFIGURED");helperPublication=value;}
-    private readonly SecurityIdentifier authoritySid,runtimeSid,ownerSid;
+    private readonly SecurityIdentifier authoritySid,runtimeSid;
     // Handles/leases are transferred actual native owners, not request fields.
     // The full coordinator must duplicate them into the bounded helper BEFORE
     // stopping old Authority. JobProcess.Start alone does not survive its owning
@@ -45,7 +45,7 @@ internal sealed class SystemBootstrapNative:ISystemBootstrapKernel
         this.dataLease=dataLease;this.dataDirectory=dataDirectory;this.authorityHealth=authorityHealth;this.runtimeBootstrap=runtimeBootstrap;this.dataUnchanged=dataUnchanged;this.helperHealth=helperHealth;
         this.requireCurrent=requireCurrent;
         if(state.Roles is null||binaries.Roles is null||state.Root!=InstalledUpdaterLayout.StateRoot||binaries.Root!=InstalledUpdaterLayout.BinaryRoot)throw new IOException("SYSTEM_BOOTSTRAP_INSTALLED_ROOTS");
-        authoritySid=state.Roles.Authority;runtimeSid=state.Roles.Runtime;ownerSid=new(anchor.OwnerSid);RequireAuthority();
+        authoritySid=state.Roles.Authority;runtimeSid=state.Roles.Runtime;RequireAuthority();
     }
     private void RequireAuthority()=>_=InstalledAuthorityReader.RequireUpdater();
     private void Bind(VerifiedSystemOperation operation)
@@ -168,7 +168,7 @@ internal sealed class SystemBootstrapNative:ISystemBootstrapKernel
     private static void ValidateSnapshot(VerifiedSystemOperation operation,SystemBootstrapSnapshot value)
     {
         FixedSystemComponents.Digest(value.ManifestDigest);if(value.OperationalProbeDigest is {} probe)FixedSystemComponents.Digest(probe);
-        if(value.Format!=1||value.InstallationId!=operation.InstallationId||value.Epoch!=operation.ExpectedBootstrapEpoch||value.Version!=operation.BootstrapFromVersion||value.Components.Length!=5||value.Components.Select(c=>c.Kind).Distinct().Count()!=5)throw new IOException("SYSTEM_BOOTSTRAP_PREVIOUS_SELECTION");
+        if(value.Format!=1||value.InstallationId!=operation.InstallationId||value.Epoch!=operation.ExpectedBootstrapEpoch||value.Version!=operation.BootstrapFromVersion||value.Components.Length!=4||value.Components.Select(c=>c.Kind).Distinct().Count()!=4)throw new IOException("SYSTEM_BOOTSTRAP_PREVIOUS_SELECTION");
         foreach(var component in value.Components)
         {
             _=new SystemComponentDescriptor(component.Kind,FixedSystemComponents.SlotPrefix(component.Kind),component.EntryPoint,component.EntrySha256,
@@ -392,7 +392,7 @@ internal sealed class SystemBootstrapNative:ISystemBootstrapKernel
             {
                 if(raw is not CommonAce ace||ace.IsCallback)throw new IOException("SYSTEM_BOOTSTRAP_FILE_ACE");if(ace.AceQualifier==AceQualifier.AccessDenied)continue;
                 if(ace.AceQualifier!=AceQualifier.AccessAllowed)throw new IOException("SYSTEM_BOOTSTRAP_FILE_ACE");if(ace.SecurityIdentifier.Value is "S-1-5-18" or "S-1-5-32-544")continue;
-                var maximum=binaries.Roles!.IsUpdater(ace.SecurityIdentifier)?0x1301bf:ace.SecurityIdentifier==runtimeSid||ace.SecurityIdentifier==ownerSid?0x1200a9:0;
+                var maximum=binaries.Roles!.IsUpdater(ace.SecurityIdentifier)?0x1301bf:ace.SecurityIdentifier==runtimeSid?0x1200a9:0;
                 if(maximum==0||(ace.AccessMask&~maximum)!=0)throw new IOException("SYSTEM_BOOTSTRAP_FILE_ACCESS");
             }
         }
@@ -412,8 +412,7 @@ internal sealed class SystemBootstrapNative:ISystemBootstrapKernel
     private string Sddl(SystemComponentKind kind,bool directory)
     {
         var flags=directory?"OICI":"";return $"O:{InstalledAuthorityReader.RequireUpdater()}D:P(A;{flags};FA;;;SY)(A;{flags};FA;;;BA)"+
-            string.Concat(binaries.Roles!.UpdaterActors.Select(sid=>$"(A;{flags};0x1301bf;;;{sid.Value})"))+$"(A;{flags};0x1200a9;;;{runtimeSid.Value})"+
-            (kind==SystemComponentKind.Owner?$"(A;{flags};0x1200a9;;;{ownerSid.Value})":"");
+            string.Concat(binaries.Roles!.UpdaterActors.Select(sid=>$"(A;{flags};0x1301bf;;;{sid.Value})"))+$"(A;{flags};0x1200a9;;;{runtimeSid.Value})";
     }
     private void EnsureParents(string root,string directory,SystemComponentKind kind)
     {

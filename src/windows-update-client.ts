@@ -10,7 +10,7 @@ export interface WindowsUpdateTransport {
   submit(command: NativeUpdateCommand): Promise<unknown>;
   defer?(command: { id: string; untilUnix: number; familyId: string; userId: string }): Promise<unknown>;
 }
-const result = z.object({ state: z.enum(['queued','pending','approval_required']) }).strict();
+const result = z.object({ state: z.enum(['queued','pending']) }).strict();
 export async function submitWindowsUpdate(transport: WindowsUpdateTransport, command: NativeUpdateCommand) {
   // A lost reply may follow durable acceptance. Do not retry it here.
   return result.parse(await transport.submit(command)).state;

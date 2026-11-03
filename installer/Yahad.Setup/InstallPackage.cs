@@ -40,7 +40,7 @@ internal sealed class InstallPackage:IDisposable
         if(FullSystem)
         {
             if(Manifest.Files.Any(f=>f.Path.StartsWith("host/",StringComparison.Ordinal)))throw new IOException("PACKAGE_FORMAT");
-            foreach(var required in new[]{"system-manifest.json","bootstrap/authority/Yahad.Authority.exe","bootstrap/owner/Yahad.Owner.exe","bootstrap/servicehost/Yahad.ServiceHost.exe","bootstrap/servicehost/Yahad.ServiceHost.runtimeconfig.json","bootstrap/probe/node/node.exe","bootstrap/handoff/Yahad.Authority.exe"})if(!Manifest.Files.Any(r=>r.Path==required))throw new IOException("PACKAGE_MISSING");
+            foreach(var required in new[]{"system-manifest.json","bootstrap/authority/Yahad.Authority.exe","bootstrap/servicehost/Yahad.ServiceHost.exe","bootstrap/servicehost/Yahad.ServiceHost.runtimeconfig.json","bootstrap/probe/node/node.exe","bootstrap/handoff/Yahad.Authority.exe"})if(!Manifest.Files.Any(r=>r.Path==required))throw new IOException("PACKAGE_MISSING");
         }
         else foreach(var required in new[]{"host/Yahad.ServiceHost.exe","host/Yahad.ServiceHost.runtimeconfig.json"})if(!Manifest.Files.Any(r=>r.Path==required))throw new IOException("PACKAGE_MISSING");
     }
@@ -137,7 +137,7 @@ internal sealed class InstallPackage:IDisposable
     }
     internal static void Name(string name)
     {
-        if(name.Length is <1 or >240||!name.StartsWith("host/",StringComparison.Ordinal)&&!name.StartsWith("payload/",StringComparison.Ordinal)&&name!="system-manifest.json"&&!new[]{"authority","owner","servicehost","probe","handoff"}.Any(kind=>name.StartsWith("bootstrap/"+kind+"/",StringComparison.Ordinal))||name.Contains('\\')||name.Contains(':'))throw new IOException("PACKAGE_PATH");
+        if(name.Length is <1 or >240||!name.StartsWith("host/",StringComparison.Ordinal)&&!name.StartsWith("payload/",StringComparison.Ordinal)&&name!="system-manifest.json"&&!new[]{"authority","servicehost","probe","handoff"}.Any(kind=>name.StartsWith("bootstrap/"+kind+"/",StringComparison.Ordinal))||name.Contains('\\')||name.Contains(':'))throw new IOException("PACKAGE_PATH");
         foreach(var part in name.Split('/'))if(part is "" or "." or ".."||part.EndsWith('.')||part.EndsWith(' ')||System.Text.RegularExpressions.Regex.IsMatch(part,"^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(\\..*)?$",System.Text.RegularExpressions.RegexOptions.IgnoreCase))throw new IOException("PACKAGE_PATH");
     }
     private static void Digest(string? value){if(value is null||!System.Text.RegularExpressions.Regex.IsMatch(value,"^[a-f0-9]{64}$"))throw new IOException("PACKAGE_DIGEST");}

@@ -35,7 +35,7 @@ internal sealed class FullInstallFiles
         if(binaries)return relative=="Yahad.Setup.exe"||relative=="bootstrap/probe"||relative.StartsWith("bootstrap/probe/",StringComparison.Ordinal)?InstalledFileRole.Anchor:
             relative.StartsWith("payloads/",StringComparison.Ordinal)?InstalledFileRole.Payload:InstalledFileRole.Control;
         if(relative is "installer-state.json" or "full-installer-plan.json" or "installation.json" or "update-authority.json" or "lan-preparation.json" or "installer-readiness.json"||relative.StartsWith("Secrets/",StringComparison.Ordinal))return InstalledFileRole.Anchor;
-        if(relative=="intake"||relative=="owner-ledger"||relative.StartsWith("intake/",StringComparison.Ordinal)||relative.StartsWith("owner-ledger/",StringComparison.Ordinal)||relative.StartsWith(".authority",StringComparison.Ordinal)||relative.StartsWith("authority-temporary",StringComparison.Ordinal))return InstalledFileRole.Recovery;
+        if(relative=="intake"||relative=="grants"||relative.StartsWith("intake/",StringComparison.Ordinal)||relative.StartsWith("grants/",StringComparison.Ordinal)||relative.StartsWith(".authority",StringComparison.Ordinal)||relative.StartsWith("authority-temporary",StringComparison.Ordinal))return InstalledFileRole.Recovery;
         if(relative=="temporary"||relative.StartsWith("temporary/",StringComparison.Ordinal))return InstalledFileRole.Data;
         if(relative.StartsWith("datasets/",StringComparison.Ordinal))
         {
@@ -49,7 +49,7 @@ internal sealed class FullInstallFiles
     private SecurityIdentifier? ReadonlyOwner(string path)
     {
         if(!binaries)return null;var relative=Path.GetRelativePath(root,path).Replace('\\','/');
-        return relative=="Yahad.Setup.exe"||relative=="bootstrap/owner"||relative.StartsWith("bootstrap/owner/",StringComparison.Ordinal)?owner:null;
+        return relative=="Yahad.Setup.exe"?owner:null;
     }
     private bool Seed(string path)=>!binaries&&Path.GetRelativePath(root,path) is "initial-seed.json" or "initial-retry.json";
     internal void Validate(string path,bool directory)

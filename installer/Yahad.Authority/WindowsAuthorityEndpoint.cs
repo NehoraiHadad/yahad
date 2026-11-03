@@ -12,52 +12,49 @@ namespace Yahad.Authority;
 
 internal static class WindowsAuthorityEndpoint
 {
-    internal static string Name(string installation,AuthorityEndpointRole role)
-    {InstalledActivationResolver.Id(installation);return "Yahad.Authority."+installation+"."+(role==AuthorityEndpointRole.Owner?"owner":"runtime");}
+    internal static string Name(string installation)
+    {InstalledActivationResolver.Id(installation);return "Yahad.Authority."+installation+".runtime";}
     // Creation is compiled but never invoked by either current Program or tests.
-    internal static async Task ServeOnceAsync(InstalledAuthorityComposition composition,AuthorityEndpointRole role,CancellationToken cancellation)
+    internal static async Task ServeOnceAsync(InstalledAuthorityComposition composition,CancellationToken cancellation)
     {
         var authority=(SecurityIdentifier)new NTAccount("NT SERVICE",InstalledAuthorityReader.AuthorityService).Translate(typeof(SecurityIdentifier));
         var runtime=(SecurityIdentifier)new NTAccount(ServiceDefinition.Account).Translate(typeof(SecurityIdentifier));
         ServiceIdentityPolicy.Require(new WindowsServiceTokenReader().Read(),authority.Value);
-        var client=role==AuthorityEndpointRole.Owner?composition.Anchor.OwnerSid:runtime.Value;
-        var descriptor=new RawSecurityDescriptor($"O:{authority.Value}D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;{authority.Value})(A;;0x00100083;;;{client})");
+        var descriptor=new RawSecurityDescriptor($"O:{authority.Value}D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;{authority.Value})(A;;0x00100083;;;{runtime.Value})");
         var bytes=new byte[descriptor.BinaryLength];descriptor.GetBinaryForm(bytes,0);var pin=GCHandle.Alloc(bytes,GCHandleType.Pinned);
         var security=new SecurityAttributes{Length=Marshal.SizeOf<SecurityAttributes>(),Descriptor=pin.AddrOfPinnedObject()};var attributes=Marshal.AllocHGlobal(security.Length);
         SafePipeHandle handle;
-        try{Marshal.StructureToPtr(security,attributes,false);handle=CreateNamedPipeW(@"\\.\pipe\"+Name(composition.Anchor.InstallationId,role),0x40080003,0x8,1,32772,32772,15000,attributes);if(handle.IsInvalid){handle.Dispose();throw new Win32Exception();}}
+        try{Marshal.StructureToPtr(security,attributes,false);handle=CreateNamedPipeW(@"\\.\pipe\"+Name(composition.Anchor.InstallationId),0x40080003,0x8,1,32772,32772,15000,attributes);if(handle.IsInvalid){handle.Dispose();throw new Win32Exception();}}
         finally{Marshal.FreeHGlobal(attributes);pin.Free();}
         using var stream=new NamedPipeServerStream(PipeDirection.InOut,true,false,handle);
         await stream.WaitForConnectionAsync(cancellation);
-        await AuthorityEndpointConnection.ServeNativeConnectedAsync(stream,handle,composition.Router,role,cancellation);
+        await AuthorityEndpointConnection.ServeNativeConnectedAsync(stream,handle,composition.Router,cancellation);
     }
-    internal static Task<EndpointReply> SendOwnerAsync(string installation,AuthorityFrame frame,CancellationToken cancellation)
-        =>SendAsync(installation,AuthorityEndpointRole.Owner,frame,cancellation);
     internal static Task<EndpointReply> SendRuntimeAsync(string installation,AuthorityFrame frame,CancellationToken cancellation)
     {
         var runtime=(SecurityIdentifier)new NTAccount(ServiceDefinition.Account).Translate(typeof(SecurityIdentifier));
         ServiceIdentityPolicy.Require(new WindowsServiceTokenReader().Read(),runtime.Value);
-        return SendAsync(installation,AuthorityEndpointRole.Runtime,frame,cancellation);
+        return SendAsync(installation,frame,cancellation);
     }
-    private static async Task<EndpointReply> SendAsync(string installation,AuthorityEndpointRole role,AuthorityFrame frame,CancellationToken cancellation)
+    private static async Task<EndpointReply> SendAsync(string installation,AuthorityFrame frame,CancellationToken cancellation)
     {
-        var name=@"\\.\pipe\"+Name(installation,role);
+        var name=@"\\.\pipe\"+Name(installation);
         var authority=(SecurityIdentifier)new NTAccount("NT SERVICE",WindowsFixedRuntimeService.AuthorityName).Translate(typeof(SecurityIdentifier));
-        var actor=WindowsIdentity.GetCurrent().User??throw new UnauthorizedAccessException("OWNER_CLIENT_IDENTITY");
+        var actor=WindowsIdentity.GetCurrent().User??throw new UnauthorizedAccessException("AUTHORITY_ENDPOINT_CLIENT_IDENTITY");
         InstalledProcessObjectAccess.PublishClientPeerAccess(actor.Value,authority.Value);
         // Exact individual data rights; identification SQOS, never delegation.
         using var handle=CreateFileW(name,0x00100083,0,IntPtr.Zero,3,0x40110000,IntPtr.Zero);
         if(handle.IsInvalid)throw new Win32Exception();
-        if(!GetNamedPipeServerProcessId(handle,out var pid)||!WindowsAuthorityServiceIdentity.IsCurrentServer(pid))throw new UnauthorizedAccessException("OWNER_SERVER_IDENTITY");
+        if(!GetNamedPipeServerProcessId(handle,out var pid)||!WindowsAuthorityServiceIdentity.IsCurrentServer(pid))throw new UnauthorizedAccessException("AUTHORITY_ENDPOINT_SERVER_IDENTITY");
         using var server=WindowsAuthorityServiceIdentity.Pin(pid);
         using var stream=new NamedPipeClientStream(PipeDirection.InOut,true,true,handle);
-        var bytes=JsonSerializer.SerializeToUtf8Bytes(frame);if(bytes.Length>32768)throw new IOException("OWNER_FRAME_BOUND");var header=new byte[4];BinaryPrimitives.WriteInt32LittleEndian(header,bytes.Length);
+        var bytes=JsonSerializer.SerializeToUtf8Bytes(frame);if(bytes.Length>32768)throw new IOException("AUTHORITY_ENDPOINT_FRAME_BOUND");var header=new byte[4];BinaryPrimitives.WriteInt32LittleEndian(header,bytes.Length);
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancellation);deadline.CancelAfter(TimeSpan.FromSeconds(15));
         await stream.WriteAsync(header,deadline.Token);await stream.WriteAsync(bytes,deadline.Token);await stream.FlushAsync(deadline.Token);
-        await stream.ReadExactlyAsync(header,deadline.Token);var length=BinaryPrimitives.ReadInt32LittleEndian(header);if(length is <2 or >32768)throw new IOException("OWNER_REPLY_BOUND");var reply=new byte[length];await stream.ReadExactlyAsync(reply,deadline.Token);
-        if(!GetNamedPipeServerProcessId(handle,out var after)||after!=pid||!WindowsAuthorityServiceIdentity.IsCurrentServer(pid))throw new UnauthorizedAccessException("OWNER_SERVER_CHANGED");
+        await stream.ReadExactlyAsync(header,deadline.Token);var length=BinaryPrimitives.ReadInt32LittleEndian(header);if(length is <2 or >32768)throw new IOException("AUTHORITY_ENDPOINT_REPLY_BOUND");var reply=new byte[length];await stream.ReadExactlyAsync(reply,deadline.Token);
+        if(!GetNamedPipeServerProcessId(handle,out var after)||after!=pid||!WindowsAuthorityServiceIdentity.IsCurrentServer(pid))throw new UnauthorizedAccessException("AUTHORITY_ENDPOINT_SERVER_CHANGED");
         WindowsAuthorityServiceIdentity.RequireAlive(server);
-        var value=NativeJson.Read<EndpointReply>(reply);if(value.Format!=1||value.Id!=frame.Id)throw new IOException("OWNER_REPLY_BINDING");return value;
+        var value=NativeJson.Read<EndpointReply>(reply);if(value.Format!=1||value.Id!=frame.Id)throw new IOException("AUTHORITY_ENDPOINT_REPLY_BINDING");return value;
     }
     [StructLayout(LayoutKind.Sequential)]private struct SecurityAttributes{public int Length;public IntPtr Descriptor;public int Inherit;}
     [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)]private static extern SafePipeHandle CreateNamedPipeW(string name,uint open,uint mode,uint instances,uint output,uint input,uint timeout,IntPtr security);
@@ -74,7 +71,7 @@ internal static class WindowsAuthorityServiceIdentity
         using var service=new ServiceHandle(OpenServiceW(manager,InstalledAuthorityReader.AuthorityService,5));if(service.IsInvalid)throw new Win32Exception();
         if(!QueryServiceStatusEx(service,0,out var status,(uint)Marshal.SizeOf<ServiceStatus>(),out _))throw new Win32Exception();
         if(status.Pid!=expectedPid||status.State is not(2 or 4)||status.Type!=16)return false;
-        QueryServiceConfigW(service,IntPtr.Zero,0,out var size);if(size is <44 or >16384)throw new IOException("OWNER_SERVICE_CONFIG_BOUND");var memory=Marshal.AllocHGlobal((int)size);
+        QueryServiceConfigW(service,IntPtr.Zero,0,out var size);if(size is <44 or >16384)throw new IOException("AUTHORITY_ENDPOINT_SERVICE_CONFIG_BOUND");var memory=Marshal.AllocHGlobal((int)size);
         try
         {
             if(!QueryServiceConfigW(service,memory,size,out _))throw new Win32Exception();var config=Marshal.PtrToStructure<ServiceConfig>(memory);
@@ -91,19 +88,19 @@ internal static class WindowsAuthorityServiceIdentity
             RequireAlive(process);var image=new System.Text.StringBuilder(32768);var size=(uint)image.Capacity;
             if(!QueryFullProcessImageNameW(process,0,image,ref size))throw new Win32Exception();
             var expected=InstalledUpdaterLayout.AuthorityExecutable;
-            if(!string.Equals(image.ToString(),expected,StringComparison.OrdinalIgnoreCase))throw new UnauthorizedAccessException("OWNER_SERVER_IMAGE");
+            if(!string.Equals(image.ToString(),expected,StringComparison.OrdinalIgnoreCase))throw new UnauthorizedAccessException("AUTHORITY_ENDPOINT_SERVER_IMAGE");
             if(!OpenProcessToken(process,8,out var token))throw new Win32Exception();
             using(token)using(var identity=new WindowsIdentity(token.DangerousGetHandle()))
             {
                 var service=(SecurityIdentifier)new NTAccount("NT SERVICE",InstalledAuthorityReader.AuthorityService).Translate(typeof(SecurityIdentifier));
-                if(identity.User!=service)throw new UnauthorizedAccessException("OWNER_SERVER_TOKEN");
+                if(identity.User!=service)throw new UnauthorizedAccessException("AUTHORITY_ENDPOINT_SERVER_TOKEN");
             }
-            if(!IsCurrentServer(pid))throw new UnauthorizedAccessException("OWNER_SERVER_CHANGED");return process;
+            if(!IsCurrentServer(pid))throw new UnauthorizedAccessException("AUTHORITY_ENDPOINT_SERVER_CHANGED");return process;
         }
         catch{process.Dispose();throw;}
     }
     internal static void RequireAlive(SafeProcessHandle process)
-    {if(WaitForSingleObject(process,0)!=258)throw new UnauthorizedAccessException("OWNER_SERVER_EXITED");}
+    {if(WaitForSingleObject(process,0)!=258)throw new UnauthorizedAccessException("AUTHORITY_ENDPOINT_SERVER_EXITED");}
     [DllImport("kernel32.dll",SetLastError=true)]private static extern SafeProcessHandle OpenProcess(uint access,bool inherit,uint pid);
     [DllImport("kernel32.dll",SetLastError=true)]private static extern uint WaitForSingleObject(SafeProcessHandle process,uint milliseconds);
     [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)]private static extern bool QueryFullProcessImageNameW(SafeProcessHandle process,uint flags,System.Text.StringBuilder image,ref uint size);

@@ -34,8 +34,8 @@ internal sealed class VerifiedSystemOperation
         bootstrapFromVersion??=fromVersion;
         if(VersionOf(toVersion)<=VersionOf(fromVersion)||VersionOf(toVersion)<VersionOf(bootstrapFromVersion)||expectedBootstrapEpoch<0||expectedBootstrapEpoch==long.MaxValue||sourceSchema is <1 or >100000||targetSchema<sourceSchema||targetSchema>100000||
             sourceCommit is null||!System.Text.RegularExpressions.Regex.IsMatch(sourceCommit,"^[a-f0-9]{40}$"))throw new IOException("SYSTEM_OPERATION_BINDING");
-        var copy=components.Select(c=>new SystemComponentDescriptor(c.Kind,c.SlotRelativeDirectory,c.EntryPoint,c.EntrySha256,c.Files)).Take(6).ToArray();
-        if(copy.Length!=5||copy.Select(c=>c.Kind).Distinct().Count()!=5||!Enum.GetValues<SystemComponentKind>().All(kind=>copy.Any(c=>c.Kind==kind)))throw new IOException("SYSTEM_OPERATION_COMPONENTS");
+        var copy=components.Select(c=>new SystemComponentDescriptor(c.Kind,c.SlotRelativeDirectory,c.EntryPoint,c.EntrySha256,c.Files)).Take(5).ToArray();
+        if(copy.Length!=4||copy.Select(c=>c.Kind).Distinct().Count()!=4||!Enum.GetValues<SystemComponentKind>().All(kind=>copy.Any(c=>c.Kind==kind)))throw new IOException("SYSTEM_OPERATION_COMPONENTS");
         return new(installationId,operationId,manifestDigest,applicationBundleDigest,policyDigest,grantId,grantBindingDigest,fromVersion,toVersion,expectedBootstrapEpoch,previousActivationDigest,sourceSchema,targetSchema,sourceCommit,Array.AsReadOnly(copy),bootstrapFromVersion);
     }
 }

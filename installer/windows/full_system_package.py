@@ -37,16 +37,15 @@ class _VerifiedFiles(dict):
 COMPONENTS = {
     'Authority': ('bootstrap/authority', 'Yahad.Authority.exe', 'Yahad.Authority'),
     'RuntimeHost': ('bootstrap/servicehost', 'Yahad.ServiceHost.exe', 'Yahad.ServiceHost'),
-    'Owner': ('bootstrap/owner', 'Yahad.Owner.exe', 'Yahad.Owner'),
     'Probe': ('bootstrap/probe', 'node/node.exe', 'Node'),
     'Helper': ('bootstrap/handoff', 'Yahad.Authority.exe', 'Yahad.Authority'),
 }
-PROTOCOLS = ('system', 'handoff', 'authorityRuntime', 'ownerAuthority', 'activation', 'journal', 'recovery', 'policy')
+PROTOCOLS = ('system', 'handoff', 'authorityRuntime', 'activation', 'journal', 'recovery', 'policy')
 RUNTIME_VERSION = '10.0.14'
 MAX_FILE, MAX_TOTAL, MAX_FILES = 512 * 1024**2, 2 * 1024**3, 50000
 PRIVATE = {'.git', '.local', '.agents', '.codex', '.authority', 'data', 'datasets', 'backups', 'secrets',
-           'owner-ledger', 'enrollment.json', 'installation.json', 'update-authority.json', 'activation.json',
-           'bootstrap.json', 'owner-intent.json', 'master-key', 'update-policy', 'update-pin'}
+           'enrollment.json', 'installation.json', 'update-authority.json', 'activation.json',
+           'bootstrap.json', 'master-key', 'update-policy', 'update-pin'}
 
 
 def _json(data, maximum=8*1024**2):
@@ -203,7 +202,7 @@ def validate_native(root, artifact, version, source, repo):
                 'coreclr.dll', 'hostfxr.dll', 'hostpolicy.dll', 'System.Private.CoreLib.dll'}
     if not required<=files.keys(): raise PackageError('Incomplete private .NET runtime')
     runtime = _json(files[stem+'.runtimeconfig.json'].read_bytes(), 65536)['runtimeOptions']
-    expected = {'Microsoft.NETCore.App'} | ({'Microsoft.WindowsDesktop.App'} if artifact=='Yahad.Owner' else set())
+    expected = {'Microsoft.NETCore.App'}
     frameworks = runtime.get('includedFrameworks', [])
     if ('framework' in runtime or 'frameworks' in runtime or not isinstance(frameworks, list) or
             len(frameworks)!=len(expected) or {f.get('name') for f in frameworks}!=expected or any(f.get('version')!=RUNTIME_VERSION for f in frameworks)):
@@ -273,7 +272,7 @@ def system_manifest(version, source, schema, migrations, application, components
     app=_json(application)
     if type(app.get('schema')) is not int or any(app.get(key)!=value for key,value in dict(schema=1,kind='windows-runtime-candidate',profile='full',target='win-x64',version=version,authority='application-updater').items()):
         raise PackageError('Application manifest binding')
-    if set(c['kind'] for c in components)!=set(COMPONENTS) or len(components)!=5: raise PackageError('Five fixed components required')
+    if set(c['kind'] for c in components)!=set(COMPONENTS) or len(components)!=len(COMPONENTS): raise PackageError('Four fixed components required')
     count = total = 0
     for component in components:
         kind = component['kind']; prefix, entry, _ = COMPONENTS[kind]
@@ -333,10 +332,10 @@ def _write_archive(output, entries, expected=None):
     return records
 
 
-def build(repo, payload_zip, authority, runtime_host, owner, helper, node_root, output):
-    repo, payload_zip, authority, runtime_host, owner, helper, node_root = map(_unlinked,(repo,payload_zip,authority,runtime_host,owner,helper,node_root))
+def build(repo, payload_zip, authority, runtime_host, helper, node_root, output):
+    repo, payload_zip, authority, runtime_host, helper, node_root = map(_unlinked,(repo,payload_zip,authority,runtime_host,helper,node_root))
     output = Path(output).absolute()
-    if output.exists() or output==repo or any(output.is_relative_to(p) for p in (authority,runtime_host,owner,helper,node_root)):
+    if output.exists() or output==repo or any(output.is_relative_to(p) for p in (authority,runtime_host,helper,node_root)):
         raise PackageError('New output outside input closures required')
     for ancestor in output.parents:
         if ancestor.exists(): _unlinked(ancestor)
@@ -350,7 +349,7 @@ def build(repo, payload_zip, authority, runtime_host, owner, helper, node_root, 
         # Platform is part of the verified application, not another caller input.
         validate_native(prepared/'app/native','Yahad.Platform',version,source,repo)
         native={kind:validate_native(path,COMPONENTS[kind][2],version,source,repo) for kind,path in
-                (('Authority',authority),('RuntimeHost',runtime_host),('Owner',owner),('Helper',helper))}
+                (('Authority',authority),('RuntimeHost',runtime_host),('Helper',helper))}
         runtime_lock=_json((prepared/'legal/runtime-lock.json').read_bytes(),65536)
         platforms=[c for c in runtime_lock['components'] if c.get('id')=='platform']
         if len(platforms)!=1 or platforms[0].get('sourceCommit')!=source: raise PackageError('Mixed Platform runtime-lock source')
@@ -387,7 +386,7 @@ def build(repo, payload_zip, authority, runtime_host, owner, helper, node_root, 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('repo','payload-zip','authority','runtime-host','owner','helper','node-root','output'):
+    for name in ('repo','payload-zip','authority','runtime-host','helper','node-root','output'):
         parser.add_argument('--'+name,required=True,type=Path)
     try: print(json.dumps(build(**vars(parser.parse_args())),sort_keys=True))
     except (ValueError,OSError,TypeError,KeyError,AttributeError,subprocess.SubprocessError,zipfile.BadZipFile,zipfile.LargeZipFile) as error:

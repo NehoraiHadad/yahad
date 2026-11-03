@@ -28,38 +28,38 @@ internal static class InstalledProcessObjectAccess
     private enum Role {Runtime,Authority,Client,AuthorityCustody}
     private static readonly object serial=new();
     internal static void PublishRuntimePeerAccess(string actualRuntimeSid,string authoritySid,bool full=false)
-        =>Publish(Role.Runtime,actualRuntimeSid,authoritySid,null,new WindowsInstalledProcessObjectKernel(),full);
-    internal static void PublishAuthorityPeerAccess(string actualAuthoritySid,string runtimeSid,string originalOwnerSid)
-        =>PublishAuthorityPeerAccess(actualAuthoritySid,runtimeSid,originalOwnerSid,new WindowsInstalledProcessObjectKernel());
+        =>Publish(Role.Runtime,actualRuntimeSid,authoritySid,new WindowsInstalledProcessObjectKernel(),full);
+    internal static void PublishAuthorityPeerAccess(string actualAuthoritySid,string runtimeSid)
+        =>PublishAuthorityPeerAccess(actualAuthoritySid,runtimeSid,new WindowsInstalledProcessObjectKernel());
     internal static void PublishClientPeerAccess(string actualCurrentSid,string authoritySid)
         =>PublishClientPeerAccess(actualCurrentSid,authoritySid,new WindowsInstalledProcessObjectKernel());
     // Only the immutable full profile enables the two fixed recovery actors.
     // Publish exact handle-transfer/job rights on this own process/token;
-    // never grant these to Runtime, Owner or a caller-selected service.
+    // never grant these to Runtime or a caller-selected service.
     internal static void PublishAuthorityCustodyAccess(InstalledFileRoles roles)
     {
         using var current=WindowsIdentity.GetCurrent();var actor=current.User??throw new IOException("OWN_OBJECT_CURRENT_IDENTITY");
         if(!roles.IsUpdater(actor))throw new IOException("OWN_OBJECT_FIXED_ROLE");
         UpdaterServiceIdentity.Require(UpdaterServiceIdentity.FromUser(actor,roles.Authority),Environment.ProcessId);
-        Publish(Role.AuthorityCustody,actor.Value,roles.Authority.Value,null,new WindowsInstalledProcessObjectKernel(),roles.HasRecoveryHelpers);
+        Publish(Role.AuthorityCustody,actor.Value,roles.Authority.Value,new WindowsInstalledProcessObjectKernel(),roles.HasRecoveryHelpers);
     }
     internal static void PublishAuthorityCustodyAccess(string actualAuthoritySid)
         =>PublishAuthorityCustodyAccess(actualAuthoritySid,new WindowsInstalledProcessObjectKernel());
     internal static void PublishRuntimePeerAccess(string actualRuntimeSid,string authoritySid,IInstalledProcessObjectKernel kernel)
-        =>Publish(Role.Runtime,actualRuntimeSid,authoritySid,null,kernel);
-    internal static void PublishAuthorityPeerAccess(string actualAuthoritySid,string runtimeSid,string originalOwnerSid,IInstalledProcessObjectKernel kernel)
-        =>Publish(Role.Authority,actualAuthoritySid,runtimeSid,originalOwnerSid,kernel);
+        =>Publish(Role.Runtime,actualRuntimeSid,authoritySid,kernel);
+    internal static void PublishAuthorityPeerAccess(string actualAuthoritySid,string runtimeSid,IInstalledProcessObjectKernel kernel)
+        =>Publish(Role.Authority,actualAuthoritySid,runtimeSid,kernel);
     internal static void PublishClientPeerAccess(string actualCurrentSid,string authoritySid,IInstalledProcessObjectKernel kernel)
-        =>Publish(Role.Client,actualCurrentSid,authoritySid,null,kernel);
+        =>Publish(Role.Client,actualCurrentSid,authoritySid,kernel);
     internal static void PublishAuthorityCustodyAccess(string actualAuthoritySid,IInstalledProcessObjectKernel kernel)
-        =>Publish(Role.AuthorityCustody,actualAuthoritySid,actualAuthoritySid,null,kernel);
+        =>Publish(Role.AuthorityCustody,actualAuthoritySid,actualAuthoritySid,kernel);
     internal static void PublishFullCustodyAccess(string actor,string authority,IInstalledProcessObjectKernel kernel)
-        =>Publish(Role.AuthorityCustody,actor,authority,null,kernel,true);
+        =>Publish(Role.AuthorityCustody,actor,authority,kernel,true);
     internal static void PublishFullRuntimeAccess(string actor,string authority,IInstalledProcessObjectKernel kernel)
-        =>Publish(Role.Runtime,actor,authority,null,kernel,true);
-    private static void Publish(Role role,string actor,string peer,string? owner,IInstalledProcessObjectKernel kernel,bool full=false)
+        =>Publish(Role.Runtime,actor,authority,kernel,true);
+    private static void Publish(Role role,string actor,string peer,IInstalledProcessObjectKernel kernel,bool full=false)
     {
-        Sid(actor);Sid(peer);if(owner is not null){var sid=Sid(owner);if(!owner.StartsWith("S-1-5-21-",StringComparison.Ordinal)||!sid.IsAccountSid())throw new IOException("OWN_OBJECT_OWNER_ACCOUNT");}
+        Sid(actor);Sid(peer);
         lock(serial)
         {
             using var session=kernel.OpenCurrent(role!=Role.Client);var identity=session.ObserveIdentity();RequireIdentity(identity,role,actor,peer,full);
@@ -68,7 +68,6 @@ internal static class InstalledProcessObjectAccess
             if(full&&role is Role.Runtime or Role.AuthorityCustody)
                 foreach(var sid in UpdaterServicePrincipals.All(Sid(peer)))peers[sid.Value]=mask;
             if(full&&role==Role.AuthorityCustody)peers[identity.RuntimeSid]=PeerReadProcess;
-            if(owner is not null)peers.Add(owner,PeerReadProcess);
             var tokenPeers=role==Role.Client?new Dictionary<string,int>(StringComparer.Ordinal):peers.ToDictionary(x=>x.Key,_=>PeerReadToken,StringComparer.Ordinal);
             var processBefore=session.Read(InstalledOwnObject.Process);var tokenBefore=session.Read(InstalledOwnObject.Token);
             var processAfter=AddPeerAces(processBefore,identity,peers,InstalledOwnObject.Process);

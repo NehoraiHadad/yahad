@@ -235,9 +235,8 @@ await Check("preserved reinstall binds exact owner package activation and keys w
  string Put<T>(string name,T value){var bytes=JsonSerializer.SerializeToUtf8Bytes(value);records[name]=bytes;return Convert.ToHexStringLower(SHA256.HashData(bytes));}
  string Raw(string name,string value){records[name]=Encoding.UTF8.GetBytes(value);return Convert.ToHexStringLower(SHA256.HashData(records[name]));}
  var key=Raw("datasets/"+dataId+"/master-key","synthetic-key");var policy=Raw("datasets/"+dataId+"/update-policy","preserved-policy");var pin=Raw("datasets/"+dataId+"/update-pin","preserved-pin");
- var intent=Put("owner-intent.json",new InstalledOwnerIntent(1,id,1,Guid.NewGuid().ToString("N"),manifest.PayloadDigest,dataId,"activate",owner.Sid,1,null));
  var web=Put("web.json",new InstalledWeb(1,id,"http://127.0.0.1:47123",47123));
- var anchor=Put("activation.json",new InstalledActivation(1,id,1,manifest.PayloadDigest,dataId,5,5,key,policy,pin,intent,web,"committed",null));
+ var anchor=Put("activation.json",new InstalledActivation(1,id,1,manifest.PayloadDigest,dataId,5,5,key,policy,pin,web,"committed",null));
  Put("epoch.json",new InstalledEpoch(1,id,1,anchor));Put("bootstrap.json",new{installationId=id,activationReceiptDigest=anchor});
  Put("installation.json",new FirstInstallReceipt(2,id,dataId,manifest.PayloadDigest,ApplicationRelease.Version,new string('a',64),47123,manifest.ZipSha256,"committed",new string('b',64)));
  var state=new InstallerState(1,id,dataId,manifest.ZipSha256,manifest.PayloadDigest,manifest.SourceCommit,owner.Sid,47123,"uninstalled",manifest.Files,"S-1-5-80-1-2-3-4-5",owner.ImageSha256);
