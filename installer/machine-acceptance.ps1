@@ -41,11 +41,11 @@ function Phase([string]$Name, [scriptblock]$Body) {
 }
 # Returns the parsed result file and anything Setup wrote to standard output.
 # Standard output is returned to the caller, never echoed.
-function RunSetup([string[]]$Arguments, [string]$Result) {
+function RunSetup([string[]]$Arguments, [string]$Result, [string[]]$Options = @()) {
     $start = [Diagnostics.ProcessStartInfo]::new($setupPath)
     $start.UseShellExecute = $false
     $start.RedirectStandardOutput = $true
-    foreach ($argument in $Arguments + @('--result', $Result)) { $start.ArgumentList.Add($argument) }
+    foreach ($argument in @($Arguments) + @('--result', $Result) + @($Options)) { $start.ArgumentList.Add($argument) }
     $process = [Diagnostics.Process]::Start($start)
     try {
         $stdout = $process.StandardOutput.ReadToEnd()
@@ -100,7 +100,7 @@ try {
         if ((YahadServices).Count -or (Test-Path -LiteralPath $programData) -or (Test-Path -LiteralPath $programFiles)) { throw 'Machine is not clean: an existing Yahad installation is present' }
     }
     $install = $null
-    Phase 'install' { $script:install = RunSetup @('--quiet-install', '--updates', 'notify', '--setup-link', 'stdout') (Join-Path $out 'install-result.json') }
+    Phase 'install' { $script:install = RunSetup @('--quiet-install', '--updates', 'notify') (Join-Path $out 'install-result.json') @('--setup-link', 'stdout') }
     Phase 'ready' {
         RequireInstalledAndReady $install.Result
         if ((SetupState) -ne 'ready') { throw 'Fresh install does not offer first-family setup' }
@@ -130,7 +130,7 @@ try {
         if (!(Test-Path -LiteralPath $programData)) { throw "$programData was removed by a keep-data uninstall" }
     }
     $reinstall = $null
-    Phase 'reinstall' { $script:reinstall = RunSetup @('--quiet-install', '--updates', 'notify', '--setup-link', 'stdout') (Join-Path $out 'reinstall-result.json') }
+    Phase 'reinstall' { $script:reinstall = RunSetup @('--quiet-install', '--updates', 'notify') (Join-Path $out 'reinstall-result.json') @('--setup-link', 'stdout') }
     Phase 'persisted' {
         RequireInstalledAndReady $reinstall.Result
         if ($reinstall.Stdout.Trim()) { throw 'Reinstall offered a new setup link over kept data' }
