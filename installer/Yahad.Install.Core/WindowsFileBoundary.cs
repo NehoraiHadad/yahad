@@ -277,7 +277,8 @@ public static class WindowsFileBoundary
     {
         // Metadata-only, share read/write but never delete: compatible with a
         // live SQLite writer while preventing a missing-DB completion race.
-        var pin=Pin(path,false,false);try{ValidateAcl(Security(pin.Leaf),ApplicationSid(),false);return pin;}catch{pin.Dispose();throw;}
+        var installed=InstalledProcessState.ForPath(path);
+        var pin=Pin(path,false,false);try{if(installed is null)ValidateAcl(Security(pin.Leaf),ApplicationSid(),false);else installed.Roles!.Validate(Security(pin.Leaf),installed.Role(path),false);return pin;}catch{pin.Dispose();throw;}
     }
     internal static PrivateReadLease OpenPrivateRead(string path)
     {
