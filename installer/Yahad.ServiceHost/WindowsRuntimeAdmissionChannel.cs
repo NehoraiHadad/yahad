@@ -190,7 +190,7 @@ internal sealed class WindowsRuntimeAdmissionChannel(Func<string,CancellationTok
             stream=new NamedPipeClientStream(PipeDirection.InOut,true,true,handle);handle=null!;
             var id=Guid.NewGuid().ToString("N");await RuntimeAdmissionWire.WriteAsync(stream,new(1,"hello",id,Binding:binding,Host:host),cancellation);
             var message=await RuntimeAdmissionWire.ReadAsync(stream,cancellation);
-            if(message.Kind is not("admit" or "offline-migrate" or "probation")||message.Id!=id||message.Binding is not null||message.Host is not null||message.Admission is null)throw new UnauthorizedAccessException("RUNTIME_ADMISSION_REPLY");
+            if(message.Kind is not("admit" or "probation")||message.Id!=id||message.Binding is not null||message.Host is not null||message.Admission is null)throw new UnauthorizedAccessException("RUNTIME_ADMISSION_REPLY");
             Purpose=message.Kind;
             message.Admission.Validate();admitted=message.Admission;RequireLaunch(admitted);return admitted;
         }
@@ -205,7 +205,6 @@ internal sealed class WindowsRuntimeAdmissionChannel(Func<string,CancellationTok
     }
     public async Task ReportReadyAsync(RuntimeAdmissionBinding admission,CancellationToken cancellation)
     {
-        if(Purpose=="offline-migrate")throw new IOException("MIGRATION_NORMAL_READY_FORBIDDEN");
         RequireLaunch(admission);if(listener is not null)throw new IOException("RUNTIME_READY_REPLAY");
         await RuntimeAdmissionWire.WriteAsync(stream!,new(1,"ready",admission.Nonce,admission),cancellation);
         // Let ServiceController publish SCM RUNNING after its health method
@@ -248,10 +247,6 @@ internal sealed class WindowsRuntimeAdmissionChannel(Func<string,CancellationTok
     private async Task<string> CancelAsync(string id,CancellationToken cancellation){await cancel(id,cancellation);return "update-cancelled";}
     private async Task<string> ReleaseEffectsAsync(string id,CancellationToken cancellation)
     {await (releaseEffects??throw new IOException("PROBATION_RELEASE_UNCONFIGURED"))(id,cancellation);return "effects-released";}
-    public async Task ReportMigrationAsync(RuntimeAdmissionBinding admission,MigrationSandboxObservation observation,CancellationToken cancellation)
-    {RequireLaunch(admission);if(Purpose!="offline-migrate")throw new IOException("MIGRATION_PURPOSE_REQUIRED");await RuntimePurposeWire.ReportAndWaitAsync(stream!,new(2,"migration-started",admission.Nonce,admission,observation),"migration-started-accepted",()=>RequireLaunch(admission),cancellation);}
-    public async Task ReportMigrationExitAsync(RuntimeAdmissionBinding admission,int code,CancellationToken cancellation)
-    {RequireLaunch(admission);if(Purpose!="offline-migrate")throw new IOException("MIGRATION_PURPOSE_REQUIRED");await RuntimePurposeWire.ReportAndWaitAsync(stream!,new(2,"migration-completed",admission.Nonce,admission,ExitCode:code),"migration-completed-accepted",()=>RequireLaunch(admission),cancellation);}
     public void Dispose()
     {if(disposed)return;disposed=true;stopped.Cancel();stream?.Dispose();server?.Dispose();authority?.Dispose();}
     [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)]private static extern SafePipeHandle CreateFileW(string name,uint access,uint share,IntPtr security,uint creation,uint flags,IntPtr template);

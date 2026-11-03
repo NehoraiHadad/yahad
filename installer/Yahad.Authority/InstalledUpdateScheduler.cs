@@ -60,7 +60,7 @@ internal sealed class InstalledUpdateScheduler
         if(rpc.GetProperty("Id").GetString()!=operationId||rpc.GetProperty("Profile").GetString()!=FullSystemUpdatePolicy.Profile||rpc.GetProperty("Action").GetString() is not("check" or "install")||rpc.GetProperty("Target").GetString()!=admission.SourceReceiptDigest||rpcDone.GetProperty("Id").GetString()!=operationId)throw new IOException("SCHEDULER_RECOVERED_RPC_BINDING");
         if(rpcDone.GetProperty("Phase").GetString()!="healthy"||rpcDone.TryGetProperty("Error",out var error)&&error.ValueKind!=JsonValueKind.Null)return Task.FromResult(false);
         var intake=new InstalledIntakeSelection(files,anchor);var head=intake.Head();
-        if(head.ReleaseDigest!=admission.ApplicationBundleDigest||head.DataId!=(data.MigrationAttempt?.NewDataId??plan.NewDataId??plan.DataId)||head.MinimumSchema!=admission.TargetSchema||head.MaximumSchema!=admission.TargetSchema)return Task.FromResult(false);
+        if(head.ReleaseDigest!=admission.ApplicationBundleDigest||head.DataId!=(data.CloneAttempt?.NewDataId??plan.DataId)||head.MinimumSchema!=admission.TargetSchema||head.MaximumSchema!=admission.TargetSchema)return Task.FromResult(false);
         // The native done handle pins this exact file while its timestamp is read.
         var completedUnix=new DateTimeOffset(File.GetLastWriteTimeUtc(nativePath)).ToUnixTimeSeconds();if(completedUnix<=0)throw new IOException("SCHEDULER_RECOVERED_TIME");
         files.EnsureDirectory(files.PathOf(".authority/scheduler"));using var owned=files.Lease(files.PathOf(".authority/scheduler"));var state=ReadState(files);

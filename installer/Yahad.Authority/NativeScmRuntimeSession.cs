@@ -33,7 +33,7 @@ internal static class RuntimeWaitingHostPin
 // Actual SCM/pipe/job operations, compiled but never selected by Program. This
 // adapter does not install services, repair ACLs or create credentials. Its fixed
 // dual-service layout must be provisioned separately by the sole installer.
-internal sealed class NativeScmRuntimeSession:IRetainedScmMigrationSession,IRetainedScmUpdatePreparation,IRetainedScmRecoveryObservation,IProbationEffectsRuntime
+internal sealed class NativeScmRuntimeSession:IRetainedScmRuntimeSession,IRetainedScmUpdatePreparation,IRetainedScmRecoveryObservation,IProbationEffectsRuntime
 {
     private WindowsFixedRuntimeService? service;private WindowsFixedRuntimeService.WindowsPinnedServiceProcess? host;
     private SafeFileHandle? job;private NamedPipeServerStream? pipe;private RuntimeAdmissionBinding? admission;
@@ -41,7 +41,7 @@ internal sealed class NativeScmRuntimeSession:IRetainedScmMigrationSession,IReta
     private uint waitingPid;private long waitingCreated;
     private RetainedRuntimeQuiescence? recoveryObservation;private bool recoveryObservationRetained;
     private readonly SemaphoreSlim commands=new(1,1);
-    private string purpose="admit";private bool migrationStarted,migrationStartAccepted,migrationCompleted,effectsIssued;
+    private string purpose="admit";private bool effectsIssued;
     public IRuntimeGateKernel Kernel=>new NativeRuntimeGateKernel(job??throw new IOException("RUNTIME_JOB_UNAVAILABLE"),host?.Handle??throw new IOException("RUNTIME_HOST_UNAVAILABLE"),Observe);
     public void RetainRecoveryObservation()
     {
@@ -63,7 +63,7 @@ internal sealed class NativeScmRuntimeSession:IRetainedScmMigrationSession,IReta
     {
         if(job is not null||disposed)throw new IOException("RUNTIME_NATIVE_SESSION_REPLAY");
         new RuntimeAdmissionBinding(intent.Binding,intent.ReleaseDigest,intent.Nonce,1,1).Validate();
-        if(intent.Purpose is not("admit" or "offline-migrate" or "probation"))throw new IOException("RUNTIME_PURPOSE_UNKNOWN");purpose=intent.Purpose;
+        if(intent.Purpose is not("admit" or "probation"))throw new IOException("RUNTIME_PURPOSE_UNKNOWN");purpose=intent.Purpose;
         var authority=(SecurityIdentifier)new NTAccount("NT SERVICE",WindowsFixedRuntimeService.AuthorityName).Translate(typeof(SecurityIdentifier));
         var runtime=(SecurityIdentifier)new NTAccount(ServiceDefinition.Account).Translate(typeof(SecurityIdentifier));
         var actor=new SecurityIdentifier(InstalledAuthorityReader.RequireUpdater());
@@ -121,7 +121,6 @@ internal sealed class NativeScmRuntimeSession:IRetainedScmMigrationSession,IReta
     }
     public async Task<RuntimeAdmissionBinding> WaitReadyAsync(CancellationToken cancellation)
     {
-        if(purpose=="offline-migrate")throw new IOException("MIGRATION_NORMAL_READY_FORBIDDEN");
         if(!launchReleased)throw new IOException("RUNTIME_LAUNCH_NOT_RELEASED");
         var ready=await RuntimeAdmissionWire.ReadAsync(pipe!,cancellation);RequireAuthenticatedCurrent(admission!);
         if(ready.Kind!="ready"||ready.Id!=admission!.Nonce||ready.Admission!=admission||ready.Binding is not null||ready.Host is not null)throw new UnauthorizedAccessException("RUNTIME_NATIVE_READY_BINDING");
@@ -131,30 +130,6 @@ internal sealed class NativeScmRuntimeSession:IRetainedScmMigrationSession,IReta
             if(service!.Status().State==4)break;await Task.Delay(20,cancellation);
         }
         await RuntimeAdmissionWire.WriteAsync(pipe!,new(1,"ready-accepted",ready.Id,admission),cancellation);return admission;
-    }
-    public async Task<MigrationSandboxObservation> WaitMigrationStartedAsync(RuntimeAdmissionBinding expected,CancellationToken cancellation)
-    {
-        RequireAuthenticatedCurrent(expected);if(purpose!="offline-migrate"||!launchReleased||migrationStarted)throw new IOException("MIGRATION_START_STATE");migrationStarted=true;
-        var reply=await RuntimePurposeWire.ReadAsync(pipe!,cancellation);RequireAuthenticatedCurrent(expected);
-        if(reply.Admission!=expected||reply.Kind!="migration-started"||reply.Observation is null)throw new UnauthorizedAccessException("MIGRATION_RUNTIME_BINDING");return reply.Observation;
-    }
-    public async Task AcknowledgeMigrationStartedAsync(RuntimeAdmissionBinding expected,CancellationToken cancellation)
-    {
-        RequireAuthenticatedCurrent(expected);if(purpose!="offline-migrate"||!migrationStarted||migrationStartAccepted)throw new IOException("MIGRATION_START_ACK_STATE");
-        // The proxy has validated actual native token/image observations before
-        // allowing even an instant child to complete the host lifecycle.
-        migrationStartAccepted=true;await RuntimePurposeWire.WriteAsync(pipe!,new(2,"migration-started-accepted",expected.Nonce,expected),cancellation);
-    }
-    public async Task<int> WaitMigrationCompletedAsync(RuntimeAdmissionBinding expected,CancellationToken cancellation)
-    {
-        RequireAuthenticatedCurrent(expected);
-        if(purpose!="offline-migrate"||!migrationStartAccepted||migrationCompleted||expected!=admission||host is null||pipe is null||disposed)throw new IOException("MIGRATION_COMPLETE_STATE");migrationCompleted=true;
-        // Runtime retains its SCM host until this acknowledgement. Both events
-        // are authenticated while the ORIGINAL pinned generation is still live.
-        var reply=await RuntimePurposeWire.ReadAsync(pipe,cancellation);RequireAuthenticatedCurrent(expected);
-        if(expected.ProcessId!=(int)host.Pid||expected.Created!=host.Created||reply.Admission!=expected||reply.Kind!="migration-completed"||reply.ExitCode is null)
-            throw new UnauthorizedAccessException("MIGRATION_RUNTIME_TERMINAL_BINDING");
-        await RuntimePurposeWire.WriteAsync(pipe,new(2,"migration-completed-accepted",expected.Nonce,expected),cancellation);return reply.ExitCode.Value;
     }
     public async Task ReleaseEffectsAsync(ProbationRuntimeBinding binding,string requestId,CancellationToken cancellation)
     {

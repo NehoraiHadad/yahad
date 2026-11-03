@@ -9,10 +9,10 @@ namespace Yahad.Authority;
 internal sealed record InstalledUpdatePlan(int Format,string InstallationId,string OperationId,string DataId,
     string PreviousActivationDigest,string PreviousRelease,string CandidateRelease,int SchemaBefore,
     int PreviousMinimumSchema,int PreviousMaximumSchema,int CandidateMinimumSchema,int CandidateMaximumSchema,
-    string PolicyDigest,string PinDigest,string? MasterKeyDigest=null,int? MigrationTargetSchema=null,string? NewDataId=null,string? FullSystemPolicyDigest=null);
-internal sealed record MigrationAttempt(int Number,string OperationId,string CloneOperationId,string NewDataId);
+    string PolicyDigest,string PinDigest,string? MasterKeyDigest=null,string? FullSystemPolicyDigest=null);
+internal sealed record CloneAttempt(int Number,string OperationId,string CloneOperationId,string NewDataId);
 internal sealed record InstalledUpdateRecord(int Format,int Sequence,string PreviousDigest,InstalledUpdatePlan Plan,
-    UpdateCheckpoint Checkpoint,string? BackupId,string? BackupReceiptDigest,string? RestoreOperationId,string? MigrationReceiptDigest=null,MigrationAttempt? MigrationAttempt=null);
+    UpdateCheckpoint Checkpoint,string? BackupId,string? BackupReceiptDigest,string? RestoreOperationId,CloneAttempt? CloneAttempt=null);
 
 // Protected, append-only transaction evidence, independent of the replaceable
 // four-record activation transaction. The kernel lease serializes every update
@@ -40,17 +40,10 @@ internal sealed class InstalledUpdateJournal:IDisposable
         foreach(var digest in new[]{plan.PreviousActivationDigest,plan.PreviousRelease,plan.CandidateRelease,plan.PolicyDigest,plan.PinDigest})Digest(digest);
         if(plan.MasterKeyDigest is not null)Digest(plan.MasterKeyDigest);
         if(plan.FullSystemPolicyDigest is not null)Digest(plan.FullSystemPolicyDigest);
-        if(plan.MigrationTargetSchema is { } target)
-        {
-            if(plan.FullSystemPolicyDigest is null)throw new IOException("UPDATE_JOURNAL_FULL_POLICY_REQUIRED");
-            if(plan.NewDataId is not null)Id(plan.NewDataId);
-            if(target<=plan.SchemaBefore||target>100000||target!=plan.CandidateMinimumSchema||target!=plan.CandidateMaximumSchema||plan.NewDataId==plan.DataId)throw new IOException("UPDATE_JOURNAL_MIGRATION_PLAN");
-        }
-        else if(plan.NewDataId is not null)throw new IOException("UPDATE_JOURNAL_UNEXPECTED_NEW_DATA");
         if(plan.Format!=1||plan.InstallationId!=installation||plan.PreviousRelease==plan.CandidateRelease||
             plan.SchemaBefore is <1 or >100000||plan.PreviousMinimumSchema<1||plan.PreviousMaximumSchema<plan.PreviousMinimumSchema||plan.PreviousMaximumSchema>100000||
             plan.CandidateMinimumSchema<1||plan.CandidateMaximumSchema<plan.CandidateMinimumSchema||plan.CandidateMaximumSchema>100000||
-            plan.SchemaBefore<plan.PreviousMinimumSchema||plan.SchemaBefore>plan.PreviousMaximumSchema||plan.MigrationTargetSchema is null&&(plan.SchemaBefore<plan.CandidateMinimumSchema||plan.SchemaBefore>plan.CandidateMaximumSchema))
+            plan.SchemaBefore<plan.PreviousMinimumSchema||plan.SchemaBefore>plan.PreviousMaximumSchema||plan.SchemaBefore<plan.CandidateMinimumSchema||plan.SchemaBefore>plan.CandidateMaximumSchema)
             throw new IOException("UPDATE_JOURNAL_PLAN");
     }
     private string DirectoryOf(string id){Id(id);return Path.Combine(root,id);}
@@ -121,33 +114,26 @@ internal sealed class InstalledUpdateJournal:IDisposable
     {
         if(!Enum.IsDefined(record.Checkpoint))throw new IOException("UPDATE_JOURNAL_CHECKPOINT");
         if(record.BackupId is not null)Id(record.BackupId);if(record.BackupReceiptDigest is not null)Digest(record.BackupReceiptDigest);if(record.RestoreOperationId is not null)Id(record.RestoreOperationId);
-        if(record.MigrationReceiptDigest is not null)Digest(record.MigrationReceiptDigest);
-        if(record.Plan.MigrationTargetSchema is null&&(record.MigrationReceiptDigest is not null||record.MigrationAttempt is not null&&record.Plan.FullSystemPolicyDigest is null))throw new IOException("UPDATE_JOURNAL_UNEXPECTED_MIGRATION");
-        if(record.Plan.MigrationTargetSchema is not null&&record.Checkpoint is(UpdateCheckpoint.MigrationIntent or UpdateCheckpoint.MigrationVerified or UpdateCheckpoint.ActivationIntent or UpdateCheckpoint.CandidateStartIntent or UpdateCheckpoint.Healthy)&&record.MigrationAttempt is null)throw new IOException("UPDATE_JOURNAL_MIGRATION_ATTEMPT_REQUIRED");
-        if(record.MigrationAttempt is { } attempt)
+        if(record.CloneAttempt is { } attempt)
         {
             Id(attempt.OperationId);Id(attempt.CloneOperationId);Id(attempt.NewDataId);
-            if(attempt.Number is <1 or >3||attempt.NewDataId==record.Plan.DataId)throw new IOException("UPDATE_JOURNAL_MIGRATION_ATTEMPT");
-            var previous=prior.LastOrDefault()?.MigrationAttempt;
-            if(attempt!=previous&&(record.Checkpoint is not(UpdateCheckpoint.MigrationIntent or UpdateCheckpoint.CloneIntent)||attempt.Number!=(previous?.Number??0)+1||prior.Any(x=>x.MigrationAttempt is { } old&&(old.OperationId==attempt.OperationId||old.CloneOperationId==attempt.CloneOperationId||old.NewDataId==attempt.NewDataId))))throw new IOException("UPDATE_JOURNAL_MIGRATION_ATTEMPT_REPLAY");
+            if(attempt.Number is <1 or >3||attempt.NewDataId==record.Plan.DataId)throw new IOException("UPDATE_JOURNAL_CLONE_ATTEMPT");
+            var previous=prior.LastOrDefault()?.CloneAttempt;
+            if(attempt!=previous&&(record.Checkpoint is not UpdateCheckpoint.CloneIntent||attempt.Number!=(previous?.Number??0)+1||prior.Any(x=>x.CloneAttempt is { } old&&(old.OperationId==attempt.OperationId||old.CloneOperationId==attempt.CloneOperationId||old.NewDataId==attempt.NewDataId))))throw new IOException("UPDATE_JOURNAL_CLONE_ATTEMPT_REPLAY");
         }
         if((record.BackupId is null)!=(record.BackupReceiptDigest is null))throw new IOException("UPDATE_JOURNAL_BACKUP");
         if(prior.Count==0)
-        {if(record.Checkpoint!=UpdateCheckpoint.Prepared||record.BackupId is not null||record.RestoreOperationId is not null||record.MigrationReceiptDigest is not null||record.MigrationAttempt is not null)throw new IOException("UPDATE_JOURNAL_INITIAL");return;}
-        var last=prior[^1];if(record.Plan!=last.Plan||last.BackupId is not null&&(record.BackupId!=last.BackupId||record.BackupReceiptDigest!=last.BackupReceiptDigest)||last.RestoreOperationId is not null&&record.RestoreOperationId!=last.RestoreOperationId||last.MigrationReceiptDigest is not null&&record.MigrationReceiptDigest!=last.MigrationReceiptDigest)throw new IOException("UPDATE_JOURNAL_BINDING");
+        {if(record.Checkpoint!=UpdateCheckpoint.Prepared||record.BackupId is not null||record.RestoreOperationId is not null||record.CloneAttempt is not null)throw new IOException("UPDATE_JOURNAL_INITIAL");return;}
+        var last=prior[^1];if(record.Plan!=last.Plan||last.BackupId is not null&&(record.BackupId!=last.BackupId||record.BackupReceiptDigest!=last.BackupReceiptDigest)||last.RestoreOperationId is not null&&record.RestoreOperationId!=last.RestoreOperationId)throw new IOException("UPDATE_JOURNAL_BINDING");
         var valid=(last.Checkpoint,record.Checkpoint) switch
         {
             (UpdateCheckpoint.Prepared,UpdateCheckpoint.Quiesced)=>true,
             (UpdateCheckpoint.Quiesced,UpdateCheckpoint.BackupVerified)=>true,
-            (UpdateCheckpoint.BackupVerified,UpdateCheckpoint.ActivationIntent)=>record.Plan.MigrationTargetSchema is null&&record.Plan.FullSystemPolicyDigest is null,
-            (UpdateCheckpoint.BackupVerified,UpdateCheckpoint.CloneIntent)=>record.Plan.FullSystemPolicyDigest is not null&&record.Plan.MigrationTargetSchema is null,
-            (UpdateCheckpoint.CloneIntent or UpdateCheckpoint.RecoveryRequired,UpdateCheckpoint.CloneIntent)=>record.Plan.FullSystemPolicyDigest is not null&&record.Plan.MigrationTargetSchema is null&&record.MigrationAttempt!=last.MigrationAttempt,
-            (UpdateCheckpoint.CloneIntent,UpdateCheckpoint.CloneVerified)=>record.Plan.FullSystemPolicyDigest is not null&&record.MigrationAttempt is not null,
+            (UpdateCheckpoint.BackupVerified,UpdateCheckpoint.ActivationIntent)=>record.Plan.FullSystemPolicyDigest is null,
+            (UpdateCheckpoint.BackupVerified,UpdateCheckpoint.CloneIntent)=>record.Plan.FullSystemPolicyDigest is not null,
+            (UpdateCheckpoint.CloneIntent or UpdateCheckpoint.RecoveryRequired,UpdateCheckpoint.CloneIntent)=>record.Plan.FullSystemPolicyDigest is not null&&record.CloneAttempt!=last.CloneAttempt,
+            (UpdateCheckpoint.CloneIntent,UpdateCheckpoint.CloneVerified)=>record.Plan.FullSystemPolicyDigest is not null&&record.CloneAttempt is not null,
             (UpdateCheckpoint.CloneVerified,UpdateCheckpoint.ActivationIntent)=>record.Plan.FullSystemPolicyDigest is not null,
-            (UpdateCheckpoint.BackupVerified,UpdateCheckpoint.MigrationIntent)=>record.Plan.MigrationTargetSchema is not null,
-            (UpdateCheckpoint.MigrationIntent or UpdateCheckpoint.RecoveryRequired,UpdateCheckpoint.MigrationIntent)=>record.Plan.MigrationTargetSchema is not null&&last.MigrationReceiptDigest is null&&record.MigrationAttempt!=last.MigrationAttempt,
-            (UpdateCheckpoint.MigrationIntent,UpdateCheckpoint.MigrationVerified)=>record.MigrationReceiptDigest is not null,
-            (UpdateCheckpoint.MigrationVerified,UpdateCheckpoint.ActivationIntent)=>record.MigrationReceiptDigest is not null,
             (UpdateCheckpoint.ActivationIntent,UpdateCheckpoint.CandidateStartIntent)=>true,
             (UpdateCheckpoint.CandidateStartIntent,UpdateCheckpoint.Healthy)=>record.Plan.FullSystemPolicyDigest is null,
             (UpdateCheckpoint.CandidateStartIntent,UpdateCheckpoint.ProbationHealthy)=>record.Plan.FullSystemPolicyDigest is not null,
@@ -157,7 +143,7 @@ internal sealed class InstalledUpdateJournal:IDisposable
             (UpdateCheckpoint.ForwardRepairEffectsIntent,UpdateCheckpoint.Healthy)=>record.Plan.FullSystemPolicyDigest is not null,
             (UpdateCheckpoint.EffectsReleaseIntent or UpdateCheckpoint.RecoveryRequired or UpdateCheckpoint.ForwardRepairEffectsIntent or UpdateCheckpoint.CurrentAvailabilityStartIntent,UpdateCheckpoint.CurrentAvailabilityStartIntent)=>record.Plan.FullSystemPolicyDigest is not null&&prior.Any(x=>x.Checkpoint is UpdateCheckpoint.EffectsReleaseIntent or UpdateCheckpoint.ForwardRepairEffectsIntent),
             (UpdateCheckpoint.CurrentAvailabilityStartIntent,UpdateCheckpoint.Healthy)=>record.Plan.FullSystemPolicyDigest is not null,
-            (UpdateCheckpoint.ActivationIntent or UpdateCheckpoint.CandidateStartIntent or UpdateCheckpoint.ProbationHealthy or UpdateCheckpoint.EffectsReleaseIntent or UpdateCheckpoint.RecoveryRequired or UpdateCheckpoint.CloneIntent or UpdateCheckpoint.CloneVerified or UpdateCheckpoint.MigrationIntent or UpdateCheckpoint.MigrationVerified or UpdateCheckpoint.BackupVerified or UpdateCheckpoint.FullRollbackEffectsIntent,UpdateCheckpoint.FullRollbackStartIntent)=>record.Plan.FullSystemPolicyDigest is not null,
+            (UpdateCheckpoint.ActivationIntent or UpdateCheckpoint.CandidateStartIntent or UpdateCheckpoint.ProbationHealthy or UpdateCheckpoint.EffectsReleaseIntent or UpdateCheckpoint.RecoveryRequired or UpdateCheckpoint.CloneIntent or UpdateCheckpoint.CloneVerified or UpdateCheckpoint.BackupVerified or UpdateCheckpoint.FullRollbackEffectsIntent,UpdateCheckpoint.FullRollbackStartIntent)=>record.Plan.FullSystemPolicyDigest is not null,
             (UpdateCheckpoint.FullRollbackStartIntent,UpdateCheckpoint.FullRollbackComplete)=>record.Plan.FullSystemPolicyDigest is not null,
             (UpdateCheckpoint.FullRollbackStartIntent,UpdateCheckpoint.FullRollbackEffectsIntent)=>record.Plan.FullSystemPolicyDigest is not null,
             (UpdateCheckpoint.FullRollbackEffectsIntent,UpdateCheckpoint.FullRollbackComplete)=>record.Plan.FullSystemPolicyDigest is not null,
@@ -177,12 +163,12 @@ internal sealed class InstalledUpdateJournal:IDisposable
         if(record.RestoreOperationId is not null&&record.Checkpoint is not(UpdateCheckpoint.RollbackIntent or UpdateCheckpoint.RollbackStartIntent or UpdateCheckpoint.RollbackComplete or UpdateCheckpoint.RecoveryRequired))throw new IOException("UPDATE_JOURNAL_RESTORE_SCOPE");
         if(record.Checkpoint==UpdateCheckpoint.RollbackComplete&&prior.Any(r=>r.Checkpoint==UpdateCheckpoint.CandidateStartIntent)&&record.RestoreOperationId is null)throw new IOException("UPDATE_JOURNAL_NEW_DATA_RESTORE_REQUIRED");
     }
-    internal InstalledUpdateRecord Append(UpdateCheckpoint checkpoint,NativeBackupResult? backup=null,string? restoreOperationId=null,Action<string>? fault=null,string? migrationReceiptDigest=null,MigrationAttempt? migrationAttempt=null)
+    internal InstalledUpdateRecord Append(UpdateCheckpoint checkpoint,NativeBackupResult? backup=null,string? restoreOperationId=null,Action<string>? fault=null,CloneAttempt? cloneAttempt=null)
     {
         lock(serial)
         {
             ObjectDisposedException.ThrowIf(disposed,this);var last=Current??throw new IOException("UPDATE_JOURNAL_NOT_OPEN");
-            var record=new InstalledUpdateRecord(1,records.Count+1,previous,last.Plan,checkpoint,backup?.BackupId??last.BackupId,backup?.ReceiptDigest??last.BackupReceiptDigest,restoreOperationId??last.RestoreOperationId,migrationReceiptDigest??last.MigrationReceiptDigest,migrationAttempt??last.MigrationAttempt);
+            var record=new InstalledUpdateRecord(1,records.Count+1,previous,last.Plan,checkpoint,backup?.BackupId??last.BackupId,backup?.ReceiptDigest??last.BackupReceiptDigest,restoreOperationId??last.RestoreOperationId,cloneAttempt??last.CloneAttempt);
             if(backup is not null&&backup.ObservedSchema!=last.Plan.SchemaBefore)throw new IOException("UPDATE_JOURNAL_BACKUP_SCHEMA");
             ValidateTransition(records,record);return AppendCore(record,fault);
         }

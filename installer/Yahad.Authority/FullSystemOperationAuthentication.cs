@@ -10,29 +10,19 @@ internal sealed class FullSystemOperationAuthentication:IOperationAuthentication
     private readonly FullSystemUpdatePolicy policy;private readonly VerifiedSystemOperation system;private readonly ProtectedOperation operation;
     private readonly Func<DateTimeOffset> clock;private readonly VerifiedOperation issued;private readonly bool reconciling;
     internal FullSystemOperationAuthentication(FullSystemUpdatePolicy policy,VerifiedSystemOperation system,ProtectedOperation operation,
-        Func<DateTimeOffset> clock,byte[] previousActivationBytes,FullCompatibleClone? compatible=null,VerifiedOperation? reconciliation=null)
+        Func<DateTimeOffset> clock,byte[] previousActivationBytes,FullCompatibleClone compatible,VerifiedOperation? reconciliation=null)
     {
         this.policy=policy;this.system=system;this.operation=operation;this.clock=clock;
         if(InstalledActivationResolver.Hash(previousActivationBytes)!=system.PreviousActivationDigest)throw new UnauthorizedAccessException("FULL_SYSTEM_SOURCE_ACTIVATION");
         var previous=NativeJson.Read<InstalledActivation>(previousActivationBytes);
         if(previous.InstallationId!=system.InstallationId||operation.ExpectedEpoch!=previous.Epoch||operation.ExpectedActivationDigest!=system.PreviousActivationDigest||
             operation.MasterKeyDigest!=previous.MasterKeyDigest||operation.PolicyDigest!=previous.PolicyDigest||operation.PinDigest!=previous.PinDigest)throw new UnauthorizedAccessException("FULL_SYSTEM_SOURCE_IDENTITY");
-        if(compatible is not null)
-        {
-            foreach(var id in new[]{compatible.OperationId,compatible.SourceDataId,compatible.CloneOperationId,compatible.NewDataId,compatible.BackupId})InstalledActivationResolver.Id(id);InstalledActivationResolver.Digest(compatible.BackupReceiptDigest);
-            if(system.SourceSchema!=system.TargetSchema||operation.Kind!="recover"||operation.Migration is not null||operation.InstallationId!=system.InstallationId||operation.ReleaseDigest!=system.ApplicationBundleDigest||
-                operation.Nonce!=compatible.OperationId||operation.DataId!=compatible.NewDataId||operation.DataId==previous.DataId||compatible.SourceDataId!=(previous.Recovery?.SourceDataId??previous.DataId)||
-                compatible.SourceRestoreOperationId!=previous.Recovery?.OperationId||operation.MinimumSchema!=system.TargetSchema||operation.MaximumSchema!=system.TargetSchema||operation.Recovery!=new InstalledRecovery(compatible.SourceDataId,compatible.BackupId,compatible.CloneOperationId,compatible.BackupReceiptDigest,compatible.SourceRestoreOperationId))throw new UnauthorizedAccessException("FULL_SYSTEM_COMPATIBLE_OPERATION_SCOPE");
-        }
-        else
-        {
-        var migration=operation.Migration??throw new UnauthorizedAccessException("FULL_SYSTEM_MIGRATION_EVIDENCE_REQUIRED");var p=migration.Plan;p.Validate();
-        if(operation.Kind!="migrate"||system.InstallationId!=operation.InstallationId||p.InstallationId!=system.InstallationId||p.SystemOperationId!=system.OperationId||
-            p.PayloadDigest!=system.ApplicationBundleDigest||p.SourceSchema!=system.SourceSchema||p.TargetSchema!=system.TargetSchema||operation.ExpectedActivationDigest!=system.PreviousActivationDigest||
-            operation.ReleaseDigest!=p.PayloadDigest||operation.DataId!=p.NewDataId||operation.Nonce!=p.OperationId||operation.MinimumSchema!=p.TargetSchema||operation.MaximumSchema!=p.TargetSchema||
-            operation.MasterKeyDigest!=p.MasterKeyDigest||operation.PolicyDigest!=p.PolicyDigest||operation.PinDigest!=p.PinDigest||
-            migration.SourceRestoreOperationId!=previous.Recovery?.OperationId||operation.Recovery!=new InstalledRecovery(p.SourceDataId,p.BackupId,p.CloneOperationId,p.BackupReceiptDigest,migration.SourceRestoreOperationId))throw new UnauthorizedAccessException("FULL_SYSTEM_MIGRATION_OPERATION_SCOPE");
-        }
+        foreach(var id in new[]{compatible.OperationId,compatible.SourceDataId,compatible.CloneOperationId,compatible.NewDataId,compatible.BackupId})InstalledActivationResolver.Id(id);InstalledActivationResolver.Digest(compatible.BackupReceiptDigest);
+        // A schema bump uses this same clone operation: the candidate release's
+        // Store migrates the clone when it opens it. Only a downgrade is refused.
+        if(system.TargetSchema<system.SourceSchema||operation.Kind!="recover"||operation.InstallationId!=system.InstallationId||operation.ReleaseDigest!=system.ApplicationBundleDigest||
+            operation.Nonce!=compatible.OperationId||operation.DataId!=compatible.NewDataId||operation.DataId==previous.DataId||compatible.SourceDataId!=(previous.Recovery?.SourceDataId??previous.DataId)||
+            compatible.SourceRestoreOperationId!=previous.Recovery?.OperationId||operation.MinimumSchema!=system.TargetSchema||operation.MaximumSchema!=system.TargetSchema||operation.Recovery!=new InstalledRecovery(compatible.SourceDataId,compatible.BackupId,compatible.CloneOperationId,compatible.BackupReceiptDigest,compatible.SourceRestoreOperationId))throw new UnauthorizedAccessException("FULL_SYSTEM_COMPATIBLE_OPERATION_SCOPE");
         reconciling=reconciliation is not null;if(reconciling)policy.RequireRecoveryEvidence(system);else policy.RequireCurrent(system);var now=clock().ToUnixTimeSeconds();
         var digest=AuthorityProtocol.Digest(operation);
         if(reconciliation is {} prior&&(prior.Subject!=policy.Subject||prior.InstallationId!=system.InstallationId||prior.OperationDigest!=digest||prior.Scope!=operation.Kind||prior.ApprovedUnix<=0||prior.ApprovedUnix>now))throw new UnauthorizedAccessException("FULL_SYSTEM_RECONCILIATION_APPROVAL");
@@ -70,9 +60,9 @@ internal sealed class FullSystemSelectionAuthentication:IFullSystemSelectionAuth
         if(p.OperationId!=system.OperationId||p.FullSystemPolicyDigest!=system.PolicyDigest||p.PreviousActivationDigest!=system.PreviousActivationDigest||p.CandidateRelease!=system.ApplicationBundleDigest||p.PreviousRelease!=previous.ReleaseDigest||
             current.InstallationId!=system.InstallationId||current.ReleaseDigest!=system.ApplicationBundleDigest&&InstalledActivationResolver.Hash(currentActivationBytes)!=system.PreviousActivationDigest)throw new IOException("FULL_RETURN_JOURNAL_BINDING");
         if(journal.EffectsMayHaveBeenReleased&&system.SourceSchema!=system.TargetSchema)throw new IOException("FULL_RETURN_FORWARD_REPAIR_REQUIRED");
-        target=journal.EffectsMayHaveBeenReleased?previous with{DataId=current.DataId,Recovery=current.Recovery,Migration=current.Migration}:previous;
+        target=journal.EffectsMayHaveBeenReleased?previous with{DataId=current.DataId,Recovery=current.Recovery}:previous;
         if(operation.Kind!="activate"||operation.InstallationId!=system.InstallationId||operation.ExpectedActivationDigest!=InstalledActivationResolver.Hash(currentActivationBytes)||operation.ExpectedEpoch!=current.Epoch||
-            operation.ReleaseDigest!=target.ReleaseDigest||operation.DataId!=target.DataId||operation.Recovery!=target.Recovery||operation.Migration!=target.Migration||
+            operation.ReleaseDigest!=target.ReleaseDigest||operation.DataId!=target.DataId||operation.Recovery!=target.Recovery||
             operation.MasterKeyDigest!=target.MasterKeyDigest||operation.PolicyDigest!=target.PolicyDigest||operation.PinDigest!=target.PinDigest||operation.MinimumSchema!=target.MinimumSchema||operation.MaximumSchema!=target.MaximumSchema||
             current.MasterKeyDigest!=target.MasterKeyDigest||current.PolicyDigest!=target.PolicyDigest||current.PinDigest!=target.PinDigest)throw new IOException("FULL_RETURN_SELECTION_BINDING");
         policy.RequireRecoveryEvidence(system);var now=clock().ToUnixTimeSeconds();reconciling=reconciliation is not null;var digest=AuthorityProtocol.Digest(operation);

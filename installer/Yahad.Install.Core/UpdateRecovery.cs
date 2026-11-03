@@ -4,7 +4,7 @@ public enum UpdateCheckpoint
 {
     Prepared, Quiesced, BackupVerified, ActivationIntent, CandidateStartIntent,
     Healthy, RecoveryRequired, RollbackIntent, RollbackComplete,
-    PreviousStartIntent, Aborted, RollbackStartIntent, MigrationIntent, MigrationVerified, ProbationHealthy, EffectsReleaseIntent, CloneIntent, CloneVerified,
+    PreviousStartIntent, Aborted, RollbackStartIntent, ProbationHealthy, EffectsReleaseIntent, CloneIntent, CloneVerified,
     FullRollbackStartIntent,FullRollbackComplete,FullRollbackEffectsIntent,PreviousEffectsReleaseIntent,ForwardRepairEffectsIntent,CurrentAvailabilityStartIntent
 }
 public enum RecoveryAction
@@ -58,7 +58,7 @@ public static class UpdateRecovery
         if(journal.Checkpoint==UpdateCheckpoint.RollbackStartIntent)return Refuse("RESTORED_RUNTIME_HEALTH_UNCONFIRMED");
         if (journal.Checkpoint == UpdateCheckpoint.RollbackIntent)
             return new(RecoveryAction.ReconcileInterruptedRestore, "RESTORE_OUTCOME_UNCERTAIN", null, false, false);
-        if (journal.Checkpoint is UpdateCheckpoint.Prepared or UpdateCheckpoint.Quiesced or UpdateCheckpoint.BackupVerified or UpdateCheckpoint.MigrationIntent or UpdateCheckpoint.MigrationVerified or UpdateCheckpoint.CloneIntent or UpdateCheckpoint.CloneVerified)
+        if (journal.Checkpoint is UpdateCheckpoint.Prepared or UpdateCheckpoint.Quiesced or UpdateCheckpoint.BackupVerified or UpdateCheckpoint.CloneIntent or UpdateCheckpoint.CloneVerified)
             return facts.ActiveRelease == journal.PreviousRelease && previousCanRead
                 ? new(RecoveryAction.StartPreviousUnchanged, "CANDIDATE_NOT_STARTED", journal.PreviousRelease, false, false)
                 : Refuse("PREACTIVATION_STATE_CHANGED");

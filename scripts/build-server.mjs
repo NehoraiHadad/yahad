@@ -18,9 +18,9 @@ import { fileURLToPath } from 'node:url';
 const args = process.argv.slice(2), option = name => { const at = args.indexOf(name); return at >= 0 ? args[at + 1] : undefined; };
 const payload = option('--payload'), root = resolve(option('--root') ?? join(dirname(fileURLToPath(import.meta.url)), '..'));
 if (!payload || args.length !== (option('--root') ? 4 : 2)) throw new Error('Use: node scripts/build-server.mjs --payload NEW_DIR [--root CHECKOUT]');
-// Entry → output stem. The migration and supervisor are separate processes with
-// fixed payload paths, so they are never split into shared chunks.
-const ENTRIES = { 'src/main.ts': 'main', 'src/native-migrate-v1.ts': 'native-migrate-v1', 'src/native-supervisor.ts': 'native-supervisor' };
+// Entry → output stem. The supervisor is a separate process with a fixed
+// payload path, so it is never split into shared chunks.
+const ENTRIES = { 'src/main.ts': 'main', 'src/native-supervisor.ts': 'native-supervisor' };
 // Optional packages, left unresolved and never shipped, each allowed only through the
 // import kind its caller guards. Baileys reaches its media helpers through
 // `import(...).catch()`: link previews are disabled, image/video thumbnails come
@@ -78,8 +78,8 @@ for (const input of Object.keys(result.metafile.inputs)) {
 for (const source of Object.keys(ENTRIES)) if (!sources.has(source)) fail('entry not bundled ' + source);
 
 // Optional packages are tolerated only in the server and only behind their guarded
-// import kind, so startup never needs them. The migration and supervisor run with
-// Node builtins alone.
+// import kind, so startup never needs them. The supervisor runs with Node builtins
+// alone.
 const outputs = [], noticesByOutput = [];
 for (const [path, output] of Object.entries(result.metafile.outputs)) {
   if (path.endsWith('.LEGAL.txt')) continue;

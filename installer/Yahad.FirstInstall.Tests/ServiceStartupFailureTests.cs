@@ -42,10 +42,10 @@ internal static class ServiceStartupFailureTests
             var result=await controller.RunAsync(report=>{if(report.State==ServiceState.Stopped)throw transport;});
             Require(result.Failure==ServiceFailure.StatusTransport&&result.QuiescenceConfirmed&&seen.SequenceEqual(new Exception[]{cause,transport}));
         });
-        await check("Runtime diagnostic permits only fixed profile refusal without private exception text",()=>
+        await check("Runtime diagnostic permits only a fixed refusal code without private exception text",()=>
         {
-            using var known=JsonDocument.Parse(ServiceStartupDiagnostic.Encode(StartupDiagnosticRole.Runtime,new IOException("MIGRATION_PROFILE_CREATE_DENIED",new Win32Exception(5))));
-            Require(known.RootElement.GetProperty("Role").GetString()=="Runtime"&&known.RootElement.GetProperty("Code").GetString()=="MIGRATION_PROFILE_CREATE_DENIED"&&known.RootElement.GetProperty("NativeError").GetInt32()==5);
+            using var known=JsonDocument.Parse(ServiceStartupDiagnostic.Encode(StartupDiagnosticRole.Runtime,new IOException("RUNTIME_UPDATER_NOT_ENROLLED",new Win32Exception(5))));
+            Require(known.RootElement.GetProperty("Role").GetString()=="Runtime"&&known.RootElement.GetProperty("Code").GetString()=="RUNTIME_UPDATER_NOT_ENROLLED"&&known.RootElement.GetProperty("NativeError").GetInt32()==5);
             var privateText="private-profile-path-and-token";var encoded=ServiceStartupDiagnostic.Encode(StartupDiagnosticRole.Runtime,new IOException(privateText));
             using var hidden=JsonDocument.Parse(encoded);Require(hidden.RootElement.GetProperty("Code").ValueKind==JsonValueKind.Null&&!encoded.Contains(privateText));return Task.CompletedTask;
         });

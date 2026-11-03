@@ -119,7 +119,7 @@ internal sealed class NativeLanInstall(InstallerState application,FullInstallFil
     {
         if(head.InstallationId!=installation.InstallationId||head.MinimumSchema!=head.MaximumSchema)throw new IOException("LAN_APP_CONFIGURATION_CHANGED");
         InstalledActivationResolver.Id(head.DataId);InstalledActivationResolver.Digest(head.ReleaseDigest);
-        return new(1,installation.InstallationId,head.DataId,installation.PackageDigest,head.ReleaseDigest,installation.SourceCommit,installation.OwnerSid,installation.Port,"committed",installation.Files,installation.RuntimeSid!,installation.SetupSha256,head.MaximumSchema,head.Recovery,head.Migration);
+        return new(1,installation.InstallationId,head.DataId,installation.PackageDigest,head.ReleaseDigest,installation.SourceCommit,installation.OwnerSid,installation.Port,"committed",installation.Files,installation.RuntimeSid!,installation.SetupSha256,head.MaximumSchema,head.Recovery);
     }
     // Caller retains the full-profile serial owner and has observed/fenced every
     // Runtime/Authority/helper before entering this bounded old/new recovery.

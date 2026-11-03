@@ -84,7 +84,7 @@ internal sealed class InstalledFullSystemExecutionKernel:IFullSystemExecutionKer
             if(allowTerminalBootstrap&&name.Contains("bootstrap-handoffs",StringComparison.Ordinal)&&SystemBootstrapJournal.Inspect(files,anchor.InstallationId,id)?.Phase==SystemBootstrapPhase.RolledBack)continue;
             return false;
         }
-        foreach(var name in new[]{".authority/full-data-operation-"+id+".json",".authority/full-data-return-"+id+".json",".authority/migration-effects-"+id+".json"})if(File.Exists(files.PathOf(name)))return false;
+        foreach(var name in new[]{".authority/full-data-operation-"+id+".json",".authority/full-data-return-"+id+".json",".authority/data-effects-"+id+".json"})if(File.Exists(files.PathOf(name)))return false;
         if(!ignoreForeignControlPending&&(File.Exists(files.PathOf("pending.json"))||Directory.EnumerateFileSystemEntries(files.Root,"pending.json.partial-*").Any()))return false;
         var capsulePath=files.PathOf(".authority/bootstrap-helper-active.json");
         if(File.Exists(capsulePath)){var capsule=NativeJson.Read<SystemBootstrapHelperCapsule>(files.Read(capsulePath,65536));SystemBootstrapHelperApplication.RequireCapsule(capsule);if(capsule.OperationId==id)return false;}
@@ -380,7 +380,7 @@ internal sealed class InstalledFullSystemExecutionKernel:IFullSystemExecutionKer
     {
         private readonly InstalledFullSystemExecutionKernel owner;private readonly string id;private readonly byte[] original;
         private readonly InstalledActivation source;private RetainedRuntimeQuiescence? proof;private WindowsFileBoundary.DataLease? serial,data;
-        private InstalledStateFiles activeFiles;private SystemBootstrapJournal? bootstrap;private InstalledDataMigrationTransaction? transaction;
+        private InstalledStateFiles activeFiles;private SystemBootstrapJournal? bootstrap;private InstalledDataTransaction? transaction;
         private SystemBootstrapHelperSession? helper;private WindowsScmRuntimeLifecycle? candidateRuntime;private bool retained,terminal,handed,disposed;
         private (WindowsScmRuntimeLifecycle Runtime,string Id)? pendingIdleCancellation;
         private readonly List<RetainedRuntimeQuiescence> cancellationOwners=[];
@@ -443,14 +443,14 @@ internal sealed class InstalledFullSystemExecutionKernel:IFullSystemExecutionKer
         {
             // The Runtime idle gate holds first setup. Independently verify the
             // actual designated parent on the quiescent, exclusively held DB
-            // before backup, migration or privileged bootstrap publication.
+            // before backup or privileged bootstrap publication.
             var enrollment=NativeUpdateEnrollmentReader.Require(activeFiles,owner.anchor);
             using(var inspector=new NativeSqliteInspector(activeFiles.ProbeExecutable,activeFiles.ProbeDigest))
             using(var recovery=await NativeRecoveryFixture.OpenInstalledAsync(activeFiles,source.Recovery?.SourceDataId??source.DataId,Proof.Duplicate(),inspector,source.Recovery?.OperationId,cancellation,Data))
                 await recovery.RequireCurrentOperatorAsync(enrollment.FamilyId,enrollment.UserId,cancellation);
             owner.policy.RequireCurrent(operation);RequireOriginal();Operation=operation;owner.PublishPlan(operation,original);
             bootstrap=new(activeFiles,operation,Serial);await Handoff(operation).PrepareAsync(operation,bootstrap,cancellation);
-            transaction=InstalledDataMigrationTransaction.Begin(activeFiles,owner.anchor,owner.policy,operation,bootstrap,Proof,Serial,Data,owner.clock);
+            transaction=InstalledDataTransaction.Begin(activeFiles,owner.anchor,owner.policy,operation,bootstrap,Proof,Serial,Data,owner.clock);
             await transaction.BackupAsync(cancellation);
         }
         public async Task<FullSystemCompletion> ReplaceBootstrapAsync(VerifiedSystemOperation operation,CancellationToken cancellation)
@@ -470,7 +470,7 @@ internal sealed class InstalledFullSystemExecutionKernel:IFullSystemExecutionKer
                 catch(UnauthorizedAccessException){await HandRecoveryToHelperAsync(operation,cancellation);return;}
                 await Handoff(operation).ReconcileAsync(operation,bootstrap,cancellation);
             }
-            activeFiles=owner.OperationalFiles(bootstrap.Current?.Phase==SystemBootstrapPhase.Complete?operation.ExpectedBootstrapEpoch+1:operation.ExpectedBootstrapEpoch);transaction=await InstalledDataMigrationTransaction.ResumeForRecoveryAsync(activeFiles,owner.anchor,owner.policy,operation,bootstrap,Proof,Serial,Data,owner.clock,original,cancellation);
+            activeFiles=owner.OperationalFiles(bootstrap.Current?.Phase==SystemBootstrapPhase.Complete?operation.ExpectedBootstrapEpoch+1:operation.ExpectedBootstrapEpoch);transaction=await InstalledDataTransaction.ResumeForRecoveryAsync(activeFiles,owner.anchor,owner.policy,operation,bootstrap,Proof,Serial,Data,owner.clock,original,cancellation);
         }
         private async Task<FullSystemCompletion> HandRecoveryToHelperAsync(VerifiedSystemOperation operation,CancellationToken cancellation)
         {
@@ -482,11 +482,7 @@ internal sealed class InstalledFullSystemExecutionKernel:IFullSystemExecutionKer
             helper.CommitHandoff();handed=true;return FullSystemCompletion.HandedToReplacementAuthority;
         }
         public async Task PrepareCandidateDataAsync(VerifiedSystemOperation operation,CancellationToken cancellation)
-        {
-            owner.policy.RequireCurrent(operation);var access=new NativeMigrationScopeAccess(activeFiles);
-            await transaction!.PrepareCandidateAsync(operation.TargetSchema>operation.SourceSchema?new NativeOfflineMigrationProxy(new WindowsInstallationReader()):null,
-                activeFiles.Roles!.Runtime.Value,NativeMigrationSandbox.DeriveProfileSid(operation.InstallationId),access.GrantAsync,access.NormalizeAsync,cancellation);
-        }
+        {owner.policy.RequireCurrent(operation);await transaction!.PrepareCandidateAsync(cancellation);}
         public async Task CommitAndStartProbationAsync(VerifiedSystemOperation operation,CancellationToken cancellation)
         {
             owner.policy.RequireCurrent(operation);var binding=await transaction!.CommitAsync(new LocalChildControlFactory(),cancellation);var selected=transaction.Candidate??throw new IOException("FULL_SYSTEM_NATIVE_CANDIDATE_REQUIRED");
@@ -605,7 +601,7 @@ internal sealed class InstalledFullSystemExecutionKernel:IFullSystemExecutionKer
             if(data is null)
             {
                 data=owner.files.Lease(SourceDirectory(owner.files,source));transaction.Failure();
-                transaction=await InstalledDataMigrationTransaction.ResumeForRecoveryAsync(activeFiles,owner.anchor,owner.policy,operation,bootstrap!,stopped,Serial,Data,owner.clock,original,cancellation);
+                transaction=await InstalledDataTransaction.ResumeForRecoveryAsync(activeFiles,owner.anchor,owner.policy,operation,bootstrap!,stopped,Serial,Data,owner.clock,original,cancellation);
             }
             var returning=owner.create();candidateRuntime=returning;
             var result=await transaction.ReconcileAsync(new ReturnLifecycle(this,returning),new LocalChildControlFactory(),stopped,cancellation);
@@ -630,8 +626,7 @@ internal sealed class InstalledFullSystemExecutionKernel:IFullSystemExecutionKer
             if(transaction?.EffectsMayHaveBeenReleased!=true)throw new IOException("FULL_SYSTEM_CURRENT_AVAILABILITY_EFFECTS_REQUIRED");
             var raw=owner.ReadCommitted();var selected=NativeJson.Read<InstalledActivation>(raw);var candidate=transaction!.Candidate??throw new IOException("FULL_SYSTEM_FORWARD_CANDIDATE_REQUIRED");
             if(selected.ReleaseDigest!=operation.ApplicationBundleDigest||selected.DataId!=candidate.DataId||selected.MinimumSchema!=operation.TargetSchema||selected.MaximumSchema!=operation.TargetSchema||
-                selected.MasterKeyDigest!=source.MasterKeyDigest||selected.PolicyDigest!=source.PolicyDigest||selected.PinDigest!=source.PinDigest||selected.Migration is null||selected.Recovery is null||
-                selected.Migration.Plan.SystemOperationId!=operation.OperationId||selected.Migration.Plan.OperationId!=candidate.OperationId||selected.Migration.Plan.TargetSchema!=operation.TargetSchema)
+                selected.MasterKeyDigest!=source.MasterKeyDigest||selected.PolicyDigest!=source.PolicyDigest||selected.PinDigest!=source.PinDigest||selected.Recovery is null)
                 throw new IOException("FULL_SYSTEM_FORWARD_CURRENT_SELECTION");
             var directory=SourceDirectory(activeFiles,selected);if(directory==SourceDirectory(owner.files,source))throw new IOException("FULL_SYSTEM_FORWARD_SOURCE_OVERWRITE_REFUSED");
             WindowsFileBoundary.DataLease? currentLease=null;var pins=new List<IDisposable>();
@@ -640,8 +635,8 @@ internal sealed class InstalledFullSystemExecutionKernel:IFullSystemExecutionKer
                 currentLease=activeFiles.Lease(directory);var scope=Path.GetDirectoryName(directory)!;
                 foreach(var file in new[]{(Path.Combine(scope,"identity","master-key"),selected.MasterKeyDigest),(Path.Combine(scope,"policy","update-policy"),selected.PolicyDigest),(Path.Combine(scope,"policy","update-pin"),selected.PinDigest)})
                 {var pinned=activeFiles.Open(file.Item1);pins.Add(pinned);if(InstalledActivationResolver.Hash(pinned.Small(1024*1024))!=file.Item2)throw new IOException("FULL_SYSTEM_FORWARD_IDENTITY_CHANGED");}
-                var spec=NativeMigrationAdmission.SpecForInstalled(activeFiles,selected.Migration);
-                _=NativeMigrationAdmission.VerifyCommittedEvidence(activeFiles,spec,selected.Migration.ReceiptDigest);
+                _=NativeRecoveryAdmission.VerifyCommittedEvidence(activeFiles.PathOf("datasets/"+selected.Recovery.SourceDataId),selected.Recovery.SourceDirectory(activeFiles.Root),selected.Recovery.BackupId,selected.Recovery.OperationId,selected.Recovery.ReceiptDigest,
+                    scope,Path.Combine(scope,"identity","master-key"),Path.Combine(scope,"policy","update-policy"),Path.Combine(scope,"policy","update-pin"),pins,activeFiles);
                 using(var inspector=new NativeSqliteInspector(activeFiles.ProbeExecutable,activeFiles.ProbeDigest))
                 using(var recovery=await NativeRecoveryFixture.OpenInstalledAsync(activeFiles,selected.Recovery.SourceDataId,stopped.Duplicate(),inspector,selected.Recovery.OperationId,cancellation,currentLease))
                 {if(await recovery.InspectCurrentSchemaAsync(cancellation)!=operation.TargetSchema)throw new IOException("FULL_SYSTEM_FORWARD_SCHEMA_CHANGED");}
@@ -673,7 +668,7 @@ internal sealed class InstalledFullSystemExecutionKernel:IFullSystemExecutionKer
         {
             owner.policy.RequireRecoveryEvidence(operation);using var stopped=await StopCurrentAsync(cancellation);await stopped.RequireAsync(cancellation);
             data??=owner.files.Lease(SourceDirectory(owner.files,source));
-            transaction=await InstalledDataMigrationTransaction.ResumeForRecoveryAsync(activeFiles,owner.anchor,owner.policy,operation,bootstrap!,stopped,Serial,Data,owner.clock,original,cancellation);
+            transaction=await InstalledDataTransaction.ResumeForRecoveryAsync(activeFiles,owner.anchor,owner.policy,operation,bootstrap!,stopped,Serial,Data,owner.clock,original,cancellation);
             var checkpoint=transaction.Evidence.Checkpoint;
             if(checkpoint is not(UpdateCheckpoint.Healthy or UpdateCheckpoint.FullRollbackComplete or UpdateCheckpoint.Aborted))throw new IOException("FULL_SYSTEM_TERMINAL_JOURNAL_CHANGED");
             var raw=owner.ReadCommitted();var selected=NativeJson.Read<InstalledActivation>(raw);var directory=SourceDirectory(activeFiles,selected);

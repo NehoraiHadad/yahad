@@ -26,7 +26,7 @@ internal static class LanWebConfiguration
             web.InstallationId!=state.InstallationId||web.Port!=state.Port||
             !Uri.TryCreate(web.Origin,UriKind.Absolute,out var origin)||origin.UserInfo!=""||origin.AbsolutePath!="/"||origin.Query!=""||origin.Fragment!=""||
             !(origin.Scheme=="http"&&origin.Host=="127.0.0.1"&&origin.Port==state.Port||origin.Scheme=="https"&&origin.Port==443&&NetworkPlan.IsPrivateLanV4(origin.Host))||
-            activation.InstallationId!=state.InstallationId||activation.ReleaseDigest!=state.PayloadDigest||activation.DataId!=state.DataId||activation.Phase!="committed"||activation.Recovery!=state.CurrentRecovery||activation.Migration!=state.CurrentMigration||
+            activation.InstallationId!=state.InstallationId||activation.ReleaseDigest!=state.PayloadDigest||activation.DataId!=state.DataId||activation.Phase!="committed"||activation.Recovery!=state.CurrentRecovery||
             activation.WebDigest!=Hash(snapshot.Web)||epoch.InstallationId!=state.InstallationId||epoch.Epoch!=activation.Epoch||epoch.ActivationDigest!=Hash(snapshot.Activation)||
             bootstrap.GetProperty("installationId").GetString()!=state.InstallationId||bootstrap.GetProperty("activationReceiptDigest").GetString()!=Hash(snapshot.Activation))
             throw new IOException("LAN_APP_CONFIGURATION_CHANGED");

@@ -4,13 +4,6 @@ namespace Yahad.Authority;
 
 internal sealed record RuntimeStartIntent(InstallationBinding Binding,string ReleaseDigest,string Nonce,string Purpose="admit");
 
-internal interface IRetainedScmMigrationSession:IRetainedScmRuntimeSession
-{
-    Task<MigrationSandboxObservation> WaitMigrationStartedAsync(RuntimeAdmissionBinding admission,CancellationToken cancellation);
-    Task AcknowledgeMigrationStartedAsync(RuntimeAdmissionBinding admission,CancellationToken cancellation);
-    Task<int> WaitMigrationCompletedAsync(RuntimeAdmissionBinding admission,CancellationToken cancellation);
-}
-
 // This ownership adapter is deliberately not a native implementation. Its factory
 // must be side-effect-free: the lifecycle retains the session BEFORE starting it.
 // All handles created by StartWaitingAsync, including failed starts, stay owned by

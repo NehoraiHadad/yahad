@@ -189,10 +189,6 @@ def validate_payload_source(repo, prepared, manifest, version, source, tracked):
         if (not record or record['sha256']!=output.get('sha256') or record['size']!=output.get('size') or output.get('entry')!=entry or
                 not isinstance(output.get('sources'), list) or entry not in output['sources'] or not set(output['sources'])<=sources.keys()):
             raise PackageError('Server bundle record differs')
-    # The offline migration runs against old data: its pinned bundle holds only
-    # migration source with the schema declaration, never a third-party package.
-    migration = outputs['app/server/native-migrate-v1.mjs']
-    if 'src/database-schema.ts' not in migration['sources'] or migration.get('packages')!=[]: raise PackageError('Migration bundle closure')
     return schema, migrations
 
 

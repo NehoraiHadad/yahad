@@ -22,6 +22,9 @@ internal interface IRuntimeAdmissionChannel
     Task ReportReadyAsync(RuntimeAdmissionBinding admission,CancellationToken cancellation);
 }
 
+internal interface IRuntimePurposeAdmissionChannel
+{string Purpose{get;}}
+
 internal sealed class WaitingRuntimeAuthorizer(IServiceStartAuthorizer installed,IInstallationReader installation,
     IRuntimeAdmissionChannel channel,Func<RuntimeHostIdentity> observeHost,
     Func<RuntimeAdmissionBinding,string,CancellationToken,Task<AuthorizedServiceStart>>? purposeStart=null):IServiceStartAuthorizer,IObservedAdmission
@@ -43,15 +46,7 @@ internal sealed class WaitingRuntimeAuthorizer(IServiceStartAuthorizer installed
             channel.RequireLaunch(admission);
         }
         Require();var purpose=(channel as IRuntimePurposeAdmissionChannel)?.Purpose??"admit";
-        if(purpose is not("admit" or "offline-migrate" or "probation"))throw new IOException("RUNTIME_PURPOSE_UNKNOWN");
-        if(purpose=="offline-migrate")
-        {
-            // Dispatch before resolving normal app state: pending DB migration
-            // deliberately has no launchable activation/web/provider grant.
-            var migration=await (purposeStart??throw new IOException("RUNTIME_PURPOSE_UNCONFIGURED"))(admission,purpose,cancellation);
-            try{Require();if(migration.Release.Id!=admission.ReleaseDigest)throw new IOException("MIGRATION_RELEASE_BINDING");return migration;}
-            catch{migration.Dispose();throw;}
-        }
+        if(purpose is not("admit" or "probation"))throw new IOException("RUNTIME_PURPOSE_UNKNOWN");
         var grant=purpose=="probation"?await (purposeStart??throw new IOException("RUNTIME_PURPOSE_UNCONFIGURED"))(admission,purpose,cancellation):await installed.AuthorizeAsync(cancellation);
         try
         {

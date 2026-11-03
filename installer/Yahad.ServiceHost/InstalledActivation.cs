@@ -14,7 +14,7 @@ internal sealed record InstalledRecovery(string SourceDataId,string BackupId,str
 }
 internal sealed record InstalledActivation(int Format,string InstallationId,long Epoch,string ReleaseDigest,string DataId,
     int MinimumSchema,int MaximumSchema,string MasterKeyDigest,string PolicyDigest,string PinDigest,
-    string WebDigest,string Phase,InstalledRecovery? Recovery,[property:JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)]InstalledMigration? Migration=null);
+    string WebDigest,string Phase,InstalledRecovery? Recovery);
 internal sealed record InstalledEpoch(int Format,string InstallationId,long Epoch,string ActivationDigest);
 internal sealed record InstalledWeb(int Format,string InstallationId,string Origin,int Port);
 internal interface IInstalledControlFiles
@@ -72,7 +72,7 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
                 var local=origin.Scheme=="http"&&origin.Host=="127.0.0.1"&&origin.Port==web.Port;
                 if(!local||!files.IsSingleService&&(files.Roles is null||!InstalledUpdaterLayout.AllowsLoopbackOrigin(Protected(InstalledUpdaterLayout.AnchorFile,4096),binding.InstallationId)))throw new IOException("INSTALLED_WEB_CONFIGURATION");
             }
-            if(head.Phase is not("committed" or "recovered" or "migrated")||head.Phase=="recovered"&&head.Recovery is null||head.Migration is not null&&head.Recovery is null||head.Phase=="migrated"&&head.Migration is null)throw new IOException("INSTALLED_INCOMPLETE_ACTIVATION");
+            if(head.Phase is not("committed" or "recovered")||head.Phase=="recovered"&&head.Recovery is null)throw new IOException("INSTALLED_INCOMPLETE_ACTIVATION");
             var selected=Path.Combine(root,"datasets",head.DataId);var key=Path.Combine(selected,"master-key");var policy=Path.Combine(selected,"update-policy");var pins=Path.Combine(selected,"update-pin");
             if(head.Recovery is { } recovery)
             {
@@ -103,37 +103,23 @@ internal sealed class InstalledActivationResolver:IInstalledActivationResolver,I
                 _=await FirstInstallWal.ReconcileAsync(probe,Path.Combine(reservation.Data,"app.sqlite"),probeTemporary,cancellation);
             reservation.CheckWal();reservation.PinData(initializing);
             var schema=initializing?head.MaximumSchema:await FrozenAdmissionSchema.ReadAsync(probe,Path.Combine(reservation.Data,"app.sqlite"),probeTemporary,cancellation);
-            if(schema<head.MinimumSchema||schema>head.MaximumSchema)throw new IOException("INSTALLED_SCHEMA_INCOMPATIBLE");
+            // The release's Store migrates an older database when it opens it, and
+            // refuses an unsupported one. Only a database newer than this release's
+            // code is refused here.
+            if(schema>head.MaximumSchema)throw new IOException("INSTALLED_SCHEMA_INCOMPATIBLE");
             if(head.Recovery is { } recovered)
             {
                 var source=recovered.SourceDirectory(root);
-                if(head.Migration is { } migration)
+                if(head.Phase=="recovered")
                 {
-                    var p=migration.Plan;p.Validate();
-                    if(p.InstallationId!=head.InstallationId||p.NewDataId!=head.DataId||p.SourceDataId!=recovered.SourceDataId||p.BackupId!=recovered.BackupId||p.CloneOperationId!=recovered.OperationId||p.BackupReceiptDigest!=recovered.ReceiptDigest||
-                        p.MasterKeyDigest!=head.MasterKeyDigest||p.PolicyDigest!=head.PolicyDigest||p.PinDigest!=head.PinDigest||migration.SourceRestoreOperationId!=recovered.SourceRestoreOperationId)throw new IOException("INSTALLED_MIGRATION_BINDING");
-                    var migrationSpec=NativeMigrationAdmission.SpecForInstalled(files,migration);
-                    if(head.Phase=="migrated")
-                    {
-                        if(!commitInspection||p.PayloadDigest!=head.ReleaseDigest)throw new IOException("INSTALLED_MIGRATION_COMMIT_REQUIRED");
-                        _=NativeMigrationAdmission.VerifyCompleted(files,migrationSpec,migration.ReceiptDigest);
-                    }
-                    var verified=NativeMigrationAdmission.VerifyCommittedEvidence(files,migrationSpec,migration.ReceiptDigest);
-                    if(verified.ObservedSchema<head.MinimumSchema||verified.ObservedSchema>head.MaximumSchema||schema<verified.ObservedSchema)throw new IOException("INSTALLED_MIGRATION_SCHEMA");
-                }
-                else
-                {
-                    if(head.Phase=="recovered")
-                    {
-                        var restoredSchema=NativeRecoveryAdmission.VerifyCompleted(Path.Combine(root,"datasets",recovered.SourceDataId),source,recovered.BackupId,recovered.OperationId,recovered.ReceiptDigest,
-                            selected,key,policy,pins,reservation.DataPins,files);
-                        if(restoredSchema!=schema)throw new IOException("INSTALLED_RECOVERY_SCHEMA");
-                        if(!commitInspection)throw new IOException("INSTALLED_RECOVERY_COMMIT_REQUIRED");
-                    }
-                    var baseline=NativeRecoveryAdmission.VerifyCommittedEvidence(Path.Combine(root,"datasets",recovered.SourceDataId),source,recovered.BackupId,recovered.OperationId,recovered.ReceiptDigest,
+                    var restoredSchema=NativeRecoveryAdmission.VerifyCompleted(Path.Combine(root,"datasets",recovered.SourceDataId),source,recovered.BackupId,recovered.OperationId,recovered.ReceiptDigest,
                         selected,key,policy,pins,reservation.DataPins,files);
-                    if(baseline<head.MinimumSchema||baseline>head.MaximumSchema||schema<baseline)throw new IOException("INSTALLED_RECOVERY_SCHEMA");
+                    if(restoredSchema!=schema)throw new IOException("INSTALLED_RECOVERY_SCHEMA");
+                    if(!commitInspection)throw new IOException("INSTALLED_RECOVERY_COMMIT_REQUIRED");
                 }
+                var baseline=NativeRecoveryAdmission.VerifyCommittedEvidence(Path.Combine(root,"datasets",recovered.SourceDataId),source,recovered.BackupId,recovered.OperationId,recovered.ReceiptDigest,
+                    selected,key,policy,pins,reservation.DataPins,files);
+                if(baseline>head.MaximumSchema||schema<baseline)throw new IOException("INSTALLED_RECOVERY_SCHEMA");
             }
             // A DB left by an interrupted first attempt is admitted without
             // reset. Retire the pending grants while its validated file pins

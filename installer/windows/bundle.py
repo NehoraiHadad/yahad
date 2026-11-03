@@ -14,7 +14,7 @@ from . import pe, dependencies
 class BundleError(ValueError): pass
 
 # One self-contained ESM file per fixed process entry; no source tree, loader or node_modules.
-SERVER = ('app/server/main.mjs', 'app/server/native-migrate-v1.mjs', 'app/server/native-supervisor.mjs')
+SERVER = ('app/server/main.mjs', 'app/server/native-supervisor.mjs')
 APP_ROOTS = ('app/server/', 'app/native/', 'app/dist/', 'app/fixtures/', 'app/deploy/')
 BASE_REQUIRED = ('app/package.json', *SERVER, 'app/dist/index.html', 'runtime/node/node.exe',
     'app/native/Yahad.Platform.exe', 'app/native/Yahad.Platform.runtimeconfig.json',

@@ -59,7 +59,7 @@ internal static class RecoveredUpdateScheduleTests
                 using var journal=new InstalledUpdateJournal(App.Files,Anchor.InstallationId);
                 journal.Begin(new(1,Anchor.InstallationId,Operation,source.DataId,PreviousDigest,source.ReleaseDigest,Candidate,6,6,6,6,6,Anchor.IntakePolicyDigest,Anchor.IntakePinDigest,FullSystemPolicyDigest:Policy));
                 journal.Append(UpdateCheckpoint.Quiesced);journal.Append(UpdateCheckpoint.BackupVerified,new(Guid.NewGuid().ToString("N"),new('a',64),6));
-                journal.Append(UpdateCheckpoint.CloneIntent,migrationAttempt:new(1,Guid.NewGuid().ToString("N"),Guid.NewGuid().ToString("N"),NewData));journal.Append(UpdateCheckpoint.CloneVerified);journal.Append(UpdateCheckpoint.ActivationIntent);journal.Append(UpdateCheckpoint.CandidateStartIntent);
+                journal.Append(UpdateCheckpoint.CloneIntent,cloneAttempt:new(1,Guid.NewGuid().ToString("N"),Guid.NewGuid().ToString("N"),NewData));journal.Append(UpdateCheckpoint.CloneVerified);journal.Append(UpdateCheckpoint.ActivationIntent);journal.Append(UpdateCheckpoint.CandidateStartIntent);
                 if(healthy){journal.Append(UpdateCheckpoint.ProbationHealthy);journal.Append(UpdateCheckpoint.EffectsReleaseIntent);journal.Append(UpdateCheckpoint.Healthy);}
             }
             if(current)

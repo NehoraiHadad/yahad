@@ -179,7 +179,7 @@ internal static class NativeCandidateIntakeTests
                     if(mutation=="directory_case"){items["app/dist/Folder/a.txt"]=[1];items["app/dist/folder/b.txt"]=[1];}
                     if(mutation=="private_clr")items["app/native/Yahad.Platform.runtimeconfig.json"]=Json(new{runtimeOptions=new{framework=new{name="Microsoft.NETCore.App",version="10.0.0"}}});
                     if(mutation=="package")items["app/package.json"]=Json(new{version="0.6.9",engines=new{node=">=24.0.0 <25"},dependencies=new{tsx="4.20.6"}});
-                    if(mutation=="server_record")items["app/server/native-migrate-v1.mjs"]=Encoding.UTF8.GetBytes("// not the recorded migration bundle");
+                    if(mutation=="server_record")items["app/server/native-supervisor.mjs"]=Encoding.UTF8.GetBytes("// not the recorded supervisor bundle");
                     if(mutation=="source")items["legal/build-inputs.json"]=Json(new{databaseSchema=6,appSourceCommit=new string('a',40),helperSourceCommit=new string('b',40),packagerSourceCommit=new string('a',40)});
                 },changeManifest:manifest=>{if(mutation=="profile")manifest["profile"]="core-fixture";if(mutation=="launch")manifest["launch"]!["node"]="runtime/caddy/caddy.exe";},alterZip:mutation,
                 changeBundle:record=>{if(mutation=="server_bundle")record["outputs"]![0]!["sha256"]=new string('0',64);});
@@ -265,8 +265,8 @@ internal static class NativeCandidateIntakeTests
     internal sealed record Artifact(string Version,byte[] Zip,byte[] Manifest);
     internal static Artifact Build(string version,int schema=6,Action<Dictionary<string,byte[]>>? changeFiles=null,Action<JsonObject>? changeManifest=null,string? alterZip=null,Action<JsonObject>? changeBundle=null)
     {
-        var server=new[]{"app/server/main.mjs","app/server/native-migrate-v1.mjs","app/server/native-supervisor.mjs"};
-        var names=new[]{"app/package.json",server[0],server[1],server[2],"app/dist/index.html","runtime/node/node.exe","app/native/Yahad.Platform.exe","app/native/Yahad.Platform.runtimeconfig.json","app/native/Yahad.Platform.deps.json","app/native/coreclr.dll","app/native/hostfxr.dll","app/native/hostpolicy.dll","app/native/System.Private.CoreLib.dll","legal/runtime-lock.json","legal/SBOM.json","legal/server-bundle.json","legal/ThirdPartyNotices-server.txt","legal/Node-LICENSE.txt","legal/DotNet-LICENSE.txt","legal/DotNet-ThirdPartyNotices.txt","runtime/ffmpeg/ffmpeg.exe","runtime/caddy/caddy.exe","legal/FFmpeg-LICENSE.txt","legal/ffmpeg-build.json","legal/Caddy-LICENSE.txt","legal/Caddy-NOTICES.txt","legal/build-inputs.json"};
+        var server=new[]{"app/server/main.mjs","app/server/native-supervisor.mjs"};
+        var names=new[]{"app/package.json",server[0],server[1],"app/dist/index.html","runtime/node/node.exe","app/native/Yahad.Platform.exe","app/native/Yahad.Platform.runtimeconfig.json","app/native/Yahad.Platform.deps.json","app/native/coreclr.dll","app/native/hostfxr.dll","app/native/hostpolicy.dll","app/native/System.Private.CoreLib.dll","legal/runtime-lock.json","legal/SBOM.json","legal/server-bundle.json","legal/ThirdPartyNotices-server.txt","legal/Node-LICENSE.txt","legal/DotNet-LICENSE.txt","legal/DotNet-ThirdPartyNotices.txt","runtime/ffmpeg/ffmpeg.exe","runtime/caddy/caddy.exe","legal/FFmpeg-LICENSE.txt","legal/ffmpeg-build.json","legal/Caddy-LICENSE.txt","legal/Caddy-NOTICES.txt","legal/build-inputs.json"};
         var files=names.ToDictionary(n=>n,n=>new[]{".exe",".dll",".node"}.Contains(Path.GetExtension(n))?Image():Encoding.UTF8.GetBytes("fixture"),StringComparer.Ordinal);
         files["app/package.json"]=Json(new{version,engines=new{node=">=24.0.0 <25"},dependencies=new{tsx="4.20.6"}});
         foreach(var name in server)files[name]=Encoding.UTF8.GetBytes("// bundled "+name);

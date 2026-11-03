@@ -28,17 +28,15 @@ internal interface IObservedAdmission
 }
 internal interface IServiceStartAuthorizer
 {Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation);}
-internal enum ServiceRunPurpose {Continuous,FiniteOfflineTask}
 
 // Only trusted in-process adapters can construct this grant. No CLI, JSON or
 // UI Boolean becomes a launch grant. Default installed activation is denied.
 internal sealed class AuthorizedServiceStart(AppRelease release,IPrivateAppLauncher launcher,
-    IAppRecoveryBarrier recovery,IDisposable? resources=null,ServiceRunPurpose purpose=ServiceRunPurpose.Continuous):IDisposable
+    IAppRecoveryBarrier recovery,IDisposable? resources=null):IDisposable
 {
     internal AppRelease Release=>release;
     internal IPrivateAppLauncher Launcher=>launcher;
     internal IAppRecoveryBarrier Recovery=>recovery;
-    internal ServiceRunPurpose Purpose=>purpose;
     public void Dispose()=>resources?.Dispose();
 }
 internal sealed class NoHostUpdateAuthority:IAppUpdateAuthority
@@ -222,11 +220,7 @@ internal sealed class ServiceController
             Pending(ServiceState.StopPending);
             if(completed==tracked.Exit&&!stop.Task.IsCompleted)
             {
-                // Only a trusted finite-purpose grant may finish on its own.
-                // Its wrapper does not report exit until Authority has accepted
-                // the terminal frame; normal applications retain crash semantics.
-                if(grant.Purpose==ServiceRunPurpose.FiniteOfflineTask&&await tracked.Exit==0)await lifecycle.StopAsync();
-                else{failure=ServiceFailure.UnexpectedExit;try{await tracked.Exit;}catch{}}
+                failure=ServiceFailure.UnexpectedExit;try{await tracked.Exit;}catch{}
             }
             else await lifecycle.StopAsync();
         }

@@ -3,7 +3,7 @@ using Yahad.Service;
 using Yahad.Install;
 namespace Yahad.Setup;
 
-internal sealed record InstallerState(int Format,string InstallationId,string DataId,string PackageDigest,string PayloadDigest,string SourceCommit,string OwnerSid,int Port,string Phase,InstallMember[] Files,string ServiceSid,string SetupSha256,int PayloadSchema=5,InstalledRecovery? CurrentRecovery=null,InstalledMigration? CurrentMigration=null);
+internal sealed record InstallerState(int Format,string InstallationId,string DataId,string PackageDigest,string PayloadDigest,string SourceCommit,string OwnerSid,int Port,string Phase,InstallMember[] Files,string ServiceSid,string SetupSha256,int PayloadSchema=5,InstalledRecovery? CurrentRecovery=null);
 internal static class InstallLocations
 {
     internal static string State=>FirstInstallProfile.StateRoot;

@@ -24,9 +24,6 @@ internal static class AdmittedServiceApplication
         if(value.FullSystemPolicyDigest is not null)
         {
             InstalledActivationResolver.Digest(value.FullSystemPolicyDigest);
-            // Initial full-profile provisioning runs as this actual Runtime
-            // account, rather than the different administrator who approved UAC.
-            _=InstalledMigrationProfile.EnsureForCurrentRuntime(value.InstallationId,value.FullSystemPolicyDigest);
         }
         InstalledProcessObjectAccess.PublishRuntimePeerAccess(runtime.Value,authority.Value,roles.HasRecoveryHelpers);
         var baselineFiles=InstalledStateFiles.InstalledRuntime(root,roles,probe,value.ProbeSha256);
@@ -55,9 +52,6 @@ internal static class AdmittedServiceApplication
             async Task<AuthorizedServiceStart> Purpose(RuntimeAdmissionBinding admission,string kind,CancellationToken cancellation)
             {
                 var files=purposeFiles??throw new IOException("RUNTIME_PURPOSE_NOT_PROVISIONED");
-                var purposeChannel=activeChannel??throw new IOException("RUNTIME_CHANNEL_UNAVAILABLE");
-                if(kind=="offline-migrate")return await new InstalledOfflineMigrationStart(installation,ObserveCurrentHost,purposeChannel,purposeChannel,admission,
-                    new InstalledMigrationSpecResolver(files),NativeMigrationSandbox.Installed()).AuthorizeAsync(cancellation);
                 if(kind!="probation")throw new IOException("RUNTIME_PURPOSE_UNKNOWN");
                 var verifiedProbation=InstalledProbationDescriptor.Read(files,admission);probation=verifiedProbation;
                 var probationResolver=new InstalledActivationResolver(files.Root,new RoleControlFiles(files),new LocalChildControlFactory(),()=>DateTimeOffset.UtcNow,
