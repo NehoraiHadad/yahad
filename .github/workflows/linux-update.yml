@@ -108,7 +108,9 @@ jobs:
         # upgrade: crash rollback from v0.5.3, the real upgrade, same-schema rollback.
         # migrated-failure: readiness fails after the migration committed. That one is
         # terminal by design (recovery_required), so it needs its own machine.
-        scenario: [upgrade, migrated-failure]
+        # pi: the machine as it really is, app 0.5.3 under the root updater of 0.5.0 in auto
+        # mode, so releases arrive on the timer and the install button has no target.
+        scenario: [upgrade, migrated-failure, pi]
     steps:
       - name: Check out exact source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6

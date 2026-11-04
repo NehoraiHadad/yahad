@@ -52,7 +52,15 @@ BASE_ASSETS = {
     'yachad-app.zip': (687835743, '3e6daba7210d2528f352fb416072d774b362804ac2fd0986e236bd1cb4a986f1'),
     'yachad-release.json': (687835744, '82620aa7bcd3ac247c433b9ee16199af33e5d77af459fbaba3569551becb026d'),
 }
-BASE_DOWNLOAD = f'https://github.com/NehoraiHadad/yahad/releases/download/v{BASE_VERSION}/'
+RELEASE_DOWNLOAD = 'https://github.com/NehoraiHadad/yahad/releases/download/'
+BASE = dict(version=BASE_VERSION, schema=BASE_SCHEMA, release_id=BASE_RELEASE_ID, assets=BASE_ASSETS, directory='base-assets')
+# The Pi runs app 0.5.3 under the root updater of 0.5.0, because an app release never replaces that
+# file: it has no supervisor, is in auto mode and writes no installTarget. Read from the Pi on 2026-11-04.
+PI_INSTALLED = dict(version='0.5.0', schema=2, release_id=426336825, directory='pi-assets', assets={
+    'yachad-app.zip': (684096682, '30f3ed5e9c6e75e5ed5aa4225f277c9431463f27bcd3fcb8e3cf8c762cca4a5c'),
+    'yachad-release.json': (684096681, '49afc04f2c0f1075935a10139adff4731eaf0d0dc0042413c1cd6a021a9b7d7d'),
+})
+PI_UPDATER_SHA256 = '22cd73dc810d08d90e1ec6af4e4b482bc60a0f42b44e1bf874c78682375264cd'
 ASSET_URL = 'https://api.github.com/repos/NehoraiHadad/yahad/releases/assets/'
 LATEST_URL = 'https://api.github.com/repos/NehoraiHadad/yahad/releases/latest'
 FAKE_HOSTS = ('api.github.com', 'release-assets.githubusercontent.com')
@@ -311,14 +319,15 @@ class GitHub:
             (self.directory / name).unlink(missing_ok=True)
 
 
-def download_base(directory):
+def download_release(work, release):
     """Done before the host is redirected, so these are the real published assets."""
+    directory = work / release['directory']
     directory.mkdir(parents=True)
-    for name, (_, digest) in BASE_ASSETS.items():
-        with urllib.request.urlopen(BASE_DOWNLOAD + name, timeout=120) as response:
+    for name, (_, digest) in release['assets'].items():
+        with urllib.request.urlopen(f"{RELEASE_DOWNLOAD}v{release['version']}/{name}", timeout=120) as response:
             raw = response.read()
         if hashlib.sha256(raw).hexdigest() != digest:
-            raise AcceptanceFailure(f'Published {name} of v{BASE_VERSION} differs from the pinned SHA-256')
+            raise AcceptanceFailure(f"Published {name} of v{release['version']} differs from the pinned SHA-256")
         (directory / name).write_bytes(raw)
 
 
@@ -591,22 +600,27 @@ class Installer:
             return re.sub(r'#setup=[A-Za-z0-9_-]+', '#setup=REDACTED', self.output)[-3000:]
 
 
-def install_base(recorder, github, work, family):
+def publish_release(github, work, release):
+    github.publish(work / release['directory'], 'v' + release['version'], release['release_id'],
+                   {name: value[0] for name, value in release['assets'].items()})
+
+
+def install_base(recorder, github, work, family, release):
     # Not under the runner's home: root-owned and reachable, as an owner's unpacked copy is.
     source = pathlib.Path(tempfile.mkdtemp(prefix='yahad-base-', dir='/var/tmp'))
-    with zipfile.ZipFile(work / 'base-assets/yachad-app.zip') as archive:
+    with zipfile.ZipFile(work / release['directory'] / 'yachad-app.zip') as archive:
         archive.extractall(source)
     installer = Installer(source, work / 'install.log')
     try:
         token = wait_until(installer.setup_token, 1200, 'deploy/install.py to print the setup link', 2)
     except InstallStopped:
         # deploy/install.py restarts the app and calls health(), which reads the schema from a database
-        # the app has not created yet (deploy/updater.py:428). v0.5.3 is published and cannot change, so
+        # the app has not created yet (deploy/updater.py:428). A published release cannot change, so
         # the test does what its owner would: run the same command again, which resumes from its receipt.
         if not installer.stopped_before_database():
             raise
         recorder.check(True, 'the first run stopped because health() read the database before the app created it')
-        wait_healthy(BASE_VERSION)
+        wait_healthy(release['version'])
         installer = Installer(source, work / 'install-rerun.log')
         token = wait_until(installer.setup_token, 1200, 'the rerun of deploy/install.py to print the setup link', 2)
     api = Api()
@@ -623,7 +637,7 @@ def install_base(recorder, github, work, family):
         raise AcceptanceFailure('deploy/install.py did not finish after setup:\n' + installer.tail()) from None
     installer.pump.join(5)
     recorder.check(code == 0 and 'COMPLETE' in installer.output, 'deploy/install.py completes after its backup and restore check', installer.tail())
-    assert_running(recorder, BASE_VERSION, BASE_SCHEMA)
+    assert_running(recorder, release['version'], release['schema'])
     recorder.check(CONFIG.stat().st_mode & 0o077 == 0, 'the updater configuration is private')
     config = json.loads(CONFIG.read_bytes())
     recorder.check(config.get('releaseTrust') == 'github-https' and config.get('enabled') is True, 'the updater is enabled in GitHub-HTTPS trust mode', config)
@@ -699,11 +713,33 @@ def discover(recorder, api, version, attempt):
 def set_notify(recorder, api):
     """The fresh default is auto, where a check also installs. Pressing Install needs notify."""
     assert_update_panel(recorder, api, mode='auto', modeControlAllowed=True, currentVersion=BASE_VERSION)
-    code, value = api.json('POST', '/api/parent/updates', dict(action='set_mode', mode='notify'))
-    recorder.check(code == 200 and value == {'state': 'queued'}, 'the parent asks for notify mode', value)
-    wait_until(lambda: (status().get('lastModeRequest') or {}).get('state') == 'applied', 120, 'the mode change to apply')
-    recorder.check(json.loads(CONFIG.read_bytes())['mode'] == 'notify', 'the root configuration now says notify')
-    assert_update_panel(recorder, api, mode='notify')
+    set_mode(recorder, api, 'notify')
+
+
+def set_mode(recorder, api, mode):
+    code, value = api.json('POST', '/api/parent/updates', dict(action='set_mode', mode=mode))
+    recorder.check(code == 200 and value == {'state': 'queued'}, f'the parent asks for {mode} mode', value)
+    wait_until(lambda: (status().get('lastModeRequest') or {}).get('state') == 'applied' and json.loads(CONFIG.read_bytes())['mode'] == mode,
+               120, 'the mode change to apply')
+    recorder.check(True, f'the root configuration now says {mode}')
+    assert_update_panel(recorder, api, mode=mode)
+
+
+def as_the_timer_does(recorder, attempt):
+    """What six hours passing does on the Pi: the timer starts `updater.py run`, which finds its last check old."""
+    current = status()
+    info = STATUS.stat()
+    temporary = STATUS.with_name('status.acceptance')
+    temporary.write_text(json.dumps(dict(current, checkedAt=1)))
+    os.chown(temporary, info.st_uid, info.st_gid)
+    os.chmod(temporary, stat.S_IMODE(info.st_mode))
+    temporary.replace(STATUS)
+    run(['/usr/bin/systemctl', 'start', 'yachad-update.service'], check=False, timeout=1800)
+    wait_until(lambda: status().get('checkedAt') != 1 and show('yachad-update.service', 'ActiveState') in ('inactive', 'failed'),
+               1800, 'the scheduled updater run to finish')
+    current = status()
+    recorder.phase(current.get('phase'), attempt)
+    return current
 
 
 def assert_rollback(recorder, family, request, current, *, attempt_version, back_to, schema, before):
@@ -833,7 +869,89 @@ def scenario_migrated_failure(recorder, github, candidates, build, family, api, 
             shutil.rmtree(parent, ignore_errors=True)
 
 
-SCENARIOS = {'upgrade': scenario_upgrade, 'migrated-failure': scenario_migrated_failure}
+def reach_the_pi_state(recorder, github, work):
+    """The Pi's own path: app 0.5.3 installed by the 0.5.0 updater, on its schedule."""
+    recorder.check(sha256(WORKER) == PI_UPDATER_SHA256, 'the root updater is the exact file the Pi runs')
+    recorder.check(json.loads(CONFIG.read_bytes())['mode'] == 'auto', 'the updater is in auto mode, as on the Pi')
+    publish_release(github, work, BASE)
+    let_start_limit_window_pass()
+    current = as_the_timer_does(recorder, 'to-pi')
+    recorder.check(current['phase'] == 'healthy' and current['currentVersion'] == BASE_VERSION, f'the updater installed {BASE_VERSION} by itself', current)
+    recorder.check('installTarget' not in current, 'this updater writes no installTarget, as on the Pi', current)
+    assert_running(recorder, BASE_VERSION, BASE_SCHEMA)
+
+
+def assert_scheduled_rollback(recorder, family, current, *, attempt_version, back_to, schema, before):
+    recorder.check(current['phase'] == 'rolled_back' and current['error'] == 'health', 'the updater reports rolled_back with the health error', current)
+    recorder.check(current['currentVersion'] == back_to and current['failedVersion'] == attempt_version, 'the journal records the failed version', current)
+    assert_running(recorder, back_to, schema)
+    assert_rows_kept(recorder, before, read_database())
+    return family.verify(recorder)
+
+
+def scenario_pi(recorder, github, candidates, build, family, api, database):
+    version = build['version']
+    schema = build['databaseSchema']
+    broken_same = build['brokenSameSchemaVersion']
+
+    with recorder.step('Pi state, a crashing release arrives by itself: rollback, and no retry'):
+        let_start_limit_window_pass()
+        github.publish(candidates / 'broken-crash', 'v0.5.90')
+        backups = len(list(BACKUPS.glob('yachad-*.backup')))
+        current = as_the_timer_does(recorder, 'crash')
+        recorder.check(len(list(BACKUPS.glob('yachad-*.backup'))) == backups + 1, 'a backup was taken before the downtime')
+        api = assert_scheduled_rollback(recorder, family, current, attempt_version='0.5.90', back_to=BASE_VERSION, schema=BASE_SCHEMA, before=database)
+        current = as_the_timer_does(recorder, 'crash-again')
+        recorder.check(current['phase'] == 'failed' and len(list(BACKUPS.glob('yachad-*.backup'))) == backups + 1, 'the next scheduled run does not retry it', current)
+        assert_running(recorder, BASE_VERSION, BASE_SCHEMA)
+
+    with recorder.step(f'Pi state, {version} arrives by itself: the real upgrade'):
+        let_start_limit_window_pass()
+        github.publish(candidates / 'candidate', 'v' + version)
+        begun = time.monotonic()
+        current = as_the_timer_does(recorder, 'upgrade')
+        recorder.upgrade_seconds = round(time.monotonic() - begun, 1)
+        recorder.check(current['phase'] == 'healthy' and current['currentVersion'] == version, 'the updater commits the healthy version', current)
+        assert_running(recorder, version, schema)
+        recorder.check(sha256(WORKER) == PI_UPDATER_SHA256, 'the 0.5.0 root updater is still the one running')
+        recorder.check(sha256(CURRENT / '.release-manifest.json') == build['manifestSha256'], 'the installed release carries the exact packaged manifest')
+        recorder.check((RELEASES / ('v' + BASE_VERSION)).is_dir(), 'the previous release is kept')
+        after = read_database()
+        recorder.check(after['schema'] == schema, f'the database migrated to schema {schema}', after['schema'])
+        assert_rows_kept(recorder, database, after)
+        api = family.verify(recorder)
+        assert_update_panel(recorder, api, currentVersion=version, mode='auto', modeControlAllowed=True, error=None)
+
+    with recorder.step('Pi state, the new release keeps working after a restart'):
+        run(['/usr/bin/systemctl', 'restart', 'yachad.service'])
+        assert_running(recorder, version, schema)
+        api = family.verify(recorder)
+        api.require('POST', '/api/parent/connect')
+        post_message(recorder, api, f'written on v{version} ' + uuid.uuid4().hex)
+        family.capture(api)
+        request, current = update_action(recorder, api, dict(action='check'), 'recheck')
+        recorder.check(request['state'] == 'succeeded' and current['phase'] == 'idle', 'a check from the new app finds nothing newer', current)
+
+    with recorder.step('Pi state, the install button cannot work without an installTarget'):
+        set_mode(recorder, api, 'notify')
+        github.publish(candidates / 'broken-same-schema', 'v' + broken_same)
+        request, current = update_action(recorder, api, dict(action='check'), 'button')
+        recorder.check(request['state'] == 'succeeded' and current['phase'] == 'available', 'the check finds the new release', current)
+        view = assert_update_panel(recorder, api, phase='available', latestVersion=broken_same)
+        recorder.check(not view.get('installTarget'), 'the panel offers no install target', view)
+        code, value = api.json('POST', '/api/parent/updates', dict(action='install', target=dict(version=broken_same, fingerprint='0' * 64)))
+        recorder.check(not (code == 200 and value == {'state': 'queued'}), 'the app refuses the button', value)
+        recorder.phase(f'button refused: {code} {value}', 'button')
+        set_mode(recorder, api, 'auto')
+
+    with recorder.step(f'Pi state, a broken release at the same schema arrives by itself: rollback to {version}'):
+        database = read_database()
+        let_start_limit_window_pass()
+        current = as_the_timer_does(recorder, 'same-schema')
+        assert_scheduled_rollback(recorder, family, current, attempt_version=broken_same, back_to=version, schema=schema, before=database)
+
+
+SCENARIOS = {'upgrade': scenario_upgrade, 'migrated-failure': scenario_migrated_failure, 'pi': scenario_pi}
 
 
 def prepare_host(recorder):
@@ -891,20 +1009,26 @@ def execute(arguments):
             summary['host'] = dict(machine=platform.machine(), kernel=platform.release(), python=platform.python_version(),
                                    node=run(['node', '--version']).stdout.decode().strip(),
                                    caddy=run(['caddy', 'version']).stdout.decode().strip())
-        with recorder.step(f'Download the published v{BASE_VERSION} assets'):
-            download_base(work / 'base-assets')
+        first = PI_INSTALLED if arguments.scenario == 'pi' else BASE
+        with recorder.step('Download the published assets'):
+            for release in {id(item): item for item in (first, BASE)}.values():
+                download_release(work, release)
         with recorder.step('Stand in for GitHub with a throwaway CA'):
-            github.publish(work / 'base-assets', 'v' + BASE_VERSION, BASE_RELEASE_ID, {name: value[0] for name, value in BASE_ASSETS.items()})
+            publish_release(github, work, first)
             github.start()
-            github.verify_reachable(recorder, 'v' + BASE_VERSION)
-        with recorder.step(f'Install v{BASE_VERSION} through its own deploy/install.py and create the family'):
-            install_base(recorder, github, work, family)
+            github.verify_reachable(recorder, 'v' + first['version'])
+        with recorder.step(f"Install v{first['version']} through its own deploy/install.py and create the family"):
+            install_base(recorder, github, work, family, first)
             summary['updaterSha256'] = sha256(WORKER)
             summary['updaterIdenticalToCheckout'] = sha256(WORKER) == sha256(ROOT / 'deploy/updater.py')
+        if first is PI_INSTALLED:
+            with recorder.step(f'Reach the Pi state: {BASE_VERSION} under the 0.5.0 updater'):
+                reach_the_pi_state(recorder, github, work)
         with recorder.step('Create real data through the API'):
             api, database = seed_family(recorder, family)
-        with recorder.step('Parent switches to notify, so that the install is the button'):
-            set_notify(recorder, api)
+        if first is not PI_INSTALLED:
+            with recorder.step('Parent switches to notify, so that the install is the button'):
+                set_notify(recorder, api)
         SCENARIOS[arguments.scenario](recorder, github, candidates, build, family, api, database)
     except Exception as error:  # Reported in summary.json, then the job fails.
         failure = dict(type=type(error).__name__, message=str(error)[:4000], trace=traceback.format_exc()[-4000:])
