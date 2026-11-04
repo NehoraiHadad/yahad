@@ -78,6 +78,32 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
     private string TargetRoot=>InstallLocations.VersionRoot(state.To);
     private string TargetPartial=>TargetRoot+".partial";
     internal UpgradeState State=>state;
+    // An administrator ran a newer Setup over this installation: the same move, instead
+    // of asking them to remove it first. They elevated this image, which is what a signed
+    // manifest would vouch for, and removing and reinstalling needs no manifest either.
+    // It must still carry the key the installation trusts. The caller holds the lock.
+    internal static bool Applies(InstallPackage package)
+    {
+        if(File.Exists(InstallLocations.RemovalStateFile)||File.Exists(InstallLocations.UpgradeStateFile)||!File.Exists(InstallLocations.StateFile))return false;
+        var state=NativeSetupHost.ReadState();
+        return state.Phase=="committed"&&ReleaseManifest.Compare(package.Manifest.Version,state.Version)>0;
+    }
+    internal static async Task<UpgradeOutcome> FromThisSetupAsync(InstallPackage package,Action<SetupProgress> progress)
+    {
+        string? from=null;var to=package.Manifest.Version;
+        try
+        {
+            var installed=UpgradeFiles.ReadInstalled();from=installed.Version;
+            TrustedReleaseKey.Require(InstalledKey(),TrustedReleaseKey.Embedded);
+            var liveSchema=(await UpgradeFiles.ReadHealthAsync(installed.Port))?.Schema;
+            if(liveSchema>package.Manifest.DatabaseSchema)throw new IOException("RELEASE_UNSUPPORTED_FROM");
+            var image=Environment.ProcessPath??throw new IOException("SETUP_IMAGE");
+            var target=new UpgradeTarget(package.Manifest.ZipSha256,package.Manifest.PayloadDigest,package.Manifest.SourceCommit,SetupOperation.HashFile(image),package.Manifest.Files);
+            using var host=new UpgradeHost(installed,UpgradeState.Begin(installed.Version,to,liveSchema,package.Manifest.DatabaseSchema,target,DateTimeOffset.UtcNow.ToUnixTimeSeconds()),progress);
+            return await host.ForwardAsync(package,new FileInfo(image).Length);
+        }
+        catch(Exception error){return new(new(false,SetupOperation.Code(error),DataPreserved:true,Failure:SetupFailureDetail.From(error)),from,to);}
+    }
     internal static async Task<UpgradeOutcome> RunAsync(string directory,Action<SetupProgress> progress)
     {
         string? from=null,to=null;

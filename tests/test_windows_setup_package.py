@@ -215,7 +215,8 @@ class RuntimeOnlyBuildTests(unittest.TestCase):
 
     def test_package_is_format_one_with_only_host_updater_and_payload_members(self):
         result = self.build(); metadata = json.loads((self.output/'install-manifest.json').read_bytes())
-        self.assertEqual(sorted(metadata), ['Files', 'Format', 'PayloadDigest', 'SourceCommit', 'Version', 'ZipSha256'])
+        self.assertEqual(sorted(metadata), ['DatabaseSchema', 'Files', 'Format', 'PayloadDigest', 'SourceCommit', 'Version', 'ZipSha256'])
+        self.assertEqual(metadata['DatabaseSchema'], 6)
         self.assertEqual((metadata['Format'], metadata['Version'], metadata['SourceCommit']), (1, VERSION, SOURCE))
         self.assertEqual(metadata['PayloadDigest'], hashlib.sha256(self.application).hexdigest())
         self.assertEqual(metadata['ZipSha256'], hashlib.sha256((self.output/'install.zip').read_bytes()).hexdigest())

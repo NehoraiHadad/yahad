@@ -69,8 +69,9 @@ $inputs = @{
 
 ### Release signing
 
-Upgrades (`Yahad.Setup.exe --quiet-upgrade <dir>`) accept only a release signed
-by the key the installation trusts. There is no override switch, environment
+The Updater's upgrades (`Yahad.Setup.exe --quiet-upgrade <dir>`) accept only a release signed
+by the key the installation trusts. Running a newer Setup by hand over an older
+installation makes the same move: the administrator elevated that image, and it must carry the same key. There is no override switch, environment
 variable or registry value. The private key stays on the maintainer's PC: it is
 never committed, never uploaded and never a CI or GitHub secret, and CI signs
 its test releases with a key generated and destroyed inside the job.

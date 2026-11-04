@@ -42,7 +42,14 @@ internal static class SetupOperation
             using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancellation);deadline.CancelAfter(OperationTimeout(uninstall?"uninstall":"install"));
             void Progress(SetupProgress p){deadline.Token.ThrowIfCancellationRequested();progress(p);}
             Progress(new("checking",0));
-            using var installLock=new SetupInstallLock();using var payload=InstallPackage.Embedded();using var host=new NativeSetupHost(payload,uninstall?null:update);
+            using var installLock=new SetupInstallLock();using var payload=InstallPackage.Embedded();
+            // Moved first, so the rest is this release's own run: home network and first-family link included.
+            if(!uninstall&&UpgradeHost.Applies(payload))
+            {
+                var upgrade=await UpgradeHost.FromThisSetupAsync(payload,Progress);
+                if(!upgrade.Result.Ok)return upgrade.Result;
+            }
+            using var host=new NativeSetupHost(payload,uninstall?null:update);
             try{return await new InstallFlow(host).RunAsync(SetupOwner.Current(),uninstall,Progress,deadline.Token,mode,lan);}
             catch(Exception failure){throw host.ReportFailure(failure);}
         }

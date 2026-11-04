@@ -89,7 +89,7 @@ public partial class MainWindow:Window
     private void ShowProgress(SetupProgress p)
     {
         ProgressBar.IsIndeterminate=p.Phase is not("extracting" or "installing_service" or "cleaning_installation" or "deleting_data" or "ready" or "removed");ProgressBar.Value=p.Percent;
-        Status.Text=p.Phase switch{"checking"=>"בודקים מקום פנוי והרשאות.","extracting"=>"מכינים את הרכיבים של יחד.","installing_service"=>"מתקינים את שירות Windows.","cleaning_installation"=>"מסיימים את ההתקנה.","starting_server"=>"מפעילים את יחד ומוודאים שהיא זמינה.","stopping_server"=>"סוגרים את יחד לפני ההסרה.","deleting_data"=>"מוחקים את הנתונים המקומיים שבחרתם להסיר.","ready"=>"יחד זמינה לשימוש","removed"=>"ההסרה הושלמה",_=>"מתקדמים בהתקנה."};
+        Status.Text=p.Phase switch{"checking"=>"בודקים מקום פנוי והרשאות.","extracting"=>"מכינים את הרכיבים של יחד.","installing_service"=>"מתקינים את שירות Windows.","cleaning_installation"=>"מסיימים את ההתקנה.","starting_server"=>"מפעילים את יחד ומוודאים שהיא זמינה.","stopping_server"=>"סוגרים את יחד לפני ההסרה.","deleting_data"=>"מוחקים את הנתונים המקומיים שבחרתם להסיר.","rolling_back"=>"מחזירים את הגרסה הקודמת.","ready"=>"יחד זמינה לשימוש","removed"=>"ההסרה הושלמה",_=>"מתקדמים בהתקנה."};
     }
     private void Failure(string code,SetupFailureDetail? detail=null)
     {
@@ -100,6 +100,10 @@ public partial class MainWindow:Window
             "UPDATE_CONSENT_ALREADY_CAPTURED"=>"הבחירה בעדכונים כבר נשמרה בניסיון הקודם. בהמשך ההתקנה היא תישמר; אפשר לשנות אותה בהגדרות של יחד אחרי ההתקנה.",
             "UPDATE_CONSENT_REQUIRED"=>"יש לבחור איך לקבל עדכונים ולאשר את מנגנון העדכון לפני ההתקנה.",
             "INSTALL_UPGRADE_REQUIRED"=>"במחשב מותקנת גרסה אחרת של יחד. כדי לעבור לגרסה הזו הסירו את יחד ובחרו לשמור את הנתונים, ואז הפעילו שוב את המתקין הזה. המשפחה והנתונים יישמרו.",
+            "ROLLED_BACK_UNHEALTHY" or "UPGRADE_PREPARE_FAILED"=>"הגרסה החדשה לא עלתה. הגרסה הקודמת חזרה לפעול והנתונים נשמרו.",
+            "ROLLBACK_FAILED" or "UPGRADE_COMMIT_INCOMPLETE"=>"השדרוג לא הסתיים. הנתונים נשמרו. התיקון ימשיך לבד בהפעלה הבאה של המחשב.",
+            "RELEASE_KEY_UNTRUSTED"=>"המתקין הזה לא נחתם במפתח שההתקנה הקיימת מכירה. כדי לעבור אליו הסירו את יחד ובחרו לשמור את הנתונים, ואז הפעילו שוב את המתקין.",
+            "RELEASE_UNSUPPORTED_FROM"=>"הנתונים במחשב חדשים יותר ממה שהמתקין הזה מכיר, ולכן לא שינינו דבר. הורידו את הגרסה האחרונה.",
             "INSTALL_DOWNGRADE_REFUSED"=>"במחשב מותקנת או נשמרה גרסה חדשה יותר של יחד. המתקין הזה ישן יותר ולכן לא שינינו דבר.",
             "INSTALL_TARGET_CHANGED"=>"קובצי ההתקנה בתיקייה אינם תואמים לחבילה. ההתקנה נעצרה ולא שינתה אותם.",
             "LAN_CONSENT_REQUIRED"=>"בחרו חיבור ביתי ואשרו במפורש את פתיחת הגישה לפני ניסיון נוסף.",
