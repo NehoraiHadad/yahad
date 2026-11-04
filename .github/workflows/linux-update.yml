@@ -112,7 +112,9 @@ jobs:
         # mode, so releases arrive on the timer and the install button has no target.
         # pi-enrolled: the same machine after the owner's one-time GitHub updater bootstrap, so a
         # release's updater pair advances the root worker, and the install button works again.
-        scenario: [upgrade, migrated-failure, pi, pi-enrolled]
+        # fresh: a new machine installed from this commit's own deploy/install.py, enrolled
+        # without any separate step, its root updater then updated on the real timer.
+        scenario: [upgrade, migrated-failure, pi, pi-enrolled, fresh]
     steps:
       - name: Check out exact source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6

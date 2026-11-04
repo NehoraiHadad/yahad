@@ -1,10 +1,12 @@
 # Explicit GitHub-HTTPS updater self-updates
 
-This is a **new owner-enrolled profile**, not a signature-verification bypass.
+This is an **owner-enrolled profile**, not a signature-verification bypass.
 It allows project releases to update the privileged worker, then the application
-and supported database schema, without creating signing keys. Publication does
-not activate it; an existing machine still needs the reviewed one-time local
-bootstrap. No host deployment, provider interaction or real-data migration is
+and supported database schema, without creating signing keys. A new
+`deploy/install.py` run enrolls itself, after printing this trust, with no
+separate step; see [enrollment on a new install](#enrollment-on-a-new-install).
+Publication does not activate it on a machine installed before that: such a
+machine still needs the reviewed one-time local bootstrap. No host deployment, provider interaction or real-data migration is
 implied by local synthetic tests.
 
 ## Trust and immutable boundary
@@ -31,11 +33,27 @@ falls back to this profile. The HTTPS bootstrap refuses signature pins, signed
 source policies, unknown direct workers and conflicting partial enrollment; it
 never deletes keys or rewrites app trust.
 
+## Enrollment on a new install
+
+`deploy/install.py` reuses the reviewed `Bootstrap` class, after the first parent
+exists and before any scheduler has started, so no worker runs outside the
+supervisor. It builds the initial pair from its own `deploy/updater.py`. The
+confirmation is its one yes/no, after the printed trust notice; there is no opt-out.
+Existing installations are never enrolled by rerunning it. A rerun on an enrolled
+machine treats the launcher, supervisor and their drop-ins as the managed files
+and changes nothing; an interrupted enrollment resumes on rerun.
+
+`INITIAL_WORKER_SHA256` in `deploy/upgrade-worker-github.py` pins `deploy/updater.py`,
+and the installer refuses to run otherwise. So **changing `deploy/updater.py` also
+requires updating that pin**; `tests/test_github_bootstrap.py` fails until they agree.
+
 ## One-time bootstrap on an existing installation
+
+Only for machines installed before enrollment joined the installer.
 
 Supported starting workers are the exact historical legacy worker and the exact
 reviewed protocol-2 direct worker installed by the 0.5.0 manual transition, or
-the exact new protocol-3 direct worker from the reviewed fresh installer. The
+the exact protocol-3 direct worker of a guided install from before that change. The
 bootstrap verifies existing helper bytes, safe ownership/paths, concrete operator,
 stable matching app journal, lock and loaded/quiet systemd units. Unknown layouts
 or pending recovery are a stop, not permission to rerun fresh setup.

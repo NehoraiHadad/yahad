@@ -3,6 +3,8 @@ from unittest.mock import patch
 spec=importlib.util.spec_from_file_location('guided_install',pathlib.Path(__file__).resolve().parents[1]/'deploy/install.py')
 u=importlib.util.module_from_spec(spec);spec.loader.exec_module(u)
 
+FAMILY,PARENT='10203040-5060-4070-8090-001122334455','aabbccdd-eeff-4011-8233-445566778899'
+
 class System:
     def __init__(self):self.calls=[];self.fail=None
     def run(self,args,**kw):
@@ -236,7 +238,8 @@ class GuidedInstallRunTests(unittest.TestCase):
         self.root=pathlib.Path(self.temp.name);self.root.chmod(0o700)
         self.stack=contextlib.ExitStack();self.addCleanup(self.stack.close)
         self.owners={};self.calls=[];self.enabled=set();self.active=set();self.https_calls=[]
-        self.clock=0;self.fail_https=False;self.create_parent=True
+        self.clock=0;self.fail_https=False;self.create_parent=True;self.database_delay=0;self.database_at=None
+        self.scheduler_actions=[];self.probes=[];self.active_at_boundary=[];self.fail_boundary=False
         self.accounts={name:types.SimpleNamespace(pw_uid=uid,pw_gid=uid,pw_shell='/usr/sbin/nologin')
                        for name,uid in [('yachad',1001),('yachad-update',1002),('caddy',1003)]}
         original_lstat=pathlib.Path.lstat;original_fstat=os.fstat
@@ -267,6 +270,7 @@ class GuidedInstallRunTests(unittest.TestCase):
         self.stack.enter_context(patch.object(u.ssl,'create_default_context',ssl_context))
         def build_opener(*handlers):
             self.assertEqual(next(h for h in handlers if isinstance(h,u.urllib.request.ProxyHandler)).proxies,{})
+            if not any(isinstance(h,u.urllib.request.HTTPSHandler) for h in handlers):return types.SimpleNamespace(open=self.ready_open)
             self.assertIsNone(next(h for h in handlers if isinstance(h,u.urllib.request.HTTPRedirectHandler)).redirect_request(None,None,None,None,None,None))
             self.assertIs(next(h for h in handlers if isinstance(h,u.urllib.request.HTTPSHandler))._context,context)
             return types.SimpleNamespace(open=self.https_open)
@@ -300,6 +304,19 @@ class GuidedInstallRunTests(unittest.TestCase):
             save=original_worker.save
         self.stack.enter_context(patch.object(u.worker,'Worker',FixtureWorker))
         self.stack.enter_context(patch.object(u.worker,'download',lambda url,*args:self.assets[url.rsplit('/',1)[1]]))
+        production=u.Installer.updater_bootstrap
+        def updater_bootstrap(installer,runtime):
+            bootstrap=production(installer,runtime,inspect_units=self.unit_states,scheduler=self.scheduler,apply_boundary=self.apply_boundary)
+            inputs=bootstrap.inputs
+            def probing():
+                result=inputs()
+                def probe(supervisor,reference):
+                    supervisor.verify_runtime(reference);self.probes.append(reference)
+                result['module'].Supervisor.probe=probe
+                return result
+            bootstrap.inputs=probing
+            return bootstrap
+        self.stack.enter_context(patch.object(u.Installer,'updater_bootstrap',updater_bootstrap))
     def p(self,path):return self.root/path.lstrip('/')
     def test_fresh_schema1_release_is_rejected_before_any_provisioning(self):
         manifest=json.loads(self.assets['yachad-release.json']);manifest.update(format=1,databaseSchema=1)
@@ -330,7 +347,7 @@ class GuidedInstallRunTests(unittest.TestCase):
         with sqlite3.connect(path) as db:
             db.executescript('CREATE TABLE IF NOT EXISTS schema_version(version INTEGER); CREATE TABLE IF NOT EXISTS users(family_id TEXT,id TEXT,role TEXT);')
             if not db.execute('SELECT 1 FROM schema_version').fetchone():db.execute('INSERT INTO schema_version VALUES(2)')
-            if parent and not db.execute('SELECT 1 FROM users').fetchone():db.execute("INSERT INTO users VALUES('family','parent','parent')")
+            if parent and not db.execute('SELECT 1 FROM users').fetchone():db.execute("INSERT INTO users VALUES(?,?,'parent')",(FAMILY,PARENT))
         self.owners[path]=(1001,1001)
     def run_command(self,args,**kwargs):
         self.calls.append(args)
@@ -358,12 +375,34 @@ class GuidedInstallRunTests(unittest.TestCase):
             if unit=='yachad-update-recover.service':
                 with self.p('/var/lib/yachad-updates/worker.lock').open('a') as lock:
                     u.fcntl.flock(lock,u.fcntl.LOCK_EX|u.fcntl.LOCK_NB)
-            if unit=='yachad.service':self.seed_database()
+            if unit=='yachad.service':
+                if self.database_delay and not self.database().exists():self.database_at=self.clock+self.database_delay
+                else:self.seed_database()
             self.active.add(unit);return b''
         if action in ('is-active','is-enabled'):
             if unit not in (self.active if action=='is-active' else self.enabled):raise u.InstallError('Synthetic inactive service')
             return b''
         raise AssertionError('Unexpected system command: '+repr(args))
+    def unit_states(self):
+        states={}
+        for unit in (*u.github.base.QUIET_UNITS,u.github.RECOVERY_UNIT):
+            on=unit in self.active
+            states[unit]=dict(LoadState='loaded',ActiveState='active' if on else 'inactive',SubState=('exited' if unit==u.github.RECOVERY_UNIT else 'waiting') if on else 'dead',
+                              MainPID='0',ControlPID='0',Job='0',NeedDaemonReload='no')
+        return states
+    def scheduler(self,action,unit):
+        self.scheduler_actions.append((action,unit))
+        (self.active.add if action=='start' else self.active.discard)(unit)
+    def apply_boundary(self):
+        self.active_at_boundary.append(set(self.active))
+        if self.fail_boundary:raise u.github.UpgradeError('Unit reload failed; launcher remains unactivated')
+    def ready_open(self,url,timeout):
+        self.assertEqual(url,'http://127.0.0.1:3000/health/ready')
+        if 'yachad.service' not in self.active:raise u.urllib.error.URLError('synthetic refused')
+        if self.database_at is not None:
+            if self.clock<self.database_at:raise u.urllib.error.URLError('synthetic refused')
+            self.seed_database();self.database_at=None
+        return contextlib.closing(types.SimpleNamespace(read=lambda n:b'{"ok":true}',close=lambda:None))
     def https_open(self,url,timeout):
         self.https_calls.append(url);self.assertEqual(url,'https://192.168.1.23/api/setup/status')
         if self.fail_https:raise u.ssl.SSLCertVerificationError('synthetic TLS rejection')
@@ -379,7 +418,7 @@ class GuidedInstallRunTests(unittest.TestCase):
     def test_fresh_run_completes_only_after_https_parent_backup_and_timers(self):
         output=self.install();config=json.loads(self.p(u.CONFIG).read_bytes())
         self.assertIn('COMPLETE:',output);self.assertTrue(self.installer.receipt['complete'])
-        self.assertEqual(config['operator'],{'familyId':'family','userId':'parent'})
+        self.assertEqual(config['operator'],{'familyId':FAMILY,'userId':PARENT})
         self.assertEqual(config['mode'],'auto');self.assertTrue(config['enabled']);self.assertTrue(config['allowUiModeControl'])
         self.assertEqual(len(self.https_calls),2)
         self.assertTrue(self.p('/var/backups/yachad-updates/yachad-123.backup').exists())
@@ -391,6 +430,77 @@ class GuidedInstallRunTests(unittest.TestCase):
         self.assertIn('ExecStartPre=/usr/bin/rm -f -- '+config['dataDirectory']+'/update-request.wake',latch)
         first=self.p('/etc/systemd/system/yachad-update.service.d/40-mode-control.conf').read_bytes()
         self.assertEqual(first,self.p('/etc/systemd/system/yachad-update-request.service.d/40-mode-control.conf').read_bytes())
+        self.assert_enrolled()
+        # No scheduler had started, so nothing is paused or restored, and no worker ever ran outside the supervisor.
+        self.assertEqual(self.scheduler_actions,[]);self.assertEqual(len(self.probes),1)
+        self.assertFalse(self.active_at_boundary[0]&{'yachad-update.timer','yachad-update-request.path'})
+        self.assertNotIn('ENABLE GITHUB UPDATER',output);self.assertIn('NehoraiHadad/yahad',output)
+        self.assertLess(output.index('NehoraiHadad/yahad'),output.index('private setup link'))
+    def assert_enrolled(self):
+        self.assertEqual(self.p(u.github.TARGET).read_bytes(),u.github.LAUNCHER)
+        policy=json.loads(self.p(u.github.SOURCE_POLICY).read_bytes())
+        self.assertEqual((policy['trust'],policy['enabled']),('github-https',True))
+        version='v'+u.github.INITIAL_RUNTIME_VERSION
+        self.assertEqual(os.readlink(self.p('/var/lib/yachad-updates/runtime/current')),'versions/'+version)
+        journal=json.loads(self.p('/var/lib/yachad-updates/updater-runtime.json').read_bytes())
+        self.assertEqual((journal['phase'],journal['previous'],journal['candidate']),('stable',None,None))
+        worker=self.p('/var/lib/yachad-updates/runtime/versions/'+version+'/updater.py').read_bytes()
+        self.assertEqual(worker,(u.HERE/'updater.py').read_bytes())
+    def again(self):
+        self.installer=u.Installer(self.system,self.root,ask=lambda _:'y',sleep=self.sleep)
+        return self.install(None)
+    def test_fresh_run_waits_for_the_app_to_create_its_database_before_health(self):
+        self.database_delay=6
+        output=self.install();self.assertIn('COMPLETE:',output);self.assert_enrolled()
+    def test_app_that_never_reports_ready_stops_with_a_resumable_diagnostic(self):
+        self.database_delay=10**6
+        with contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(u.InstallError,'did not report ready'):self.installer.run('https://192.168.1.23')
+        self.assertFalse(self.installer.receipt.get('integrationHealthy'));self.assertFalse(self.p(u.CONFIG).exists())
+    def test_enrollment_interrupted_before_the_launcher_resumes_on_rerun(self):
+        self.fail_boundary=True
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            with self.assertRaisesRegex(u.InstallError,'launcher remains unactivated'):self.installer.run('https://192.168.1.23')
+        self.assertNotIn('COMPLETE:',output.getvalue());self.assertEqual(self.p(u.github.TARGET).read_bytes(),(u.HERE/'updater.py').read_bytes())
+        self.assertTrue(self.p('/etc/systemd/system/yachad-update.service.d/60-updater-supervisor.conf').exists())
+        self.assertNotIn('yachad-update.timer',self.enabled);self.assertFalse(self.installer.receipt.get('complete'))
+        backups=sum('scripts/update-backup.ts' in call for call in self.calls)
+        self.fail_boundary=False
+        self.assertIn('COMPLETE:',self.again());self.assert_enrolled();self.assertIn('yachad-update.timer',self.enabled)
+        self.assertEqual(sum('scripts/update-backup.ts' in call for call in self.calls),backups)
+    def test_interruption_after_enrollment_resumes_without_a_second_enrollment(self):
+        original=self.system.run
+        def fail(args,**kw):
+            if args[:2]==['/usr/bin/systemctl','enable'] and args[-1]=='yachad-update.timer':raise u.InstallError('injected interruption')
+            return original(args,**kw)
+        self.system.run=fail
+        with contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(u.InstallError,'injected interruption'):self.installer.run('https://192.168.1.23')
+        self.assert_enrolled();self.assertFalse(self.installer.receipt.get('complete'))
+        self.system.run=original;self.probes.clear();self.active_at_boundary.clear()
+        self.assertIn('COMPLETE:',self.again());self.assert_enrolled();self.assertTrue(self.installer.receipt['complete'])
+        self.assertFalse(self.probes);self.assertFalse(self.active_at_boundary);self.assertIn('yachad-update.timer',self.enabled)
+    def test_rerun_on_an_enrolled_machine_changes_nothing(self):
+        self.install();self.scheduler_actions.clear();self.probes.clear()
+        watched=[self.p(path) for path in (u.github.TARGET,u.github.SOURCE_POLICY,u.CONFIG,u.RECEIPT,'/var/lib/yachad-updates/status.json','/var/lib/yachad-updates/updater-runtime.json')]
+        before=[path.read_bytes() for path in watched]
+        self.assertIn('ALREADY_COMPLETE:',self.again())
+        self.assertEqual([path.read_bytes() for path in watched],before);self.assertFalse(self.scheduler_actions);self.assertFalse(self.probes)
+    def test_rerun_refuses_a_changed_supervisor_or_boundary(self):
+        self.install()
+        supervisor=self.p(u.github.SUPERVISOR);saved=supervisor.read_bytes();supervisor.write_bytes(saved[:-1]+b'#')
+        with self.assertRaisesRegex(u.InstallError,'immutable boundary differs'):self.again()
+        supervisor.write_bytes(saved)
+        drop=self.p('/etc/systemd/system/yachad-update-recover.service.d/60-updater-supervisor.conf');saved=drop.read_bytes();drop.write_bytes(b'[Service]\n')
+        with self.assertRaisesRegex(u.InstallError,'reviewed helper migration'):self.again()
+        drop.unlink()
+        with self.assertRaisesRegex(u.InstallError,'Effective updater unit'):self.again()
+    def test_unenrolled_machine_still_refuses_supervisor_drop_ins(self):
+        self.installer.enroll=lambda fd:None;self.install() # The layout of a machine installed before enrollment.
+        drop=self.p('/etc/systemd/system/yachad-update.service.d/60-updater-supervisor.conf')
+        drop.write_bytes(u.github.BOUNDARY);drop.chmod(0o644)
+        self.installer=u.Installer(self.system,self.root,ask=lambda _:'y',sleep=self.sleep)
+        with self.assertRaisesRegex(u.InstallError,'Effective updater unit'):self.install(None)
     def test_existing_run_preserves_0640_environment_custom_store_and_key(self):
         env={'DATA_DIR':'/var/lib/yachad/custom-live','MASTER_KEY_FILE':'/etc/yachad/custom.key','APP_ORIGIN':'https://192.168.1.23','CONNECTOR':'baileys'}
         for path,mode,owner in (('/etc/yachad',0o750,(0,1001)),('/var/lib/yachad',0o755,(0,1001)),
@@ -404,6 +514,7 @@ class GuidedInstallRunTests(unittest.TestCase):
         self.assertIn('COMPLETE:',output);self.assertEqual(self.p(u.ENV).read_text(),text);self.assertEqual(key.read_bytes(),b'synthetic-existing-key')
         self.assertEqual(stat.S_IMODE(self.p(u.ENV).stat().st_mode),0o640);self.assertFalse(self.https_calls)
         self.assertFalse(self.p('/etc/caddy/yachad.Caddyfile').exists());self.assertFalse(self.p('/var/lib/yachad/store').exists())
+        self.assertEqual(self.p(u.github.TARGET).read_bytes(),(u.HERE/'updater.py').read_bytes());self.assertFalse(self.p(u.github.SOURCE_POLICY).exists())
     def test_fresh_run_without_valid_https_never_enables_updates_or_reports_complete(self):
         self.fail_https=True
         with contextlib.redirect_stdout(io.StringIO()) as output:
@@ -440,7 +551,7 @@ class GuidedInstallRunTests(unittest.TestCase):
         self.assertEqual(len(self.https_calls),3)
 
     def test_existing_mixed_crlf_install_preserves_bytes_policy_and_pin(self):
-        self.install();env=u.environment(self.p(u.ENV).read_text())
+        self.installer.enroll=lambda fd:None;self.install();env=u.environment(self.p(u.ENV).read_text())
         original={}
         for name in u.HISTORICAL_CRLF:
             root='/usr/local/lib/yachad-updater/' if name.endswith('.py') else '/etc/systemd/system/'
@@ -474,6 +585,8 @@ class GuidedInstallTests(unittest.TestCase):
         self.s=System();self.i=u.Installer(self.s,self.root);self.i.app=types.SimpleNamespace(pw_uid=1001,pw_gid=1001)
         for d in ('etc/yachad','var/lib/yachad-updates','var/backups/yachad-updates'):(self.root/d).mkdir(parents=True,exist_ok=True)
         self.op={'familyId':'f','userId':'p'};self.i.parent=lambda env:self.op;self.i.verify_effective_updates=lambda *args,**kwargs:None
+        self.i.enroll=lambda fd:None # Enrollment needs real-shaped ids and units: GuidedInstallRunTests.
+        self.i.web_health=lambda env,state:None # HTTPS readiness: GuidedInstallRunTests.
         self.env={'DATA_DIR':'/var/lib/yachad/custom-live','MASTER_KEY_FILE':'/etc/yachad/custom.key'}
         self.c=json.loads((u.HERE/'updates.json.example').read_bytes());self.c.update(dataDirectory=self.env['DATA_DIR'],masterKeyFile=self.env['MASTER_KEY_FILE'])
         self.i.p(self.c['backupPassphraseFile']).write_bytes(b'synthetic local backup phrase only');self.i.p(self.c['backupPassphraseFile']).chmod(0o600)
@@ -506,7 +619,7 @@ class GuidedInstallTests(unittest.TestCase):
         self.assertEqual(actual,self.c);self.assertEqual(actual['releaseTrust'],'signature')
     def test_success_checks_backup_restore_and_health_before_auto(self):
         self.i.receipt['newInstall']=True
-        self.i.finish(self.c,self.env,'0.4.0')
+        self.i.finish(self.c,self.env,'0.4.0',None)
         c=json.loads(self.i.p(u.CONFIG).read_bytes());self.assertTrue(c['enabled']);self.assertEqual(c['mode'],'auto');self.assertTrue(c['allowUiModeControl'])
         self.assertTrue(self.i.receipt['backupVerified']);self.assertTrue(self.i.receipt['complete'])
         call=next(x for x in Worker.calls if x[0]=='backup');self.assertEqual(call[1][-1],'--verify')
@@ -515,15 +628,15 @@ class GuidedInstallTests(unittest.TestCase):
             self.assertIn(['/usr/bin/systemctl','is-active','--quiet',timer],self.s.calls)
     def test_backup_failure_restores_service_and_never_enables_timers(self):
         Worker.result=b'not verified'
-        with self.assertRaises(u.InstallError):self.i.finish(self.c,self.env,'0.4.0')
+        with self.assertRaises(u.InstallError):self.i.finish(self.c,self.env,'0.4.0',None)
         self.assertIn(['/usr/bin/systemctl','start','yachad.service'],self.s.calls)
         self.assertFalse(self.i.receipt.get('backupVerified'));self.assertFalse(any('enable' in c for c in self.s.calls))
     def test_changed_config_and_operator_preserved(self):
         p=self.i.p(u.CONFIG);p.write_text('{}');p.chmod(0o600);self.i.receipt['configHash']='changed'
-        with self.assertRaises(u.InstallError):self.i.finish(self.c,self.env,'0.4.0')
+        with self.assertRaises(u.InstallError):self.i.finish(self.c,self.env,'0.4.0',None)
         self.assertEqual(p.read_bytes(),b'{}');self.assertFalse(self.s.calls)
         self.i.receipt={};self.c['operator']={'familyId':'f','userId':'other'}
-        with self.assertRaises(u.InstallError):self.i.finish(self.c,self.env,'0.4.0')
+        with self.assertRaises(u.InstallError):self.i.finish(self.c,self.env,'0.4.0',None)
     def test_mode_control_boundary_protects_secret_and_existing_env(self):
         (self.root/'etc/systemd/system').mkdir(parents=True)
         self.i.mode_control_boundary(self.c,self.env)
@@ -572,10 +685,10 @@ class GuidedInstallTests(unittest.TestCase):
     def test_partial_timer_activation_resumes_without_duplicate_backup(self):
         self.i.receipt['newInstall']=True
         self.s.fail=lambda args:'enable' in args and 'yachad-update.timer' in args
-        with self.assertRaises(u.InstallError):self.i.finish(self.c,self.env,'0.4.0')
+        with self.assertRaises(u.InstallError):self.i.finish(self.c,self.env,'0.4.0',None)
         self.assertTrue(self.i.receipt['autoStarting']);self.assertFalse(self.i.receipt.get('complete'))
         backups=len([x for x in Worker.calls if x[0]=='backup']);self.s.fail=None
-        self.i.finish(json.loads(self.i.p(u.CONFIG).read_bytes()),self.env,'0.4.0')
+        self.i.finish(json.loads(self.i.p(u.CONFIG).read_bytes()),self.env,'0.4.0',None)
         self.assertEqual(len([x for x in Worker.calls if x[0]=='backup']),backups);self.assertTrue(self.i.receipt['complete'])
 
 if __name__=='__main__':unittest.main()

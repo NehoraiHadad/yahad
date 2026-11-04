@@ -7,13 +7,14 @@ artifact merely carries reviewed code; only local owner confirmation enrolls it.
 import argparse
 import ast
 import hashlib
-import io
-import json
+import importlib.util
 import pathlib
 import stat
-import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+spec = importlib.util.spec_from_file_location('updater_runtime_pair', ROOT / 'deploy/updater-runtime-pair.py')
+runtime = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(runtime)
 SOURCES = ('upgrade-worker-github.py', 'upgrade-worker-manual.py', 'request-update-github.py',
            'request-update-manual.py', 'updater-supervisor.py', 'updater-transport.py')
 PIN_FILES = {'BASE_SHA256': 'upgrade-worker-manual.py', 'SUPERVISOR_SHA256': 'updater-supervisor.py',
@@ -29,18 +30,6 @@ def literals(raw):
                     try: result[target.id] = ast.literal_eval(node.value)
                     except (ValueError, TypeError): pass
     return result
-
-
-def zip_bytes(contents):
-    stream = io.BytesIO()
-    with zipfile.ZipFile(stream, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-        for name, raw in contents.items():
-            entry = zipfile.ZipInfo(name, date_time=(2026, 10, 28, 0, 0, 0))
-            entry.create_system = 3
-            entry.external_attr = (stat.S_IFREG | 0o644) << 16
-            entry.compress_type = zipfile.ZIP_DEFLATED
-            archive.writestr(entry, raw, compresslevel=9)
-    return stream.getvalue()
 
 
 def package(output):
@@ -71,16 +60,10 @@ def package(output):
     if type(protocol) is not int or protocol < 3:
         raise ValueError('HTTPS joined-release bootstrap requires worker protocol 3 or newer')
     version = settings['INITIAL_RUNTIME_VERSION']
-    archive = zip_bytes({'updater.py': sources['updater.py']})
-    manifest = dict(format=1, kind='yachad-updater', version=version, archive='yachad-updater.zip',
-                    bytes=len(archive), sha256=hashlib.sha256(archive).hexdigest(), supervisorProtocol=1,
-                    workerProtocol=protocol, helperProtocol=1, configFormat=1, stateFormat=1,
-                    appManifestFormats=[1, 2])
     contents = {name: sources[name] for name in SOURCES}
-    contents['yachad-updater.json'] = (json.dumps(manifest, separators=(',', ':')) + '\n').encode()
-    contents['yachad-updater.zip'] = archive
+    contents['yachad-updater.json'], contents['yachad-updater.zip'] = runtime.runtime_pair(sources['updater.py'], version, protocol)
     filename = 'yachad-github-updater-bootstrap-' + version + '.zip'
-    payload = zip_bytes(contents)
+    payload = runtime.zip_bytes(contents)
     output.mkdir(mode=0o700)
     (output / filename).write_bytes(payload)
     digest = hashlib.sha256(payload).hexdigest()

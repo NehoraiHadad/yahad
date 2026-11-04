@@ -6,7 +6,9 @@ plus deliberately broken variants. `run` then installs the published v0.5.3 thro
 its own deploy/install.py, creates a family through the real API over the managed
 HTTPS origin, and drives upgrades with the parent update button: the POST writes the
 request file, the systemd path unit wakes deploy/updater.py, and the updater's own
-verify, build, backup, activation, health and rollback logic does the rest.
+verify, build, backup, activation, health and rollback logic does the rest. The
+`fresh` scenario instead installs the candidate through its own deploy/install.py,
+as a new machine does: there is no older release and no separate enrollment.
 
 The updater has fixed hosts and verifies TLS, and deploy/ is not edited. So the host
 gets a throwaway CA and an /etc/hosts entry, and fake-github.py serves "latest". The
@@ -107,6 +109,7 @@ CRASH_AT_START = ('src/main.ts', 'silencePayloadConsoles();\n',
                   "silencePayloadConsoles();\nprocess.stderr.write('Acceptance: deliberately broken candidate\\n');\nprocess.exit(12);\n")
 # Only the real service fails: scripts/update-smoke.ts must still pass, as the updater
 # runs it before any downtime. The app has already opened (and migrated) the database.
+HEALTHY = ('src/main.ts', 'silencePayloadConsoles();\n', 'silencePayloadConsoles();\n// Acceptance: a healthy higher version.\n')
 READY_503 = ('src/server.ts', "app.get('/health/ready', async (_req, reply) => {\n",
              "app.get('/health/ready', async (_req, reply) => {\n    if (process.argv[1]?.endsWith('/src/main.ts')) return reply.code(503).send({ ok: false });\n")
 
@@ -229,20 +232,25 @@ def package(arguments):
     recorder.check(version_tuple(version) > version_tuple('0.5.91'), 'candidate version is above the broken 0.5.x fixtures', version)
     recorder.check(BASE_SCHEMA in manifest['databaseMigrationsFrom'], 'candidate declares a migration from the baseline schema', manifest)
     broken_same_schema = f'{major}.{minor}.{patch + 1}'
+    healthy_same_schema = f'{major}.{minor}.{patch + 2}'
     with recorder.step('Package the deliberately broken candidates'):
         package_variant(work, output / 'broken-crash', '0.5.90', CRASH_AT_START)
         package_variant(work, output / 'broken-migrated', '0.5.91', READY_503)
         package_variant(work, output / 'broken-same-schema', broken_same_schema, READY_503)
+    with recorder.step('Package a healthy higher candidate of the same schema'):
+        package_variant(work, output / 'healthy-same-schema', healthy_same_schema, HEALTHY)
     work.rmdir()
     with recorder.step('Package the root updater pair of the candidates with scripts/release-updater.mjs package-github'):
         runtime = package_runtime(output / 'updater-candidate', version, env)
         broken_runtime = package_runtime(output / 'updater-broken-same-schema', broken_same_schema, env)
+        healthy_runtime = package_runtime(output / 'updater-healthy-same-schema', healthy_same_schema, env)
         recorder.check(version_tuple(runtime) > version_tuple(bootstrap_literal('INITIAL_RUNTIME_VERSION')), 'the runtime is above the initial one of the bootstrap', runtime)
     (output / 'build.json').write_text(json.dumps(dict(
         commit=arguments.commit, version=version, databaseSchema=manifest['databaseSchema'],
         databaseMigrationsFrom=manifest['databaseMigrationsFrom'], manifestSha256=sha256(output / 'candidate/yachad-release.json'),
         archiveBytes=manifest['bytes'], brokenSameSchemaVersion=broken_same_schema, runtimeVersion=runtime,
-        brokenSameSchemaRuntimeVersion=broken_runtime, steps=recorder.steps), indent=2))
+        brokenSameSchemaRuntimeVersion=broken_runtime, healthySameSchemaVersion=healthy_same_schema,
+        healthySameSchemaRuntimeVersion=healthy_runtime, steps=recorder.steps), indent=2))
     print(f'Candidate {version} and broken variants packaged in {output}', flush=True)
 
 
@@ -626,11 +634,16 @@ def publish_release(github, work, release):
                    {name: value[0] for name, value in release['assets'].items()})
 
 
-def install_base(recorder, github, work, family, release):
+def unpacked(package):
     # Not under the runner's home: root-owned and reachable, as an owner's unpacked copy is.
     source = pathlib.Path(tempfile.mkdtemp(prefix='yahad-base-', dir='/var/tmp'))
-    with zipfile.ZipFile(work / release['directory'] / 'yachad-app.zip') as archive:
+    with zipfile.ZipFile(package / 'yachad-app.zip') as archive:
         archive.extractall(source)
+    return source
+
+
+def install_base(recorder, github, work, family, release):
+    source = unpacked(work / release['directory'])
     installer = Installer(source, work / 'install.log')
     try:
         token = wait_until(installer.setup_token, 1200, 'deploy/install.py to print the setup link', 2)
@@ -644,6 +657,10 @@ def install_base(recorder, github, work, family, release):
         wait_healthy(release['version'])
         installer = Installer(source, work / 'install-rerun.log')
         token = wait_until(installer.setup_token, 1200, 'the rerun of deploy/install.py to print the setup link', 2)
+    create_family(recorder, installer, token, family, release['version'], release['schema'])
+
+
+def create_family(recorder, installer, token, family, version, schema):
     api = Api()
     code, value = api.json('GET', '/api/setup/status')
     recorder.check(code == 200 and value == {'state': 'ready'}, 'setup is open through the managed HTTPS origin', value)
@@ -658,7 +675,7 @@ def install_base(recorder, github, work, family, release):
         raise AcceptanceFailure('deploy/install.py did not finish after setup:\n' + installer.tail()) from None
     installer.pump.join(5)
     recorder.check(code == 0 and 'COMPLETE' in installer.output, 'deploy/install.py completes after its backup and restore check', installer.tail())
-    assert_running(recorder, release['version'], release['schema'])
+    assert_running(recorder, version, schema)
     recorder.check(CONFIG.stat().st_mode & 0o077 == 0, 'the updater configuration is private')
     config = json.loads(CONFIG.read_bytes())
     recorder.check(config.get('releaseTrust') == 'github-https' and config.get('enabled') is True, 'the updater is enabled in GitHub-HTTPS trust mode', config)
@@ -666,10 +683,10 @@ def install_base(recorder, github, work, family, release):
         recorder.check(show(unit, 'ActiveState') == 'active', f'{unit} is active')
 
 
-def seed_family(recorder, family):
+def seed_family(recorder, family, version=BASE_VERSION, schema=BASE_SCHEMA):
     api = Api()
     code, me = api.login(**family.parent)
-    recorder.check(code == 200 and me['user']['role'] == 'parent', 'the parent signs in to v' + BASE_VERSION, me)
+    recorder.check(code == 200 and me['user']['role'] == 'parent', 'the parent signs in to v' + version, me)
     family.family_id = me['user']['familyId']
     api.require('POST', '/api/parent/connect')
     api.require('POST', '/api/parent/sync-groups')
@@ -683,12 +700,12 @@ def seed_family(recorder, family):
         time.sleep(3)
         return first >= 6 and first == len(messages_of(api))
     wait_until(settled, 120, 'the sample history to arrive')
-    post_message(recorder, api, 'written on v' + BASE_VERSION + ' ' + uuid.uuid4().hex)
+    post_message(recorder, api, 'written on v' + version + ' ' + uuid.uuid4().hex)
     family.capture(api)
     recorder.check(len(family.messages) >= 7, 'the family has message history', len(family.messages))
     recorder.check(family.media, 'the family has encrypted media')
     database = read_database()
-    recorder.check(database['schema'] == BASE_SCHEMA, f'the data is in schema {BASE_SCHEMA}', database['schema'])
+    recorder.check(database['schema'] == schema, f'the data is in schema {schema}', database['schema'])
     for name in ('families', 'users', 'groups', 'grants', 'group_keys', 'messages', 'media'):
         recorder.check(database['counts'].get(name, 0) > 0, f'table {name} has rows', database['counts'])
     return api, database
@@ -1158,7 +1175,88 @@ def scenario_pi_enrolled(recorder, github, candidates, build, family, api, datab
         recorder.check((RELEASES / ('v' + BASE_VERSION)).is_dir(), 'the failed attempt pruned nothing')
 
 
-SCENARIOS = {'upgrade': scenario_upgrade, 'migrated-failure': scenario_migrated_failure, 'pi': scenario_pi, 'pi-enrolled': scenario_pi_enrolled}
+def install_candidate(recorder, candidates, build, family, work):
+    """A new machine: this commit's own deploy/install.py, one run, no separate enrollment, nothing typed but its y."""
+    version = build['version']
+    schema = build['databaseSchema']
+    initial = bootstrap_literal('INITIAL_RUNTIME_VERSION')
+    launcher = hashlib.sha256(bootstrap_literal('LAUNCHER')).hexdigest()
+    source = unpacked(candidates / 'candidate')
+
+    with recorder.step(f'Install {version} through its own deploy/install.py and create the family'):
+        installer = Installer(source, work / 'install.log')
+        # InstallStopped is the failure here: a first install must not need a rerun.
+        token = wait_until(installer.setup_token, 1200, 'deploy/install.py to print the setup link', 2)
+        create_family(recorder, installer, token, family, version, schema)
+        recorder.check('NehoraiHadad/yahad' in installer.output and 'certificate-verified HTTPS' in installer.output, 'the install discloses whom it trusts for root updater code')
+        recorder.check('ENABLE GITHUB UPDATER' not in installer.output, 'the install asks for no typed phrase')
+
+    with recorder.step('The one run also enrolled the root updater'):
+        recorder.check(sha256(WORKER) == launcher, 'the launcher is the installed root updater')
+        for name in ('updater-supervisor.py', 'updater-transport.py'):
+            recorder.check(WORKER.with_name(name).read_bytes() == (ROOT / 'deploy' / name).read_bytes(), f'{name} is installed')
+        policy = json.loads(SOURCE_POLICY.read_bytes())
+        recorder.check(policy['format'] == 2 and policy['trust'] == 'github-https' and policy['enabled'] is True, 'the source policy is the enabled GitHub-HTTPS profile', policy)
+        assert_runtime(recorder, initial, previous=None)
+        config = json.loads(CONFIG.read_bytes())
+        recorder.check(config['mode'] == 'auto', 'the install leaves automatic updates on', config)
+
+    with recorder.step('The first scheduled run under the supervisor keeps the app and issues a target'):
+        current = on_the_real_timer(recorder, 'fresh', lambda value: (value.get('installTarget') or {}).get('version') == version, 420)
+        recorder.check(current['phase'] in ('healthy', 'idle') and current['currentVersion'] == version, f'the app is still {version}', current)
+        recorder.check(transport_state().get('result') == 'unavailable', 'an app-only release keeps the initial runtime', transport_state())
+        assert_runtime(recorder, initial, previous=None)
+
+    with recorder.step('Rerunning the same command on the enrolled machine succeeds and changes nothing'):
+        # Just after a timer run, so the next one is minutes away and finds the lock free.
+        watched = (WORKER, CONFIG, SOURCE_POLICY, RUNTIME_JOURNAL, pathlib.Path('/var/lib/yachad-updates/install.json'), STATUS)
+        before = [path.read_bytes() for path in watched]
+        pointer = os.readlink(RUNTIME_POINTER)
+        rerun = Installer(source, work / 'install-rerun.log')
+        try:
+            code = rerun.process.wait(600)
+        except subprocess.TimeoutExpired:
+            rerun.process.kill()
+            raise AcceptanceFailure('The rerun of deploy/install.py did not finish:\n' + rerun.tail()) from None
+        rerun.pump.join(5)
+        recorder.check(code == 0 and 'ALREADY_COMPLETE' in rerun.output, 'the rerun reports the completed install', rerun.tail())
+        recorder.check([path.read_bytes() for path in watched] == before and os.readlink(RUNTIME_POINTER) == pointer, 'the rerun changed nothing')
+
+    with recorder.step('Create real data through the API'):
+        return seed_family(recorder, family, version, schema)
+
+
+def scenario_fresh(recorder, github, candidates, build, family, api, database):
+    version = build['version']
+    schema = build['databaseSchema']
+    healthy = build['healthySameSchemaVersion']
+    runtime = build['healthySameSchemaRuntimeVersion']
+    package = candidates / 'healthy-same-schema'
+    pair = candidates / 'updater-healthy-same-schema'
+    launcher = hashlib.sha256(bootstrap_literal('LAUNCHER')).hexdigest()
+
+    with recorder.step(f'{healthy} with runtime {runtime} arrives on the timer'):
+        let_start_limit_window_pass()
+        backups = len(list(BACKUPS.glob('yachad-*.backup')))
+        github.publish(package, 'v' + healthy, updater=pair)
+        begun = time.monotonic()
+        # At most one timer interval and its jitter, then at most the service's 30 minutes.
+        on_the_real_timer(recorder, 'upgrade', lambda value: value.get('currentVersion') == healthy and value.get('phase') in ('healthy', 'idle'), 2220)
+        recorder.upgrade_seconds = round(time.monotonic() - begun, 1)
+        assert_runtime(recorder, runtime, previous=bootstrap_literal('INITIAL_RUNTIME_VERSION'), package=pair)
+        recorder.check(sha256(WORKER) == launcher, 'the launcher itself is not replaced by a release')
+        assert_running(recorder, healthy, schema)
+        recorder.check(len(list(BACKUPS.glob('yachad-*.backup'))) == backups + 1, 'a backup was taken before the downtime')
+        recorder.check(sha256(CURRENT / '.release-manifest.json') == sha256(package / 'yachad-release.json'), 'the installed release carries the exact packaged manifest')
+        recorder.check((RELEASES / ('v' + version)).is_dir(), 'the previous release is kept')
+        assert_rows_kept(recorder, database, read_database())
+        api = family.verify(recorder)
+        view = assert_update_panel(recorder, api, currentVersion=healthy, mode='auto', modeControlAllowed=True, error=None)
+        target = view.get('installTarget') or {}
+        recorder.check(target.get('version') == healthy and re.fullmatch('[0-9a-f]{64}', target.get('fingerprint', '')), 'the panel offers a bound install target', view)
+
+
+SCENARIOS = {'upgrade': scenario_upgrade, 'migrated-failure': scenario_migrated_failure, 'pi': scenario_pi, 'pi-enrolled': scenario_pi_enrolled, 'fresh': scenario_fresh}
 
 
 def prepare_host(recorder):
@@ -1194,6 +1292,30 @@ def collect_diagnostics(output):
     (diagnostics / 'layout.txt').write_bytes(listing)
 
 
+def install_published(recorder, github, work, family, scenario, summary):
+    first = PI_INSTALLED if scenario in ('pi', 'pi-enrolled') else BASE
+    with recorder.step('Download the published assets'):
+        for release in {id(item): item for item in (first, BASE)}.values():
+            download_release(work, release)
+    with recorder.step('Stand in for GitHub with a throwaway CA'):
+        publish_release(github, work, first)
+        github.start()
+        github.verify_reachable(recorder, 'v' + first['version'])
+    with recorder.step(f"Install v{first['version']} through its own deploy/install.py and create the family"):
+        install_base(recorder, github, work, family, first)
+        summary['updaterSha256'] = sha256(WORKER)
+        summary['updaterIdenticalToCheckout'] = sha256(WORKER) == sha256(ROOT / 'deploy/updater.py')
+    if first is PI_INSTALLED:
+        with recorder.step(f'Reach the Pi state: {BASE_VERSION} under the 0.5.0 updater'):
+            reach_the_pi_state(recorder, github, work)
+    with recorder.step('Create real data through the API'):
+        api, database = seed_family(recorder, family)
+    if first is not PI_INSTALLED:
+        with recorder.step('Parent switches to notify, so that the install is the button'):
+            set_notify(recorder, api)
+    return api, database
+
+
 def execute(arguments):
     if not arguments.disposable or os.geteuid() != 0:
         raise AcceptanceFailure('Run as root with --disposable, on a throwaway machine only')
@@ -1216,26 +1338,15 @@ def execute(arguments):
             summary['host'] = dict(machine=platform.machine(), kernel=platform.release(), python=platform.python_version(),
                                    node=run(['node', '--version']).stdout.decode().strip(),
                                    caddy=run(['caddy', 'version']).stdout.decode().strip())
-        first = PI_INSTALLED if arguments.scenario in ('pi', 'pi-enrolled') else BASE
-        with recorder.step('Download the published assets'):
-            for release in {id(item): item for item in (first, BASE)}.values():
-                download_release(work, release)
-        with recorder.step('Stand in for GitHub with a throwaway CA'):
-            publish_release(github, work, first)
-            github.start()
-            github.verify_reachable(recorder, 'v' + first['version'])
-        with recorder.step(f"Install v{first['version']} through its own deploy/install.py and create the family"):
-            install_base(recorder, github, work, family, first)
-            summary['updaterSha256'] = sha256(WORKER)
-            summary['updaterIdenticalToCheckout'] = sha256(WORKER) == sha256(ROOT / 'deploy/updater.py')
-        if first is PI_INSTALLED:
-            with recorder.step(f'Reach the Pi state: {BASE_VERSION} under the 0.5.0 updater'):
-                reach_the_pi_state(recorder, github, work)
-        with recorder.step('Create real data through the API'):
-            api, database = seed_family(recorder, family)
-        if first is not PI_INSTALLED:
-            with recorder.step('Parent switches to notify, so that the install is the button'):
-                set_notify(recorder, api)
+        if arguments.scenario == 'fresh':
+            summary['baseRelease'] = None
+            with recorder.step('Stand in for GitHub with a throwaway CA'):
+                github.publish(candidates / 'candidate', 'v' + build['version'])
+                github.start()
+                github.verify_reachable(recorder, 'v' + build['version'])
+            api, database = install_candidate(recorder, candidates, build, family, work)
+        else:
+            api, database = install_published(recorder, github, work, family, arguments.scenario, summary)
         SCENARIOS[arguments.scenario](recorder, github, candidates, build, family, api, database)
     except Exception as error:  # Reported in summary.json, then the job fails.
         failure = dict(type=type(error).__name__, message=str(error)[:4000], trace=traceback.format_exc()[-4000:])
@@ -1245,7 +1356,8 @@ def execute(arguments):
             collect_diagnostics(output)
         requests = github.requests()
         github.close()
-        (work / 'install.log').exists() and shutil.copyfile(work / 'install.log', output / 'install.log')
+        for log in ('install.log', 'install-rerun.log'):
+            (work / log).exists() and shutil.copyfile(work / log, output / log)
         shutil.rmtree(work, ignore_errors=True)
         summary.update(result='failed' if failure else 'passed', failure=failure, totalSeconds=round(time.monotonic() - recorder.started, 1),
                        upgradeSeconds=getattr(recorder, 'upgrade_seconds', None), steps=recorder.steps, phases=recorder.phases,
