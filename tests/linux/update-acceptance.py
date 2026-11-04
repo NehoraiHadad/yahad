@@ -914,8 +914,8 @@ def reach_the_pi_state(recorder, github, work):
     """The Pi's own path: app 0.5.3 installed by the 0.5.0 updater, on its schedule."""
     recorder.check(sha256(WORKER) == PI_UPDATER_SHA256, 'the root updater is the exact file the Pi runs')
     recorder.check(json.loads(CONFIG.read_bytes())['mode'] == 'auto', 'the updater is in auto mode, as on the Pi')
-    let_start_limit_window_pass()
     publish_release(github, work, BASE)
+    let_start_limit_window_pass()
     # A fresh install has never checked, so the real timer may install this during the wait above. The run below then
     # finds nothing new and reports idle, which is what the Pi itself reports.
     current = as_the_timer_does(recorder, 'to-pi')
