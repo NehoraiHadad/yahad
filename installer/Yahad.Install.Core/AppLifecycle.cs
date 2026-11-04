@@ -1,11 +1,11 @@
 namespace Yahad.Install;
 
-public enum AppLifecycleState { Stopped, Starting, Running, Quiescing, RecoveryRequired }
+public enum AppLifecycleState { Stopped, Starting, Running, Quiescing, Failed }
 
 /// <summary>A release identity, never an arbitrary executable supplied by UI.</summary>
 public sealed record AppRelease(string Id);
 
-/// <summary>The launcher must validate/pin its private payload and contain all descendants.</summary>
+/// <summary>The launcher contains all of the session's descendants.</summary>
 public interface IContainedAppSession : IAsyncDisposable
 {
     Task RequestGracefulStopAsync(CancellationToken cancellation);
@@ -18,16 +18,11 @@ public interface IPrivateAppLauncher
     Task<IContainedAppSession> StartAsync(AppRelease release, CancellationToken cancellation);
     Task WaitForHealthyAsync(IContainedAppSession session, CancellationToken cancellation);
 }
-public interface IAppRecoveryBarrier
-{
-    Task RequireStartAllowedAsync(AppRelease release, CancellationToken cancellation);
-}
 
 /// <summary>Start and stop of one contained app session; no SCM or database implementation.</summary>
 public sealed class AppLifecycle : IAsyncDisposable
 {
     private readonly IPrivateAppLauncher launcher;
-    private readonly IAppRecoveryBarrier recovery;
     private readonly TimeSpan deadline,startupDeadline;
     private readonly SemaphoreSlim serial = new(1, 1);
     private readonly AppRelease active;
@@ -35,11 +30,11 @@ public sealed class AppLifecycle : IAsyncDisposable
     private bool disposed;
     public AppLifecycleState State { get; private set; } = AppLifecycleState.Stopped;
 
-    public AppLifecycle(AppRelease active, IPrivateAppLauncher launcher, IAppRecoveryBarrier recovery,
+    public AppLifecycle(AppRelease active, IPrivateAppLauncher launcher,
         TimeSpan deadline, TimeSpan? startupDeadline=null)
     {
         if (deadline <= TimeSpan.Zero || deadline > TimeSpan.FromMinutes(5)) throw new ArgumentOutOfRangeException(nameof(deadline));
-        this.active = active; this.launcher = launcher; this.recovery = recovery; this.deadline = deadline;
+        this.active = active; this.launcher = launcher; this.deadline = deadline;
         this.startupDeadline=startupDeadline??deadline;
         if(this.startupDeadline<=TimeSpan.Zero||this.startupDeadline>TimeSpan.FromMinutes(5))throw new ArgumentOutOfRangeException(nameof(startupDeadline));
     }
@@ -63,7 +58,6 @@ public sealed class AppLifecycle : IAsyncDisposable
     private async Task StartCoreAsync(CancellationToken cancellation)
     {
         State = AppLifecycleState.Starting;
-        await recovery.RequireStartAllowedAsync(active, cancellation);
         session = await launcher.StartAsync(active, cancellation);
         await launcher.WaitForHealthyAsync(session, cancellation).WaitAsync(cancellation);
         State = AppLifecycleState.Running;
@@ -92,7 +86,7 @@ public sealed class AppLifecycle : IAsyncDisposable
     }
     private async Task FailAndCleanAsync()
     {
-        State = AppLifecycleState.RecoveryRequired;
+        State = AppLifecycleState.Failed;
         if (session is null) return;
         using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         try

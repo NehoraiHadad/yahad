@@ -108,7 +108,7 @@ internal static class PackagedNativeStartupProbe
         public TimeSpan AdmissionBudget => budget ?? TimeSpan.FromSeconds(30);
         public event Action? ObservedWork { add { } remove { } }
         public Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)
-            => Task.FromResult(new AuthorizedServiceStart(new(new string('a', 64)), launcher, new Barrier()));
+            => Task.FromResult(new AuthorizedServiceStart(new(new string('a', 64)), launcher));
     }
     private sealed class SlowReady : IPrivateAppLauncher
     {
@@ -127,10 +127,5 @@ internal static class PackagedNativeStartupProbe
         public Task WaitForTreeEmptyAsync(CancellationToken cancellation) => exit.Task.WaitAsync(cancellation);
         public Task TerminateAndWaitForTreeEmptyAsync(CancellationToken cancellation) { exit.TrySetResult(1); return Task.CompletedTask; }
         public ValueTask DisposeAsync() { Disposed=true; return ValueTask.CompletedTask; }
-    }
-    private sealed class Barrier : IAppRecoveryBarrier
-    {
-        public Task RequireStartAllowedAsync(AppRelease release, CancellationToken cancellation)
-        { cancellation.ThrowIfCancellationRequested(); return Task.CompletedTask; }
     }
 }

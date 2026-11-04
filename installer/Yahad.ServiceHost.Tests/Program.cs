@@ -58,20 +58,10 @@ await Check("stop during authorization cancels startup without blocking handler"
     await auth.Entered.Task;var watch=Stopwatch.StartNew();Assert(controller.Control(ServiceDefinition.Stop)==0);Assert(watch.ElapsedMilliseconds<100);
     var result=await running.WaitAsync(TimeSpan.FromSeconds(3));Assert(result.Failure==ServiceFailure.None&&app.Calls.Count==0&&!reports.Any(r=>r.State==ServiceState.Running));
 });
-await Check("recovery barrier denies launch before process creation",async()=>
-{
-    var app=new FakeApp{DenyRecovery=true};var reports=new List<ServiceReport>();var result=await new ServiceController(new TestAuthorization(app)).RunAsync(reports.Add);
-    Assert(result.Failure==ServiceFailure.StartFailed&&app.Calls.SequenceEqual(new[]{"barrier"})&&!reports.Any(r=>r.State==ServiceState.Running));
-});
-await Check("noncooperative read-only recovery barrier times out without launching a process",async()=>
-{
-    var app=new FakeApp{StuckRecovery=true};var reports=new List<ServiceReport>();var result=await new ServiceController(new TestAuthorization(app),TimeSpan.FromMilliseconds(150)).RunAsync(reports.Add).WaitAsync(TimeSpan.FromSeconds(3));
-    Assert(result.Failure==ServiceFailure.StartFailed&&result.QuiescenceConfirmed&&!app.Calls.Contains("start")&&!reports.Any(r=>r.State==ServiceState.Running));
-});
 await Check("authorization returning within the stop window has its resources revoked",async()=>
 {
     var app=new FakeApp();var resource=new RevokedResource();var late=new LateAuthorization();var controller=new ServiceController(late);var reports=new List<ServiceReport>();var running=controller.RunAsync(reports.Add);
-    controller.Control(ServiceDefinition.Stop);await late.Cancelled.Task.WaitAsync(TimeSpan.FromSeconds(3));late.Completion.TrySetResult(new(new("late"),app,app,resource));var result=await running.WaitAsync(TimeSpan.FromSeconds(3));
+    controller.Control(ServiceDefinition.Stop);await late.Cancelled.Task.WaitAsync(TimeSpan.FromSeconds(3));late.Completion.TrySetResult(new(new("late"),app,resource));var result=await running.WaitAsync(TimeSpan.FromSeconds(3));
     await resource.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(3));Assert(result.QuiescenceConfirmed&&app.Calls.Count==0&&!reports.Any(r=>r.State==ServiceState.Running));
     // STOP is advertised while starting, so the SCM delivers it instead of refusing with 1052.
     Assert(reports.Any(r=>r.State==ServiceState.StartPending)&&reports.Where(r=>r.State==ServiceState.StartPending).All(r=>r.AcceptedControls==5));
@@ -132,7 +122,7 @@ await Check("non-listening real native job with synthetic control channel: "+mod
 {
     var directory=Session();var fake=new FileControlFactory(directory,mode);var environment=new Dictionary<string,string>{{"HOST","127.0.0.1"},{"CONNECTOR","mock"},{"ALLOW_REAL_WHATSAPP","no"}};
     var spec=new VerifiedProcessSpec(node,["-e",ChildScript.Code,directory,mode],directory,directory,node,environment);
-    var launcher=new ServiceProcessLauncher(spec,fake);var barrier=new Barrier();var auth=new TestAuthorization(null!,()=>new(new("verified-test"),launcher,barrier));
+    var launcher=new ServiceProcessLauncher(spec,fake);var auth=new TestAuthorization(null!,()=>new(new("verified-test"),launcher));
     var controller=new ServiceController(auth,TimeSpan.FromSeconds(10),TimeSpan.FromMilliseconds(mode=="timeout"?1000:5000));var reports=new List<ServiceReport>();
     var before=Environment.GetEnvironmentVariable("NODE_OPTIONS");Environment.SetEnvironmentVariable("NODE_OPTIONS","--require untrusted-hook");
     try
@@ -152,15 +142,15 @@ await Check("root exiting before readiness fails startup at once with its exit c
     // exit can end the wait; the old behavior held startup to the deadline.
     var directory=Session();var fake=new FileControlFactory(directory,"normal");
     var spec=new VerifiedProcessSpec(node,["-e","process.exit(23)"],directory,directory,node,new Dictionary<string,string>());
-    var launcher=new ServiceProcessLauncher(spec,fake);var auth=new TestAuthorization(null!,()=>new(new("verified-test"),launcher,new Barrier()));
+    var launcher=new ServiceProcessLauncher(spec,fake);var auth=new TestAuthorization(null!,()=>new(new("verified-test"),launcher));
     var seen=new List<(Exception Error,StartupStep[] Steps)>();ServiceController? controller=null;
     controller=new ServiceController(auth,TimeSpan.FromSeconds(20),TimeSpan.FromSeconds(5),error=>seen.Add((error,controller!.StartupSteps)));
     var timer=Stopwatch.StartNew();var reports=new List<ServiceReport>();var result=await controller.RunAsync(reports.Add);
     Assert(timer.Elapsed<TimeSpan.FromSeconds(10)&&result.Failure==ServiceFailure.StartFailed&&result.QuiescenceConfirmed&&!reports.Any(r=>r.State==ServiceState.Running));
     Assert(seen.Count==1&&seen[0].Error is ChildExitedException{ExitCode:23});
-    Assert(seen[0].Steps.Select(s=>s.Stage).SequenceEqual(["Authorizing","ValidatingStart","Launching","WaitingForHealth","WaitingForHealth"])&&seen[0].Steps[^1].Failure=="readiness_failed");
+    Assert(seen[0].Steps.Select(s=>s.Stage).SequenceEqual(["Authorizing","Launching","WaitingForHealth","WaitingForHealth"])&&seen[0].Steps[^1].Failure=="readiness_failed");
     using var encoded=JsonDocument.Parse(ServiceStartupDiagnostic.Encode(StartupDiagnosticRole.Runtime,seen[0].Error,seen[0].Steps));var json=encoded.RootElement;
-    Assert(json.GetProperty("Code").GetString()=="SERVICE_CHILD_EXITED"&&json.GetProperty("ExitCode").GetInt32()==23&&json.GetProperty("Steps").GetArrayLength()==5);
+    Assert(json.GetProperty("Code").GetString()=="SERVICE_CHILD_EXITED"&&json.GetProperty("ExitCode").GetInt32()==23&&json.GetProperty("Steps").GetArrayLength()==4);
 });
 await Check("unknown child environment keys refuse before opening any control endpoint",async()=>
 {
@@ -205,19 +195,16 @@ internal sealed class Reader:IInstallationReader
 {internal int Reads;internal bool Denied;public InstallationBinding Read(){Reads++;if(Denied)throw new IOException("ACL_DENIED");return new(new string('a',32),new string('b',64));}}
 internal sealed class Resolver:IInstalledActivationResolver
 {internal int Calls;public Task<AuthorizedServiceStart> ResolveAsync(InstallationBinding binding,CancellationToken cancellation){Calls++;throw new ServiceStartDenied(ServiceFailure.ActivationUnavailable);}}
-internal sealed class Barrier:IAppRecoveryBarrier
-{public Task RequireStartAllowedAsync(AppRelease release,CancellationToken cancellation)=>Task.CompletedTask;}
 internal sealed class TestAuthorization(FakeApp app,Func<AuthorizedServiceStart>? factory=null):IServiceStartAuthorizer
 {
     internal int Calls;internal bool Deny,Wait;internal readonly TaskCompletionSource Entered=new(TaskCreationOptions.RunContinuationsAsynchronously);
     public async Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)
-    {Calls++;Entered.TrySetResult();if(Deny)throw new ServiceStartDenied(ServiceFailure.IdentityDenied);if(Wait)await Task.Delay(Timeout.Infinite,cancellation);return factory?.Invoke()??new(new("test"),app,app);}
+    {Calls++;Entered.TrySetResult();if(Deny)throw new ServiceStartDenied(ServiceFailure.IdentityDenied);if(Wait)await Task.Delay(Timeout.Infinite,cancellation);return factory?.Invoke()??new(new("test"),app);}
 }
-internal sealed class FakeApp:IPrivateAppLauncher,IAppRecoveryBarrier
+internal sealed class FakeApp:IPrivateAppLauncher
 {
     internal readonly List<string> Calls=[];internal readonly TaskCompletionSource<int> Exit=new(TaskCreationOptions.RunContinuationsAsynchronously);
-    internal bool DenyRecovery,BadHealth,CleanupUnknown,StuckRecovery,StuckGraceful,StuckRoot,StuckTree;
-    public Task RequireStartAllowedAsync(AppRelease release,CancellationToken cancellation){Calls.Add("barrier");if(StuckRecovery)return new TaskCompletionSource().Task;if(DenyRecovery)throw new IOException("RECOVERY_DENIED");return Task.CompletedTask;}
+    internal bool BadHealth,CleanupUnknown,StuckGraceful,StuckRoot,StuckTree;
     public Task<IContainedAppSession> StartAsync(AppRelease release,CancellationToken cancellation){Calls.Add("start");return Task.FromResult<IContainedAppSession>(new Session(this));}
     public Task WaitForHealthyAsync(IContainedAppSession session,CancellationToken cancellation){Calls.Add("healthy");if(BadHealth)throw new IOException("UNHEALTHY");return Task.CompletedTask;}
     private sealed class Session(FakeApp owner):IContainedAppSession
@@ -287,7 +274,7 @@ internal sealed class ObservedTestAuthorizer(FakeApp app):IServiceStartAuthorize
     internal TimeSpan Budget=TimeSpan.FromMinutes(5);public TimeSpan AdmissionBudget=>Budget;public event Action? ObservedWork;
     internal void Pulse()=>ObservedWork?.Invoke();
     public Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)=>Task.Run(()=>
-    {for(var i=0;i<3;i++){cancellation.ThrowIfCancellationRequested();_ =System.Security.Cryptography.SHA256.HashData(new byte[4096]);Pulse();}return new AuthorizedServiceStart(new("observed"),app,app);},cancellation);
+    {for(var i=0;i<3;i++){cancellation.ThrowIfCancellationRequested();_ =System.Security.Cryptography.SHA256.HashData(new byte[4096]);Pulse();}return new AuthorizedServiceStart(new("observed"),app);},cancellation);
 }
 
 internal sealed class WaitingObservedAuthorizer:IServiceStartAuthorizer,IObservedAdmission

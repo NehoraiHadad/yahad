@@ -13,8 +13,8 @@ internal sealed record StartupStep(string Stage,long ElapsedMilliseconds,string?
 internal sealed class ChildExitedException(int exitCode):IOException("SERVICE_CHILD_EXITED")
 {internal int ExitCode=>exitCode;}
 // Fixed local Application event only. No source-registration/registry writes,
-// exception text, paths, arguments, tokens or data. Logging cannot authorize
-// recovery or replace the original failure when the event log is unavailable.
+// exception text, paths, arguments, tokens or data. Logging cannot replace the
+// original failure when the event log is unavailable.
 internal static class ServiceStartupDiagnostic
 {
     internal static string Encode(StartupDiagnosticRole role,Exception error,IReadOnlyList<StartupStep>? steps=null)

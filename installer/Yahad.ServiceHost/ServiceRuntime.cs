@@ -17,15 +17,14 @@ internal interface IServiceStartAuthorizer
 // Only trusted in-process adapters can construct this grant. No CLI, JSON or
 // UI Boolean becomes a launch grant. Default installed activation is denied.
 internal sealed class AuthorizedServiceStart(AppRelease release,IPrivateAppLauncher launcher,
-    IAppRecoveryBarrier recovery,IDisposable? resources=null):IDisposable
+    IDisposable? resources=null):IDisposable
 {
     internal AppRelease Release=>release;
     internal IPrivateAppLauncher Launcher=>launcher;
-    internal IAppRecoveryBarrier Recovery=>recovery;
     public void Dispose()=>resources?.Dispose();
 }
 internal readonly record struct ServiceRunResult(ServiceFailure Failure,bool QuiescenceConfirmed);
-internal enum ServiceStartupStage {NotStarted,Authorizing,ValidatingStart,Launching,WaitingForHealth,Ready,Running}
+internal enum ServiceStartupStage {NotStarted,Authorizing,Launching,WaitingForHealth,Ready,Running}
 // Operational observations only: no paths, credentials, payloads or exception text.
 internal sealed record ServiceStartupObservation(ServiceStartupStage Stage,long ElapsedMilliseconds,string? Failure);
 internal sealed record ServiceRootExitObservation(int Code,long ElapsedMilliseconds,bool ReadyObserved,bool ForcedCleanupRequested);
@@ -59,7 +58,7 @@ internal sealed class ServiceController
     internal uint Control(uint control)
     {
         // Handler never runs cancellation callbacks, waits for a process, does
-        // file I/O or performs update/recovery on the SCM dispatcher thread.
+        // file I/O or performs an update on the SCM dispatcher thread.
         if(control==ServiceDefinition.Interrogate)return 0;
         if(control is not(ServiceDefinition.Stop or ServiceDefinition.Shutdown))return 120;
         if(Volatile.Read(ref terminal)!=0)return 1062;
@@ -96,13 +95,6 @@ internal sealed class ServiceController
             public Task TerminateAndWaitForTreeEmptyAsync(CancellationToken c){forced();return inner.TerminateAndWaitForTreeEmptyAsync(c);}
             public ValueTask DisposeAsync()=>inner.DisposeAsync();
         }
-    }
-    private sealed class BoundedStartBarrier(IAppRecoveryBarrier inner):IAppRecoveryBarrier
-    {
-        // A start barrier is a read-only admission verdict, never a restore or
-        // activation executor. Ignored cancellation cannot hold SCM startup open.
-        public Task RequireStartAllowedAsync(AppRelease release,CancellationToken cancellation)
-            =>inner.RequireStartAllowedAsync(release,cancellation).WaitAsync(cancellation);
     }
     internal async Task<ServiceRunResult> RunAsync(Action<ServiceReport> publish)
     {
@@ -174,8 +166,7 @@ internal sealed class ServiceController
             // Readiness belongs to startup. The linked start token still bounds
             // total admission + launch; stop/cleanup retain lifecycleDeadline.
             var tracked=new TrackedLauncher(grant.Launcher,startDeadline,Observe,ObservedExit);
-            lifecycle=new(grant.Release,tracked,new BoundedStartBarrier(grant.Recovery),lifecycleDeadline,authorizer is IObservedAdmission?startDeadline:null);
-            Observe(ServiceStartupStage.ValidatingStart,null);
+            lifecycle=new(grant.Release,tracked,lifecycleDeadline,authorizer is IObservedAdmission?startDeadline:null);
             await lifecycle.StartAsync(start.Token);
             start.Token.ThrowIfCancellationRequested();if(stop.Task.IsCompleted)throw new OperationCanceledException();
             start.CancelAfter(Timeout.InfiniteTimeSpan);
@@ -232,7 +223,7 @@ internal sealed class ServiceController
         }
         // Unknown quiescence NEVER emits STOPPED success (or any STOPPED claim).
         // Native entry exits unsuccessfully; OS job-handle teardown is a last
-        // containment mechanism, not a verified recovery observation.
+        // containment mechanism, not a verified stop.
         if(!quiescent)ReportFailure(new IOException("RUNTIME_QUIESCENCE_UNCONFIRMED"));
         return new(failure,quiescent);
     }

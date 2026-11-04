@@ -2,11 +2,11 @@ using Yahad.Install;
 
 internal static class AppLifecycleTests
 {
-    private sealed class Fixture : IPrivateAppLauncher, IAppRecoveryBarrier
+    private sealed class Fixture : IPrivateAppLauncher
     {
         public readonly List<string> Calls = [];
         public int RootExit;
-        public bool StuckTree, DenyRecovery, FailHealth, FailCleanup;
+        public bool StuckTree, FailHealth, FailCleanup;
         private sealed class Session(Fixture owner) : IContainedAppSession
         {
             public Task RequestGracefulStopAsync(CancellationToken cancellation) { owner.Calls.Add("stop"); return Task.CompletedTask; }
@@ -16,13 +16,11 @@ internal static class AppLifecycleTests
             public Task TerminateAndWaitForTreeEmptyAsync(CancellationToken cancellation) { owner.Calls.Add("abort-tree-empty"); if(owner.FailCleanup) throw new IOException("QUIESCENCE_UNKNOWN"); return Task.CompletedTask; }
             public ValueTask DisposeAsync() { owner.Calls.Add("dispose-session"); return ValueTask.CompletedTask; }
         }
-        public Task RequireStartAllowedAsync(AppRelease release, CancellationToken cancellation)
-        { Calls.Add("barrier:" + release.Id); if (DenyRecovery) throw new InvalidOperationException("RECOVERY_REQUIRED"); return Task.CompletedTask; }
         public Task<IContainedAppSession> StartAsync(AppRelease release, CancellationToken cancellation)
         { Calls.Add("start:" + release.Id); return Task.FromResult<IContainedAppSession>(new Session(this)); }
         public Task WaitForHealthyAsync(IContainedAppSession session, CancellationToken cancellation)
         { Calls.Add("health"); if (FailHealth) throw new IOException("UNHEALTHY"); return Task.CompletedTask; }
-        public AppLifecycle Host() => new(new("current"), this, this, TimeSpan.FromMilliseconds(250));
+        public AppLifecycle Host() => new(new("current"), this, TimeSpan.FromMilliseconds(250));
     }
     public static async Task Run(Func<string, Func<Task>, Task> check)
     {
@@ -33,28 +31,23 @@ internal static class AppLifecycleTests
             var f = new Fixture(); await using var host = f.Host(); await host.StartAsync();
             Assert(host.State == AppLifecycleState.Running);
             await host.StopAsync(); Assert(host.State == AppLifecycleState.Stopped);
-            Assert(f.Calls.SequenceEqual(new[] { "barrier:current", "start:current", "health", "stop", "root-exit", "tree-empty", "dispose-session" }));
-        });
-        await check("start barrier refuses app start before any launch", async () =>
-        {
-            var f = new Fixture { DenyRecovery = true }; await using var host = f.Host(); await Reject(() => host.StartAsync());
-            Assert(host.State == AppLifecycleState.RecoveryRequired && f.Calls.SequenceEqual(new[] { "barrier:current" }));
+            Assert(f.Calls.SequenceEqual(new[] { "start:current", "health", "stop", "root-exit", "tree-empty", "dispose-session" }));
         });
         await check("unclean root exit is not a confirmed stop", async () =>
         {
             var f = new Fixture { RootExit = 17 }; await using var host = f.Host(); await host.StartAsync(); await Reject(() => host.StopAsync());
-            Assert(host.State == AppLifecycleState.RecoveryRequired && f.Calls.Contains("abort-tree-empty"));
+            Assert(host.State == AppLifecycleState.Failed && f.Calls.Contains("abort-tree-empty"));
         });
         await check("living descendant after root exit times out and refuses a later start", async () =>
         {
             var f = new Fixture { StuckTree = true }; await using var host = f.Host(); await host.StartAsync(); await Reject(() => host.StopAsync());
-            Assert(host.State == AppLifecycleState.RecoveryRequired);
+            Assert(host.State == AppLifecycleState.Failed);
             await Reject(() => host.StartAsync());
         });
         await check("failed health terminates the tree and stays down", async () =>
         {
             var f = new Fixture { FailHealth = true }; await using var host = f.Host(); await Reject(() => host.StartAsync());
-            Assert(host.State == AppLifecycleState.RecoveryRequired && f.Calls.Count(c => c.StartsWith("start:")) == 1 && f.Calls.Contains("abort-tree-empty") && f.Calls.Contains("dispose-session"));
+            Assert(host.State == AppLifecycleState.Failed && f.Calls.Count(c => c.StartsWith("start:")) == 1 && f.Calls.Contains("abort-tree-empty") && f.Calls.Contains("dispose-session"));
         });
         await check("repeated disposal retries unresolved cleanup and never reports false success", async () =>
         {

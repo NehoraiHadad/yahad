@@ -7,8 +7,8 @@ using Yahad.Install;
 
 namespace Yahad.Service;
 
-// Supplied only by installed activation admission after protected identity and
-// observed recovery checks. No executable/argument JSON or CLI factory.
+// Supplied only by installed activation admission. No executable/argument JSON
+// or CLI factory.
 internal sealed record VerifiedProcessSpec(string Image,string[] Arguments,string WorkingDirectory,
     string PrivateTemporaryDirectory,string PrivateFFmpeg,IReadOnlyDictionary<string,string> AppEnvironment,WindowsFileBoundary.DataLease? DataLease=null,Action? BeforeMutableStart=null);
 internal readonly record struct ChildReady(uint PeerPid,string Type);
@@ -54,7 +54,7 @@ internal sealed class LocalChildControlFactory:IChildControlFactory
 internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildControlFactory channels):IPrivateAppLauncher
 {
     private static readonly HashSet<string> Allowed=new(StringComparer.Ordinal)
-    {"HOST","PORT","APP_ORIGIN","APP_ADDITIONAL_ORIGINS","COOKIE_SECURE","DATA_DIR","MASTER_KEY_FILE","CONNECTOR","ALLOW_REAL_WHATSAPP","DIAGNOSTICS_ENABLED","SETUP_CAPABILITY_FILE","YAHAD_NATIVE_PROBATION_NONCE","YAHAD_NATIVE_PROBATION_ACTIVATION","YAHAD_NATIVE_PROBATION_OPERATION"};
+    {"HOST","PORT","APP_ORIGIN","APP_ADDITIONAL_ORIGINS","COOKIE_SECURE","DATA_DIR","MASTER_KEY_FILE","CONNECTOR","ALLOW_REAL_WHATSAPP","DIAGNOSTICS_ENABLED","SETUP_CAPABILITY_FILE"};
     public Task<IContainedAppSession> StartAsync(AppRelease release,CancellationToken cancellation)
     {
         cancellation.ThrowIfCancellationRequested();

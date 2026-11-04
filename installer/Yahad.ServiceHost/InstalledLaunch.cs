@@ -93,22 +93,16 @@ internal sealed class InstalledLaunchResolver(string root,string versionRoot,ICh
             var release=new AppRelease(ApplicationRelease.Version);
             var spec=new VerifiedProcessSpec(node,["server/main.mjs"],app,temporary,Path.Combine(binaries,"payload","runtime","ffmpeg","ffmpeg.exe"),environment,lease,held.BeginMutableStart);
             var launcher=processFactory is null?new ServiceProcessLauncher(spec,channels):processFactory(spec)??throw new IOException("INSTALLED_PROCESS_FACTORY_NULL");
-            held.Release=release.Id;
-            return Task.FromResult(new AuthorizedServiceStart(release,launcher,held,held));
+            return Task.FromResult(new AuthorizedServiceStart(release,launcher,held));
         }
         catch{held.Dispose();throw;}
     }
-    // The data lease taken during admission is held until the service stops. The
-    // start barrier admits exactly one start of exactly this release.
-    private sealed class HeldResources:IAppRecoveryBarrier,IDisposable
+    // The data lease taken during admission is held until the service stops, and
+    // admits exactly one start.
+    private sealed class HeldResources:IDisposable
     {
-        private readonly List<IDisposable> resources=[];private bool disposed,started;internal string Release="";
+        private readonly List<IDisposable> resources=[];private bool disposed,started;
         internal void Add(IDisposable item)=>resources.Add(item);
-        public Task RequireStartAllowedAsync(AppRelease release,CancellationToken cancellation)
-        {
-            cancellation.ThrowIfCancellationRequested();ObjectDisposedException.ThrowIf(disposed,this);
-            if(started||release.Id!=Release)throw new IOException("INSTALLED_ALREADY_STARTED");return Task.CompletedTask;
-        }
         internal void BeginMutableStart(){ObjectDisposedException.ThrowIf(disposed,this);if(started)throw new IOException("INSTALLED_ALREADY_STARTED");started=true;}
         public void Dispose(){if(disposed)return;disposed=true;for(var i=resources.Count-1;i>=0;i--)resources[i].Dispose();}
     }

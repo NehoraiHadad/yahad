@@ -90,10 +90,8 @@ internal static class StoreIntegrationTests
         public Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)
         {
             var lease=WindowsFileBoundary.AcquireDataLease(fixture.Data);
-            try{return Task.FromResult(new AuthorizedServiceStart(new("store"),fixture.CreateLauncher(fixture.RawSpec(lease)),new OpenBarrier(),lease));}
+            try{return Task.FromResult(new AuthorizedServiceStart(new("store"),fixture.CreateLauncher(fixture.RawSpec(lease)),lease));}
             catch{lease.Dispose();throw;}
         }
     }
-    private sealed class OpenBarrier:IAppRecoveryBarrier
-    {public Task RequireStartAllowedAsync(AppRelease release,CancellationToken cancellation)=>Task.CompletedTask;}
 }

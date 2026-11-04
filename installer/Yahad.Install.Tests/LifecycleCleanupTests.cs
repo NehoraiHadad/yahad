@@ -11,11 +11,10 @@ internal static class LifecycleCleanupTests
         public Task TerminateAndWaitForTreeEmptyAsync(CancellationToken cancellation) => job.TerminateAndWaitForTreeEmptyAsync(cancellation);
         public ValueTask DisposeAsync() { job.Dispose(); return ValueTask.CompletedTask; }
     }
-    private sealed class NativeFixture(string root,bool timeout) : IPrivateAppLauncher,IAppRecoveryBarrier
+    private sealed class NativeFixture(string root,bool timeout) : IPrivateAppLauncher
     {
         public readonly string PidFile=Path.Combine(root,"grandchild.pid");
         public int RootPid;
-        public Task RequireStartAllowedAsync(AppRelease release,CancellationToken cancellation)=>Task.CompletedTask;
         public Task<IContainedAppSession> StartAsync(AppRelease release,CancellationToken cancellation)
         {
             var environment=LaunchEnvironment.Clean(root);
@@ -37,10 +36,10 @@ internal static class LifecycleCleanupTests
         await check(timeout?"native health timeout cleans complete job before returning failure":"native failed health cleans root and grandchild before returning failure",async()=>
         {
             var directory=PrivateSession.Create(root);var fixture=new NativeFixture(directory,timeout);
-            await using var host=new AppLifecycle(new("fixture"),fixture,fixture,TimeSpan.FromSeconds(3));
+            await using var host=new AppLifecycle(new("fixture"),fixture,TimeSpan.FromSeconds(3));
             try{await host.StartAsync();throw new Exception("expected startup failure");}
             catch(Exception e)when(e is IOException or OperationCanceledException){}
-            if(host.State!=AppLifecycleState.RecoveryRequired||Alive(fixture.RootPid))throw new Exception("root cleanup unconfirmed");
+            if(host.State!=AppLifecycleState.Failed||Alive(fixture.RootPid))throw new Exception("root cleanup unconfirmed");
             if(File.Exists(fixture.PidFile)&&Alive(int.Parse(File.ReadAllText(fixture.PidFile))))throw new Exception("grandchild survived failed health");
         });
     }
