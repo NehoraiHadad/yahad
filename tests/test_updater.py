@@ -213,7 +213,6 @@ class UpdaterTests(unittest.TestCase):
     @unittest.skipUnless(os.getuid()==0,'Root ownership lifecycle simulated in isolated temp tree only')
     def test_https_backup_failure_still_never_activates(self): self.lifecycle(fail_backup=True,https=True)
 
-    @unittest.skipUnless(os.getuid()==0,'Root ownership recovery simulated in isolated temp tree only')
     def test_start_clears_the_crash_loop_count_first_and_only_the_start_decides(self):
         calls=[]
         class Worker(u.Worker):
@@ -227,6 +226,7 @@ class UpdaterTests(unittest.TestCase):
         refused='start'
         with self.assertRaises(u.UpdateError): Worker().start_service()
 
+    @unittest.skipUnless(os.getuid()==0,'Root ownership recovery simulated in isolated temp tree only')
     def test_interrupted_maintenance_recovers(self):
         worker,effects=self.lifecycle()
         old=self.root/'releases/v0.1.0'

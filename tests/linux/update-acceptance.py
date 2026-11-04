@@ -793,6 +793,15 @@ def assert_rollback(recorder, family, request, current, *, attempt_version, back
     return api
 
 
+def let_start_limit_window_pass():
+    # Only for a root worker that a published baseline installed, which no release can change. yachad.service allows 12
+    # starts in 120s and that worker does not reset the count: a crash loop takes 8 during its 90s health wait, so this
+    # script's quick restarts would use up the rest and refuse its rollback's start, seen in runs 41804602065 and 41870967797.
+    # A worker from this tree clears the count; scenario_pi_enrolled proves that without this wait.
+    started = int(show('yachad.service', 'ActiveEnterTimestampMonotonic')) / 1e6
+    time.sleep(max(0, started + 120 - time.monotonic()))
+
+
 def scenario_upgrade(recorder, github, candidates, build, family, api, database):
     version = build['version']
     schema = build['databaseSchema']
@@ -800,6 +809,7 @@ def scenario_upgrade(recorder, github, candidates, build, family, api, database)
     worker_digest = sha256(WORKER)
 
     with recorder.step('Broken candidate that dies before migrating: rollback from the baseline'):
+        let_start_limit_window_pass()
         github.publish(candidates / 'broken-crash', 'v0.5.90')
         target = discover(recorder, api, '0.5.90', 'crash')
         backups = len(list(BACKUPS.glob('yachad-*.backup')))
@@ -846,6 +856,7 @@ def scenario_upgrade(recorder, github, candidates, build, family, api, database)
         assert_update_panel(recorder, api, phase='idle', currentVersion=version)
 
     with recorder.step(f'Candidate failing /health/ready at the same schema: rollback to {version}'):
+        let_start_limit_window_pass()
         database = read_database()
         github.publish(candidates / 'broken-same-schema', 'v' + broken_same)
         target = discover(recorder, api, broken_same, 'same-schema')
@@ -903,6 +914,7 @@ def reach_the_pi_state(recorder, github, work):
     """The Pi's own path: app 0.5.3 installed by the 0.5.0 updater, on its schedule."""
     recorder.check(sha256(WORKER) == PI_UPDATER_SHA256, 'the root updater is the exact file the Pi runs')
     recorder.check(json.loads(CONFIG.read_bytes())['mode'] == 'auto', 'the updater is in auto mode, as on the Pi')
+    let_start_limit_window_pass()
     publish_release(github, work, BASE)
     # A fresh install has never checked, so the real timer may install this during the wait above. The run below then
     # finds nothing new and reports idle, which is what the Pi itself reports.
@@ -926,6 +938,7 @@ def scenario_pi(recorder, github, candidates, build, family, api, database):
     broken_same = build['brokenSameSchemaVersion']
 
     with recorder.step('Pi state, a crashing release arrives by itself: rollback, and no retry'):
+        let_start_limit_window_pass()
         github.publish(candidates / 'broken-crash', 'v0.5.90')
         backups = len(list(BACKUPS.glob('yachad-*.backup')))
         current = as_the_timer_does(recorder, 'crash')
@@ -936,6 +949,7 @@ def scenario_pi(recorder, github, candidates, build, family, api, database):
         assert_running(recorder, BASE_VERSION, BASE_SCHEMA)
 
     with recorder.step(f'Pi state, {version} arrives by itself: the real upgrade'):
+        let_start_limit_window_pass()
         github.publish(candidates / 'candidate', 'v' + version)
         begun = time.monotonic()
         current = as_the_timer_does(recorder, 'upgrade')
@@ -974,6 +988,7 @@ def scenario_pi(recorder, github, candidates, build, family, api, database):
         set_mode(recorder, api, 'auto')
 
     with recorder.step(f'Pi state, a broken release at the same schema arrives by itself: rollback to {version}'):
+        let_start_limit_window_pass()
         database = read_database()
         current = as_the_timer_does(recorder, 'same-schema')
         assert_scheduled_rollback(recorder, family, current, attempt_version=broken_same, back_to=version, schema=schema, before=database)
@@ -1060,7 +1075,7 @@ def transport_state():
     return {}
 
 
-def on_the_real_timer(recorder, attempt, reached, timeout):
+def on_the_real_timer(recorder, attempt, reached, timeout, settled=None):
     """Nothing is started or aged here. The status file must not be touched either: the supervisor fails closed
     if it changes during a probe (deploy/updater-supervisor.py:430). The timer fires every 5 minutes on an enrolled machine."""
     seen = None
@@ -1074,7 +1089,8 @@ def on_the_real_timer(recorder, attempt, reached, timeout):
         if state == 'inactive':
             if reached(current):
                 return current
-            if current.get('phase') in ('failed', 'rolled_back', 'recovery_required', 'incompatible') or transport_state().get('result') == 'failed':
+            if (current.get('phase') in ('failed', 'rolled_back', 'recovery_required', 'incompatible') and current.get('failedVersion') != settled or
+                    transport_state().get('result') == 'failed'):
                 raise AcceptanceFailure(f'The scheduled run stopped: {json.dumps(current)} {json.dumps(transport_state())}')
         elif state == 'failed':
             log = run(['journalctl', '-u', 'yachad-update.service', '-n', '40', '-o', 'cat', '--no-pager']).stdout.decode(errors='replace')
@@ -1125,12 +1141,31 @@ def scenario_pi_enrolled(recorder, github, candidates, build, family, api, datab
         code, output = as_the_owner(source, '--check-only')
         recorder.check(code == 0 and 'ALREADY_CURRENT' in output, 'rerunning the bootstrap reports the completed enrollment', output[-2000:])
 
+    with recorder.step('Enrolled, a crashing release right after quick restarts: the start limit does not stop the rollback'):
+        # With the crash loop these exceed the unit's 12 starts in 120s, which refuses a rollback that does not clear them.
+        for _ in range(8):
+            run(['/usr/bin/systemctl', 'restart', 'yachad.service'])
+        wait_healthy(BASE_VERSION)
+        backups = len(list(BACKUPS.glob('yachad-*.backup')))
+        github.publish(candidates / 'broken-crash', 'v0.5.90')
+        current = on_the_real_timer(recorder, 'crash', lambda value: value.get('failedVersion') == '0.5.90' and value.get('phase') == 'rolled_back', 1200)
+        recorder.check(len(list(BACKUPS.glob('yachad-*.backup'))) == backups + 1, 'a backup was taken before the downtime')
+        api = assert_scheduled_rollback(recorder, family, current, attempt_version='0.5.90', back_to=BASE_VERSION, schema=BASE_SCHEMA, before=database)
+
+    with recorder.step('Enrolled, the next scheduled run leaves the failed release alone'):
+        checked = transport_state().get('checkedAt')
+        wait_until(lambda: transport_state().get('checkedAt') != checked and show('yachad-update.service', 'ActiveState') == 'inactive', 420, 'the next scheduled run')
+        current = status()
+        recorder.check(current['phase'] == 'rolled_back' and current['failedVersion'] == '0.5.90', 'the app stays rolled back without a retry', current)
+        recorder.check(transport_state().get('result') == 'unavailable' and len(list(BACKUPS.glob('yachad-*.backup'))) == backups + 1, 'no second attempt was made', transport_state())
+        assert_running(recorder, BASE_VERSION, BASE_SCHEMA)
+
     with recorder.step(f'Enrolled, {version} with runtime {runtime} arrives on the timer'):
         backups = len(list(BACKUPS.glob('yachad-*.backup')))
         github.publish(candidates / 'candidate', 'v' + version, updater=candidates / 'updater-candidate')
         begun = time.monotonic()
         # At most one timer interval and its jitter, then at most the service's 30 minutes.
-        current = on_the_real_timer(recorder, 'upgrade', lambda value: value.get('currentVersion') == version and value.get('phase') in ('healthy', 'idle'), 2220)
+        current = on_the_real_timer(recorder, 'upgrade', lambda value: value.get('currentVersion') == version and value.get('phase') in ('healthy', 'idle'), 2220, settled='0.5.90')
         recorder.upgrade_seconds = round(time.monotonic() - begun, 1)
         assert_runtime(recorder, runtime, previous=initial, package=candidates / 'updater-candidate')
         recorder.check(sha256(WORKER) == launcher, 'the launcher itself is not replaced by a release')
