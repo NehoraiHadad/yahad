@@ -105,7 +105,8 @@ function writeAssets(directory: string, version: string, keys: Pair, omit: strin
     'yachad-updater.zip': worker,
     [`yahad-windows-${version}.json`]: windows,
     [`yahad-windows-${version}.json.sig`]: sign('sha256', Buffer.concat([Buffer.from('yahad-release-v1\n'), windows]), { key: keys.private, dsaEncoding: 'ieee-p1363' }),
-    [setupName]: setup
+    [setupName]: setup,
+    'Yahad.Setup.exe': setup
   };
   for (const [name, bytes] of Object.entries(files)) if (!omit.includes(name)) writeFileSync(join(directory, name), bytes);
 }
@@ -254,7 +255,7 @@ test('release:publish --dry-run stops before push; a confirmed run pushes the co
     const args = create[0];
     assert.equal(args[2], 'v0.5.4');
     assert.deepEqual(args.slice(3, args.indexOf('--repo')).map((path) => path.split(/[\\/]/).at(-1)).sort(),
-      ['Yahad.Setup-0.5.4.exe', 'yachad-app.zip', 'yachad-release.json', 'yachad-updater.json', 'yachad-updater.zip', 'yahad-windows-0.5.4.json', 'yahad-windows-0.5.4.json.sig']);
+      ['Yahad.Setup-0.5.4.exe', 'Yahad.Setup.exe', 'yachad-app.zip', 'yachad-release.json', 'yachad-updater.json', 'yachad-updater.zip', 'yahad-windows-0.5.4.json', 'yahad-windows-0.5.4.json.sig']);
     for (const flag of ['--latest', '--verify-tag']) assert.ok(args.includes(flag));
     for (const flag of ['--draft', '--prerelease']) assert.equal(args.includes(flag), false);
     assert.equal(args[args.indexOf('--repo') + 1], 'NehoraiHadad/yahad');
@@ -268,7 +269,7 @@ test('release:publish keeps the assets and prints a working retry when gh fails 
       await assert.rejects(publish({ repo: w.repo, options: w.options, stage: w.stage(), confirm: async () => '0.5.4', log: () => {} }), (error: Error) => {
         assert.match(error.message, /v0\.5\.4 was pushed but gh release create failed/);
         const kept = join(w.repo, '.local', 'release-0.5.4');
-        assert.equal(readdirSync(kept).length, 7);
+        assert.equal(readdirSync(kept).length, 8);
         assert.ok(error.message.includes(join(kept, 'yachad-app.zip')));
         assert.equal(error.message.includes('yahad-release-'), false, 'the retry names no temporary path');
         assert.match(error.message, /--repo NehoraiHadad\/yahad --verify-tag --latest/);
@@ -283,7 +284,10 @@ test('collectReleaseAssets rejects an inconsistent or extra asset', () => {
   try {
     const keys = pair();
     writeAssets(join(root, 'ok'), '1.0.0', keys);
-    assert.equal(collectReleaseAssets(join(root, 'ok'), '1.0.0', keys.spki).length, 7);
+    assert.equal(collectReleaseAssets(join(root, 'ok'), '1.0.0', keys.spki).length, 8);
+    writeAssets(join(root, 'other-setup'), '1.0.0', keys);
+    writeFileSync(join(root, 'other-setup', 'Yahad.Setup.exe'), 'other bytes');
+    assert.throws(() => collectReleaseAssets(join(root, 'other-setup'), '1.0.0', keys.spki), /Yahad\.Setup\.exe is not the same file/);
     writeAssets(join(root, 'extra'), '1.0.0', keys);
     writeFileSync(join(root, 'extra', 'yachad-updater.sig'), 'x');
     assert.throws(() => collectReleaseAssets(join(root, 'extra'), '1.0.0', keys.spki), /Unexpected release assets/);

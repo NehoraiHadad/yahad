@@ -528,6 +528,21 @@ try {
         RequireAccessBoundaries $baseRelease.version
         if ((SetupState) -ne 'ready') { throw 'Fresh install does not offer first-family setup' }
     }
+    Phase 'expired-link' {
+        # Fifteen minutes passing, without waiting them: the app reads this file only as it starts.
+        $capability = Join-Path $programData 'Secrets\setup-capability.json'
+        Stop-Service -Name $runtime
+        $record = Get-Content -LiteralPath $capability -Raw | ConvertFrom-Json
+        $record.expiresAt = 1
+        [IO.File]::WriteAllBytes($capability, [Text.UTF8Encoding]::new($false).GetBytes(($record | ConvertTo-Json -Compress -Depth 5)))
+        Start-Service -Name $runtime
+        if ((SetupState) -ne 'closed') { throw 'An expired setup link still reports setup as open' }
+        $expired = $install.Stdout.Trim()
+        $script:install = RunSetup @('--quiet-install', '--updates', 'notify') (Join-Path $out 'renew-result.json') @('--setup-link', 'stdout')
+        if ((SetupState) -ne 'ready') { throw 'Running Setup again did not reopen first-family setup' }
+        if ($install.Stdout.Trim() -eq $expired) { throw 'Running Setup again handed back the expired link' }
+        $expired = $null
+    }
     $familyId = $null
     Phase 'create-family' {
         # The same private link the Setup window opens; parse without echoing it.

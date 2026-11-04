@@ -44,7 +44,7 @@ public partial class MainWindow:Window
     }
     private async void Start_Click(object sender,RoutedEventArgs e)
     {
-        if(running)return;if(completed){if(!uninstall&&result?.Url is not null)OpenBrowser(result);else Close();return;}
+        if(running)return;if(completed){if(!uninstall&&result?.Url is not null)await OpenCurrentLink(result);else Close();return;}
         var mode=uninstall?choice.Confirmed():UninstallMode.KeepData;var network=SelectedLanRequest();var update=SelectedUpdateRequest();UpdatePanel.IsEnabled=false;
         running=true;Primary.IsEnabled=false;Secondary.IsEnabled=false;UninstallChoices.IsEnabled=false;LanPanel.IsEnabled=false;ProgressBar.Visibility=Visibility.Visible;ProgressBar.IsIndeterminate=true;
         Notice.Background=new SolidColorBrush(Color.FromRgb(234,241,234));Status.Text="בודקים מקום פנוי והרשאות.";
@@ -66,6 +66,25 @@ public partial class MainWindow:Window
         }
         catch(Exception error){Failure(SetupOperation.Code(error),SetupFailureDetail.From(error));}
         finally{UpdatePanel.IsEnabled=true;running=false;Primary.IsEnabled=true;Secondary.IsEnabled=true;UninstallChoices.IsEnabled=true;LanPanel.IsEnabled=true;if(uninstall&&!completed)Primary.IsEnabled=choice.CanBegin;else if(!completed)UpdateLanUi();}
+    }
+    // The window may stay open long past the link's 15 minutes. Only this elevated process can issue a new one.
+    private async Task OpenCurrentLink(SetupResult current)
+    {
+        if(current.SetupToken is null){OpenBrowser(current);return;}
+        running=true;Primary.IsEnabled=false;Secondary.IsEnabled=false;
+        try
+        {
+            var state=await SetupOperation.SetupStateAsync(current.Url!);
+            if(state=="ready"){OpenBrowser(current);return;}
+            if(state=="complete"){OpenBrowser(result=current with{SetupToken=null});return;}
+            ProgressBar.Visibility=Visibility.Visible;ProgressBar.IsIndeterminate=true;Status.Text="הקישור פג. מכינים קישור חדש.";
+            var renewed=await SetupOperation.RunAsync(false,p=>Dispatcher.Invoke(()=>ShowProgress(p)),CancellationToken.None);
+            if(!renewed.Ok){Failure(renewed.Code,renewed.Failure);return;}
+            ProgressBar.IsIndeterminate=false;ProgressBar.Value=100;Status.Text="הקישור חודש.";Primary.Content="פתיחת יחד";
+            result=current with{Url=renewed.Url,SetupToken=renewed.SetupToken};OpenBrowser(result);
+        }
+        catch(Exception error){Failure(SetupOperation.Code(error),SetupFailureDetail.From(error));}
+        finally{running=false;Primary.IsEnabled=true;Secondary.IsEnabled=true;}
     }
     private void ShowProgress(SetupProgress p)
     {

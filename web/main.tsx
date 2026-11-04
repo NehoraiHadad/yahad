@@ -276,11 +276,13 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
     [show, setShow] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
-  if (setupToken && !setupDone) return <FamilySetup setupToken={setupToken}
+  const linkUsable = setupState !== 'closed' && setupState !== 'complete';
+  if (setupToken && !setupDone && linkUsable) return <FamilySetup setupToken={setupToken}
     onDone={() => { setupToken = ''; setSetupDone(true); void onLogin(); }}
     onClose={() => { setupToken = ''; setSetupDone(true); }} />;
   return (
     <main className="login-page">
+      {setupState === 'closed' && <p className="setup-link-notice" role="status">קישור ההכנה תקף ל־15 דקות, והוא פג. כדי להמשיך, הפעילו שוב את המתקין של יחד באותו מחשב והוא יפתח קישור חדש. שום דבר לא אבד.</p>}
       {setupState === 'ready' && !setupToken && <p className="setup-link-notice" role="status">ההכנה עדיין פתוחה. חזרו לקישור הפרטי שהציג המתקין. רענון הדף מסיר את הקישור הפרטי להגנה על החשבון; אין צורך ליצור משפחה נוספת.</p>}
       <div className="login-art">
         <div className="brand">

@@ -1,7 +1,9 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Net.Http;
 using System.Security.Cryptography;
+using System.Text.Json;
 using Yahad.Install;
 namespace Yahad.Setup;
 
@@ -19,6 +21,17 @@ internal static class SetupOperation
         "uninstall"=>TimeSpan.FromMinutes(96),
         _=>throw new IOException("SETUP_COMMAND")
     };
+    // What the running application says about first-family setup; null when it does not answer.
+    internal static async Task<string?> SetupStateAsync(string url)
+    {
+        try
+        {
+            using var client=new HttpClient(new HttpClientHandler{UseProxy=false,AllowAutoRedirect=false}){Timeout=TimeSpan.FromSeconds(5)};
+            using var response=await client.GetAsync(url+"api/setup/status");response.EnsureSuccessStatusCode();
+            return JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync()).RootElement.GetProperty("state").GetString();
+        }
+        catch(Exception error) when(error is HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException or KeyNotFoundException){return null;}
+    }
     internal static Task<SetupResult> RunAsync(bool uninstall,Action<SetupProgress> progress,CancellationToken cancellation,UninstallMode mode=UninstallMode.KeepData,LanSetupRequest? lan=null,UpdateSetupChoice? update=null)
         =>Task.Run(()=>ExecuteAsync(uninstall,progress,cancellation,mode,lan,update),CancellationToken.None);
     private static async Task<SetupResult> ExecuteAsync(bool uninstall,Action<SetupProgress> progress,CancellationToken cancellation,UninstallMode mode,LanSetupRequest? lan,UpdateSetupChoice? update)

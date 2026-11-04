@@ -28,6 +28,8 @@ const LINUX_ASSETS = ['yachad-release.json', 'yachad-app.zip'];
 // Enrolled machines take their root worker from this pair (deploy/updater-transport.py:25). Everything
 // else ignores it: direct workers only look up the assets they require (deploy/updater.py:678).
 const UPDATER_ASSETS = ['yachad-updater.json', 'yachad-updater.zip'];
+// The landing page links releases/latest/download/ this name. The updaters select the versioned file.
+const STABLE_SETUP = 'Yahad.Setup.exe';
 const prefix = Buffer.from('yahad-release-v1\n', 'ascii');
 const keyIdOf = (spki) => createHash('sha256').update(spki).digest('hex').slice(0, 16);
 const sha256Of = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -82,12 +84,12 @@ function signatureVerifies(manifestFile, spki) {
   return signature.length === 64 && verify('sha256', Buffer.concat([prefix, readFileSync(manifestFile)]), { key: trusted, dsaEncoding: 'ieee-p1363' }, signature);
 }
 
-// Exactly the seven assets, each consistent with its own manifest. A release missing
+// Exactly the eight assets, each consistent with its own manifest. A release missing
 // any one of them would stall one platform's updater.
 export function collectReleaseAssets(directory, version, spki) {
   const windowsManifest = `yahad-windows-${version}.json`;
   const setup = `Yahad.Setup-${version}.exe`;
-  const expected = [...LINUX_ASSETS, ...UPDATER_ASSETS, windowsManifest, `${windowsManifest}.sig`, setup];
+  const expected = [...LINUX_ASSETS, ...UPDATER_ASSETS, windowsManifest, `${windowsManifest}.sig`, setup, STABLE_SETUP];
   const found = existsSync(directory) ? readdirSync(directory) : [];
   const missing = expected.filter((name) => !found.includes(name) || statSync(join(directory, name)).size === 0);
   if (missing.length) refuse(`Release asset set incomplete; missing or empty: ${missing.join(', ')}.`);
@@ -103,6 +105,7 @@ export function collectReleaseAssets(directory, version, spki) {
   const windows = JSON.parse(read(windowsManifest).toString('utf8'));
   const setupBytes = read(setup);
   if (windows.version !== version || windows.keyId !== keyIdOf(spki) || windows.setup.name !== setup || windows.setup.bytes !== setupBytes.length || windows.setup.sha256 !== sha256Of(setupBytes)) refuse(`${windowsManifest} does not describe ${setup} at this version and key.`);
+  if (!read(STABLE_SETUP).equals(setupBytes)) refuse(`${STABLE_SETUP} is not the same file as ${setup}.`);
   if (!signatureVerifies(join(directory, windowsManifest), spki)) refuse(`${windowsManifest}.sig does not verify against the committed key.`);
   return expected.map((name) => ({ name, path: join(directory, name), bytes: statSync(join(directory, name)).size }));
 }
@@ -332,6 +335,8 @@ async function stageRelease({ clone, root, keyFile, inputs }) {
   for (const name of LINUX_ASSETS) copyFileSync(join(linux, name), join(assets, name));
   for (const name of UPDATER_ASSETS) copyFileSync(join(updater, name), join(assets, name));
   for (const name of readdirSync(windows.assets)) copyFileSync(join(windows.assets, name), join(assets, name));
+  const version = JSON.parse(readFileSync(join(clone, 'package.json'), 'utf8')).version;
+  copyFileSync(join(assets, `Yahad.Setup-${version}.exe`), join(assets, STABLE_SETUP));
   return { assets, spki: windows.spki };
 }
 
