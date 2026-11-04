@@ -72,6 +72,8 @@ jobs:
         # Ownership fixtures run only as root and the queue writers only as a normal user, so it takes both runs.
         if: (success() || failure()) && steps.dependencies.outcome == 'success'
         run: |
+          # The fixtures drop to `nobody`, which has to reach the checkout under the runner's home.
+          sudo chmod o+x "$HOME"
           sudo env PATH="$PATH" HOME=/root PYTHONDONTWRITEBYTECODE=1             python3 -m unittest discover -s tests -p 'test_*.py' -v 2>&1 | tee "$RUNNER_TEMP/suites/updater-root.log"
       - name: npm tests
         # A failed Python suite must not hide this one; without dependencies it proves nothing.

@@ -92,7 +92,7 @@ class UpdaterTests(unittest.TestCase):
         config.chmod(0o600)
         with (self.root/'worker.lock').open('a') as lock:
             fcntl.flock(lock,fcntl.LOCK_EX | fcntl.LOCK_NB)
-            with patch.object(u,'CONFIG',config):
+            with patch.object(u,'CONFIG',config),patch.object(u.sys,'argv',['updater.py','run']):
                 u.main()
             self.assertFalse((self.root/'status.json').exists())
 
@@ -217,7 +217,8 @@ class UpdaterTests(unittest.TestCase):
     def test_interrupted_maintenance_recovers(self):
         worker,effects=self.lifecycle()
         old=self.root/'releases/v0.1.0'
-        worker.save(phase='checking_health',currentVersion='0.1.0',previousPath=str(old))
+        # A recorded health failure: without one, recover() adopts a target that still answers.
+        worker.save(phase='checking_health',currentVersion='0.1.0',previousPath=str(old),error='health')
         worker.recover()
         self.assertEqual((self.root/'current').resolve(),old)
         self.assertEqual(worker.status['phase'],'rolled_back')
