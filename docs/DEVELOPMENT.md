@@ -55,7 +55,7 @@ separate service. Never commit keys, .env or connector state.
 Inspect `tests/` and run the affected file first:
 
 ```sh
-node --import tsx --test tests/windows-updater-policy-ui.test.ts
+node --import tsx --test tests/windows-updates-disabled.test.ts
 npm test
 python -m unittest discover -s tests -p "test_*.py"
 ```
@@ -67,10 +67,8 @@ Windows synthetic test entry points:
 
 ```powershell
 ./installer/build.ps1
-./tests/windows-updater/run.ps1 -DotNet (Get-Command dotnet).Source
 ./installer/test-service-host.ps1 -DotNet (Get-Command dotnet).Source -Node (Get-Command node).Source -PackageCache C:/path/to/nuget-cache
-./installer/test-native-recovery.ps1 -DotNet (Get-Command dotnet).Source -Node (Get-Command node).Source -PackageCache C:/path/to/nuget-cache
-./installer/test-production.ps1 -DotNet (Get-Command dotnet).Source -Node (Get-Command node).Source -PackageCache C:/path/to/nuget-cache
+./installer/test-store.ps1 -DotNet (Get-Command dotnet).Source -Node (Get-Command node).Source -PackageCache C:/path/to/nuget-cache
 ```
 
 Read script parameters first. Some integration suites need a prepared app/helper

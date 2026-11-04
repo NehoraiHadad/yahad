@@ -3,14 +3,13 @@ using System.IO;
 
 namespace Yahad.Setup;
 
-// Only fixed operation names and numeric error identifiers cross the elevated
-// boundary. Exception messages can contain private paths and must stay out.
+// Only fixed operation names and numeric error identifiers reach the window
+// and the result file. Exception messages can contain private paths and must stay out.
 internal enum UninstallPhase
 {
-    ReadState, InspectReceiptRecovery, InspectRecoveryService, InspectRecoveryHost, InspectRecoverySetup, InspectRecoveryReceipt, CompareRecoveryState, VerifyReceiptRecovery, ValidateBinaries, ValidateRegistration, StopService, AcquireDataLease,
-    InspectData, WriteRemovalReceipt, ProtectRemovalReceipt, SaveRemovalState,
-    RemoveLan, RemoveService, WaitForServiceRemoval, PreflightDataDeletion,
-    DeleteData, DeleteDataRoot, DeleteBinaries, RemoveRegistration, SavePreservedState, DeleteDiagnostic, DeleteReceipt,
+    StopService, AcquireDataLease, InspectData, WriteRemovalReceipt, SaveRemovalState,
+    RemoveLan, RemoveService, WaitForServiceRemoval,
+    DeleteData, DeleteDataRoot, DeleteBinaries, RemoveRegistration, SavePreservedState, DeleteReceipt,
     FullPrepare, FullProvision, FullNetwork, FullStart, FullUninstall
 }
 
@@ -18,26 +17,28 @@ internal sealed class SetupOperationException(UninstallPhase phase, Exception ca
     : IOException("UNINSTALL_OPERATION_FAILED", cause)
 {
     internal UninstallPhase Phase { get; } = phase;
-    internal bool DiagnosticRecorded { get; set; }
 }
 
-internal sealed record SetupFailureDetail(string? Phase, int? NativeError, int HResult,bool DiagnosticRecorded=false,string? RecoveryCheck=null)
+internal sealed record SetupFailureDetail(string? Phase, int? NativeError, int HResult,string[]? Sites=null)
 {
-    internal static Exception Cause(Exception error) =>
-        error is SetupOperationException { InnerException: { } cause } ? cause : error;
+    internal static Exception Cause(Exception error) => error switch
+    {
+        SetupOperationException { InnerException: { } cause } => Cause(cause),
+        AggregateException { InnerExceptions: [var first, ..] } => first,
+        _ => error
+    };
+    // A cleanup that also failed is reported beside what caused it, not in its place.
+    internal static AggregateException Besides(Exception cause, Exception incomplete) => new(cause, incomplete);
 
     internal static SetupFailureDetail From(Exception error)
     {
         var cause = Cause(error);
         return new(error is SetupOperationException operation ? operation.Phase.ToString() : null,
             cause is Win32Exception native ? native.NativeErrorCode : null, cause.HResult,
-            error is SetupOperationException {DiagnosticRecorded:true},
-            cause is Yahad.Install.ReceiptRecoveryRefusal refusal ? refusal.Check.ToString() : null);
+            Yahad.Install.ServiceStartupDiagnostic.Sites(cause));
     }
 
     internal string Display() =>
-        (RecoveryCheck is null ? "" : RecoveryCheck+" | ")+
         (Phase is null ? "" : " · " + Phase) +
-        (NativeError is { } native ? " · Windows " + native : " · HRESULT " + HResult.ToString("X8"))+
-        (DiagnosticRecorded ? " · פרטי התקלה נשמרו" : "");
+        (NativeError is { } native ? " · Windows " + native : " · HRESULT " + HResult.ToString("X8"));
 }

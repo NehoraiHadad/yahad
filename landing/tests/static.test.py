@@ -16,7 +16,7 @@ class Document(HTMLParser):
 s=(ROOT/'dist/index.html').read_text();d=Document();d.feed(s)
 assert d.html['lang']=='he' and d.html['dir']=='rtl'
 # Download links, when wired, may point only at real release assets of this repo.
-RELEASE_URL=re.compile(r'^https://github\.com/NehoraiHadad/yahad/releases/download/[^/]+/[^/]+$')
+RELEASE_URL=re.compile(r'^https://github\.com/NehoraiHadad/yahad/releases/(download/[^/]+|latest/download)/[^/]+$')
 for a in d.anchors:
  href=a.get('href','')
  if 'download-action' in (a.get('class') or ''):
@@ -68,19 +68,17 @@ def activate(src,platform,url):
  body=re.sub(r'<button class="primary download-action"[^>]*>(.*?)</button>',r'<a class="primary download-action" href="%s">\1</a>'%url,body)
  return src[:m.start()]+'<li class="download-card"'+head+'>'+body+'</li>'+src[m.end():]
 FIXTURE_URL='https://github.com/NehoraiHadad/yahad/releases/download/test-fixture/installer-file'
-# Shipped page: both platforms pending, no download link anywhere, no release URL shipped.
+# Shipped page: Windows ready at the fixed latest-release name, Linux still pending.
 assert validate_download(s)==[],validate_download(s)
-assert not re.search(r'data-state="ready"',s),'Shipped page marks a download ready'
-assert 'releases/download' not in s,'Shipped page carries a release URL'
-assert 'אין הורדה זמינה כרגע' in s and 'download=' not in s
+assert re.findall(r'data-platform="(\w+)" data-state="ready"',s)==['windows'],'Only Windows is released'
+assert 'releases/latest/download/Yahad.Setup.exe' in s and 'releases/download' not in s,'Shipped page must use the fixed link'
+assert 'download=' not in s
 # Fixtures: the documented activation edit, per platform and combined, must validate.
-assert validate_download(activate(s,'windows',FIXTURE_URL))==[],'windows-only ready fixture rejected'
 assert validate_download(activate(s,'linux',FIXTURE_URL))==[],'linux-only ready fixture rejected'
-assert validate_download(activate(activate(s,'windows',FIXTURE_URL),'linux',FIXTURE_URL))==[],'both-ready fixture rejected'
 assert validate_download(s.replace(' disabled','',1)),'pending enabled button accepted'
 # Negative fixtures: non-repo URL rejected; ready without a link rejected; pending with a link rejected.
-assert validate_download(activate(s,'windows','https://example.com/installer.exe')),'non-repo download URL accepted'
+assert validate_download(activate(s,'linux','https://example.com/installer.exe')),'non-repo download URL accepted'
 assert validate_download(re.sub(r'data-state="pending"','data-state="ready"',s,count=1)),'ready without link accepted'
-assert validate_download(activate(s,'windows',FIXTURE_URL).replace('data-state="ready"','data-state="pending"',1)),'pending with link accepted'
+assert validate_download(s.replace('data-state="ready"','data-state="pending"',1)),'pending with link accepted'
 print('PASS: Hebrew RTL, all anchors/assets/CSS URLs, no-JS complete demo, reduced-motion CSS, parent-before-child DOM, per-platform pending downloads + ready-state fixtures, quota wording, explicit illustration dimensions and <250 kB budget')
 print('NOTE: static checks do not establish responsive rendering, contrast, browser focus or live motion behavior.')

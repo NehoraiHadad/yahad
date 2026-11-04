@@ -329,6 +329,13 @@ class Worker:
         atomic_json(self.status_path, following, self.group)
         self.status = following
 
+    def start_service(self):
+        # A crash loop uses up the unit's start limit, and systemd then refuses this start too.
+        # A unit systemd no longer holds has no count and answers with an error; the start decides.
+        try: self.command(['/usr/bin/systemctl', 'reset-failed', self.c['service']])
+        except UpdateError: pass
+        self.command(['/usr/bin/systemctl', 'start', self.c['service']])
+
     def command(self, args, *, user=None, cwd=None, input=None, timeout=300, code='internal'):
         if user:
             args = ['/usr/sbin/runuser', '-u', user, '--'] + args
@@ -498,7 +505,7 @@ class Worker:
             if boot:
                 self.save(phase='rollback_pending_health', error=self.status.get('error') or 'health')
                 return True
-            self.command(['/usr/bin/systemctl', 'start', self.c['service']])
+            self.start_service()
             self.health(previous_version, expected_schema=previous_schema)
             self.save(phase='rolled_back', currentVersion=previous_version, error=self.status.get('error') or 'health')
             return True
@@ -805,7 +812,7 @@ class Worker:
                 raise UpdateError('incompatible')
             self.save(phase='activating', backupId=created_backups.pop())
             self.switch(destination)
-            self.command(['/usr/bin/systemctl', 'start', self.c['service']])
+            self.start_service()
             self.save(phase='checking_health')
             self.health(manifest['version'], expected_schema=manifest['databaseSchema'])
             self.save(phase='healthy', currentVersion=manifest['version'], failedVersion=None, error=None)

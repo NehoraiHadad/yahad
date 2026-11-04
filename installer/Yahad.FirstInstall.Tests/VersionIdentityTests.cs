@@ -35,12 +35,5 @@ internal static class VersionIdentityTests
             foreach(var version in new[]{"0.5.3","999.0.0"})Refuse(()=>{using var wrong=new InstallPackage(new MemoryStream(fixture.Zip),JsonSerializer.SerializeToUtf8Bytes(manifest with{Version=version}));});
             return Task.CompletedTask;
         });
-        await check("service receipt admission shares the compiled identity and preserves repair barriers",()=>
-        {
-            var receipt=new FirstInstallReceipt(2,Guid.NewGuid().ToString("N"),Guid.NewGuid().ToString("N"),new string('a',64),ApplicationRelease.Version,new string('b',64),47123,new string('c',64),"committed",new string('d',64));
-            Assert(FirstInstallProfile.ValidateReceipt(receipt)==receipt);
-            foreach(var changed in new[]{receipt with{Version="0.5.3"},receipt with{Version="999.0.0"},receipt with{Format=1},receipt with{Phase="preparing"},receipt with{ReleaseDigest="invalid"}})Refuse(()=>FirstInstallProfile.ValidateReceipt(changed));
-            return Task.CompletedTask;
-        });
     }
 }

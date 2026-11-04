@@ -9,13 +9,11 @@ internal sealed class FixturePreparationException(bool quiescenceConfirmed,Excep
 {
     internal bool QuiescenceConfirmed{get;}=quiescenceConfirmed;
 }
-internal sealed class PrivateControlFiles:IInstalledControlFiles
-{public byte[] Read(string path,int bound,ICollection<IDisposable> held){var file=WindowsFileBoundary.OpenPrivateRead(path);held.Add(file);return file.Small(bound);}}
-internal sealed class FileControl(ProductionFixture fixture):IChildControlFactory
+internal sealed class FileControl(StoreFixture fixture)
 {
     internal int Creates;internal bool HeldAfterClose;internal string? StopError;
-    public IChildControl Create(){Creates++;HeldAfterClose=false;StopError=null;return new Channel(this,fixture);}
-    private sealed class Channel(FileControl owner,ProductionFixture fixture):IChildControl
+    internal IChildControl Create(){Creates++;HeldAfterClose=false;StopError=null;return new Channel(this,fixture);}
+    private sealed class Channel(FileControl owner,StoreFixture fixture):IChildControl
     {
         public string Endpoint=>"synthetic-control-no-network-listener";
         private async Task Wait(string name,CancellationToken cancellation)
@@ -26,117 +24,78 @@ internal sealed class FileControl(ProductionFixture fixture):IChildControlFactor
                 await Task.Delay(10,cancellation);
             }
         }
-        public async Task<ChildReady> ReadyAsync(int root,CancellationToken cancellation)
-        {await Wait("native-ready",cancellation);using var value=JsonDocument.Parse(File.ReadAllBytes(Path.Combine(fixture.Data,"native-ready")));if(value.RootElement.GetProperty("pid").GetInt32()!=root||value.RootElement.GetProperty("PATH").GetString()!=""||!value.RootElement.GetProperty("clean").GetBoolean())throw new IOException("STORE_CHILD_ENV_OR_PID");return new((uint)root,"ready");}
+        public async Task<ChildReady> ReadyAsync(CancellationToken cancellation)
+        {await Wait("native-ready",cancellation);using var value=JsonDocument.Parse(File.ReadAllBytes(Path.Combine(fixture.Data,"native-ready")));var root=value.RootElement.GetProperty("pid").GetInt32();if(value.RootElement.GetProperty("PATH").GetString()!=""||!value.RootElement.GetProperty("clean").GetBoolean())throw new IOException("STORE_CHILD_ENV_OR_PID");return new((uint)root,"ready");}
         public async Task StopAsync(CancellationToken cancellation)
         {File.WriteAllText(Path.Combine(fixture.Data,"native-stop"),"stop");await Wait("native-closed",cancellation);try{using var wrong=WindowsFileBoundary.AcquireDataLease(fixture.Data);throw new IOException("EARLY_LEASE_RELEASE");}catch(Win32Exception e)when(e.NativeErrorCode==32){owner.HeldAfterClose=true;}catch(Exception e){owner.StopError=e.GetType().Name+":"+e.Message;throw;}File.WriteAllText(Path.Combine(fixture.Data,"native-exit"),"exit");}
         public void Dispose(){}
     }
 }
-internal sealed class ProductionFixture:IDisposable
+internal sealed class StoreFixture:IDisposable
 {
     private readonly OwnedFixtureDirectory owned;
     private readonly FixtureProcesses processes=new();
     private bool disposed,modulesReleased;
     private bool cleanupAttempted;private Exception? cleanupFailure;
-    internal readonly string Root,Dataset,OriginalDataId=Guid.NewGuid().ToString("N"),InstallationId=Guid.NewGuid().ToString("N"),Payload,Node,Repo;
-    internal string DataId,Phase="committed";internal long AnchorEpoch=1;internal string? AnchorDigest,OwnerRelease;internal long? Expiry;
+    internal readonly string Root,Dataset,Package,Repo;
     internal int Schema {get;}
-    internal InstalledRecovery? Recovery;internal DateTimeOffset Now=DateTimeOffset.UtcNow;internal readonly FileControl Control;
-    internal string Data=>Recovery is null?Path.Combine(Dataset,"data"):Path.Combine(Dataset,"restore-"+Recovery.OperationId,"completed","data");
-    internal string Policy=>Path.Combine(Dataset,"update-policy");private string release="";
+    internal readonly FileControl Control;
+    internal string Data=>Path.Combine(Dataset,"data");
     private readonly StoreFixtureModules modules;
-    private ProductionFixture(string repo,StoreFixtureModules modules)
+    private StoreFixture(string repo,StoreFixtureModules modules)
     {
         this.modules=modules;Repo=repo;Schema=ReadSourceSchema(repo);owned=OwnedFixtureDirectory.Create(Path.GetTempPath());Root=owned.Root;
         modules.AcquireUser();
         try{
         Directory.CreateDirectory(Path.Combine(Root,"datasets"));
-        var source=SafeDirectory.CreatePrivateSession(Path.Combine(Root,"datasets"));Dataset=Path.Combine(Root,"datasets",OriginalDataId);
+        var source=PrivateSession.Create(Path.Combine(Root,"datasets"));Dataset=Path.Combine(Root,"datasets",Guid.NewGuid().ToString("N"));
         if(!Path.GetFullPath(source).StartsWith(Root+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)||!Path.GetFullPath(Dataset).StartsWith(Root+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))throw new IOException("TEST_MOVE_SCOPE");Directory.Move(source,Dataset);
-        DataId=OriginalDataId;Payload=Path.Combine(Root,"payload-stage");Directory.CreateDirectory(Payload);Node=Path.Combine(Payload,"runtime/node/node.exe");Directory.CreateDirectory(Path.GetDirectoryName(Node)!);Control=new(this);
-        Directory.CreateDirectory(Path.Combine(Root,"temporary"));Directory.CreateDirectory(Data);File.WriteAllText(Path.Combine(Dataset,"master-key"),Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)));File.WriteAllText(Policy,"synthetic-policy");File.WriteAllText(Path.Combine(Dataset,"update-pin"),"synthetic-pin");
+        Package=Path.Combine(Root,"package");Directory.CreateDirectory(Path.Combine(Package,"runtime/node"));Control=new(this);
+        Directory.CreateDirectory(Path.Combine(Root,"temporary"));Directory.CreateDirectory(Data);File.WriteAllText(Path.Combine(Dataset,"master-key"),Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)));
         }catch(Exception failure){modules.ReleaseUser();try{owned.Cleanup(()=>true);}catch(Exception cleanup){throw new AggregateException(failure,cleanup);}throw;}
     }
-    internal static async Task<ProductionFixture> Create(string node,string repo,string helper)
+    internal static async Task<StoreFixture> Create(string node,string repo,string helper)
     {
-        var f=new ProductionFixture(repo,await StoreFixtureModules.Prepare(node,repo));
+        var f=new StoreFixture(repo,await StoreFixtureModules.Prepare(node,repo));
         try{
         // Node/CreateProcess cannot spawn this non-namespaced native image at
         // MAX_PATH. Diagnose the fixture location before copying or starting it.
-        if(Path.Combine(f.Root,"payloads",new string('a',64),"app/native/Yahad.Platform.exe").Length>=260)
+        if(Path.Combine(f.Package,"app/native/Yahad.Platform.exe").Length>=260)
             throw new IOException("STORE_FIXTURE_PATH_TOO_LONG: select a shorter private TEMP directory");
-        File.Copy(node,f.Node);Copy(helper,Path.Combine(f.Payload,"app/native"));
-        void Put(string name,string text){var p=Path.Combine(f.Payload,name);Directory.CreateDirectory(Path.GetDirectoryName(p)!);File.WriteAllText(p,text);}
+        File.Copy(node,Path.Combine(f.Package,"runtime/node/node.exe"));Copy(helper,Path.Combine(f.Package,"app/native"));
+        void Put(string name,string text){var p=Path.Combine(f.Package,name);Directory.CreateDirectory(Path.GetDirectoryName(p)!);File.WriteAllText(p,text);}
         Put("runtime/ffmpeg/ffmpeg.exe","synthetic-ffmpeg-not-executed");Put("runtime/caddy/caddy.exe","synthetic-caddy-not-executed");
-        Put("app/package.json","{\"type\":\"module\"}");Put("app/node_modules/tsx/package.json","{\"type\":\"module\",\"exports\":\"./index.mjs\"}");
-        Put("app/node_modules/tsx/index.mjs","export * from "+JsonSerializer.Serialize(new Uri(Path.Combine(repo,"node_modules/tsx/dist/loader.mjs")).AbsoluteUri)+";");
-        Put("legal/build-inputs.json",JsonSerializer.Serialize(new{databaseSchema=f.Schema}));
-        Put("app/src/worker.ts",f.Worker());
-        Put("app/src/main.ts","import fs from 'node:fs';try{await import('./worker.ts')}catch(error){fs.writeFileSync("+JsonSerializer.Serialize(f.PathOf("worker-error.json"))+",JSON.stringify({name:error.name,message:error.message,stack:error.stack}));process.exitCode=1}");
-        var records=Directory.GetFiles(f.Payload,"*",SearchOption.AllDirectories).Order(StringComparer.Ordinal).Select(p=>new{path=Path.GetRelativePath(f.Payload,p).Replace('\\','/'),size=new FileInfo(p).Length,sha256=Hash(File.ReadAllBytes(p))}).ToArray();
-        var manifest=JsonSerializer.SerializeToUtf8Bytes(new{version=ApplicationRelease.Version,schema=1,kind="windows-runtime-candidate",target="win-x64",profile="full",authority="application-updater",
-            launch=new{node="runtime/node/node.exe",entry="app/src/main.ts",helper="app/native/Yahad.Platform.exe",ffmpeg="runtime/ffmpeg/ffmpeg.exe",caddy="runtime/caddy/caddy.exe"},files=records});
-        f.release=Hash(manifest);File.WriteAllBytes(Path.Combine(f.Payload,"bundle.json"),manifest);Directory.CreateDirectory(Path.Combine(f.Root,"payloads"));var target=Path.Combine(f.Root,"payloads",f.release);Directory.Move(f.Payload,target);
-        f.actualPayload=target;
-        await f.Seed(node);f.Publish();return f;
-        }catch(Exception failure){f.processes.Retain(failure);try{f.Dispose();}catch(Exception cleanup){throw new AggregateException(failure,cleanup);}throw;}
+        Put("app/package.json","{\"type\":\"module\"}");
+        // Stands in for the server bundle: the package has no loader, so the entry
+        // registers the repository tsx before importing the source Store worker.
+        var register="const{register}=await import("+JsonSerializer.Serialize(new Uri(Path.Combine(repo,"node_modules/tsx/dist/esm/api/index.mjs")).AbsoluteUri)+");register();";
+        Put("app/server/worker.ts",f.Worker());
+        Put("app/server/main.mjs","import fs from 'node:fs';try{"+register+"await import('./worker.ts')}catch(error){fs.writeFileSync("+JsonSerializer.Serialize(f.PathOf("worker-error.json"))+",JSON.stringify({name:error.name,message:error.message,stack:error.stack}));process.exitCode=1}");
+        await f.Seed(node);return f;
+        }catch(Exception failure){try{f.Dispose();}catch(Exception cleanup){throw new AggregateException(failure,cleanup);}throw;}
     }
-    private string? actualPayload;internal string Package=>actualPayload??Payload;
     internal string PathOf(string name)=>Path.Combine(Root,name);
-    private static readonly List<ProbeOwnershipException> pendingSchemaProbes=[];
-    internal async Task<int> ReadQuiescentSchema(string node,JobProcessFaultInjection? fault=null)
-    {
-        fault=processes.Observe(fault);
-        // Call only after the seed job or admitted child has been observed
-        // empty. The lease and no-write pin make the immutable read explicit.
-        IDisposable? lease=WindowsFileBoundary.AcquireDataLease(Data);WindowsFileBoundary.PrivateReadLease? pin=null;
-        try
-        {
-            var database=Path.Combine(Data,"app.sqlite");var sidecars=new[]{database+"-wal",database+"-shm",database+"-journal"};
-            if(sidecars.Any(Path.Exists))throw new IOException("SEEDED_STORE_SIDECAR");
-            pin=WindowsFileBoundary.OpenPrivateRead(database);var before=pin.Sha256(134217728);
-            var observed=await FrozenAdmissionSchema.ReadAsync(node,database,PathOf("temporary"),default,fault);
-            if(sidecars.Any(Path.Exists)||pin.Sha256(134217728)!=before)throw new IOException("SEEDED_STORE_CHANGED_DURING_READBACK");
-            return observed;
-        }
-        catch(ProbeOwnershipException owned)
-        {
-            owned.Retain(lease);lease=null;if(pin is not null){owned.Retain(pin);pin=null;}
-            // Keep ownership rooted even after the runner records a failure.
-            lock(pendingSchemaProbes)pendingSchemaProbes.Add(owned);
-            owned.AfterCleanup(()=>{lock(pendingSchemaProbes)pendingSchemaProbes.Remove(owned);});
-            try{using var bound=new CancellationTokenSource(TimeSpan.FromSeconds(5));await owned.RetryCleanupAsync(bound.Token);}
-            catch{throw new FixturePreparationException(false,owned);}
-            throw new FixturePreparationException(owned.QuiescenceConfirmed&&owned.CleanupComplete,owned);
-        }
-        finally{pin?.Dispose();lease?.Dispose();}
-    }
     internal void ClearSignals()
     {
         foreach(var name in new[]{"native-ready","native-stop","native-closed","native-exit"})if(File.Exists(Path.Combine(Data,name)))File.Delete(Path.Combine(Data,name));
         // Callers clear only after the previous child is observed quiescent.
         if(File.Exists(PathOf("worker-error.json")))File.Delete(PathOf("worker-error.json"));
     }
-    internal void Reset(){Recovery=null;DataId=OriginalDataId;Phase="committed";AnchorEpoch=1;AnchorDigest=null;OwnerRelease=null;Expiry=null;if(File.Exists(PathOf("PENDING.JSON")))File.Delete(PathOf("PENDING.JSON"));File.WriteAllText(Policy,"synthetic-policy");File.WriteAllText(Path.Combine(Dataset,"update-pin"),"synthetic-pin");ClearSignals();Publish();}
-    internal void ResetRecovery(NativeBackupResult b,NativeRestoreResult restore){Reset();DataId=Guid.NewGuid().ToString("N");Recovery=new(OriginalDataId,b.BackupId,restore.OperationId,b.ReceiptDigest);Phase="recovered";Publish();}
-    internal void Publish()
+    internal IPrivateAppLauncher CreateLauncher(VerifiedProcessSpec spec)
+        =>processes.Launcher(new ServiceProcessLauncher(spec,Control.Create));
+    internal FixtureProcesses.JobOwner StartJob(string image,IEnumerable<string> arguments,string directory,IReadOnlyDictionary<string,string> environment,
+        Action<Microsoft.Win32.SafeHandles.SafeProcessHandle,int>? beforeResume=null)
+        =>processes.StartJob(image,arguments,directory,environment,beforeResume);
+    // Call only after the child's tree is observed empty; reads back what the Store wrote.
+    internal async Task<int> ReadSchema(string node)
     {
-        string Write<T>(string name,T value){var bytes=JsonSerializer.SerializeToUtf8Bytes(value);File.WriteAllBytes(PathOf(name),bytes);return Hash(bytes);}
-        var owner=Write("owner-intent.json",new InstalledOwnerIntent(1,InstallationId,1,Guid.NewGuid().ToString("N"),OwnerRelease??release,DataId,Recovery is not null?"recover":"activate","synthetic-owner",Now.AddSeconds(-1).ToUnixTimeSeconds(),Expiry));
-        var web=Write("web.json",new InstalledWeb(1,InstallationId,"https://yahad.invalid",32000));
-        var head=Write("activation.json",new InstalledActivation(1,InstallationId,1,release,DataId,Schema,Schema,Hash(File.ReadAllBytes(Path.Combine(Dataset,"master-key"))),Hash(File.ReadAllBytes(Policy)),Hash(File.ReadAllBytes(Path.Combine(Dataset,"update-pin"))),owner,web,Phase,Recovery));
-        Write("epoch.json",new InstalledEpoch(1,InstallationId,AnchorEpoch,AnchorDigest??head));
+        var output=PathOf("schema-"+Guid.NewGuid().ToString("N")+".txt");
+        const string code="const{DatabaseSync}=require('node:sqlite'),fs=require('node:fs');const db=new DatabaseSync(process.argv[1],{readOnly:true});fs.writeFileSync(process.argv[2],String(db.prepare('SELECT version FROM schema_version').get().version));db.close()";
+        using var job=StartJob(node,["-e",code,Path.Combine(Data,"app.sqlite"),output],Root,LaunchEnvironment.Clean(PathOf("temporary")));
+        using var bound=new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        if(await job.WaitAsync(bound.Token)!=0)throw new IOException("STORE_SCHEMA_READ_FAILED");await job.WaitForTreeEmptyAsync(bound.Token);
+        return int.Parse(File.ReadAllText(output),System.Globalization.CultureInfo.InvariantCulture);
     }
-    internal InstallationBinding Binding=>new(InstallationId,Hash(File.ReadAllBytes(PathOf("activation.json"))));
-    internal FixtureProcesses.FixtureResolver CreateResolver(JobProcessFaultInjection? fault=null,FreshDataAuthorization? fresh=null,JobProcessFaultInjection? startFault=null,InstalledStateFiles? stateFiles=null)
-        =>processes.Resolver(new(Root,new PrivateControlFiles(),Control,()=>Now,processes.Observe(fault),stateFiles:stateFiles,fresh:fresh,startFault:startFault,connectorProfile:RuntimeConnectorProfile.Synthetic,processFactory:spec=>CreateLauncher(spec,startFault)));
-    internal IPrivateAppLauncher CreateLauncher(VerifiedProcessSpec spec,JobProcessFaultInjection? fault=null)
-        =>processes.Launcher(new ServiceProcessLauncher(spec,Control,processes.Observe(fault)));
-    internal void RetainFailure(Exception failure)=>processes.Retain(failure);
-    internal FixtureProcesses.JobOwner StartJob(string image,IEnumerable<string> arguments,string directory,IReadOnlyDictionary<string,string> environment)
-        =>processes.StartJob(image,arguments,directory,environment);
-    internal Task<AuthorizedServiceStart> Resolve(CancellationToken cancellation=default)=>CreateResolver().ResolveAsync(Binding,cancellation);
     private async Task Seed(string node)
     {
         var marker=JsonSerializer.Serialize(Path.Combine(Root,"seed-state.json"));
@@ -148,7 +107,6 @@ internal sealed class ProductionFixture:IDisposable
         // cache in Root, and bound slow dependency preparation separately.
         FixtureProcesses.JobOwner seed;
         try{seed=processes.StartJob(node,["--input-type=module","-e",script],Repo,LaunchEnvironment.Clean(PathOf("temporary")));}
-        catch(JobStartQuiescenceUnconfirmedException failure){throw await StopPreparation(failure.OwnedProcess,failure);}
         catch(Exception failure){throw new FixturePreparationException(true,failure);}
         using var seedOwner=seed;var job=seed.Process;using var bound=new CancellationTokenSource(TimeSpan.FromSeconds(120));
         try
@@ -173,18 +131,8 @@ internal sealed class ProductionFixture:IDisposable
     }
     private static void BestEffortDiagnostic(string message){try{Console.Error.WriteLine(message);}catch{}}
     private string ConfigScript()=>"const config={dataDir:"+JsonSerializer.Serialize(Path.Combine(Dataset,"data"))+",masterKey:Buffer.from(fs.readFileSync("+JsonSerializer.Serialize(Path.Combine(Dataset,"master-key"))+",'utf8').trim(),'base64'),connector:'mock',realAllowed:false,host:'127.0.0.1',port:32000,origin:'https://yahad.invalid',secureCookie:true,maxMedia:16777216,maxStorage:2147483648,childIdleMs:900000,sessionMs:43200000,diagnosticsEnabled:false};";
-    private string Worker()=>"import fs from 'node:fs';import path from 'node:path';import{Store}from "+JsonSerializer.Serialize(new Uri(Path.Combine(Repo,"src/store.ts")).AbsoluteUri)+";import{createPlatformFiles}from "+JsonSerializer.Serialize(new Uri(Path.Combine(Repo,"src/platform-files.ts")).AbsoluteUri)+";"+"const data=process.env.DATA_DIR;const release=await createPlatformFiles('win32',path.resolve('native/Yahad.Platform.exe')).acquireDataLock(data);const config={dataDir:data,masterKey:Buffer.from(fs.readFileSync(process.env.MASTER_KEY_FILE,'utf8').trim(),'base64'),connector:'mock',realAllowed:false,host:'127.0.0.1',port:32000,origin:'https://yahad.invalid',secureCookie:true,maxMedia:16777216,maxStorage:2147483648,childIdleMs:900000,sessionMs:43200000,diagnosticsEnabled:false};if(fs.existsSync("+JsonSerializer.Serialize(Path.Combine(Root,"crash-before-store"))+"))process.exit(73);const store=new Store(config);store.db.exec('CREATE TABLE IF NOT EXISTS native_activation_probe(value INTEGER);INSERT INTO native_activation_probe VALUES(1)');fs.writeFileSync(path.join(data,'native-ready.partial'),JSON.stringify({pid:process.pid,PATH:process.env.PATH,clean:!process.env.NODE_OPTIONS&&!process.env.DOTNET_STARTUP_HOOKS}));fs.renameSync(path.join(data,'native-ready.partial'),path.join(data,'native-ready'));const wait=n=>new Promise(resolve=>{const timer=setInterval(()=>{if(fs.existsSync(path.join(data,n))){clearInterval(timer);resolve();}},10)});await wait('native-stop');store.close();await release();fs.writeFileSync(path.join(data,'native-closed'),'closed');await wait('native-exit');";
-    internal void SelectPreparedPayload(string prepared)
-    {
-        var build=NativeJson.Read<JsonElement>(File.ReadAllBytes(Path.Combine(prepared,"legal/build-inputs.json")));
-        if(build.GetProperty("databaseSchema").GetInt32()!=Schema)throw new IOException("STORE_FIXTURE_SCHEMA_MISMATCH");
-        var manifest=File.ReadAllBytes(Path.Combine(prepared,"bundle.json"));release=Hash(manifest);var target=Path.Combine(Root,"payloads",release);
-        Directory.CreateDirectory(target);
-        foreach(var path in Directory.GetFiles(prepared,"*",SearchOption.AllDirectories))
-        {var destination=Path.Combine(target,Path.GetRelativePath(prepared,path));Directory.CreateDirectory(Path.GetDirectoryName(destination)!);File.Copy(path,destination);}
-        actualPayload=target;Publish();
-    }
-    internal VerifiedProcessSpec RawSpec(WindowsFileBoundary.DataLease lease)=>new(Path.Combine(Package,"runtime/node/node.exe"),Hash(File.ReadAllBytes(Path.Combine(Package,"runtime/node/node.exe"))),["--import","tsx","src/main.ts"],Path.Combine(Package,"app"),Path.Combine(Root,"temporary"),Path.Combine(Package,"runtime/ffmpeg/ffmpeg.exe"),new Dictionary<string,string>{{"DATA_DIR",Data},{"MASTER_KEY_FILE",Path.Combine(Dataset,"master-key")}},lease);
+    private string Worker()=>"import fs from 'node:fs';import path from 'node:path';import{Store}from "+JsonSerializer.Serialize(new Uri(Path.Combine(Repo,"src/store.ts")).AbsoluteUri)+";import{createPlatformFiles}from "+JsonSerializer.Serialize(new Uri(Path.Combine(Repo,"src/platform-files.ts")).AbsoluteUri)+";"+"const data=process.env.DATA_DIR;const release=await createPlatformFiles('win32',path.resolve('native/Yahad.Platform.exe')).acquireDataLock(data);const config={dataDir:data,masterKey:Buffer.from(fs.readFileSync(process.env.MASTER_KEY_FILE,'utf8').trim(),'base64'),connector:'mock',realAllowed:false,host:'127.0.0.1',port:32000,origin:'https://yahad.invalid',secureCookie:true,maxMedia:16777216,maxStorage:2147483648,childIdleMs:900000,sessionMs:43200000,diagnosticsEnabled:false};const store=new Store(config);store.db.exec('CREATE TABLE IF NOT EXISTS native_activation_probe(value INTEGER);INSERT INTO native_activation_probe VALUES(1)');fs.writeFileSync(path.join(data,'native-ready.partial'),JSON.stringify({pid:process.pid,PATH:process.env.PATH,clean:!process.env.NODE_OPTIONS&&!process.env.DOTNET_STARTUP_HOOKS}));fs.renameSync(path.join(data,'native-ready.partial'),path.join(data,'native-ready'));const wait=n=>new Promise(resolve=>{const timer=setInterval(()=>{if(fs.existsSync(path.join(data,n))){clearInterval(timer);resolve();}},10)});await wait('native-stop');store.close();await release();fs.writeFileSync(path.join(data,'native-closed'),'closed');await wait('native-exit');";
+    internal VerifiedProcessSpec RawSpec(WindowsFileBoundary.DataLease lease)=>new(Path.Combine(Package,"runtime/node/node.exe"),["server/main.mjs"],Path.Combine(Package,"app"),Path.Combine(Root,"temporary"),Path.Combine(Package,"runtime/ffmpeg/ffmpeg.exe"),new Dictionary<string,string>{{"DATA_DIR",Data},{"MASTER_KEY_FILE",Path.Combine(Dataset,"master-key")}},lease);
     internal static string Hash(byte[] value)=>Convert.ToHexStringLower(SHA256.HashData(value));
     internal static int ReadSourceSchema(string repo)
     {

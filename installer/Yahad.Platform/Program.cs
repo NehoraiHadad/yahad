@@ -17,16 +17,14 @@ try
     {
         using var input=Console.OpenStandardInput();using var bounded=new MemoryStream();var buffer=new byte[1024];int n;
         while((n=await input.ReadAsync(buffer))>0){if(bounded.Length+n>4096)throw new IOException();bounded.Write(buffer,0,n);}
-        using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        var result=await Yahad.Authority.RuntimeUpdateBridge.ExecuteAsync(bounded.ToArray(),deadline.Token);
-        Reply(new{schema=1,ok=true,result});return 0;
+        Reply(await Yahad.Platform.UpdaterClient.HandleAsync(bounded.ToArray()));return 0;
     }
     if (args is ["read-secret", var role, var path] && role is "master-key" or "setup-capability")
     {
         try
         {
-            using var file = WindowsFileBoundary.OpenSecret(path, role == "master-key" ? SecretRole.MasterKey : SecretRole.SetupCapability);
-            var bytes = file.Read();
+            using var file = WindowsFileBoundary.OpenRead(path);
+            var bytes = file.Small(role == "master-key" ? 4096 : 1024);
             try { Reply(new { schema = 1, ok = true, exists = true, bytes = Convert.ToBase64String(bytes) }); }
             finally { CryptographicOperations.ZeroMemory(bytes); }
         }
@@ -36,9 +34,9 @@ try
     }
     if(args is ["adopt-host-lease",var descriptor,var data,var pidText,var nonce]&&int.TryParse(pidText,out var pid))
     {WindowsFileBoundary.ValidateHostLease(descriptor,data,pid,nonce);Reply(new{schema=1,ok=true,locked=true});return 0;}
-    if (args is ["lock-data", var directory, var ownerText] && int.TryParse(ownerText, out var owner) && owner > 0)
+    if (args is ["lock-data", var directory])
     {
-        using var lease = WindowsFileBoundary.AcquireDataLease(directory, owner);
+        using var lease = WindowsFileBoundary.AcquireDataLease(directory);
         Reply(new { schema = 1, ok = true, locked = true });
         // Parent's stdin is a private lifetime pipe. EOF on parent death releases
         // the kernel lock. A bounded explicit release line permits normal shutdown.

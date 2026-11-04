@@ -41,7 +41,7 @@ class LogicTests(unittest.TestCase):
     def test_recovery_orders_stop_schema_switch_start_and_version_health(self):
         w = self.worker
         self.assertTrue(w.recover())
-        self.assertEqual(w.effects, ['stop','switch','start',('health','0.2.0')])
+        self.assertEqual(w.effects, ['stop','switch','reset-failed','start',('health','0.2.0')])
         self.assertEqual(w.status['phase'], 'rolled_back')
         self.assertEqual(w.status['failedVersion'], '0.3.0')
 

@@ -28,15 +28,4 @@ public static class NetworkPlan
             throw new InvalidDataException("NETWORK_SELECTION_CHANGED");
         return "https://" + selectedAddress;
     }
-
-    // A momentary preflight only. The real listener must handle a later bind failure
-    // without killing the process that acquired the port in the meantime.
-    public static bool CanBindLoopback(int port)
-    {
-        if (port is < 1 or > 65535) throw new ArgumentOutOfRangeException(nameof(port));
-        using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-        socket.ExclusiveAddressUse = true;
-        try { socket.Bind(new IPEndPoint(IPAddress.Loopback, port)); return true; }
-        catch (SocketException) { return false; }
-    }
 }

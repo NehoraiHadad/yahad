@@ -8,8 +8,8 @@ internal static class ImportTraceProbe
 {
     internal static async Task<int> RunAsync(string node,string repo,string output,bool compilerOnly=false)
     {
-        output=SafeDirectory.CreatePrivateSession(output);
-        var root=SafeDirectory.CreatePrivateSession(Path.GetTempPath());
+        output=PrivateSession.Create(output);
+        var root=PrivateSession.Create(Path.GetTempPath());
         var trace=Path.Combine(root,"trace.jsonl");var loader=Path.Combine(root,"trace-loader.mjs");
         File.WriteAllText(trace,"");
         File.WriteAllText(loader,"""
@@ -50,7 +50,6 @@ let count=0;globalThis.__yahadImportProbe=(phase,url)=>{if(count++<4096)fs.appen
         catch(Exception failure)
         {
             failureCode=failure.GetType().Name;timedOut=failure is OperationCanceledException;
-            if(failure is JobStartQuiescenceUnconfirmedException owned)job=owned.OwnedProcess;
             if(job is not null){try{using var cleanup=new CancellationTokenSource(TimeSpan.FromSeconds(30));await job.TerminateAndWaitForTreeEmptyAsync(cleanup.Token);}catch{quiescent=false;}}
         }
         finally{job?.Dispose();}

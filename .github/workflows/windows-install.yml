@@ -1,0 +1,159 @@
+name: Windows install acceptance
+
+# Runs the synthetic C# suites, then builds Yahad.Setup.exe from the exact
+# commit and runs real machine acceptance on a disposable Windows runner:
+# install, readiness, first family over HTTP, repair, refused releases, upgrade
+# with a schema change, health rollback, interrupted-upgrade recovery, keep-data
+# uninstall, reinstall with the family intact, and full removal
+# (installer/machine-acceptance.ps1). The releases are signed by a key generated
+# in this job and destroyed with it; the real signing key never touches CI.
+on:
+  push:
+    branches: [main, windows-install-acceptance]
+    paths:
+      - 'installer/**'
+      - 'scripts/**'
+      - 'src/**'
+      - 'web/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/windows-install.yml'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: windows-install-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suites:
+    # Synthetic, non-privileged C# suites; separate from the machine run so a
+    # failure is attributed to a suite, not to installation.
+    if: github.repository == 'NehoraiHadad/yahad' && github.event.repository.private == false
+    runs-on: windows-2025
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      NODE_VERSION: v24.22.2
+      NODE_ZIP_SHA256: ca1bff5d8ead13c9f2ea404a176db46bd430704d5b5113734049fa365e7799e2
+      DOTNET_SDK_VERSION: 10.0.403
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Fetch pinned build tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force .local/tools, .local/downloads | Out-Null
+          $zip = ".local/downloads/node-$env:NODE_VERSION-win-x64.zip"
+          Invoke-WebRequest "https://nodejs.org/dist/$env:NODE_VERSION/node-$env:NODE_VERSION-win-x64.zip" -OutFile $zip
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $env:NODE_ZIP_SHA256) { throw 'Node archive checksum' }
+          Expand-Archive $zip .local/tools
+          Invoke-WebRequest 'https://builds.dotnet.microsoft.com/dotnet/scripts/v1/dotnet-install.ps1' -OutFile .local/downloads/dotnet-install.ps1
+          & .local/downloads/dotnet-install.ps1 -Version $env:DOTNET_SDK_VERSION -InstallDir .local/tools/dotnet -NoPath
+      - name: Yahad.Install.Tests
+        shell: pwsh
+        run: ./installer/ci-test-suites.ps1 -Suite Install -DotNet .local/tools/dotnet/dotnet.exe -Node ".local/tools/node-$env:NODE_VERSION-win-x64/node.exe" -PackageCache .local/nuget-cache -Output .local/suites
+      - name: Yahad.FirstInstall.Tests --full-installer-only
+        if: success() || failure()
+        shell: pwsh
+        run: ./installer/ci-test-suites.ps1 -Suite FirstInstall -DotNet .local/tools/dotnet/dotnet.exe -Node ".local/tools/node-$env:NODE_VERSION-win-x64/node.exe" -PackageCache .local/nuget-cache -Output .local/suites
+      - name: Yahad.ServiceHost.Tests
+        if: success() || failure()
+        shell: pwsh
+        run: ./installer/ci-test-suites.ps1 -Suite ServiceHost -DotNet .local/tools/dotnet/dotnet.exe -Node ".local/tools/node-$env:NODE_VERSION-win-x64/node.exe" -PackageCache .local/nuget-cache -Output .local/suites
+      - name: Keep suite results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: csharp-suites-${{ github.sha }}
+          path: .local/suites/
+          retention-days: 14
+          if-no-files-found: warn
+  install:
+    # Standard runners are free only for public repositories; never spend minutes.
+    if: github.repository == 'NehoraiHadad/yahad' && github.event.repository.private == false
+    runs-on: windows-2025
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      NODE_VERSION: v24.22.2
+      NODE_ZIP_SHA256: ca1bff5d8ead13c9f2ea404a176db46bd430704d5b5113734049fa365e7799e2
+      DOTNET_SDK_VERSION: 10.0.403
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Fetch pinned build tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force .local/tools, .local/downloads | Out-Null
+          $zip = ".local/downloads/node-$env:NODE_VERSION-win-x64.zip"
+          Invoke-WebRequest "https://nodejs.org/dist/$env:NODE_VERSION/node-$env:NODE_VERSION-win-x64.zip" -OutFile $zip
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $env:NODE_ZIP_SHA256) { throw 'Node archive checksum' }
+          Expand-Archive $zip .local/tools
+          Invoke-WebRequest 'https://builds.dotnet.microsoft.com/dotnet/scripts/v1/dotnet-install.ps1' -OutFile .local/downloads/dotnet-install.ps1
+          & .local/downloads/dotnet-install.ps1 -Version $env:DOTNET_SDK_VERSION -InstallDir .local/tools/dotnet -NoPath
+      - name: Fetch pinned vendors
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pins = Get-Content installer/windows/dependency-pins.json -Raw | ConvertFrom-Json
+          $d = '.local/downloads'
+          foreach ($name in 'ffmpeg', 'caddy') {
+            $source = $pins.sources.$name
+            Invoke-WebRequest $source.archive.url -OutFile "$d/$name-archive"
+            Invoke-WebRequest $source.checksums.url -OutFile "$d/$name-checksums"
+          }
+          python -m installer.windows.dependencies stage --ffmpeg-archive "$d/ffmpeg-archive" --ffmpeg-checksums "$d/ffmpeg-checksums" --caddy-archive "$d/caddy-archive" --caddy-checksums "$d/caddy-checksums" --output .local/vendors
+          if ($LASTEXITCODE -ne 0) { throw 'Vendor staging failed' }
+      - name: Install locked npm dependencies
+        shell: pwsh
+        run: |
+          $node = ".local/tools/node-$env:NODE_VERSION-win-x64"
+          & "$node/node.exe" "$node/node_modules/npm/bin/npm-cli.js" ci --cache .local/npm-cache --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
+      - name: Generate an ephemeral release key
+        shell: pwsh
+        run: |
+          & ".local/tools/node-$env:NODE_VERSION-win-x64/node.exe" scripts/windows-release-key.mjs keygen "$env:RUNNER_TEMP/release-key"
+          if ($LASTEXITCODE -ne 0) { throw 'Key generation failed' }
+      - name: Build the N, N+1 and broken releases
+        shell: pwsh
+        run: ./installer/ci-build-upgrade-set.ps1 -Key "$env:RUNNER_TEMP/release-key" -NodeDirectory ".local/tools/node-$env:NODE_VERSION-win-x64" -NpmCache .local/npm-cache -VendorDirectory .local/vendors -DotNet .local/tools/dotnet/dotnet.exe -PackageCache .local/nuget-cache -Output .local/packages/set
+      - name: Machine acceptance (install, repair, upgrade, rollback, reinstall, removal)
+        shell: pwsh
+        run: |
+          $set = '.local/packages/set'
+          ./installer/machine-acceptance.ps1 -Setup "$set/n/setup/Yahad.Setup.exe" -Base "$set/n/release" -Upgrade "$set/n1/release" -Broken "$set/broken/release" -Refused "$set/refused" -Output .local/acceptance -Disposable
+      - name: Destroy the ephemeral release key
+        if: always()
+        shell: pwsh
+        run: Remove-Item -LiteralPath "$env:RUNNER_TEMP/release-key" -Recurse -Force -ErrorAction SilentlyContinue
+      - name: Keep diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: install-acceptance-${{ github.sha }}
+          path: |
+            .local/acceptance/
+            .local/packages/set/*/*.log
+            .local/packages/set/*/package-build.json
+          retention-days: 14
+          if-no-files-found: warn

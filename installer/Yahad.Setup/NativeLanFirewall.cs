@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 using Yahad.Install;
 namespace Yahad.Setup;
 
-// Called only by the elevated, owner-authenticated installer after explicit
+// Called only by the elevated in-process Setup operation after explicit
 // network consent. Tests use the pure LanFirewallRule model, never this adapter.
 internal static class NativeLanFirewall
 {
@@ -25,19 +25,40 @@ internal static class NativeLanFirewall
         if(interfaces is not null && (interfaces is not Array list||list.Length!=0))throw new IOException("LAN_FIREWALL_CHANGED");
         if((int)rule.EdgeTraversalOptions!=0)throw new IOException("LAN_FIREWALL_CHANGED");
         return new((string)rule.Name,(string)rule.Description,(string)rule.Grouping,
-            (string)rule.ApplicationName,(string)rule.LocalAddresses,(string)rule.LocalPorts,(string)rule.RemoteAddresses,
+            (string)rule.ApplicationName,SingleAddress((string)rule.LocalAddresses),(string)rule.LocalPorts,(string)rule.RemoteAddresses,
             (string)rule.RemotePorts,(string)rule.InterfaceTypes,(int)rule.Profiles,(int)rule.Protocol,(int)rule.Direction,
             (int)rule.Action,(bool)rule.Enabled,(bool)rule.EdgeTraversal,(string?)rule.ServiceName??"");
     }
+    // Windows reports a single IPv4 address with its full mask.
+    internal static string SingleAddress(string reported)=>reported.EndsWith("/255.255.255.255",StringComparison.Ordinal)?reported[..^"/255.255.255.255".Length]:reported;
+    // The rule names the proxy's program, which lives in the release folder. Changed
+    // in place, so an interrupted upgrade finds each rule at one release or the other.
+    // A rule someone else changed is left as it is: it stays reported as needing
+    // repair, and is no reason to hold up the Runtime's upgrade or its rollback.
+    internal static void Move(IReadOnlyList<LanFirewallRule> rules,string? otherProgram)
+    {
+        dynamic policy=Policy();
+        try
+        {
+            foreach(var expected in rules)
+            {
+                dynamic? observed;
+                try{observed=Find(policy,expected.Name);if(observed is null||!expected.MatchesEitherRelease(Read(observed),otherProgram))continue;}
+                catch(IOException){continue;}
+                observed!.ApplicationName=expected.ApplicationName;
+            }
+        }
+        finally{Marshal.FinalReleaseComObject(policy);}
+    }
     internal static void RequireNoDrift(IReadOnlyList<LanFirewallRule> rules)
     {
-        NativeInstallFiles.RequireAdministrator();dynamic policy=Policy();
+        dynamic policy=Policy();
         try{foreach(var expected in rules){dynamic? observed=Find(policy,expected.Name);if(observed is not null&&!expected.Matches(Read(observed)))throw new IOException("LAN_FIREWALL_CHANGED");}}
         finally{Marshal.FinalReleaseComObject(policy);}
     }
     internal static void RequirePresentAndMatching(IReadOnlyList<LanFirewallRule> rules)
     {
-        NativeInstallFiles.RequireAdministrator();dynamic policy=Policy();
+        dynamic policy=Policy();
         try{foreach(var expected in rules){dynamic? observed=Find(policy,expected.Name);if(observed is null||!expected.Matches(Read(observed)))throw new IOException("LAN_FIREWALL_REPAIR_REQUIRED");}}
         finally{Marshal.FinalReleaseComObject(policy);}
     }
@@ -49,7 +70,7 @@ internal static class NativeLanFirewall
             foreach(var expected in rules)
             {
                 dynamic? observed=Find(policy,expected.Name);
-                if(observed is not null){if(!expected.Matches(Read(observed)))throw new IOException("LAN_FIREWALL_CHANGED");continue;}
+                if(observed is not null)continue;
                 dynamic rule=NewRule();
                 try
                 {
@@ -61,8 +82,6 @@ internal static class NativeLanFirewall
                     policy.Rules.Add(rule);
                 }
                 finally{Marshal.FinalReleaseComObject(rule);}
-                dynamic created=Find(policy,expected.Name)??throw new IOException("LAN_FIREWALL_NOT_OBSERVED");
-                if(!expected.Matches(Read(created)))throw new IOException("LAN_FIREWALL_CHANGED");
             }
         }
         finally{Marshal.FinalReleaseComObject(policy);}
@@ -70,13 +89,7 @@ internal static class NativeLanFirewall
     internal static void Remove(IReadOnlyList<LanFirewallRule> rules)
     {
         RequireNoDrift(rules);dynamic policy=Policy();
-        try{foreach(var expected in rules){dynamic? observed=Find(policy,expected.Name);if(observed is null)continue;if(!expected.Matches(Read(observed)))throw new IOException("LAN_FIREWALL_CHANGED");policy.Rules.Remove(expected.Name);}}
+        try{foreach(var expected in rules){if(Find(policy,expected.Name) is not null)policy.Rules.Remove(expected.Name);}}
         finally{Marshal.FinalReleaseComObject(policy);}
-    }
-    internal static void RequirePrivateProfile(string selectedAdapter)
-    {
-        // A private IPv4 is not proof of a home network (VPNs use them too).
-        // Read the selected adapter's actual Windows category; never reclassify it.
-        NativeNetworkProfile.RequirePrivateCategory(NativeNetworkProfile.ReadCategory(selectedAdapter));
     }
 }

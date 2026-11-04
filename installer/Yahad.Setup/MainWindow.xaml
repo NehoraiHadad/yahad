@@ -84,7 +84,7 @@
      </Border>
      <TextBlock Text="התיקייה המושפעת: C:\ProgramData\Yahad.FirstInstall" FontSize="12" Foreground="#5C716B" Margin="2,12,2,0"/>
     </StackPanel>
-    <Border x:Name="Notice" Background="#EAF1EA" CornerRadius="13" Padding="16" Margin="0,16,0,0"><TextBlock x:Name="NoticeText" Text="Windows יבקש אישור מנהל כדי להתקין את יחד. לאחר ההתקנה יחד תפעל ברקע ותופעל עם המחשב." FontSize="13" Foreground="#46665B" LineHeight="22"/></Border>
+    <Border x:Name="Notice" Background="#EAF1EA" CornerRadius="13" Padding="16" Margin="0,16,0,0"><TextBlock x:Name="NoticeText" Text="לאחר ההתקנה יחד תפעל ברקע ותופעל עם המחשב." FontSize="13" Foreground="#46665B" LineHeight="22"/></Border>
     <ProgressBar x:Name="ProgressBar" Visibility="Collapsed" Height="7" Maximum="100" Foreground="#157C69" Background="#DFE7E0" BorderThickness="0" Margin="0,18,0,0" AutomationProperties.Name="התקדמות ההתקנה"/>
     <TextBlock x:Name="Status" FontSize="13" Foreground="#5C716B" Margin="0,12,0,0" AutomationProperties.LiveSetting="Polite"/>
    </StackPanel></ScrollViewer>

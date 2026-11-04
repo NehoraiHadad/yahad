@@ -26,7 +26,8 @@ if (command === 'keygen') {
   const dir=resolve(output); mkdirSync(dir,{recursive:true,mode:0o700});
   const archive=join(dir,'yachad-app.zip');
   if (existsSync(archive)) throw new Error('Use an empty release output directory');
-  execFileSync('python3',['-c',`
+  // Windows Python installs provide `python`; `python3` may be absent or a Store alias.
+  execFileSync(process.platform === 'win32' ? 'python' : 'python3',['-c',`
 import pathlib,zipfile,sys
 root=pathlib.Path.cwd()
 files=['package.json','package-lock.json','README.md','LICENSE','tsconfig.json','vite.config.ts','.env.example']

@@ -2,7 +2,7 @@
 """Guided owner installation. Linux runtime, also used by the Windows WSL adapter.
 No application/package code runs as root. Run from an inspected release checkout.
 """
-import argparse, base64, contextlib, fcntl, hashlib, importlib.util, ipaddress, json, os
+import argparse, base64, contextlib, fcntl, hashlib, importlib.util, io, ipaddress, json, os
 import pathlib, pwd, re, secrets, shlex, shutil, sqlite3, ssl, stat, subprocess, sys, tempfile, time
 import urllib.error, urllib.request
 from urllib.parse import urlsplit
@@ -11,6 +11,14 @@ HERE = pathlib.Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location('release_worker', HERE / 'updater.py')
 worker = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(worker)
+# The reviewed standalone bootstrap enrolls a new machine too; it checks its pinned sibling as it loads.
+spec = importlib.util.spec_from_file_location('reviewed_github_bootstrap', HERE / 'upgrade-worker-github.py')
+github = importlib.util.module_from_spec(spec)
+try: spec.loader.exec_module(github)
+except ValueError: raise SystemExit('Installer source differs from its reviewed bytes; use the verified release ZIP, not a converted Windows checkout') from None
+spec = importlib.util.spec_from_file_location('updater_runtime_pair', HERE / 'updater-runtime-pair.py')
+runtime_pair = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(runtime_pair)
 UNITS = ('yachad-update.service','yachad-update.timer','yachad-update-recover.service',
          'yachad-update-request.service','yachad-update-request.path',
          'yachad-update-backup-expiry.service','yachad-update-backup-expiry.timer')
@@ -220,9 +228,16 @@ class Installer:
             return existing
         if self.p('/etc/yachad/release-signing.pub').exists():raise InstallError('Existing signature trust needs its matching updater configuration')
         return value
+    def supervised(self):
+        # Once enrolled, the launcher is the managed file: the supervisor owns the worker behind it.
+        try:return self.p(github.TARGET).read_bytes()==github.LAUNCHER
+        except FileNotFoundError:return False
+    def supervisor_boundary(self):
+        return {'/etc/systemd/system/'+unit+'.d/60-updater-supervisor.conf':github.BOUNDARY for unit in (*github.WORKERS,github.RECOVERY_UNIT)}
     def helper_files(self):
         files={'/usr/local/lib/yachad-updater/'+name:(HERE/name).read_bytes() for name in ('updater.py','data-lock.py','export-dependencies.py')}
         files.update({'/etc/systemd/system/'+name:(HERE/name).read_bytes() for name in UNITS})
+        if self.supervised():files[github.TARGET]=github.LAUNCHER
         if any(b'\r' in value for value in files.values()):
             raise InstallError('Installer source is not canonical LF; use the verified release ZIP, not a converted Windows checkout')
         return files
@@ -259,17 +274,22 @@ class Installer:
         for path,content in files.items():self.write(path,content)
     def verify_effective_updates(self,config,env,allow_missing=False):
         boundaries=self.boundary_files(config,env)
+        supervised=self.supervised()
+        # An interrupted enrollment may have written some drop-ins before its launcher.
+        supervisor=self.supervisor_boundary() if supervised or self.receipt.get('enrollmentStarted') else {}
         for unit in UNITS:
             raw=self.s.run(['/usr/bin/systemctl','show',unit,'--property=LoadState,FragmentPath,DropInPaths,NeedDaemonReload','--no-pager']).decode()
             values=dict(line.split('=',1) for line in raw.splitlines() if '=' in line)
             if allow_missing and values.get('LoadState')=='not-found':continue
             expected={path for path in boundaries if '/'+unit+'.d/' in path}
+            optional={path for path in supervisor if '/'+unit+'.d/' in path}
+            required=expected|optional if supervised else expected
             actual=set(values.get('DropInPaths','').split())
             # systemd resolves inherited/global/runtime/vendor overrides here too.
             if (values.get('LoadState')!='loaded' or values.get('FragmentPath')!='/etc/systemd/system/'+unit or
-                    values.get('NeedDaemonReload')!='no' or (not actual<=expected if allow_missing else actual!=expected)):
+                    values.get('NeedDaemonReload')!='no' or not actual<=expected|optional or not (allow_missing or required<=actual)):
                 raise InstallError('Effective updater unit differs or needs reload; owner review required, preserved: '+unit)
-            self.verify_managed({path:boundaries[path] for path in actual})
+            self.verify_managed({path:{**boundaries,**supervisor}[path] for path in actual})
     def verify_update_state(self,config):
         state=self.p(config['stateDirectory'])/'status.json'
         if state.exists():
@@ -279,6 +299,8 @@ class Installer:
     def verify_completed_updates(self,config,env):
         self.verify_managed({**self.helper_files(),**self.boundary_files(config,env)})
         self.verify_effective_updates(config,env)
+        if self.supervised():
+            with self.enrollment() as bootstrap:bootstrap.verify_provisioned(bootstrap.inputs())
         if not config.get('enabled'):
             return 'update policy disabled (preserved); component bytes verified'
         for unit in ('yachad-update-request.path','yachad-update.timer','yachad-update-backup-expiry.timer'):
@@ -403,6 +425,22 @@ class Installer:
             except (InstallError,OSError,ValueError,urllib.error.URLError):pass
             self.sleep(2)
         raise InstallError('HTTPS readiness failed; check the chosen LAN IP, yachad-web service and local Caddy CA. Certificate verification was not bypassed')
+    def wait_ready(self,config):
+        # health() reads the schema first, and the app creates its database only as it starts.
+        url=config['healthUrl']
+        if not re.fullmatch(r'http://127\.0\.0\.1:\d{1,5}/health/ready',url):raise InstallError('Unsupported local health address')
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self,*args,**kwargs):return None
+        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
+        deadline=time.monotonic()+config.get('healthTimeoutSeconds',90)
+        while time.monotonic()<deadline:
+            try:
+                with opener.open(url,timeout=3) as response:
+                    body=json.loads(response.read(1024))
+                if isinstance(body,dict) and body.get('ok') is True:return
+            except (OSError,ValueError):pass
+            self.sleep(2)
+        raise InstallError('The application did not report ready; check yachad.service, then rerun this same command to continue')
     def resume_backup(self,config,env,version):
         # Called only after run() owns the worker lock and verifies the recovery
         # guard. A killed installer cannot run finish()'s service-start finally.
@@ -414,7 +452,31 @@ class Installer:
         if state!=b'active':self.s.run(['/usr/bin/systemctl','start','yachad.service'])
         worker.Worker(config).health(version)
         self.note(backupStarting=False)
-    def finish(self,config,env,version):
+    def updater_bootstrap(self,runtime,**systemd):
+        # The notice before the installer's own confirmation is the owner's authorization.
+        return github.Bootstrap(self.root,HERE/'updater-supervisor.py',runtime_dir=runtime,ask=lambda _:github.CONFIRMATION,**systemd)
+    @contextlib.contextmanager
+    def enrollment(self):
+        # Only the worker's hash is pinned; Bootstrap.inputs() refuses any other updater.py.
+        with tempfile.TemporaryDirectory() as temporary:
+            directory=pathlib.Path(temporary).resolve()
+            raw,archive=runtime_pair.runtime_pair((HERE/'updater.py').read_bytes(),github.INITIAL_RUNTIME_VERSION,worker.UPDATER_PROTOCOL)
+            (directory/'yachad-updater.json').write_bytes(raw);(directory/'yachad-updater.zip').write_bytes(archive)
+            try:yield self.updater_bootstrap(directory)
+            except InstallError:raise
+            except Exception as error:
+                raise InstallError(str(error) if isinstance(error,github.UpgradeError) else 'Updater enrollment stopped; app and data are intact. Rerun this same command to continue') from None
+    def enroll(self,fd):
+        # Before any scheduler has ever started, so no worker runs outside the supervisor. Leaves the
+        # lock released for good: a supervised worker fails loudly on it, and a timer may fire from here on.
+        if self.supervised():
+            with self.enrollment() as bootstrap:bootstrap.verify_provisioned(bootstrap.inputs())
+            fcntl.flock(fd,fcntl.LOCK_UN);return
+        self.note(enrollmentStarted=True)
+        fcntl.flock(fd,fcntl.LOCK_UN) # The bootstrap takes the same kernel lock itself.
+        with self.enrollment() as bootstrap,contextlib.redirect_stdout(io.StringIO()):result=bootstrap.run()
+        if not result.startswith('GITHUB_UPDATER_ENROLLED'):raise InstallError('Updater enrollment did not finish; rerun this same command to continue')
+    def finish(self,config,env,version,fd):
         operator=self.parent(env)
         if not operator:raise InstallError('Create the first parent in the browser before finishing')
         old=config.get('operator')
@@ -442,18 +504,24 @@ class Installer:
         worker.atomic_json(self.p(CONFIG),config)
         self.note(configHash=hashlib.sha256(self.p(CONFIG).read_bytes()).hexdigest())
         w=worker.Worker(config);w.save(phase='healthy',currentVersion=version,error=None)
+        if self.receipt.get('newInstall'):self.enroll(fd)
         units=('yachad.service','yachad-update-request.path','yachad-update.timer','yachad-update-backup-expiry.timer') if self.receipt.get('newInstall') else ()
         for unit in units:
             self.s.run(['/usr/bin/systemctl','enable','--now',unit]);self.s.run(['/usr/bin/systemctl','is-active','--quiet',unit]);self.s.run(['/usr/bin/systemctl','is-enabled','--quiet',unit])
         self.note(complete=True,autoStarting=False)
-        detail='automatic updates and parent UI control are active' if self.receipt.get('newInstall') else 'existing update policy, version pin and service enablement preserved; no automatic activation performed'
+        detail='automatic updates, root updater updates and parent UI control are active' if self.receipt.get('newInstall') else 'existing update policy, version pin and service enablement preserved; no automatic activation performed'
         print('COMPLETE: healthy app; '+detail+'. Local encrypted backups: at most 7, kept at most 7 days. Device loss can also lose local backups. Keep an off-device copy if you want disaster recovery.')
     def run(self,new_origin=None):
         self.load()
         node,npm=self.prerequisites();env,fresh=self.paths(new_origin)
         fresh=fresh or bool(self.receipt.get('newInstall') and not self.receipt.get('complete'))
         if fresh and not self.p('/opt/yachad/current').is_symlink():self.fetch_fresh()
+        if fresh:
+            with self.enrollment() as bootstrap:bootstrap.inputs() # Refuse a wrong worker before any change, not after the family exists.
         print('This installs app/updater service components. Fresh installs enable automatic stable releases after health checks; existing update policy, version pin and service enablement are preserved. Data, keys, environment, Caddy CA and signature policy are preserved. A short service interruption may be needed.')
+        if fresh:
+            print('A fresh install trusts stable Releases of NehoraiHadad/yahad, over certificate-verified HTTPS, for future root updater code.')
+            print('Control of that GitHub repository is the publisher authority: hashes check bytes, and there is no separate signature.')
         if self.ask('Continue? [y/N] ').strip().lower()!='y':raise InstallCanceled('CANCELED: no changes made')
         self.app=self.s.account('yachad');self.builder=self.s.account('yachad-update')
         if self.app.pw_uid==self.builder.pw_uid or self.app.pw_gid==self.builder.pw_gid:
@@ -510,10 +578,10 @@ class Installer:
             self.resume_backup(config,env,version)
             if fresh:self.s.run(['/usr/bin/systemctl','enable','--now','yachad-web.service'])
             if not self.receipt.get('integrationHealthy'):
-                self.s.run(['/usr/bin/systemctl','restart','yachad.service']);worker.Worker(config).health(version)
+                self.s.run(['/usr/bin/systemctl','restart','yachad.service']);self.wait_ready(config);worker.Worker(config).health(version)
                 self.note(integrationHealthy=True)
             self.bootstrap(env,version)
-            self.finish(config,env,version)
+            self.finish(config,env,version,fd)
         except BlockingIOError:raise InstallError('Updater is busy; try again after it finishes') from None
         finally:os.close(fd)
 

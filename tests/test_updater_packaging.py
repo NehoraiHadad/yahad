@@ -18,7 +18,7 @@ class UpdaterPackagingTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = pathlib.Path(temporary.name)
         (self.root / 'deploy').mkdir()
-        self.source = b'# synthetic fixture only\n'
+        self.source = b'# synthetic fixture only\nUPDATER_PROTOCOL = 7\n'
         (self.root / 'deploy/updater.py').write_bytes(self.source)
         self.key = self.root / 'fixture-only.pem'
         self.public = self.root / 'fixture-only.pub'
@@ -30,6 +30,12 @@ class UpdaterPackagingTests(unittest.TestCase):
         return subprocess.run(['node', str(ROOT / 'scripts/release-updater.mjs'), 'package', '1.0.0',
                                str(self.root / 'out'), str(self.key)], cwd=self.root, capture_output=True, text=True)
 
+    def test_refuses_a_worker_that_declares_no_protocol(self):
+        (self.root / 'deploy/updater.py').write_bytes(b'# fixture\n')
+        result = self.package()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('UPDATER_PROTOCOL', result.stderr)
+
     def test_exact_root_only_manifest_archive_and_real_ed25519_signature(self):
         result = self.package(); self.assertEqual(result.returncode, 0, result.stderr)
         output = self.root / 'out'
@@ -38,7 +44,7 @@ class UpdaterPackagingTests(unittest.TestCase):
         content = (output / 'yachad-updater.zip').read_bytes()
         self.assertEqual(manifest, dict(format=1, kind='yachad-updater', version='1.0.0', archive='yachad-updater.zip',
                          bytes=len(content), sha256=hashlib.sha256(content).hexdigest(), supervisorProtocol=1,
-                         workerProtocol=3, helperProtocol=1, configFormat=1, stateFormat=1, appManifestFormats=[1, 2]))
+                         workerProtocol=7, helperProtocol=1, configFormat=1, stateFormat=1, appManifestFormats=[1, 2]))
         self.assertEqual(len((output / 'yachad-updater.sig').read_bytes()), 64)
         subprocess.run(['openssl', 'pkeyutl', '-verify', '-pubin', '-inkey', str(self.public), '-rawin',
                         '-in', str(output / 'yachad-updater.json'), '-sigfile', str(output / 'yachad-updater.sig')], check=True, capture_output=True)

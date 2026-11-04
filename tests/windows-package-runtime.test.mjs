@@ -1,21 +1,22 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fork, execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync, lstatSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, lstatSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:net';
 import { once } from 'node:events';
 
 const prepared = process.env.YAHAD_PREPARED_WINDOWS_CORE;
-test('offline packaged Node, production modules and private CLR run actual mock app with empty PATH',
+test('offline packaged Node, bundled server and private CLR run actual mock app with empty PATH',
   { skip: process.platform !== 'win32' || !prepared, timeout: 120000 }, async t => {
     const app = join(prepared, 'app');
     assert.equal(process.execPath.toLowerCase(), resolve(prepared, 'runtime/node/node.exe').toLowerCase());
-    const { DATABASE_SCHEMA } = await import(pathToFileURL(join(app, 'src/database-schema.ts')));
-    const { createPlatformFiles } = await import(pathToFileURL(join(app, 'src/platform-files.ts')));
+    // The payload carries no source: its schema is the one recorded at build time, and the
+    // harness's own lease client comes from this checkout under the caller's loader.
+    const { databaseSchema } = JSON.parse(readFileSync(join(prepared, 'legal/build-inputs.json'), 'utf8'));
+    const { createPlatformFiles } = await import(new URL('../src/platform-files.ts', import.meta.url));
     const native = createPlatformFiles('win32', join(app, 'native/Yahad.Platform.exe'));
     const system32 = join(process.env.SystemRoot, 'System32');
     const root = mkdtempSync(join(tmpdir(), 'yahad-packaged-app-'));
@@ -46,17 +47,7 @@ test('offline packaged Node, production modules and private CLR run actual mock 
       LOCALAPPDATA: root, PATH: empty, NODE_ENV: 'production', MASTER_KEY_FILE: key, DATA_DIR: data,
       CONNECTOR: 'mock', ALLOW_REAL_WHATSAPP: 'no', HOST: '127.0.0.1', COOKIE_SECURE: 'false',
       SETUP_CAPABILITY_FILE: join(root, 'missing-capability'), DIAGNOSTICS_ENABLED: 'false' };
-    let entry = join(app, 'src/main.ts');
-    if (process.env.YAHAD_PACKAGE_IMPORT_TRACE === '1') {
-      entry = join(root, 'import-probe.mjs');
-      const imports = ['logging', 'config', 'server', 'lock', 'bootstrap', 'native-control',
-        'runtime-shutdown', 'update-idle', 'windows-update-transport', 'native-probation', 'main'];
-      writeFileSync(entry, `const emit = (stage, module) => process.stdout.write(JSON.stringify({stage,module,at:Date.now()})+'\\n');
-emit('probe-entered', 'loader');
-for (const [name, url] of ${JSON.stringify(imports.map(name => [name, pathToFileURL(join(app, 'src', name + '.ts')).href]))}) {
-  emit('import-start', name); await import(url); emit('import-finished', name);
-}\n`);
-    }
+    const entry = join(app, 'server/main.mjs');
     for (const command of ['node', 'npm', 'python', 'dotnet', 'ffmpeg', 'caddy'])
       assert.throws(() => execFileSync(join(system32, 'where.exe'), [command], { env: environment, windowsHide: true, stdio: 'ignore' }));
     async function port() {
@@ -65,7 +56,7 @@ for (const [name, url] of ${JSON.stringify(imports.map(name => [name, pathToFile
     }
     function start(selected) {
       const child = fork(entry, { cwd: app, execPath: process.execPath,
-        execArgv: ['--import', pathToFileURL(join(app, 'node_modules/tsx/dist/loader.mjs')).href],
+        execArgv: [],
         env: { ...environment, PORT: String(selected), APP_ORIGIN: `http://127.0.0.1:${selected}` },
         stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
       children.add(child); return child;
@@ -83,16 +74,16 @@ for (const [name, url] of ${JSON.stringify(imports.map(name => [name, pathToFile
         await new Promise(done => setTimeout(done, 40));
       }
       const response = await fetch(`http://127.0.0.1:${selected}/health/ready`); assert.equal(response.status, 200);
-      const health = await response.json(); assert.equal(health.ok, true); assert.equal(health.databaseSchema, DATABASE_SCHEMA);
-      t.diagnostic(JSON.stringify({ packagedStartupMilliseconds: Date.now() - started,
-        ...(process.env.YAHAD_PACKAGE_IMPORT_TRACE === '1' ? { importStages: output.split('\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line)) } : {}) }));
+      const health = await response.json(); assert.equal(health.ok, true); assert.equal(health.databaseSchema, databaseSchema);
+      t.diagnostic(JSON.stringify({ packagedStartupMilliseconds: Date.now() - started }));
     }
     const selected = await port(), child = start(selected), exited = once(child, 'exit');
     try {
       await ready(child, selected);
       const competing = start(await port()); competing.stdout.resume(); competing.stderr.resume(); const competingExit = once(competing, 'exit');
       const timeout = setTimeout(() => competing.kill(), 20000);
-      try { assert.equal((await competingExit)[0], 1); }
+      // A second writer is refused at the data lock, whose fixed startup exit code is 11.
+      try { assert.equal((await competingExit)[0], 11); }
       finally { clearTimeout(timeout); if (competing.exitCode === null) competing.kill(); }
       child.send({ type: 'yahad.shutdown' }); assert.equal((await exited)[0], 0);
       assert.ok(existsSync(join(data, 'app.sqlite'))); await (await native.acquireDataLock(data))();

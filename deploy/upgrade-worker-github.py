@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import signal
 import stat
 import subprocess
@@ -26,8 +27,8 @@ import uuid
 
 BASE_SHA256 = 'f269352cadc965237f5e48ab2c7c9e5fdddb2ae6482bedb273f8afb9f4df78e5'
 SUPERVISOR_SHA256 = 'a432cb808d9e56a58e87684e8899b00667949c3acef68ed3a2d4beb65065291e'
-TRANSPORT_SHA256 = 'bb81e88782aade42c8251a237ccd6c555d7c02452f718819f0c9c5d8229e4010'
-INITIAL_WORKER_SHA256 = 'c29b97e7eb62e516cfbd270befb4f4af8592b38d2294a1b102447dc8a78484b3'
+TRANSPORT_SHA256 = 'c95f90509bcf4d38738e89b78b54a439f1e529b56fdec18f31677dd30fd83011'
+INITIAL_WORKER_SHA256 = '2c40275fc1ed518864cc8f6a53d2f2cff2b388a59ee204b7ff0d89eb0ba6ed78'
 INITIAL_RUNTIME_VERSION = '1.0.1'
 SUPERVISOR = '/usr/local/lib/yachad-updater/updater-supervisor.py'
 TRANSPORT = '/usr/local/lib/yachad-updater/updater-transport.py'
@@ -196,6 +197,11 @@ class Bootstrap(base.Bootstrap):
         finally:
             pathlib.Path(temporary).unlink(missing_ok=True)
 
+    @staticmethod
+    def staging_leftover(path):
+        # exact_file's own staging name, left behind only when a kill beat its cleanup.
+        return re.fullmatch(r'\.github-bootstrap-[a-z0-9_]{8}', path.name) and stat.S_ISREG(path.lstat().st_mode)
+
     def boundary_paths(self):
         return [self.path('/etc/systemd/system/' + unit + '.d/60-updater-supervisor.conf')
                 for unit in (*WORKERS, RECOVERY_UNIT)]
@@ -232,7 +238,7 @@ class Bootstrap(base.Bootstrap):
             info = current.lstat()
             if not stat.S_ISLNK(info.st_mode) or info.st_uid != 0 or os.readlink(current) != 'versions/v' + reference['version']:
                 raise UpgradeError('Existing runtime pointer differs; preserved')
-        if destination.exists() and {p.name for p in destination.iterdir()} - RUNTIME_FILES:
+        if destination.exists() and {p.name for p in destination.iterdir() if not self.staging_leftover(p)} - RUNTIME_FILES:
             raise UpgradeError('Initial runtime has unexpected files; preserved')
         if runtime.exists() and {p.name for p in runtime.iterdir()} - {'versions', 'current'}:
             raise UpgradeError('Unknown partial runtime enrollment is preserved')
@@ -258,6 +264,8 @@ class Bootstrap(base.Bootstrap):
         # Only exact absent/resumable files are provisioned. App config is never written.
         self.directory(runtime); self.directory(runtime / 'versions'); self.directory(destination)
         for path in self.boundary_paths(): self.directory(path.parent, 0o755)
+        for path in destination.iterdir():
+            if self.staging_leftover(path): path.unlink()
         for path, content, mode in planned: self.exact_file(path, content, mode)
         if {p.name for p in destination.iterdir()} != RUNTIME_FILES:
             raise UpgradeError('Initial runtime has unexpected files')

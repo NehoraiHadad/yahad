@@ -1,4 +1,4 @@
-import { submitWindowsUpdate, type WindowsUpdateTransport } from './windows-update-client.js';
+import { submitWindowsUpdate, WindowsUpdateRefusal, type WindowsUpdateTransport } from './windows-update-transport.js';
 import { readFile, open, lstat, link, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -18,21 +18,15 @@ const visibleTargetSchema = updateTargetSchema.strip().nullable().optional().cat
 const statusSchema = z.object({
   enabled: z.boolean(), mode: z.enum(['notify', 'auto']),
   modeControlAllowed: z.boolean().default(false),
-  profile:z.enum(['application-routine-v1','full-system-v1']).nullable().optional(),
-  systemGrant:z.object({state:z.enum(['active','revoked','disabled','unavailable']),untilRevoked:z.literal(true),
-    scopes:z.array(z.enum(['application','database','authority','servicehost','owner','probe','handoff'])).max(7)}).strict().nullable().optional(),
-  delegation: z.object({state:z.enum(['active','expired','exhausted','revoked','busy']),
-    expiresUnix:z.number().int().nonnegative().nullable(),remainingOperations:z.number().int().min(0).max(100).nullable()}).strict()
-    .refine(value=>value.state==='busy'?value.expiresUnix===null&&value.remainingOperations===null:value.expiresUnix!==null&&value.remainingOperations!==null).nullable().optional(),
   lastModeRequest: z.object({id:z.uuid(),mode:z.enum(['notify','auto']),state:z.enum(['pending','applied','rejected']),
     error:z.enum(['configuration','expired','replayed','local_setup','operator_changed','busy']).nullable()}).nullable().optional(),
   lastRequest: z.object({id:z.uuid(),action:z.enum(['check','install']),state:z.enum(['running','succeeded','failed']),
     startedAt:z.number(),finishedAt:z.number().nullable(),error:updateError.or(z.literal('expired')).nullable(),target:visibleTargetSchema}).nullable().optional(),
   operator: z.object({ familyId: z.string().max(100), userId: z.string().max(100) }),
-  phase: z.enum(['awaiting_runtime','starting_runtime','quiescing_runtime','cancelled','awaiting_local_approval','idle','available','checking','preparing','downloading','verifying','building','stopping','backing_up','activating','checking_health','healthy','rolled_back','failed','incompatible','rolling_back','recovery_required','rollback_pending_health','waiting_for_idle','updating_components','restarting_updater','preparing_data','releasing_effects','previous_restored','recovering']),
+  phase: z.enum(['idle','available','checking','preparing','downloading','verifying','building','stopping','backing_up','activating','checking_health','healthy','rolled_back','failed','incompatible','rolling_back','recovery_required','rollback_pending_health']),
   currentVersion: z.string().max(40).nullable(), latestVersion: z.string().max(40).nullable(),
   installTarget: visibleTargetSchema,
-  checkedAt: z.number().nullable(), updatedAt: z.number(), lastUpdateAt: z.number().nullable().optional(), deferredUntil: z.number().nonnegative().optional(),
+  checkedAt: z.number().nullable(), updatedAt: z.number(),
   error: updateError.nullable(),
 });
 export async function updateStatus(config: Config, user: User, native?: WindowsUpdateTransport) {
@@ -47,12 +41,12 @@ export async function updateStatus(config: Config, user: User, native?: WindowsU
     }
     const status = statusSchema.parse(raw);
     const operator = user.role === 'parent' && status.operator.familyId === user.familyId && status.operator.userId === user.id;
-    if (!operator) return { configured: false as const };
+    if (!operator) return { configured: false as const, ...native ? { reason: 'OPERATOR' } : {} };
     const { operator: _operator, ...visible } = status;
     let queuedMode: {id:string;mode:'notify'|'auto'} | null = null;
     let queuedRequest: {id:string;action:'check'|'install'|'set_mode';mode?:'notify'|'auto';target?:UpdateTarget;createdAt:number} | null = null;
     try {
-      if(native)throw new Error('Native queue is owned by authority');
+      if(native)throw new Error('The native transport owns its queue');
       const requestPath=join(config.dataDir,'update-request.json'), queuedStat=await lstat(requestPath);
       if(queuedStat.isFile()&&!queuedStat.isSymbolicLink()&&queuedStat.size<=512){
         const request=JSON.parse(await readFile(requestPath,'utf8'));
@@ -66,21 +60,22 @@ export async function updateStatus(config: Config, user: User, native?: WindowsU
         }
       }
     } catch {}
-    return { configured: true as const, ...visible, ...(native ? { confirmation: 'native' as const } : {}), queuedMode, queuedRequest, stale: Date.now() - status.updatedAt > 86400000 };
-  } catch { return { configured: false as const }; }
+    return { configured: true as const, ...visible, queuedMode, queuedRequest, stale: Date.now() - status.updatedAt > 86400000 };
+  } catch (error) {
+    // Parent-only, and for support: where the native path stopped, nothing more.
+    return { configured: false as const, ...native ? { reason: error instanceof WindowsUpdateRefusal ? error.reason : 'STATUS_SCHEMA' } : {} };
+  }
 }
 export async function requestUpdate(config: Config, user: User, action: 'check' | 'install' | 'set_mode', mode?: 'notify'|'auto', target?: UpdateTarget, native?: WindowsUpdateTransport) {
   const status = await updateStatus(config, user, native);
   if (!status.configured || !status.enabled || status.stale) return 'unavailable';
-  const nativeContraction=!!native&&action==='set_mode'&&mode==='notify'&&status.modeControlAllowed;
   // Neither a queued install nor a mode/check request can repair these states.
   // In automatic mode even "check" may install, so reject every POST here;
   // GET status remains readable; only the root worker's recovery path clears it.
-  if (!nativeContraction&&(status.phase === 'recovery_required' || status.phase === 'rollback_pending_health')) return 'unavailable';
+  if (status.phase === 'recovery_required' || status.phase === 'rollback_pending_health') return 'unavailable';
   if(action==='set_mode'&&(!status.modeControlAllowed||!mode))return 'mode_locked';
-  if(!nativeContraction&&['awaiting_local_approval','awaiting_runtime','starting_runtime','quiescing_runtime'].includes(status.phase))return 'pending';
-  if(!nativeContraction&&status.lastModeRequest?.state==='pending')return 'pending';
-  if(!nativeContraction&&status.lastRequest?.state==='running')return 'pending';
+  if(status.lastModeRequest?.state==='pending')return 'pending';
+  if(status.lastRequest?.state==='running')return 'pending';
   if(action==='install') {
     const supplied=updateTargetSchema.safeParse(target), available=status.installTarget;
     // Legacy workers without a root-issued target must be checked/upgraded, not

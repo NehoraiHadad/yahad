@@ -20,14 +20,14 @@ internal sealed class OwnedFixtureDirectory
     {
         Root=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(root));
         owner=WindowsIdentity.GetCurrent().User??throw new IOException("FIXTURE_OWNER_MISSING");
-        SafeDirectory.ValidateSession(Root);
+        PrivateSession.Validate(Root);
         using var directory=Open(Root,true,false);originalRoot=Observe(directory,true);
         using var marker=Open(Path.Combine(Root,Marker),false,false,true);originalMarker=Observe(marker,false);
         RequireMarker(marker);
     }
     internal static OwnedFixtureDirectory Create(string parent)
     {
-        var root=SafeDirectory.CreatePrivateSession(Path.GetFullPath(parent));
+        var root=PrivateSession.Create(Path.GetFullPath(parent));
         try{return new(root);}
         catch(Exception error){throw new IOException("FIXTURE_OWNERSHIP_CAPTURE_FAILED: "+root,error);}
     }
@@ -101,7 +101,8 @@ internal sealed class OwnedFixtureDirectory
         {
             var size=GetSecurityDescriptorLength(descriptor);if(size is <20 or >65536)throw new IOException("FIXTURE_SECURITY_BOUND");
             var bytes=new byte[size];Marshal.Copy(descriptor,bytes,0,bytes.Length);var acl=new RawSecurityDescriptor(bytes,0);
-            WindowsFileBoundary.ValidateAcl(acl,owner,false);
+            foreach(CommonAce ace in acl.DiscretionaryAcl!)
+                if(ace.AceQualifier==AceQualifier.AccessAllowed&&ace.SecurityIdentifier!=owner&&!ace.SecurityIdentifier.IsWellKnown(WellKnownSidType.LocalSystemSid)&&!ace.SecurityIdentifier.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid))throw new IOException("FIXTURE_FOREIGN_PRINCIPAL");
             if(root&&(acl.Owner!=owner||(acl.ControlFlags&ControlFlags.DiscretionaryAclProtected)==0))throw new IOException("FIXTURE_ROOT_OWNERSHIP");
         }
         finally{_=LocalFree(descriptor);}

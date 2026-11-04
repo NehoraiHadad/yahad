@@ -4,7 +4,6 @@ import { compareChatActivity } from './chatOrder';
 import { newClientId as newId } from './clientId';
 import { useVisibleChatRead } from './useVisibleChatRead';
 import { useUsageBudget } from './useUsageBudget';
-import { useUpdateIdleBlocker, useUpdateIdleLease } from './useUpdateIdleLease';
 import { UsageIndicator, UsageOverlay } from './UsageBudget';
 import './usage-budget.css';
 import { readRoute, writeRoute, type AppRoute } from './browserNavigation';
@@ -141,10 +140,6 @@ function App() {
     [loaded, setLoaded] = useState(false),
     [error, setError] = useState('');
   const [route, setRoute] = useState<AppRoute>({ mode: 'chat', group: null });
-  const updateIdle = useUpdateIdleLease(me?.user.id ?? null);
-  const admittedIdentity = useRef<string | null>(null);
-  if (!me) admittedIdentity.current = null;
-  else if (updateIdle.ready) admittedIdentity.current = me.user.id;
   const navigate = (next: AppRoute) => {
     if (!me) return;
     writeRoute(history, next, me.user.id);
@@ -192,7 +187,6 @@ function App() {
     return () => window.removeEventListener('session-expired', expire);
   }, [refresh]);
   const logout = useCallback(async () => {
-    await updateIdle.releaseIfSafe();
     const attempt = api('/logout', 'POST');
     localStorage.setItem('yachad-locked', '1');
     setMe(null);
@@ -202,7 +196,7 @@ function App() {
     } catch {
       setError('המכשיר ננעל מקומית. החיבור לשרת אינו זמין כרגע.');
     }
-  }, [updateIdle.releaseIfSafe]);
+  }, []);
   useEffect(() => {
     if (!me) return;
     let last = Date.now(),
@@ -249,11 +243,8 @@ function App() {
       </div>
     );
   if (!me) return <Login onLogin={refresh} />;
-  if (!updateIdle.ready && admittedIdentity.current !== me.user.id)
-    return <div className="splash" role="status"><MessageCircleHeart /><span>מתחברים…</span></div>;
   return (
-    <div className="app-shell" inert={!updateIdle.ready || undefined} aria-busy={!updateIdle.ready}>
-      <UpdateIdleRepair idle={updateIdle} />
+    <div className="app-shell">
       {error && (
         <ErrorToast message={error} onDismiss={() => setError('')} />
       )}
@@ -276,40 +267,6 @@ function App() {
     </div>
   );
 }
-function UpdateIdleRepair({ idle }: { idle: ReturnType<typeof useUpdateIdleLease> }) {
-  const [expanded, setExpanded] = useState(false), [confirmed, setConfirmed] = useState<string | null>(null);
-  const snapshot = idle.otherLeases.map(lease => `${lease.id}:${lease.generation}`).join(',') + `|${idle.orphanRevision}`;
-  useEffect(() => { setConfirmed(null); }, [snapshot]);
-  if (!idle.otherLeases.length && !idle.orphanRevision) return null;
-  return <aside className="update-idle-repair" aria-label="סיום פעילות קודמת"
-    style={{ padding: '0.6rem 1rem', background: 'var(--surface, #fff)', maxHeight: '45dvh', overflow: 'auto', flexShrink: 0 }}>
-    <p style={{ margin: '0 0 0.4rem' }}>העדכון ממתין לבדיקת פעילות קודמת בחשבון הזה.</p>
-    <button type="button" className="text-button" disabled={idle.repairBusy}
-      onClick={() => { setExpanded(value => !value); setConfirmed(null); void idle.refreshPrevious(); }}>
-      {expanded ? 'סגירת הבדיקה' : 'כל החלונות האחרים כבר נסגרו?'}
-    </button>
-    {expanded && <div>
-      <p>לפני האישור, סגרו בכל המכשירים את החלונות האחרים של החשבון הזה בלבד.
-        האישור עשוי לאפשר עדכון כשהיישום פנוי, ואינו משחזר טיוטות או הקלטות שלא נשמרו.
-        אל תמשיכו אם נותר משהו לשחזור או אם צריך לברר תוצאה של שליחה קודמת.
-        אם אי אפשר לוודא שהחלונות האחרים נסגרו, אל תאשרו. הפעולה לא תשלח הודעות מחדש.</p>
-      <label style={{ display: 'flex', gap: '0.5rem', alignItems: 'start' }}>
-        <input type="checkbox" checked={confirmed === snapshot} disabled={idle.repairBusy}
-          onChange={event => setConfirmed(event.target.checked ? snapshot : null)} />
-        <span>סגרתי את כל החלונות האחרים של החשבון הזה.
-          לא נותרה פעילות קודמת, בחלון הזה או בחלונות שנסגרו, שדורשת שחזור טיוטה או הקלטה, או בירור של שליחה לא מוכרעת.</span>
-      </label>
-      {!idle.repairAllowed && !idle.repairBusy && <p>סיימו קודם את הטיוטה, ההקלטה, השליחה או העריכה הפתוחה בחלון הזה.</p>}
-      <button type="button" disabled={confirmed !== snapshot || !idle.repairAllowed}
-        onClick={() => { if (confirmed === snapshot) { setConfirmed(null); void idle.settlePrevious(true, idle.orphanRevision); } }}>
-        {idle.repairBusy ? 'בודקים…' : 'אישור סיום הפעילות הקודמת'}
-      </button>
-      <button type="button" className="text-button" disabled={idle.repairBusy}
-        onClick={() => { setConfirmed(null); void idle.refreshPrevious(); }}>בדיקה נוספת</button>
-      {idle.repairError && <p role="alert" className="error">{idle.repairError}</p>}
-    </div>}
-  </aside>;
-}
 function Login({ onLogin }: { onLogin: () => Promise<void> }) {
   const [setupDone, setSetupDone] = useState(false);
   const [setupState, setSetupState] = useState('');
@@ -319,11 +276,13 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
     [show, setShow] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
-  if (setupToken && !setupDone) return <FamilySetup setupToken={setupToken}
+  const linkUsable = setupState !== 'closed' && setupState !== 'complete';
+  if (setupToken && !setupDone && linkUsable) return <FamilySetup setupToken={setupToken}
     onDone={() => { setupToken = ''; setSetupDone(true); void onLogin(); }}
     onClose={() => { setupToken = ''; setSetupDone(true); }} />;
   return (
     <main className="login-page">
+      {setupState === 'closed' && <p className="setup-link-notice" role="status">קישור ההכנה תקף ל־15 דקות, והוא פג. כדי להמשיך, הפעילו שוב את המתקין של יחד באותו מחשב והוא יפתח קישור חדש. שום דבר לא אבד.</p>}
       {setupState === 'ready' && !setupToken && <p className="setup-link-notice" role="status">ההכנה עדיין פתוחה. חזרו לקישור הפרטי שהציג המתקין. רענון הדף מסיר את הקישור הפרטי להגנה על החשבון; אין צורך ליצור משפחה נוספת.</p>}
       <div className="login-art">
         <div className="brand">
@@ -1099,7 +1058,6 @@ function Chat({
         {composerGroup && (
             <Composer
               key={composerGroup.id}
-              identity={me.user.id}
               group={composerGroup.id}
               messages={messages}
               caps={c}
@@ -1385,7 +1343,6 @@ function Message({
   );
 }
 function Composer({
-  identity,
   group,
   messages,
   caps,
@@ -1402,7 +1359,6 @@ function Composer({
   onError,
   onBusyChange,
 }: {
-  identity: string;
   group: string;
   messages: PublicMessage[];
   caps: Partial<Capabilities>;
@@ -1451,8 +1407,6 @@ function Composer({
     copiedEdit = useRef(false),
     available = useRef(enabled && !suspended);
   available.current = enabled && !suspended && !sendUncertain;
-  const markUpdateUnsafe = useUpdateIdleBlocker(identity, !!text || !!file || !!voice || recording || recordPending || busy || sendUncertain ||
-    submitting.current || uncertain.current || !!reply || !!editing);
   const { burst, celebrate } = useChatCelebration(effects, flair, group);
   const path = '/groups/' + encodeURIComponent(group);
   useEffect(() => {
@@ -1527,7 +1481,6 @@ function Composer({
   const chooseSticker = async (mediaId: string) => {
     if (!available.current || busy || editing || !caps.sticker || !availableStickers.some(s => s.id === mediaId)) return;
     const controller = new AbortController();
-    markUpdateUnsafe();
     stickerRequest.current?.abort(); stickerRequest.current = controller;
     setEmojiOpen(false); setBusy(true); onBusyChange(true);
     try {
@@ -1544,7 +1497,6 @@ function Composer({
   };
   const checkSend = async () => {
     if (!uncertain.current || submitting.current || busy || !enabled || suspended) return;
-    markUpdateUnsafe();
     submitting.current = true; setBusy(true); onBusyChange(true);
     try {
       const result = await api<{ state: string }>(`${path}/outgoing/${encodeURIComponent(id.current)}`);
@@ -1559,7 +1511,6 @@ function Composer({
   const send = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (submitting.current || uncertain.current || busy || !available.current || recording || (!text.trim() && !file && !voice)) return;
-    markUpdateUnsafe();
     if (!editing) {
       const previous = lastAttempt.current, draft = { text, replyId: reply?.id, file, voice, sticker };
       // Every payload change gets a new identity after proven non-submission,
@@ -1614,7 +1565,7 @@ function Composer({
       onError('הדפדפן הזה אינו תומך בהקלטה.');
       return;
     }
-    markUpdateUnsafe(); setRecordPending(true);
+    setRecordPending(true);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       if (!mounted.current || !available.current || submitting.current || uncertain.current) {

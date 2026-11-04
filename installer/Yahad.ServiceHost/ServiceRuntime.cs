@@ -2,284 +2,42 @@ using Yahad.Install;
 
 namespace Yahad.Service;
 
-internal static class ServiceDefinition
-{
-    internal const string Name="Yahad.Acceptance";
-    internal const string Account="NT SERVICE\\Yahad.Acceptance";
-    internal const uint OwnProcess=0x10,Stop=1,Interrogate=4,Shutdown=5;
-}
-internal enum ServiceState:uint {Stopped=1,StartPending=2,StopPending=3,Running=4}
-internal enum ServiceFailure:uint {None=0,IdentityDenied=1001,BootstrapUnavailable=1002,ActivationUnavailable=1003,
+internal enum ServiceFailure:uint {None=0,ActivationUnavailable=1003,
     StartFailed=1004,UnexpectedExit=1005,StopFailed=1006,QuiescenceUnknown=1007,ArgumentsRejected=1008,StatusTransport=1009}
-internal sealed class ServiceStartDenied(ServiceFailure failure):Exception
-{internal ServiceFailure Failure=>failure;}
-internal readonly record struct ServiceReport(ServiceState State,uint AcceptedControls,uint Checkpoint,uint WaitHint,
-    uint Win32ExitCode,uint ServiceSpecificExitCode);
-internal interface IScmApi
-{
-    void Dispatch(string name,Action<string[]> main);
-    void Register(string name,Func<uint,uint> handler);
-    void Publish(ServiceReport report);
-}
-internal interface IObservedAdmission
-{
-    TimeSpan AdmissionBudget {get;}
-    event Action? ObservedWork;
-}
 internal interface IServiceStartAuthorizer
 {Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation);}
-internal enum ServiceRunPurpose {Continuous,FiniteOfflineTask}
 
-// Only trusted in-process adapters can construct this grant. No CLI, JSON or
-// UI Boolean becomes a launch grant. Default installed activation is denied.
-internal sealed class AuthorizedServiceStart(AppRelease release,IPrivateAppLauncher launcher,
-    IAppRecoveryBarrier recovery,IDisposable? resources=null,ServiceRunPurpose purpose=ServiceRunPurpose.Continuous):IDisposable
+// What one admitted start owns: its launcher and the resources held until it stops.
+internal sealed class AuthorizedServiceStart(IPrivateAppLauncher launcher,IDisposable? resources=null):IDisposable
 {
-    internal AppRelease Release=>release;
     internal IPrivateAppLauncher Launcher=>launcher;
-    internal IAppRecoveryBarrier Recovery=>recovery;
-    internal ServiceRunPurpose Purpose=>purpose;
     public void Dispose()=>resources?.Dispose();
 }
-internal sealed class NoHostUpdateAuthority:IAppUpdateAuthority
-{
-    public Task<AppRelease> ActivateAsync(AppRelease requested,QuiescentApp grant,CancellationToken cancellation)
-        =>throw new UnauthorizedAccessException("HOST_HAS_NO_UPDATE_AUTHORITY");
-}
 internal readonly record struct ServiceRunResult(ServiceFailure Failure,bool QuiescenceConfirmed);
-internal enum ServiceStartupStage {NotStarted,Authorizing,ValidatingStart,Launching,WaitingForHealth,Ready,Running}
-// Operational observations only: no paths, credentials, payloads or exception text.
-internal sealed record ServiceStartupObservation(ServiceStartupStage Stage,long ElapsedMilliseconds,string? Failure);
-internal sealed record ServiceRootExitObservation(int Code,long ElapsedMilliseconds,bool ReadyObserved,bool ForcedCleanupRequested);
 
-internal sealed class ServiceController
+// One SCM service: the control handler and the dispatch both services share.
+internal abstract class ScmController
 {
-    private readonly IServiceStartAuthorizer authorizer;
-    private readonly Action<Exception>? reportFailure;
-    private readonly TimeSpan startDeadline,lifecycleDeadline;
-    private readonly TaskCompletionSource stop=new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private int terminal;
-    private IContainedAppSession? updateSession;
-    internal Task<bool> PrepareUpdateAsync(string id,CancellationToken cancellation)=>Volatile.Read(ref terminal)==0&&StartupObservation.Stage==ServiceStartupStage.Running&&Volatile.Read(ref updateSession) is IUpdateIdleSession idle?idle.PrepareUpdateAsync(id,cancellation):Task.FromResult(false);
-    internal Task CancelUpdateAsync(string id,CancellationToken cancellation)=>Volatile.Read(ref updateSession) is IUpdateIdleSession idle?idle.CancelUpdateAsync(id,cancellation):Task.CompletedTask;
-    internal Task ReleaseEffectsAsync(ProbationRuntimeBinding binding,string id,CancellationToken cancellation)=>Volatile.Read(ref terminal)==0&&StartupObservation.Stage==ServiceStartupStage.Running&&Volatile.Read(ref updateSession) is IProbationAppSession probation?probation.ReleaseEffectsAsync(binding,id,cancellation):throw new IOException("PROBATION_RUNTIME_NOT_READY");
-    private ProbeOwnershipException? unresolvedProbe;private Task<AuthorizedServiceStart>? unresolvedAuthorization;
-    private AppLifecycle? unresolvedLifecycle;private AuthorizedServiceStart? unresolvedGrant;
-    private ServiceStartupObservation startupObservation=new(ServiceStartupStage.NotStarted,0,null);
-    internal ServiceStartupObservation StartupObservation=>Volatile.Read(ref startupObservation);
-    private ServiceRootExitObservation? rootExitObservation;
-    internal ServiceRootExitObservation? RootExitObservation=>Volatile.Read(ref rootExitObservation);
-    internal bool CleanupReconciliationRequired=>unresolvedAuthorization is not null||unresolvedProbe is not null||unresolvedLifecycle is not null||unresolvedGrant is not null;
-    internal ServiceController(IServiceStartAuthorizer authorizer,TimeSpan? startDeadline=null,TimeSpan? lifecycleDeadline=null,Action<Exception>? reportFailure=null)
-    {
-        this.authorizer=authorizer;this.reportFailure=reportFailure;this.startDeadline=startDeadline??(authorizer is IObservedAdmission observed?observed.AdmissionBudget:TimeSpan.FromSeconds(25));
-        this.lifecycleDeadline=lifecycleDeadline??TimeSpan.FromSeconds(20);
-        if(this.startDeadline<=TimeSpan.Zero||this.startDeadline>(authorizer is IObservedAdmission?TimeSpan.FromMinutes(5):TimeSpan.FromSeconds(30))||this.lifecycleDeadline<=TimeSpan.Zero||this.lifecycleDeadline>TimeSpan.FromSeconds(30))throw new ArgumentOutOfRangeException();
-    }
-    private void ReportFailure(Exception error){try{reportFailure?.Invoke(error);}catch{}}
-    internal async Task RetryAdmissionCleanupAsync(CancellationToken cancellation)
-    {
-        if(unresolvedAuthorization is { } pending)
-        {
-            try{var late=await pending.WaitAsync(cancellation);late.Dispose();unresolvedAuthorization=null;}
-            catch(ProbeOwnershipException owned){unresolvedProbe=owned;unresolvedAuthorization=null;}
-            catch when(pending.IsFaulted||pending.IsCanceled){_ =pending.Exception;unresolvedAuthorization=null;}
-        }
-        if(unresolvedProbe is { } probe){await probe.RetryCleanupAsync(cancellation);unresolvedProbe=null;}
-        if(unresolvedLifecycle is { } life){await life.DisposeAsync();unresolvedLifecycle=null;}
-        if(unresolvedAuthorization is null&&unresolvedProbe is null&&unresolvedLifecycle is null&&unresolvedGrant is { } grant){grant.Dispose();unresolvedGrant=null;}
-    }
+    protected readonly TaskCompletionSource stop=new(TaskCreationOptions.RunContinuationsAsynchronously);
+    protected int terminal;
     internal uint Control(uint control)
     {
         // Handler never runs cancellation callbacks, waits for a process, does
-        // file I/O or performs update/recovery on the SCM dispatcher thread.
+        // file I/O or performs an update on the SCM dispatcher thread.
         if(control==ServiceDefinition.Interrogate)return 0;
         if(control is not(ServiceDefinition.Stop or ServiceDefinition.Shutdown))return 120;
         if(Volatile.Read(ref terminal)!=0)return 1062;
         stop.TrySetResult();return 0;
     }
-    private sealed class TrackedLauncher(IPrivateAppLauncher inner,TimeSpan healthDeadline,Action<ServiceStartupStage,string?> observe,Action<int,bool,bool> observedExit,Action<IContainedAppSession> remember):IPrivateAppLauncher
-    {
-        private readonly TaskCompletionSource<int> exit=new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private int readyObserved,forcedCleanup;
-        internal Task<int> Exit=>exit.Task;
-        public async Task<IContainedAppSession> StartAsync(AppRelease release,CancellationToken cancellation)
-        {
-            observe(ServiceStartupStage.Launching,null);
-            try{var session=await inner.StartAsync(release,cancellation);remember(session);_ = Watch(session);return new ObservedSession(session,()=>Interlocked.Exchange(ref forcedCleanup,1));}
-            catch(OperationCanceledException){observe(ServiceStartupStage.Launching,"launch_cancelled");throw;}
-            catch{observe(ServiceStartupStage.Launching,"launch_failed");throw;}
-        }
-        private async Task Watch(IContainedAppSession session)
-        {try{var code=await session.WaitForRootExitAsync(default);observedExit(code,Volatile.Read(ref readyObserved)!=0,Volatile.Read(ref forcedCleanup)!=0);exit.TrySetResult(code);}catch(Exception e){exit.TrySetException(e);}}
-        public async Task WaitForHealthyAsync(IContainedAppSession session,CancellationToken cancellation)
-        {
-            observe(ServiceStartupStage.WaitingForHealth,null);
-            using var health=CancellationTokenSource.CreateLinkedTokenSource(cancellation);health.CancelAfter(healthDeadline);
-            try{await inner.WaitForHealthyAsync(((ObservedSession)session).Inner,health.Token).WaitAsync(health.Token);Interlocked.Exchange(ref readyObserved,1);observe(ServiceStartupStage.Ready,null);}
-            catch(OperationCanceledException){observe(ServiceStartupStage.WaitingForHealth,!cancellation.IsCancellationRequested&&health.IsCancellationRequested?"readiness_timeout":"readiness_cancelled");throw;}
-            catch{observe(ServiceStartupStage.WaitingForHealth,"readiness_failed");throw;}
-        }
-        private sealed class ObservedSession(IContainedAppSession inner,Action forced):IContainedAppSession
-        {
-            internal IContainedAppSession Inner=>inner;
-            public Task RequestGracefulStopAsync(CancellationToken c)=>inner.RequestGracefulStopAsync(c);
-            public Task<int> WaitForRootExitAsync(CancellationToken c)=>inner.WaitForRootExitAsync(c);
-            public Task WaitForTreeEmptyAsync(CancellationToken c)=>inner.WaitForTreeEmptyAsync(c);
-            public Task TerminateAndWaitForTreeEmptyAsync(CancellationToken c){forced();return inner.TerminateAndWaitForTreeEmptyAsync(c);}
-            public ValueTask DisposeAsync()=>inner.DisposeAsync();
-        }
-    }
-    private sealed class BoundedStartBarrier(IAppRecoveryBarrier inner):IAppRecoveryBarrier
-    {
-        // A start barrier is a read-only admission verdict, never a restore or
-        // activation executor. Ignored cancellation cannot hold SCM startup open.
-        public Task RequireStartAllowedAsync(AppRelease release,CancellationToken cancellation)
-            =>inner.RequireStartAllowedAsync(release,cancellation).WaitAsync(cancellation);
-    }
-    internal async Task<ServiceRunResult> RunAsync(Action<ServiceReport> publish)
-    {
-        AuthorizedServiceStart? grant=null;AppLifecycle? lifecycle=null;
-        var elapsed=System.Diagnostics.Stopwatch.StartNew();
-        var observationGate=new object();var observationsComplete=false;
-        Volatile.Write(ref startupObservation,new(ServiceStartupStage.NotStarted,0,null));Volatile.Write(ref rootExitObservation,null);
-        void Observe(ServiceStartupStage stage,string? error)
-        {
-            // First cause is latched. A late readiness task cannot clear it or
-            // publish a false Ready after the controller has already returned.
-            lock(observationGate){if(observationsComplete||StartupObservation.Failure is not null)return;Volatile.Write(ref startupObservation,new(stage,elapsed.ElapsedMilliseconds,error));}
-        }
-        // Exit can be observed after unresolved cleanup returns. Record it once,
-        // separately from the frozen startup verdict; it is not proof of tree exit.
-        void ObservedExit(int code,bool ready,bool forced)=>Interlocked.CompareExchange(ref rootExitObservation,new(code,elapsed.ElapsedMilliseconds,ready,forced),null);
-        void Refused(string error){var current=StartupObservation;if(current.Failure is null)Observe(current.Stage,error);}
-        var failure=ServiceFailure.None;var quiescent=true;var checkpoint=0u;
-        var pending=ServiceState.StartPending;var statusGate=new object();var acceptingProgress=true;var progressStatusFailed=false;
-        var observed=authorizer as IObservedAdmission;
-        void Pending(ServiceState state)
-        {
-            lock(statusGate)
-            {
-                if(state!=pending){pending=state;checkpoint=0;}
-                publish(new(state,0,++checkpoint,60000,0,0));
-            }
-        }
-        void Observed()
-        {
-            lock(statusGate)
-            {
-                if(!acceptingProgress||pending!=ServiceState.StartPending)return;
-                try{Pending(ServiceState.StartPending);}catch{progressStatusFailed=true;throw;}
-            }
-        }
-        try
-        {
-            Pending(ServiceState.StartPending);if(observed is not null)observed.ObservedWork+=Observed;
-            using var start=new CancellationTokenSource(startDeadline);
-            // A stop request cancels startup on a pool thread, never inside HandlerEx.
-            _=stop.Task.ContinueWith(_=>{try{start.Cancel();}catch(Exception e)when(e is ObjectDisposedException or AggregateException){}},CancellationToken.None,TaskContinuationOptions.None,TaskScheduler.Default);
-            Observe(ServiceStartupStage.Authorizing,null);var authorization=authorizer.AuthorizeAsync(start.Token);
-            try{grant=await authorization.WaitAsync(start.Token);}
-            catch
-            {
-                // Revoke late results; an authorizer may pin files, never start processes.
-                // Let cooperative cancellation settle briefly. If it has not
-                // settled, retain the task: it may still own a probe/reservation.
-                if(!authorization.IsCompleted)await Task.WhenAny(authorization,Task.Delay(250));
-                if(authorization.IsCompletedSuccessfully)
-                {unresolvedAuthorization=authorization;authorization.Result.Dispose();unresolvedAuthorization=null;}
-                else if(authorization.IsCompleted)
-                {
-                    try{authorization.GetAwaiter().GetResult();}
-                    catch(ProbeOwnershipException){throw;}
-                    catch{_ =authorization.Exception;}
-                }
-                else{unresolvedAuthorization=authorization;quiescent=false;}
-                throw;
-            }
-            start.Token.ThrowIfCancellationRequested();Pending(ServiceState.StartPending);
-            // Readiness belongs to startup. The linked start token still bounds
-            // total admission + launch; stop/cleanup retain lifecycleDeadline.
-            var tracked=new TrackedLauncher(grant.Launcher,startDeadline,Observe,ObservedExit,session=>Volatile.Write(ref updateSession,session));
-            lifecycle=new(grant.Release,tracked,new BoundedStartBarrier(grant.Recovery),new NoHostUpdateAuthority(),lifecycleDeadline,authorizer is IObservedAdmission?startDeadline:null);
-            Observe(ServiceStartupStage.ValidatingStart,null);
-            await lifecycle.StartAsync(start.Token);
-            start.Token.ThrowIfCancellationRequested();if(stop.Task.IsCompleted)throw new OperationCanceledException();
-            start.CancelAfter(Timeout.InfiniteTimeSpan);
-            lock(statusGate){acceptingProgress=false;publish(new(ServiceState.Running,0x1|0x4,0,0,0,0));}Observe(ServiceStartupStage.Running,null);
-            var completed=await Task.WhenAny(stop.Task,tracked.Exit);
-            Pending(ServiceState.StopPending);
-            if(completed==tracked.Exit&&!stop.Task.IsCompleted)
-            {
-                // Only a trusted finite-purpose grant may finish on its own.
-                // Its wrapper does not report exit until Authority has accepted
-                // the terminal frame; normal applications retain crash semantics.
-                if(grant.Purpose==ServiceRunPurpose.FiniteOfflineTask&&await tracked.Exit==0)await lifecycle.StopAsync();
-                else{failure=ServiceFailure.UnexpectedExit;try{await tracked.Exit;}catch{}}
-            }
-            else await lifecycle.StopAsync();
-        }
-        catch(ProbeOwnershipException owned)
-        {ReportFailure(owned);Refused("probe_quiescence_unconfirmed");unresolvedProbe=owned;lifecycle=AppLifecycle.RetainFailedAdmission(owned.OwnedSession);failure=ServiceFailure.StartFailed;}
-        catch(ServiceStartDenied denied){ReportFailure(denied);if(pending==ServiceState.StartPending)Refused("admission_denied");failure=denied.Failure;}
-        catch(OperationCanceledException error)
-        {
-            ReportFailure(error);
-            if(pending==ServiceState.StartPending)Refused(stop.Task.IsCompleted?"startup_cancelled":"startup_timeout");
-            // Expected cancellation before RUNNING differs from a failed stop
-            // after RUNNING. Forced cleanup must never turn that timeout into
-            // a successful STOPPED status merely because STOP was requested.
-            failure=pending==ServiceState.StopPending?ServiceFailure.StopFailed:
-                stop.Task.IsCompleted?ServiceFailure.None:ServiceFailure.StartFailed;
-        }
-        catch(Exception error){ReportFailure(error);if(pending==ServiceState.StartPending)Refused("startup_failed");failure=pending==ServiceState.StopPending?ServiceFailure.StopFailed:ServiceFailure.StartFailed;}
-        finally
-        {
-            lock(statusGate)acceptingProgress=false;
-            if(observed is not null)observed.ObservedWork-=Observed;
-            if(progressStatusFailed)failure=ServiceFailure.StatusTransport;
-            if(lifecycle is not null)
-            {
-                try{if(pending!=ServiceState.StopPending)Pending(ServiceState.StopPending);}catch{failure=ServiceFailure.StatusTransport;}
-                try{await lifecycle.DisposeAsync();}
-                catch
-                {
-                    // Same explicit retry contract as AppLifecycle. Retain all
-                    // owned resources if cleanup cannot observe an empty tree.
-                    try{await lifecycle.DisposeAsync();}catch{quiescent=false;failure=ServiceFailure.QuiescenceUnknown;}
-                }
-            }
-            if(unresolvedAuthorization is not null){quiescent=false;failure=ServiceFailure.QuiescenceUnknown;}
-            if(unresolvedProbe?.CleanupComplete==true)unresolvedProbe=null;
-            if(!quiescent){unresolvedLifecycle=lifecycle;unresolvedGrant=grant;}
-            else if(grant is not null)
-            {try{grant.Dispose();}catch{unresolvedGrant=grant;quiescent=false;failure=ServiceFailure.QuiescenceUnknown;}}
-            Volatile.Write(ref terminal,1);
-            lock(observationGate)observationsComplete=true;
-        }
-        if(quiescent)
-        {
-            try{publish(new(ServiceState.Stopped,0,0,0,failure==ServiceFailure.None?0u:1066u,(uint)failure));}
-            catch(Exception error){ReportFailure(error);return new(ServiceFailure.StatusTransport,true);}
-        }
-        // Unknown quiescence NEVER emits STOPPED success (or any STOPPED claim).
-        // Native entry exits unsuccessfully; OS job-handle teardown is a last
-        // containment mechanism, not a verified recovery observation.
-        if(!quiescent)ReportFailure(new IOException("RUNTIME_QUIESCENCE_UNCONFIRMED"));
-        return new(failure,quiescent);
-    }
-}
-
-internal sealed class ServiceApplication(IScmApi api,IServiceStartAuthorizer authorizer,Action<int> unsafeExit)
-{
-    internal int Run()
+    internal abstract Task<ServiceRunResult> RunAsync(Action<ServiceReport> publish);
+    internal static int Dispatch(IScmApi api,string name,Action<int> unsafeExit,Func<ScmController> create)
     {
         var result=new ServiceRunResult(ServiceFailure.StatusTransport,false);
-        api.Dispatch(ServiceDefinition.Name,arguments=>
+        api.Dispatch(name,arguments=>
         {
-            var controller=new ServiceController(authorizer);
-            api.Register(ServiceDefinition.Name,controller.Control);
-            if(arguments.Length!=1||arguments[0]!=ServiceDefinition.Name)
+            var controller=create();
+            api.Register(name,controller.Control);
+            if(arguments.Length!=1||arguments[0]!=name)
             {
                 api.Publish(new(ServiceState.Stopped,0,0,0,1066,(uint)ServiceFailure.ArgumentsRejected));
                 result=new(ServiceFailure.ArgumentsRejected,true);return;
@@ -288,5 +46,145 @@ internal sealed class ServiceApplication(IScmApi api,IServiceStartAuthorizer aut
             if(!result.QuiescenceConfirmed||result.Failure==ServiceFailure.StatusTransport)unsafeExit(1);
         });
         return result.Failure==ServiceFailure.None&&result.QuiescenceConfirmed?0:1;
+    }
+}
+
+internal sealed class ServiceController(IServiceStartAuthorizer authorizer,TimeSpan? startDeadline=null,TimeSpan? lifecycleDeadline=null,Action<Exception>? reportFailure=null):ScmController
+{
+    private readonly TimeSpan startBudget=startDeadline??TimeSpan.FromSeconds(25),stopBudget=lifecycleDeadline??TimeSpan.FromSeconds(20);
+    // Every accepted stage in order, so a failure report shows where the
+    // admission budget went rather than only the stage it ended in.
+    private readonly List<StartupStep> startupSteps=[];
+    private bool stepsComplete;
+    internal StartupStep[] StartupSteps{get{lock(startupSteps)return [..startupSteps];}}
+    private void ReportFailure(Exception error){try{reportFailure?.Invoke(error);}catch{}}
+    private sealed class TrackedLauncher(IPrivateAppLauncher inner,Action<string,string?> observe):IPrivateAppLauncher
+    {
+        private readonly TaskCompletionSource<int> exit=new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal Task<int> Exit=>exit.Task;
+        public async Task<IContainedAppSession> StartAsync(CancellationToken cancellation)
+        {
+            observe("Launching",null);
+            try{var session=await inner.StartAsync(cancellation);_ = Watch(session);return session;}
+            catch(OperationCanceledException){observe("Launching","launch_cancelled");throw;}
+            catch{observe("Launching","launch_failed");throw;}
+        }
+        private async Task Watch(IContainedAppSession session)
+        {try{exit.TrySetResult(await session.WaitForRootExitAsync(default));}catch(Exception e){exit.TrySetException(e);}}
+        public async Task WaitForHealthyAsync(IContainedAppSession session,CancellationToken cancellation)
+        {
+            observe("WaitingForHealth",null);
+            try{await inner.WaitForHealthyAsync(session,cancellation).WaitAsync(cancellation);observe("Ready",null);}
+            catch(OperationCanceledException){observe("WaitingForHealth","readiness_cancelled");throw;}
+            catch{observe("WaitingForHealth","readiness_failed");throw;}
+        }
+    }
+    internal override async Task<ServiceRunResult> RunAsync(Action<ServiceReport> publish)
+    {
+        AuthorizedServiceStart? grant=null;AppLifecycle? lifecycle=null;
+        var elapsed=System.Diagnostics.Stopwatch.StartNew();
+        void Observe(string stage,string? error)
+        {
+            // First cause is latched. A late readiness task cannot clear it or
+            // publish a false Ready after the controller has already returned.
+            lock(startupSteps)
+            {
+                if(stepsComplete||startupSteps.LastOrDefault()?.Failure is not null)return;
+                startupSteps.Add(new(stage,elapsed.ElapsedMilliseconds,error));
+            }
+        }
+        void Refused(string error)=>Observe(StartupSteps.LastOrDefault()?.Stage??"NotStarted",error);
+        var failure=ServiceFailure.None;var quiescent=true;var authorizationUnresolved=false;var checkpoint=0u;
+        var pending=ServiceState.StartPending;
+        // Startup accepts STOP/SHUTDOWN: the handler cancels it (below), so a
+        // long admission never makes the SCM refuse a stop with 1052.
+        void Pending(ServiceState state)
+        {
+            if(state!=pending){pending=state;checkpoint=0;}
+            publish(new(state,state==ServiceState.StartPending?0x1u|0x4u:0,++checkpoint,60000,0,0));
+        }
+        try
+        {
+            Pending(ServiceState.StartPending);
+            using var start=new CancellationTokenSource(startBudget);
+            // A stop request cancels startup on a pool thread, never inside HandlerEx.
+            _=stop.Task.ContinueWith(_=>{try{start.Cancel();}catch(Exception e)when(e is ObjectDisposedException or AggregateException){}},CancellationToken.None,TaskContinuationOptions.None,TaskScheduler.Default);
+            Observe("Authorizing",null);var authorization=authorizer.AuthorizeAsync(start.Token);
+            try{grant=await authorization.WaitAsync(start.Token);}
+            catch
+            {
+                // Revoke late results; an authorizer may pin files, never start processes.
+                // Let cooperative cancellation settle briefly. If it has not
+                // settled, it may still own the data lease.
+                if(!authorization.IsCompleted)await Task.WhenAny(authorization,Task.Delay(250));
+                if(authorization.IsCompletedSuccessfully)
+                {authorizationUnresolved=true;authorization.Result.Dispose();authorizationUnresolved=false;}
+                else if(authorization.IsCompleted)
+                {
+                    try{authorization.GetAwaiter().GetResult();}
+                    catch{_ =authorization.Exception;}
+                }
+                else authorizationUnresolved=true;
+                throw;
+            }
+            start.Token.ThrowIfCancellationRequested();Pending(ServiceState.StartPending);
+            // Readiness belongs to startup. The linked start token still bounds
+            // total admission + launch; stop/cleanup retain their own budget.
+            var tracked=new TrackedLauncher(grant.Launcher,Observe);
+            lifecycle=new(tracked,stopBudget,startBudget);
+            await lifecycle.StartAsync(start.Token);
+            start.Token.ThrowIfCancellationRequested();if(stop.Task.IsCompleted)throw new OperationCanceledException();
+            start.CancelAfter(Timeout.InfiniteTimeSpan);
+            publish(new(ServiceState.Running,0x1|0x4,0,0,0,0));Observe("Running",null);
+            var completed=await Task.WhenAny(stop.Task,tracked.Exit);
+            Pending(ServiceState.StopPending);
+            if(completed==tracked.Exit&&!stop.Task.IsCompleted)
+            {
+                failure=ServiceFailure.UnexpectedExit;try{await tracked.Exit;}catch{}
+            }
+            else await lifecycle.StopAsync();
+        }
+        // Each handler latches its fixed failure token before reporting, so the
+        // report carries the complete stage history including the verdict.
+        catch(OperationCanceledException error)
+        {
+            if(pending==ServiceState.StartPending)Refused(stop.Task.IsCompleted?"startup_cancelled":"startup_timeout");
+            ReportFailure(error);
+            // Expected cancellation before RUNNING differs from a failed stop
+            // after RUNNING. Forced cleanup must never turn that timeout into
+            // a successful STOPPED status merely because STOP was requested.
+            failure=pending==ServiceState.StopPending?ServiceFailure.StopFailed:
+                stop.Task.IsCompleted?ServiceFailure.None:ServiceFailure.StartFailed;
+        }
+        catch(Exception error){if(pending==ServiceState.StartPending)Refused("startup_failed");ReportFailure(error);failure=pending==ServiceState.StopPending?ServiceFailure.StopFailed:ServiceFailure.StartFailed;}
+        finally
+        {
+            if(lifecycle is not null)
+            {
+                try{if(pending!=ServiceState.StopPending)Pending(ServiceState.StopPending);}catch{failure=ServiceFailure.StatusTransport;}
+                try{await lifecycle.DisposeAsync();}
+                catch
+                {
+                    // Same explicit retry contract as AppLifecycle. Unknown cleanup
+                    // keeps the grant: the host exits with the lease still held.
+                    try{await lifecycle.DisposeAsync();}catch{quiescent=false;failure=ServiceFailure.QuiescenceUnknown;}
+                }
+            }
+            if(authorizationUnresolved){quiescent=false;failure=ServiceFailure.QuiescenceUnknown;}
+            if(quiescent&&grant is not null)
+            {try{grant.Dispose();}catch{quiescent=false;failure=ServiceFailure.QuiescenceUnknown;}}
+            Volatile.Write(ref terminal,1);
+            lock(startupSteps)stepsComplete=true;
+        }
+        if(quiescent)
+        {
+            try{publish(new(ServiceState.Stopped,0,0,0,failure==ServiceFailure.None?0u:1066u,(uint)failure));}
+            catch(Exception error){ReportFailure(error);return new(ServiceFailure.StatusTransport,true);}
+        }
+        // Unknown quiescence NEVER emits STOPPED success (or any STOPPED claim).
+        // Native entry exits unsuccessfully; OS job-handle teardown is a last
+        // containment mechanism, not a verified stop.
+        if(!quiescent)ReportFailure(new IOException("RUNTIME_QUIESCENCE_UNCONFIRMED"));
+        return new(failure,quiescent);
     }
 }

@@ -229,6 +229,31 @@ class BootstrapTests(unittest.TestCase):
         self.worker.inputs = original
         self.assertIn('GITHUB_UPDATER_ENROLLED', self.run_bootstrap())
 
+    def interrupted_runtime(self):
+        original = self.worker.inputs
+        def killed():
+            inputs = original()
+            def probe(*_): raise RuntimeError('synthetic kill')
+            inputs['module'].Supervisor.probe = probe
+            return inputs
+        self.worker.inputs = killed
+        with self.assertRaises(RuntimeError): self.run_bootstrap()
+        self.worker.inputs = original
+        return next((self.worker.path(u.STATE) / 'runtime/versions').iterdir())
+
+    def test_staging_file_of_a_killed_run_does_not_block_the_next(self):
+        leftover = self.interrupted_runtime() / '.github-bootstrap-a1b2c_d3'
+        leftover.write_bytes(b'partial')
+        self.assertIn('GITHUB_UPDATER_ENROLLED', self.run_bootstrap())
+        self.assertFalse(leftover.exists())
+
+    def test_unknown_file_beside_the_runtime_is_still_refused(self):
+        destination = self.interrupted_runtime()
+        for name in ('.github-bootstrap-short', 'other'):
+            (destination / name).write_bytes(b'x')
+            with self.assertRaisesRegex(u.UpgradeError, 'unexpected files'): self.run_bootstrap()
+            (destination / name).unlink()
+
     def test_probe_mutation_leaves_schedulers_paused(self):
         original = self.worker.inputs
         def mutating():

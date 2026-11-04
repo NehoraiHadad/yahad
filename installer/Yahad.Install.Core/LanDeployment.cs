@@ -17,6 +17,9 @@ public sealed record LanFirewallRule(
     bool EdgeTraversal = false, string ServiceName = "")
 {
     public bool Matches(LanFirewallRule observed) => this == observed;
+    /// <summary>The same rule, for this release's program or the other release of an upgrade.</summary>
+    public bool MatchesEitherRelease(LanFirewallRule observed, string? otherProgram) =>
+        Matches(observed) || otherProgram is not null && this with { ApplicationName = otherProgram } == observed;
 }
 
 /// <summary>No plan is consent. The caller must obtain explicit owner consent and recheck the adapter before execution.</summary>
@@ -38,24 +41,11 @@ public static class LanDeployment
         string selectedAdapterId, string selectedAddress, int appPort, string caddyExecutable,
         string storageDirectory, string publicJoinDirectory, bool enableHttpHelp = true)
     {
-        if (!Guid.TryParseExact(installationId, "N", out var installation) || installation.ToString("N") != installationId)
-            throw new InvalidDataException("LAN_INSTALLATION_ID");
-        if (string.IsNullOrWhiteSpace(selectedAdapterId) || selectedAdapterId.Length > 256)
-            throw new InvalidDataException("LAN_ADAPTER");
         var origin = NetworkPlan.LanOrigin(choices, selectedAdapterId, selectedAddress);
-        if (appPort is < 1024 or > 65535) throw new InvalidDataException("LAN_APP_PORT");
-        var executable = SafePath(caddyExecutable);
-        if (!executable.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("LAN_CADDY_EXECUTABLE");
-        var storage = SafePath(storageDirectory);
-        var publicJoin = SafePath(publicJoinDirectory);
-        if (Overlaps(storage, publicJoin)) throw new InvalidDataException("LAN_PUBLIC_PRIVATE_OVERLAP");
-        if (Overlaps(executable, storage) || Overlaps(executable, publicJoin))
-            throw new InvalidDataException("LAN_EXECUTABLE_STORAGE_OVERLAP");
         var grouping = "Yahad.LAN." + installationId;
         LanFirewallRule Rule(int port) => new(grouping + ".TCP." + port,
             "Yahad home network; installation " + installationId + "; TCP " + port,
-            grouping, executable, selectedAddress, port.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            grouping, caddyExecutable, selectedAddress, port.ToString(System.Globalization.CultureInfo.InvariantCulture));
         var rules = new List<LanFirewallRule> { Rule(HttpsPort) };
         if (enableHttpHelp) rules.Add(Rule(HttpHelpPort));
         var config = new StringBuilder();
@@ -63,7 +53,7 @@ public static class LanDeployment
         // No access log is enabled. Discard the default runtime logger as well:
         // reverse-proxy errors may otherwise contain private request paths.
         config.Append("    log {\n        output discard\n    }\n");
-        config.Append("    storage file_system {\n        root ").Append(Quote(storage)).Append("\n    }\n");
+        config.Append("    storage file_system {\n        root ").Append(Quote(storageDirectory)).Append("\n    }\n");
         // There is deliberately no UDP/HTTP3 listener or implicit port-80 redirect.
         config.Append("    servers {\n        protocols h1 h2\n    }\n}\n");
         config.Append(origin).Append(" {\n    bind ").Append(selectedAddress).Append("\n    tls internal\n");
@@ -78,12 +68,12 @@ public static class LanDeployment
             // route preserves execution order; without it Caddy sorts `handle`
             // before `respond`, which would make the method guard unreachable.
             config.Append("    route {\n        respond @unsupportedMethod 405\n");
-            config.Append("        handle @help {\n            root * ").Append(Quote(publicJoin)).Append("\n            rewrite * /index.html\n            file_server\n        }\n");
-            config.Append("        handle /certificate.crt {\n            root * ").Append(Quote(publicJoin)).Append("\n            header Content-Type \"application/pkix-cert\"\n            header Content-Disposition \"attachment; filename=yahad-home-root.crt\"\n            rewrite * /certificate.crt\n            file_server\n        }\n");
+            config.Append("        handle @help {\n            root * ").Append(Quote(publicJoinDirectory)).Append("\n            rewrite * /index.html\n            file_server\n        }\n");
+            config.Append("        handle /certificate.crt {\n            root * ").Append(Quote(publicJoinDirectory)).Append("\n            header Content-Type \"application/pkix-cert\"\n            header Content-Disposition \"attachment; filename=yahad-home-root.crt\"\n            rewrite * /certificate.crt\n            file_server\n        }\n");
             config.Append("        handle {\n            respond 404\n        }\n    }\n}\n");
         }
         return new(installationId, selectedAdapterId, selectedAddress, appPort, origin,
-            enableHttpHelp ? "http://" + selectedAddress : null, executable, storage, publicJoin,
+            enableHttpHelp ? "http://" + selectedAddress : null, caddyExecutable, storageDirectory, publicJoinDirectory,
             config.ToString(), rules.AsReadOnly());
     }
 
@@ -92,24 +82,6 @@ public static class LanDeployment
     {
         if (NetworkPlan.LanOrigin(current, plan.AdapterId, plan.Address) != plan.Origin)
             throw new InvalidDataException("NETWORK_SELECTION_CHANGED");
-    }
-
-    private static bool Overlaps(string left, string right) =>
-        left.Equals(right, StringComparison.OrdinalIgnoreCase) ||
-        left.StartsWith(right.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
-        right.StartsWith(left.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
-
-    private static string SafePath(string path)
-    {
-        // Reject Caddy interpolation, unquoted tokens and device/UNC paths. Only
-        // local, administrator-owned Windows paths may be supplied by the installer.
-        if (string.IsNullOrWhiteSpace(path) || path.Length > 240 || !Path.IsPathFullyQualified(path) ||
-            path.StartsWith("\\\\", StringComparison.Ordinal) || path.Any(c => char.IsControl(c) || c is '"' or '{' or '}' or '`' or '*' or '?' or '<' or '>' or '|'))
-            throw new InvalidDataException("LAN_PATH");
-        var full = Path.GetFullPath(path);
-        if (full.Length < 4 || !char.IsAsciiLetter(full[0]) || full[1] != ':' || full[2] != '\\' ||
-            full.AsSpan(2).Contains(':')) throw new InvalidDataException("LAN_PATH");
-        return Path.TrimEndingDirectorySeparator(full);
     }
 
     private static string Quote(string path) => "\"" + path.Replace('\\', '/') + "\"";

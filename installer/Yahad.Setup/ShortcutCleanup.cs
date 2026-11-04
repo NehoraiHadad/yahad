@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text;
 using Yahad.Install;
 namespace Yahad.Setup;
 internal static class ShortcutCleanup
@@ -9,8 +10,8 @@ internal static class ShortcutCleanup
         var path=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs),"Yahad.url");
         try
         {
-            if(!File.Exists(path))return true;SafeDirectory.NoReparseAncestors(path);if(new FileInfo(path).Length>4096)return false;
-            if(File.ReadAllText(path).Replace("\r\n","\n")!="[InternetShortcut]\nURL="+origin+"\n")return false;
+            if(!File.Exists(path))return true;
+            if(Encoding.UTF8.GetString(NativeInstallFiles.ReadRecord(path,4096)).Replace("\r\n","\n")!="[InternetShortcut]\nURL="+origin+"\n")return false;
             File.Delete(path);return true;
         }
         catch{return false;}

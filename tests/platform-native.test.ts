@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fork, execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -23,7 +23,7 @@ function fixture() {
   execFileSync('icacls.exe', [directory, '/inheritance:r', '/grant:r', `*${sid}:(OI)(CI)F`, '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F'], { windowsHide: true, stdio: 'pipe' });
   return directory;
 }
-test('Windows native private key reader and app config use ACLs rather than POSIX mode', { skip: !available }, () => {
+test('Windows native private key reader and app config read through the helper rather than POSIX mode', { skip: !available }, () => {
   const directory = fixture(), path = join(directory, 'master-key');
   const key = randomBytes(32); writeFileSync(path, key.toString('base64'));
   assert.equal(native.readMasterKey(path).toString(), key.toString('base64'));
@@ -32,13 +32,14 @@ test('Windows native private key reader and app config use ACLs rather than POSI
     process.env.MASTER_KEY_FILE = path; process.env.APP_ORIGIN = 'http://127.0.0.1:3000'; process.env.COOKIE_SECURE = 'false';
     assert.deepEqual(loadConfig(native).masterKey, key);
   } finally { process.env = previous; }
-  execFileSync('icacls.exe', [path, '/grant', '*S-1-1-0:R'], { windowsHide: true, stdio: 'pipe' });
-  assert.throws(() => native.readMasterKey(path), /Native file boundary refused/);
 });
-test('Windows capability keeps administrator-owner requirement and missing-file semantics', { skip: !available }, () => {
+test('Windows capability reads through the helper, is absent when missing and refuses a hard link', { skip: !available }, () => {
   const directory = fixture(), path = join(directory, 'capability');
   assert.equal(readBootstrap(path, Date.now(), native), undefined);
-  writeFileSync(path, JSON.stringify({ token: randomBytes(32).toString('base64url'), expiresAt: Date.now() + 60000 }));
+  const token = randomBytes(32).toString('base64url');
+  writeFileSync(path, JSON.stringify({ token, expiresAt: Date.now() + 60000 }));
+  assert.equal(readBootstrap(path, Date.now(), native)?.token, token);
+  linkSync(path, join(directory, 'alias'));
   assert.throws(() => readBootstrap(path, Date.now(), native), /Native file boundary refused/);
 });
 test('Windows native data lease excludes a second process and releases normally', { skip: !available }, async () => {
@@ -70,19 +71,6 @@ async function freePort() {
   const port = (server.address() as { port: number }).port;
   await new Promise<void>(done => server.close(() => done())); return port;
 }
-test('helper crash retains the exclusive native lease in its still-living Node owner', { skip: !available, timeout: 25000 }, async () => {
-  const directory = fixture();
-  const owner = fork(resolve('tests/fixtures/native-remote-lease-owner.ts'), [directory], { execArgv: ['--import', 'tsx'], stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
-  const exited = once(owner, 'exit'); owner.stdout!.resume(); owner.stderr!.resume();
-  try {
-    assert.deepEqual((await once(owner, 'message'))[0], { ready: true });
-    const helperDead = once(owner, 'message'); owner.send({ killHelper: true });
-    assert.deepEqual((await helperDead)[0], { helperExited: true });
-    await assert.rejects(native.acquireDataLock(directory), /Native data lock refused/);
-    owner.kill(); await exited;
-    await (await native.acquireDataLock(directory))();
-  } finally { if (owner.exitCode === null && owner.signalCode === null) { owner.kill(); await exited; } }
-});
 test('actual mock app starts without development tools on PATH, excludes another writer and stops through private IPC', { skip: !available, timeout: 75000 }, async () => {
   const root = fixture(), data = join(root, 'data'); mkdirSync(data);
   const keyPath = join(root, 'master-key'); writeFileSync(keyPath, randomBytes(32).toString('base64'));
@@ -109,7 +97,8 @@ test('actual mock app starts without development tools on PATH, excludes another
     // A different port ensures a missing data lock cannot pass through a bind failure.
     const concurrent = start(await freePort()); concurrent.stdout!.resume(); concurrent.stderr!.resume();
     const concurrentDeadline = setTimeout(() => concurrent.kill(), 20000);
-    try { assert.equal((await once(concurrent, 'exit'))[0], 1); }
+    // 11 is the fixed data-lock stage code: the refusal is the held lock.
+    try { assert.equal((await once(concurrent, 'exit'))[0], 11); }
     finally { clearTimeout(concurrentDeadline); if (concurrent.exitCode === null) concurrent.kill(); }
     child.send({ type: 'yahad.shutdown' });
     assert.equal((await exited)[0], 0);

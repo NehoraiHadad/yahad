@@ -21,7 +21,7 @@ $env:DOTNET_EnableDiagnostics='0'
 foreach($folder in @($env:DOTNET_CLI_HOME,$env:NUGET_PACKAGES,$env:APPDATA,$env:LOCALAPPDATA,$env:TEMP)){New-Item -ItemType Directory -Path $folder -Force | Out-Null}
 $offlineConfig=Join-Path $taskScratch 'NuGet.Config'
 [IO.File]::WriteAllText($offlineConfig,'<configuration><packageSources><clear/></packageSources></configuration>')
-foreach($project in @('Yahad.Install.Tests','Yahad.FirstInstall.Tests','Yahad.Production.Tests','Yahad.Recovery.Tests')){
+foreach($project in @('Yahad.Install.Tests','Yahad.FirstInstall.Tests')){
  & $DotNet build (Join-Path $PSScriptRoot "$project/$project.csproj") --disable-build-servers -m:1 -p:UseSharedCompilation=false "-p:RestoreConfigFile=$offlineConfig" --nologo
  if($LASTEXITCODE -ne 0){throw "Build failed: $project"}
 }
@@ -33,15 +33,8 @@ $env:YAHAD_LAN_UI_OUTPUT=Join-Path $taskScratch 'ui'
 & $DotNet (Join-Path $PSScriptRoot 'Yahad.FirstInstall.Tests/bin/Debug/net10.0-windows/Yahad.FirstInstall.Tests.dll') --lan-integration-only
 if($LASTEXITCODE -ne 0){throw 'LAN integration and synthetic UI tests failed'}
 $sourceRepo=Split-Path $PSScriptRoot
-foreach($project in @('Yahad.FirstInstall.Tests','Yahad.Production.Tests')){
- & $DotNet (Join-Path $PSScriptRoot "$project/bin/Debug/net10.0-windows/$project.dll") --store-schema-only $sourceRepo
- if($LASTEXITCODE -ne 0){throw "Source schema parser tests failed: $project"}
-}
-$schemaFixture=Join-Path $taskScratch 'schema-package'
-New-Item -ItemType Directory -Path (Join-Path $schemaFixture 'legal') -Force | Out-Null
-[IO.File]::WriteAllText((Join-Path $schemaFixture 'legal/build-inputs.json'),'{"databaseSchema":6}')
-& $DotNet (Join-Path $PSScriptRoot 'Yahad.Recovery.Tests/bin/Debug/net10.0-windows/Yahad.Recovery.Tests.dll') --store-schema-only $schemaFixture
-if($LASTEXITCODE -ne 0){throw 'Recovery schema parser tests failed'}
+& $DotNet (Join-Path $PSScriptRoot 'Yahad.FirstInstall.Tests/bin/Debug/net10.0-windows/Yahad.FirstInstall.Tests.dll') --store-schema-only $sourceRepo
+if($LASTEXITCODE -ne 0){throw 'Source schema parser tests failed'}
 } finally {
  foreach($name in $taskEnvironmentNames){[Environment]::SetEnvironmentVariable($name,$previousTaskEnvironment[$name],'Process')}
 }

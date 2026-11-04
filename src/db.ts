@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { normalizeAccountName, accountNameKey } from './account-name.js';
-import { DATABASE_SCHEMA } from './database-schema.js';
+import { DATABASE_MIGRATIONS_FROM, DATABASE_SCHEMA } from './database-schema.js';
 export { DATABASE_SCHEMA } from './database-schema.js';
 export const USERS_TABLE = `CREATE TABLE users(id TEXT NOT NULL,family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE,name TEXT NOT NULL,name_key TEXT NOT NULL UNIQUE,role TEXT NOT NULL CHECK(role IN ('parent','child')),password TEXT NOT NULL,PRIMARY KEY(family_id,id))`;
 
@@ -12,7 +12,9 @@ export function migrateAccountNames(db: DatabaseSync) {
     return;
   }
   const versions = db.prepare('SELECT version FROM schema_version').all();
-  if (versions.length !== 1 || ![1, 2, 3, 4, 5, DATABASE_SCHEMA].includes(Number(versions[0].version)))
+  // The release declares its sources once; a second list here would refuse them.
+  const admitted: readonly number[] = [...DATABASE_MIGRATIONS_FROM, DATABASE_SCHEMA];
+  if (versions.length !== 1 || !admitted.includes(Number(versions[0].version)))
     throw new Error('Unsupported database schema');
   if (Number(versions[0].version) >= 2) return;
   // Rebuilding the parent table must not cascade-delete sessions/grants. SQLite

@@ -1,10 +1,12 @@
 # Explicit GitHub-HTTPS updater self-updates
 
-This is a **new owner-enrolled profile**, not a signature-verification bypass.
+This is an **owner-enrolled profile**, not a signature-verification bypass.
 It allows project releases to update the privileged worker, then the application
-and supported database schema, without creating signing keys. Publication does
-not activate it; an existing machine still needs the reviewed one-time local
-bootstrap. No host deployment, provider interaction or real-data migration is
+and supported database schema, without creating signing keys. A new
+`deploy/install.py` run enrolls itself, after printing this trust, with no
+separate step; see [enrollment on a new install](#enrollment-on-a-new-install).
+Publication does not activate it on a machine installed before that: such a
+machine still needs the reviewed one-time local bootstrap. No host deployment, provider interaction or real-data migration is
 implied by local synthetic tests.
 
 ## Trust and immutable boundary
@@ -31,11 +33,27 @@ falls back to this profile. The HTTPS bootstrap refuses signature pins, signed
 source policies, unknown direct workers and conflicting partial enrollment; it
 never deletes keys or rewrites app trust.
 
+## Enrollment on a new install
+
+`deploy/install.py` reuses the reviewed `Bootstrap` class, after the first parent
+exists and before any scheduler has started, so no worker runs outside the
+supervisor. It builds the initial pair from its own `deploy/updater.py`. The
+confirmation is its one yes/no, after the printed trust notice; there is no opt-out.
+Existing installations are never enrolled by rerunning it. A rerun on an enrolled
+machine treats the launcher, supervisor and their drop-ins as the managed files
+and changes nothing; an interrupted enrollment resumes on rerun.
+
+`INITIAL_WORKER_SHA256` in `deploy/upgrade-worker-github.py` pins `deploy/updater.py`,
+and the installer refuses to run otherwise. So **changing `deploy/updater.py` also
+requires updating that pin**; `tests/test_github_bootstrap.py` fails until they agree.
+
 ## One-time bootstrap on an existing installation
+
+Only for machines installed before enrollment joined the installer.
 
 Supported starting workers are the exact historical legacy worker and the exact
 reviewed protocol-2 direct worker installed by the 0.5.0 manual transition, or
-the exact new protocol-3 direct worker from the reviewed fresh installer. The
+the exact protocol-3 direct worker of a guided install from before that change. The
 bootstrap verifies existing helper bytes, safe ownership/paths, concrete operator,
 stable matching app journal, lock and loaded/quiet systemd units. Unknown layouts
 or pending recovery are a stop, not permission to rerun fresh setup.
@@ -118,17 +136,34 @@ or retry a different target automatically.
 
 ## Release publication and update order
 
-Produce a no-key worker bundle locally:
+`npm run release:publish` puts a no-key worker bundle in every release, packaged by:
 
 ```sh
-node scripts/release-updater.mjs package-github 1.1.0 /PRIVATE_NEW_RUNTIME_OUTPUT
+node scripts/release-updater.mjs package-github RUNTIME_VERSION /PRIVATE_NEW_RUNTIME_OUTPUT
 ```
 
 It produces `yachad-updater.json` and `yachad-updater.zip`, not an empty/fake
 signature. Signed publication retains the separate `package VERSION OUT KEY`
-command. Publish matching app and updater assets in a normal stable semantic app
-Release only after reviewing and testing the exact candidate. Packaging itself
-never publishes or activates anything.
+command. Packaging itself never publishes or activates anything.
+
+The runtime version is separate from the app version and is derived from it:
+`major+1.minor.patch`, so app 0.6.1 carries runtime 1.6.1. It says nothing about what
+changed. An enrolled machine refuses a runtime at or below the one it already accepted
+unless the manifest bytes are identical, reports that as `incompatible`, and so also
+stops its app update. The archive bytes differ between zlib builds, so republishing an
+old runtime version cannot be relied on to match. Deriving it puts each release above
+all earlier ones and above the bootstrap's initial 1.0.1 (the publish refuses otherwise),
+so an unchanged `deploy/updater.py` simply reactivates under a new version. The supervisor
+keeps every activated runtime directory, about 80 KB per release.
+
+Carrying the pair every time also keeps idle checks small: the metadata-only path below
+needs a runtime manifest to compare, and without one a healthy machine downloads the
+app archive on each check.
+
+Machines that are not enrolled ignore the pair. Direct workers, including the 0.5.0
+worker, only look up the assets they require and refuse none; the Windows Updater selects
+its own by exact name. A signature-pinned enrollment finds no `.sig` for this pair, so its
+runtime check reports `invalid_release` and its app update continues as before.
 
 Discovery uses GitHub’s `/releases/latest` selection, not a scan for the highest
 semantic version. Versions still must advance. The target fingerprint binds all
@@ -240,3 +275,36 @@ artifact with runtime 1.0.1; never replace the already published 1.0.0 archive.
 The runtime now records a worker-liveness heartbeat on scheduled deferred/no-op
 transport results, preserving app `checkedAt` and its existing outcome. This
 keeps parent controls usable after 24 hours without claiming a new app preflight.
+
+## Windows installations
+
+Windows does not use the HTTPS-trust profile above. It has its own signed channel,
+checked by `Yahad.Updater` (a service of the native installer).
+
+- **Release.** One release carries both platforms, because the Raspberry Pi updater and the
+  Windows Updater both read GitHub's single `/releases/latest`: a release without the Pi's
+  assets stalls the Pi, and one without Windows assets hides the update from Windows. A GitHub-HTTPS
+  Pi needs `yachad-release.json` and `yachad-app.zip` (`deploy/updater-transport.py` `APP_ASSETS`,
+  `deploy/updater.py` `release_assets`); an enrolled Pi also takes its worker from the `yachad-updater.*`
+  pair, which every release carries (see "Release publication and update order"). Windows needs
+  `yahad-windows-<version>.json`, `yahad-windows-<version>.json.sig` and `Yahad.Setup-<version>.exe`.
+  The maintainer runs `npm run release:publish` (runbook:
+  [installer/README.md](../installer/README.md#release-signing)), which builds and signs both sets locally
+  and, after a typed confirmation, pushes `main` and the tag and creates the release. The
+  private key stays on the maintainer's PC: no GitHub secret, no Authenticode certificate.
+- **Discovery.** The Updater reads only GitHub's `/releases/latest` for the fixed
+  repository (`NehoraiHadad/yahad`); drafts, prereleases and non-newer versions are ignored.
+- **Verification.** The ECDSA P-256 signature is checked over a fixed prefix plus the
+  **raw manifest bytes** with the installed key before the manifest is parsed. Then
+  the strict parse, the key id, the version order and the minimum-from-version and
+  database-schema rules. The Setup is downloaded only up to the signed size and
+  accepted only if its SHA-256 matches.
+- **Upgrade.** Setup runs `--quiet-upgrade`, with no prompt. The database is migrated
+  as the app starts; the application health check decides whether the release stays.
+- **Rollback.** If the new version does not become healthy, the previous version and
+  its pre-upgrade data are restored automatically.
+- **Fail closed.** The trusted key is the one installed at
+  `%ProgramFiles%\Yahad.FirstInstallelease-key.spki`, and the running Setup must carry
+  the same one. A build without a key installs but refuses every upgrade; a missing,
+  foreign, unsigned or tampered signature is refused and nothing falls back to HTTPS trust.
+  Losing the private key means installed machines can only be reinstalled, not upgraded.

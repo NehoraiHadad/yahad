@@ -22,6 +22,9 @@ internal static class NativeNetworkProfile
         }
         finally{Marshal.FinalReleaseComObject(manager);}
     }
+    // A private IPv4 is not proof of a home network (VPNs use them too).
+    // Read the selected adapter's actual Windows category; never reclassify it.
+    internal static void RequirePrivateProfile(string adapter)=>RequirePrivateCategory(ReadCategory(adapter));
     internal static void RequirePrivateCategory(int category)
     {if(category!=1)throw new IOException("LAN_PRIVATE_PROFILE_REQUIRED");}
     internal static int RequireConsistentCategory(IReadOnlyList<int> categories)

@@ -1,4 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
+  <ItemGroup><Compile Include="../test-support/PrivateSession.cs" Link="TestSupport/PrivateSession.cs"/></ItemGroup>
   <ItemGroup><ProjectReference Include="../Yahad.Install.Core/Yahad.Install.Core.csproj" /></ItemGroup>
 </Project>
