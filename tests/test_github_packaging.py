@@ -24,7 +24,7 @@ class RuntimePackageTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
         self.root = pathlib.Path(temporary.name)
         (self.root / 'deploy').mkdir()
-        (self.root / 'deploy/updater.py').write_bytes(b'# synthetic reviewed source\n')
+        (self.root / 'deploy/updater.py').write_bytes(b'# synthetic reviewed source\nUPDATER_PROTOCOL = 3\n')
 
     def package(self, *extra, version='1.0.0'):
         return subprocess.run(['node', str(ROOT / 'scripts/release-updater.mjs'), 'package-github', version,

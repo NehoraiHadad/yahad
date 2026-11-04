@@ -26,6 +26,9 @@ const worker = readFileSync(source);
 if (!info.isFile() || info.isSymbolicLink() || worker.length > 1024 * 1024 || worker.includes(13)) {
   throw new Error('Use the reviewed regular canonical-LF worker source, at most 1 MiB');
 }
+// The worker reports this number to the supervisor, which compares it with the manifest.
+const protocol = /^UPDATER_PROTOCOL = ([1-9][0-9]*)$/m.exec(worker.toString('utf8'))?.[1];
+if (!protocol) throw new Error('The worker source does not declare UPDATER_PROTOCOL');
 const dir = resolve(output);
 if (existsSync(dir)) throw new Error('Use a new empty updater output directory');
 mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -45,7 +48,7 @@ if (bytes.length > 2 * 1024 * 1024) throw new Error('Updater archive exceeds 2 M
 const manifest = Buffer.from(JSON.stringify({
   format: 1, kind: 'yachad-updater', version, archive: 'yachad-updater.zip', bytes: bytes.length,
   sha256: createHash('sha256').update(bytes).digest('hex'), supervisorProtocol: 1,
-  workerProtocol: 3, helperProtocol: 1, configFormat: 1, stateFormat: 1, appManifestFormats: [1, 2],
+  workerProtocol: Number(protocol), helperProtocol: 1, configFormat: 1, stateFormat: 1, appManifestFormats: [1, 2],
 }) + '\n');
 writeFileSync(join(dir, 'yachad-updater.json'), manifest, { mode: 0o600, flag: 'wx' });
 if (!github) writeFileSync(join(dir, 'yachad-updater.sig'), sign(null, manifest, key), { mode: 0o600, flag: 'wx' });

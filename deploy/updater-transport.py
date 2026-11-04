@@ -308,6 +308,14 @@ def eligible(supervisor, command, selected, now_ms, expected_intent=None):
     return None
 
 
+def app_settled(status, release, repository, runtime):
+    """The app already runs this exact target, or will not retry it with this runtime."""
+    version = release['tag_name'].lstrip('v')
+    return status.get('installTarget') == release_target(release, repository) and (
+        status.get('phase') in ('healthy', 'idle') and status.get('currentVersion') == version or
+        status.get('failedVersion') == version and status.get('failedRuntimeDigest') == runtime['sha256'])
+
+
 def finish(supervisor, checked_at, attempt, result, error=None, version=None):
     # A later serialized check owns the outcome. Never overwrite it after a slow
     # network response from an older attempt, even with equal wall-clock time.
@@ -361,16 +369,14 @@ def refresh(supervisor, command='run', *, fetch=download, now=time.time):
         selection = release_selection(raw, repository) if https else None
         if https and bound_install and release_target(selection['release'], repository) != supervisor.app_status().get('installTarget'):
             raise TransportError('target_changed')
-        # An already healthy exact app target and identical enrolled runtime need
-        # no archive downloads. This is only a scheduled no-op, never an install
+        # An exact app target the app has settled and an identical enrolled runtime
+        # need no archive downloads. This is only a scheduled no-op, never an install
         # authorization; any changed target/runtime retains full app preflight.
-        if https and command == 'run' and urls is not None:
+        if https and command == 'run':
             status = supervisor.app_status()
-            if (status.get('phase') in ('healthy', 'idle') and
-                    status.get('currentVersion') == selection['release']['tag_name'].lstrip('v') and
-                    status.get('installTarget') == release_target(selection['release'], repository)):
-                raw_runtime = fetch(urls[0], 8192)
-                if hashlib.sha256(raw_runtime).hexdigest() == before.get('manifestSha256'):
+            if app_settled(status, selection['release'], repository, before):
+                raw_runtime = None if urls is None else fetch(urls[0], 8192)
+                if raw_runtime is None or hashlib.sha256(raw_runtime).hexdigest() == before.get('manifestSha256'):
                     with supervisor.locked():
                         eligible(supervisor, command, selected, now()*1000, intent)
                         supervisor.require_quiet_app()
@@ -379,7 +385,7 @@ def refresh(supervisor, command='run', *, fetch=download, now=time.time):
                         previous = saved_status(supervisor)
                         if (journal['phase'] == 'stable' and journal['active'] == before and
                                 current_status == status and previous and previous['attempt'] == attempt):
-                            return save(supervisor, checked_at, attempt, 'unchanged', version=before['version'])
+                            return save(supervisor, checked_at, attempt, 'unavailable' if urls is None else 'unchanged', version=before['version'])
         if https: selection = preflight_app(selection, fetch)
         if urls is None:
             result = finish(supervisor, checked_at, attempt, 'unavailable')

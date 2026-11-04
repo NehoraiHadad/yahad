@@ -388,6 +388,39 @@ class GithubTransportTests(unittest.TestCase):
         self.assertNotIn('selection', result)
         self.assertEqual(self.calls, ['https://api.github.com/repos/NehoraiHadad/yahad/releases/latest', self.assets[2]['url']])
 
+    def failed_status(self, digest=None):
+        write(self.u.state / 'status.json', json_bytes(dict(phase='rolled_back', releaseTrust='github-https', installTarget=self.target,
+              currentVersion='0.5.0', latestVersion='0.6.0', failedVersion='0.6.0',
+              failedRuntimeDigest=digest or self.u.journal()['active']['sha256'])))
+
+    def test_failed_same_target_is_not_downloaded_again_by_the_timer(self):
+        self.refresh()
+        self.failed_status()
+        self.calls.clear()
+        result = t.refresh(self.u, fetch=self.fetch, now=lambda:23000)
+        self.assertEqual(result['result'], 'unchanged')
+        self.assertNotIn('selection', result)
+        self.assertEqual(self.calls, ['https://api.github.com/repos/NehoraiHadad/yahad/releases/latest', self.assets[2]['url']])
+
+    def test_failed_target_with_another_runtime_may_retry(self):
+        self.refresh()
+        self.failed_status('0' * 64)
+        self.calls.clear()
+        result = t.refresh(self.u, fetch=self.fetch, now=lambda:23000)
+        self.assertIn('selection', result)
+        self.assertIn(self.assets[1]['url'], self.calls)
+
+    def test_release_without_a_runtime_pair_is_not_downloaded_when_settled(self):
+        self.refresh()
+        self.release['assets'] = self.assets[:2]
+        write(self.u.state / 'status.json', json_bytes(dict(phase='healthy', releaseTrust='github-https',
+              installTarget=t.release_target(self.release, 'NehoraiHadad/yahad'), currentVersion='0.6.0', latestVersion='0.6.0')))
+        self.calls.clear()
+        result = t.refresh(self.u, fetch=self.fetch, now=lambda:23000)
+        self.assertEqual(result['result'], 'unavailable')
+        self.assertNotIn('selection', result)
+        self.assertEqual(self.calls, ['https://api.github.com/repos/NehoraiHadad/yahad/releases/latest'])
+
     def test_changed_target_does_not_skip_app_preflight(self):
         self.refresh()
         write(self.u.state / 'status.json', json_bytes(dict(phase='healthy', releaseTrust='github-https',

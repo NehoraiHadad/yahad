@@ -793,14 +793,6 @@ def assert_rollback(recorder, family, request, current, *, attempt_version, back
     return api
 
 
-def let_start_limit_window_pass():
-    # yachad.service allows 12 starts in 120s, and the updater does not reset that count. A crash loop takes up to 9
-    # during its 90s health wait and the rollback one more, so this script's quick restarts would use up the rest:
-    # the updater's next start is then refused and it stops at recovery_required, seen in runs 41803772941 and 41804602065.
-    started = int(show('yachad.service', 'ActiveEnterTimestampMonotonic')) / 1e6
-    time.sleep(max(0, started + 120 - time.monotonic()))
-
-
 def scenario_upgrade(recorder, github, candidates, build, family, api, database):
     version = build['version']
     schema = build['databaseSchema']
@@ -808,7 +800,6 @@ def scenario_upgrade(recorder, github, candidates, build, family, api, database)
     worker_digest = sha256(WORKER)
 
     with recorder.step('Broken candidate that dies before migrating: rollback from the baseline'):
-        let_start_limit_window_pass()
         github.publish(candidates / 'broken-crash', 'v0.5.90')
         target = discover(recorder, api, '0.5.90', 'crash')
         backups = len(list(BACKUPS.glob('yachad-*.backup')))
@@ -856,7 +847,6 @@ def scenario_upgrade(recorder, github, candidates, build, family, api, database)
 
     with recorder.step(f'Candidate failing /health/ready at the same schema: rollback to {version}'):
         database = read_database()
-        let_start_limit_window_pass()
         github.publish(candidates / 'broken-same-schema', 'v' + broken_same)
         target = discover(recorder, api, broken_same, 'same-schema')
         request, current = update_action(recorder, api, dict(action='install', target=target), 'same-schema')
@@ -914,7 +904,6 @@ def reach_the_pi_state(recorder, github, work):
     recorder.check(sha256(WORKER) == PI_UPDATER_SHA256, 'the root updater is the exact file the Pi runs')
     recorder.check(json.loads(CONFIG.read_bytes())['mode'] == 'auto', 'the updater is in auto mode, as on the Pi')
     publish_release(github, work, BASE)
-    let_start_limit_window_pass()
     # A fresh install has never checked, so the real timer may install this during the wait above. The run below then
     # finds nothing new and reports idle, which is what the Pi itself reports.
     current = as_the_timer_does(recorder, 'to-pi')
@@ -937,7 +926,6 @@ def scenario_pi(recorder, github, candidates, build, family, api, database):
     broken_same = build['brokenSameSchemaVersion']
 
     with recorder.step('Pi state, a crashing release arrives by itself: rollback, and no retry'):
-        let_start_limit_window_pass()
         github.publish(candidates / 'broken-crash', 'v0.5.90')
         backups = len(list(BACKUPS.glob('yachad-*.backup')))
         current = as_the_timer_does(recorder, 'crash')
@@ -948,7 +936,6 @@ def scenario_pi(recorder, github, candidates, build, family, api, database):
         assert_running(recorder, BASE_VERSION, BASE_SCHEMA)
 
     with recorder.step(f'Pi state, {version} arrives by itself: the real upgrade'):
-        let_start_limit_window_pass()
         github.publish(candidates / 'candidate', 'v' + version)
         begun = time.monotonic()
         current = as_the_timer_does(recorder, 'upgrade')
@@ -988,7 +975,6 @@ def scenario_pi(recorder, github, candidates, build, family, api, database):
 
     with recorder.step(f'Pi state, a broken release at the same schema arrives by itself: rollback to {version}'):
         database = read_database()
-        let_start_limit_window_pass()
         current = as_the_timer_does(recorder, 'same-schema')
         assert_scheduled_rollback(recorder, family, current, attempt_version=broken_same, back_to=version, schema=schema, before=database)
 
@@ -1140,7 +1126,6 @@ def scenario_pi_enrolled(recorder, github, candidates, build, family, api, datab
         recorder.check(code == 0 and 'ALREADY_CURRENT' in output, 'rerunning the bootstrap reports the completed enrollment', output[-2000:])
 
     with recorder.step(f'Enrolled, {version} with runtime {runtime} arrives on the timer'):
-        let_start_limit_window_pass()
         backups = len(list(BACKUPS.glob('yachad-*.backup')))
         github.publish(candidates / 'candidate', 'v' + version, updater=candidates / 'updater-candidate')
         begun = time.monotonic()
@@ -1165,7 +1150,6 @@ def scenario_pi_enrolled(recorder, github, candidates, build, family, api, datab
     with recorder.step(f'Enrolled in notify mode, the install button takes a broken release: rollback to {version} under the new runtime'):
         set_mode(recorder, api, 'notify')
         database = read_database()
-        let_start_limit_window_pass()
         github.publish(candidates / 'broken-same-schema', 'v' + broken_same, updater=candidates / 'updater-broken-same-schema')
         target = discover(recorder, api, broken_same, 'same-schema')
         request, current = update_action(recorder, api, dict(action='install', target=target), 'same-schema')
@@ -1236,7 +1220,6 @@ def scenario_fresh(recorder, github, candidates, build, family, api, database):
     launcher = hashlib.sha256(bootstrap_literal('LAUNCHER')).hexdigest()
 
     with recorder.step(f'{healthy} with runtime {runtime} arrives on the timer'):
-        let_start_limit_window_pass()
         backups = len(list(BACKUPS.glob('yachad-*.backup')))
         github.publish(package, 'v' + healthy, updater=pair)
         begun = time.monotonic()

@@ -214,6 +214,19 @@ class UpdaterTests(unittest.TestCase):
     def test_https_backup_failure_still_never_activates(self): self.lifecycle(fail_backup=True,https=True)
 
     @unittest.skipUnless(os.getuid()==0,'Root ownership recovery simulated in isolated temp tree only')
+    def test_start_clears_the_crash_loop_count_first_and_only_the_start_decides(self):
+        calls=[]
+        class Worker(u.Worker):
+            def __init__(self): self.c={'service':'yachad.service'}
+            def command(self,args,**_):
+                calls.append(args[1])
+                if args[1]==refused: raise u.UpdateError('internal')
+        refused='reset-failed'
+        Worker().start_service()
+        self.assertEqual(calls,['reset-failed','start'])
+        refused='start'
+        with self.assertRaises(u.UpdateError): Worker().start_service()
+
     def test_interrupted_maintenance_recovers(self):
         worker,effects=self.lifecycle()
         old=self.root/'releases/v0.1.0'
