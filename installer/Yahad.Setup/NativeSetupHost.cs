@@ -57,8 +57,8 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
             {
                 case "committed":
                     if(ReleaseManifest.Compare(version,state.Version)<0)throw new IOException("INSTALL_DOWNGRADE_REFUSED");
-                    // An installed release is changed only by removing it with
-                    // its data kept and installing the new one; never in place.
+                    // A newer Setup has already moved this installation (UpgradeHost), so this
+                    // is the same version built differently, which nothing can move between.
                     if(state.Version!=version||state.PackageDigest!=manifest.ZipSha256)throw new IOException("INSTALL_UPGRADE_REQUIRED");
                     service=NativeService.Open(version);updater=NativeService.Open(version,ServiceSpec.Updater);
                     InspectBinaries(Inventory(),true,true,"INSTALL_TARGET_CHANGED");existing=true;return;

@@ -288,7 +288,7 @@ def build(repo, payload_zip, runtime_host, updater, output):
     with tempfile.TemporaryDirectory(prefix='yahad-install-inputs-', dir=output) as scratch:
         prepared=Path(scratch)/'payload';verify_archive.verify(_unlinked(payload_zip,file=True),prepared,retain_manifest=True)
         application=(prepared/'bundle.json').read_bytes();manifest=_json(application)
-        validate_payload_source(repo,prepared,manifest,version,source,tracked)
+        schema,_=validate_payload_source(repo,prepared,manifest,version,source,tracked)
         # Platform is part of the verified application, not another caller input.
         validate_native(prepared/'app/native','Yahad.Platform',version,source,repo)
         host=validate_native(runtime_host,'Yahad.ServiceHost',version,source,repo)
@@ -305,7 +305,7 @@ def build(repo, payload_zip, runtime_host, updater, output):
         require_members(entries)
         archive=output/'install.zip';records=_write_archive(archive,entries,expected)
         saved=dict(Format=1,Version=version,SourceCommit=source,ZipSha256=bundle.digest(archive),
-                   PayloadDigest=_hash(application),Files=records)
+                   PayloadDigest=_hash(application),DatabaseSchema=schema,Files=records)
         metadata=_encode(saved)
         if len(metadata)>16*1024**2: raise PackageError('Installer manifest bound')
         host.require_unchanged();updates.require_unchanged()

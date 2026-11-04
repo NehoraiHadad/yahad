@@ -7,7 +7,7 @@ using Yahad.Install;
 namespace Yahad.Setup;
 
 internal sealed record InstallMember(string Path,long Size,string Sha256);
-internal sealed record InstallPackageManifest(int Format,string Version,string SourceCommit,string ZipSha256,string PayloadDigest,InstallMember[] Files);
+internal sealed record InstallPackageManifest(int Format,string Version,string SourceCommit,string ZipSha256,string PayloadDigest,int DatabaseSchema,InstallMember[] Files);
 // Where Extract writes: protected directories, protected files and a no-replace commit.
 internal sealed record ExtractTarget(Action<string> CreateDirectory,Func<string,FileStream> CreateFile,Action<string,string> Commit,Func<string,InstallMember,bool> ExistingMatches);
 // One Format-1 archive holding host/ (the service host), updater/ (the Updater
@@ -20,7 +20,7 @@ internal sealed class InstallPackage:IDisposable
     internal InstallPackage(Stream zip,byte[] manifest)
     {
         stream=zip;Manifest=NativeJson.Read<InstallPackageManifest>(manifest);
-        if(Manifest.Format!=Format||Manifest.Version!=ApplicationRelease.Version||!System.Text.RegularExpressions.Regex.IsMatch(Manifest.SourceCommit,"^[a-f0-9]{40}$")||Manifest.Files.Length is <10 or >50000)throw new IOException("PACKAGE_FORMAT");
+        if(Manifest.Format!=Format||Manifest.Version!=ApplicationRelease.Version||!System.Text.RegularExpressions.Regex.IsMatch(Manifest.SourceCommit,"^[a-f0-9]{40}$")||Manifest.DatabaseSchema is <1 or >1024||Manifest.Files.Length is <10 or >50000)throw new IOException("PACKAGE_FORMAT");
         if(Manifest.SourceCommit!=ApplicationRelease.SourceCommit)throw new IOException("PACKAGE_SOURCE");
         Digest(Manifest.ZipSha256);Digest(Manifest.PayloadDigest);
         if(!zip.CanSeek||zip.Length>2147483648||Convert.ToHexStringLower(SHA256.HashData(zip))!=Manifest.ZipSha256)throw new IOException("PACKAGE_HASH");zip.Position=0;

@@ -205,7 +205,7 @@ internal static class FullInstallerIntegrationTests
         if(extra is not null)names.Add(extra);if(omit is not null){names.Remove(omit);names.Add("payload/legal/other.json");}
         var stream=new MemoryStream();using(var zip=new ZipArchive(stream,ZipArchiveMode.Create,true))foreach(var name in names){using var entry=zip.CreateEntry(name).Open();entry.WriteByte(1);}
         var bytes=stream.ToArray();stream.Position=0;var sha=Hash([1]);
-        try{return new(stream,Json(new InstallPackageManifest(format,ApplicationRelease.Version,source??ApplicationRelease.SourceCommit,Hash(bytes),payloadDigest??sha,names.Select(n=>new InstallMember(n,1,sha)).ToArray())));}
+        try{return new(stream,Json(new InstallPackageManifest(format,ApplicationRelease.Version,source??ApplicationRelease.SourceCommit,Hash(bytes),payloadDigest??sha,1,names.Select(n=>new InstallMember(n,1,sha)).ToArray())));}
         catch{stream.Dispose();throw;}
     }
 }

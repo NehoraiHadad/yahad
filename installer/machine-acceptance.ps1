@@ -495,6 +495,11 @@ function RequireAccessBoundaries([string]$Version) {
     RunAccessProbe $sid ($installDirectories + $stateDirectories) $sealedFiles $writable (Join-Path $data ('.access-probe-result-' + [Guid]::NewGuid().ToString('N')))
 }
 function RequireRemovedServices { if ((YahadServices).Count) { throw ('Services remain after removal: ' + ((YahadServices).Name -join ',')) } }
+function RequireNothingLeft {
+    RequireRemovedServices
+    foreach ($path in $programData, $programFiles, $lanRoot, "$programFiles.lan-uninstall.json", (Join-Path $env:windir 'System32\Tasks\Yahad')) { if (Test-Path -LiteralPath $path) { throw "$path remains after removal" } }
+    RequireNoRepairTask
+}
 function Collect {
     @(YahadServices | ForEach-Object { [ordered]@{ Name=$_.Name; Status=[string]$_.Status; StartType=[string]$_.StartType; ImagePath=(Get-CimInstance -ClassName Win32_Service -Filter "Name='$($_.Name)'").PathName } }) | ConvertTo-Json | Set-Content -Encoding utf8NoBOM (Join-Path $out 'services.json')
     if (Test-Path -LiteralPath $upgradeState) { Copy-Item -LiteralPath $upgradeState -Destination (Join-Path $out 'upgrade-state.json') }
@@ -795,11 +800,38 @@ try {
         RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema @($upgradeRelease.version)
     }
     Phase 'uninstall' { RunSetup @('--quiet-uninstall', '--data', 'delete') (Join-Path $out 'uninstall-result.json') | Out-Null }
-    Phase 'removed' {
-        RequireRemovedServices
-        foreach ($path in $programData, $programFiles, $lanRoot, "$programFiles.lan-uninstall.json", (Join-Path $env:windir 'System32\Tasks\Yahad')) { if (Test-Path -LiteralPath $path) { throw "$path remains after removal" } }
-        RequireNoRepairTask
+    Phase 'removed' { RequireNothingLeft }
+    # What someone with an older release gets from the landing page: the downloaded Setup,
+    # run by hand, moves it in place. Its setup link expired meanwhile.
+    Phase 'setup-over-older' {
+        $older = RunSetup @('--quiet-install', '--updates', 'notify') (Join-Path $out 'older-install-result.json') @('--setup-link', 'stdout') $baseSetup
+        $script:origin = ([Uri]$older.Result.Url).GetLeftPart([UriPartial]::Authority)
+        $capability = Join-Path $programData 'Secrets\setup-capability.json'
+        Stop-Service -Name $runtime
+        $record = Get-Content -LiteralPath $capability -Raw | ConvertFrom-Json
+        $record.expiresAt = 1
+        [IO.File]::WriteAllBytes($capability, [Text.UTF8Encoding]::new($false).GetBytes(($record | ConvertTo-Json -Compress -Depth 5)))
+        Start-Service -Name $runtime
+        if ((SetupState) -ne 'closed') { throw 'An expired setup link still reports setup as open' }
+        $moved = RunSetup @('--quiet-install', '--updates', 'notify') (Join-Path $out 'setup-over-older-result.json') @('--setup-link', 'stdout') $upgradeSetup
+        if ((Health).version -ne $upgradeRelease.version) { throw "Setup over an older release left $((Health).version) running" }
+        if ((SetupState) -ne 'ready') { throw 'Setup over an older release did not reopen first-family setup' }
+        $match = [regex]::Match($moved.Stdout.Trim(), '^(http://127\.0\.0\.1:\d+/)#setup=([A-Za-z0-9_-]{43})$')
+        if (!$match.Success) { throw 'Setup over an older release did not hand back a setup link' }
+        if ($moved.Stdout.Trim() -eq $older.Stdout.Trim()) { throw 'Setup over an older release handed back the expired link' }
+        $suffix = [Guid]::NewGuid().ToString('N').Substring(0, 10)
+        $script:account = [pscustomobject]@{ Family="Acceptance family $suffix"; Name="acceptance-$suffix"; Password=[Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(24)) }
+        $body = Json @{ familyName=$account.Family; name=$account.Name; password=$account.Password; confirmation=$account.Password }
+        Invoke-RestMethod -Method Post -Uri "$origin/api/setup" -Body $body -ContentType 'application/json' -SessionVariable created -TimeoutSec 60 `
+            -Headers @{ Origin=$origin; 'X-Setup-Token'=$match.Groups[2].Value } | Out-Null
+        $script:familyId = RequireSignedInAccount $created
+        $older = $null; $moved = $null; $match = $null; $body = $null
+        RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema @($baseRelease.version, $upgradeRelease.version)
+        $null = RunSetupExpecting $baseSetup @('--quiet-install', '--updates', 'notify') (Join-Path $out 'refuse-older-setup-result.json') 'INSTALL_DOWNGRADE_REFUSED' 1
+        RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema @($baseRelease.version, $upgradeRelease.version)
     }
+    Phase 'uninstall-moved' { RunSetup @('--quiet-uninstall', '--data', 'delete') (Join-Path $out 'uninstall-moved-result.json') | Out-Null }
+    Phase 'removed-moved' { RequireNothingLeft }
     $state = 'Passed'
 }
 catch { $state = 'Failed'; Write-Output "FAILED $($_.Exception.Message)"; throw }
