@@ -58,7 +58,7 @@ internal static class InstallAclTests
         await check("what the service creates in its data it can modify and delete but not re-permission",()=>
         {
             var parent=PrivateSession.Create(Path.GetTempPath());var root=Path.Combine(parent,"data");var user=WindowsIdentity.GetCurrent().User!.Value;
-            NativeInstallFiles.NewDirectory(root,NativeInstallFiles.DataAcl(user).Replace("O:BA",$"O:{user}"));
+            NativeInstallFiles.NewDirectory(root,NativeInstallFiles.DataAcl(user).Replace("O:BA",$"O:{user}").Replace("(A;OICI;FA;;;BA)",""));
             var folder=Path.Combine(root,"folder");Directory.CreateDirectory(folder);var file=Path.Combine(folder,"file");File.WriteAllText(file,"first");File.AppendAllText(file,"second");
             foreach(var change in new Action[]{()=>{var security=new DirectoryInfo(folder).GetAccessControl();security.SetAccessRuleProtection(true,true);new DirectoryInfo(folder).SetAccessControl(security);},()=>{var security=new FileInfo(file).GetAccessControl();security.SetAccessRuleProtection(true,true);new FileInfo(file).SetAccessControl(security);}})
             {

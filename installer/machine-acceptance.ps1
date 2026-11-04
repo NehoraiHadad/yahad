@@ -391,7 +391,7 @@ try {
     Phase 'ready' {
         RequireInstalledAndReady $install.Result
         RequireServiceConfiguration
-        RequireAccessBoundaries $version
+        RequireAccessBoundaries $baseRelease.version
         if ((SetupState) -ne 'ready') { throw 'Fresh install does not offer first-family setup' }
     }
     $familyId = $null
