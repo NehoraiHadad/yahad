@@ -25,8 +25,12 @@ internal static class InstallAclTests
         var aces=acl.DiscretionaryAcl!.Cast<CommonAce>().ToArray();
         Require(aces.All(a=>a.AceQualifier==AceQualifier.AccessAllowed&&(a.AceFlags&(AceFlags.ObjectInherit|AceFlags.ContainerInherit))==(AceFlags.ObjectInherit|AceFlags.ContainerInherit)));
         // Only SYSTEM, Administrators and the one service: Users have no access at all.
-        Require(aces.Select(a=>a.SecurityIdentifier.Value).Order().SequenceEqual(new[]{"S-1-5-18","S-1-5-32-544",Service}.Order()));
-        return aces.Single(a=>a.SecurityIdentifier.Value==Service).AccessMask;
+        // An owner, when the ACL names one, gets exactly what the service gets.
+        const string OwnerRights="S-1-3-4";
+        Require(aces.Select(a=>a.SecurityIdentifier.Value).Where(sid=>sid!=OwnerRights).Order().SequenceEqual(new[]{"S-1-5-18","S-1-5-32-544",Service}.Order()));
+        var rights=aces.Single(a=>a.SecurityIdentifier.Value==Service).AccessMask;
+        Require(aces.Where(a=>a.SecurityIdentifier.Value==OwnerRights).All(a=>a.AccessMask==rights));
+        return rights;
     }
     internal static async Task RunAsync(Func<string,Func<Task>,Task> check)
     {
@@ -50,6 +54,18 @@ internal static class InstallAclTests
                 Require(rules.All(r=>r.IsInherited)&&rules.Any(r=>r.IdentityReference.Value==Service));
             }
             Directory.Delete(parent,true);return Task.CompletedTask;
+        });
+        await check("what the service creates in its data it can modify and delete but not re-permission",()=>
+        {
+            var parent=PrivateSession.Create(Path.GetTempPath());var root=Path.Combine(parent,"data");var user=WindowsIdentity.GetCurrent().User!.Value;
+            NativeInstallFiles.NewDirectory(root,NativeInstallFiles.DataAcl(user).Replace("O:BA",$"O:{user}"));
+            var folder=Path.Combine(root,"folder");Directory.CreateDirectory(folder);var file=Path.Combine(folder,"file");File.WriteAllText(file,"first");File.AppendAllText(file,"second");
+            foreach(var change in new Action[]{()=>{var security=new DirectoryInfo(folder).GetAccessControl();security.SetAccessRuleProtection(true,true);new DirectoryInfo(folder).SetAccessControl(security);},()=>{var security=new FileInfo(file).GetAccessControl();security.SetAccessRuleProtection(true,true);new FileInfo(file).SetAccessControl(security);}})
+            {
+                var refused=false;try{change();}catch(UnauthorizedAccessException){refused=true;}
+                Require(refused);
+            }
+            File.Delete(file);Directory.Delete(folder);Directory.Delete(parent,true);return Task.CompletedTask;
         });
         await check("a state root a user could have squatted in ProgramData is refused and Setup's own is accepted",()=>
         {

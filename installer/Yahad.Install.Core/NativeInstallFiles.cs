@@ -16,7 +16,9 @@ internal static class NativeInstallFiles
     // elevated code later trusts, so the service can never shape what they consume.
     internal static string InstallAcl(string serviceSid)=>Acl(serviceSid,"0x1200a9");
     // The service's own data, which it may modify. Users have no access to either.
-    internal static string DataAcl(string serviceSid)=>Acl(serviceSid,"0x1301bf");
+    // The service owns what it creates there, and an owner may rewrite the ACL unless an
+    // OWNER RIGHTS entry says otherwise, so one states what an owner gets here.
+    internal static string DataAcl(string serviceSid)=>Acl(serviceSid,"0x1301bf")+"(A;OICI;0x1301bf;;;OW)";
     private static string Acl(string serviceSid,string rights)=>$"O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;{rights};;;{serviceSid})";
     // Without an ACL the directory inherits from its parent. It never already exists.
     internal static void NewDirectory(string path,string? acl=null)
