@@ -105,6 +105,15 @@ Read-only review of `installer/` at branch `windows-install-acceptance` (2026-11
 7. Collapse the ACLs to two inherited ACLs and delete the role validators and the process/custody DACLs. Add an `icacls` assertion that the Runtime account can't write the install dir.
 8. Replace `NativeRecovery` with a plain SQLite backup/restore.
 
+### Status (2026-11-04)
+
+Steps 0-8 are done on `windows-install-acceptance`, each gated by machine acceptance. The last green run is 41785039763.
+
+- **Size:** product C# went from 20,687 to about 5,000 lines. The 3,500 estimate was low: shared code that several processes rely on is about 1,200 lines, not 400, and LAN and rollback account for most of the rest of the gap.
+- **Timings in that run (seconds):** install 42, start 1.1, upgrade 31, rollback 12.4, repair 12, resume after a killed Setup 12.7.
+- **Beyond the plan:** the LAN proxy runs from the release folder, so upgrades move it. The data ACL has an OWNER RIGHTS entry, so the Runtime cannot re-permission files it creates.
+- **Not verified:** the real UAC prompt and browser opening; the real LAN enable screen (CI places what it leaves); a download from a real signed GitHub release; repairing a service that failed to start, and repair moving the LAN proxy; a real Store outside the test suites. No release key exists yet, so builds refuse every upgrade until the maintainer creates one (`installer/README.md`).
+
 ### Risks accepted
 
 - **Updater runs as LocalSystem.** A parsing bug before signature verification could become a SYSTEM compromise. Mitigations: verify the signature over raw bytes first, HTTPS only, a small code surface. This is the same model as browser updaters.
