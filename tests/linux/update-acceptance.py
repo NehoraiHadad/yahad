@@ -717,6 +717,13 @@ def assert_rollback(recorder, family, request, current, *, attempt_version, back
     return api
 
 
+def let_start_limit_window_pass():
+    # yachad.service allows 12 starts in 120s. A crash loop takes up to 9 during the updater's 90s health wait
+    # and the rollback needs one more, which fits unless 3 more came just before: the install's own restarts do.
+    started = int(show('yachad.service', 'ActiveEnterTimestampMonotonic')) / 1e6
+    time.sleep(max(0, started + 120 - time.monotonic()))
+
+
 def scenario_upgrade(recorder, github, candidates, build, family, api, database):
     version = build['version']
     schema = build['databaseSchema']
@@ -724,6 +731,7 @@ def scenario_upgrade(recorder, github, candidates, build, family, api, database)
     worker_digest = sha256(WORKER)
 
     with recorder.step('Broken candidate that dies before migrating: rollback from the baseline'):
+        let_start_limit_window_pass()
         github.publish(candidates / 'broken-crash', 'v0.5.90')
         target = discover(recorder, api, '0.5.90', 'crash')
         backups = len(list(BACKUPS.glob('yachad-*.backup')))
