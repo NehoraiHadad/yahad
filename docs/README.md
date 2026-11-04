@@ -11,7 +11,7 @@ and [current validation limits](VALIDATION.md).
 | Back up application data | [Backup](BACKUP.md) |
 | Understand behavior | [Architecture](ARCHITECTURE.md), [connector](CONNECTOR.md), [messages](MESSAGE-COMPATIBILITY.md), [send outcomes](send-outcomes.md) |
 | Review update safety | [Updates](UPDATES.md), [transactions](NATIVE-PROTECTED-TRANSACTIONS.md), [schemas](SCHEMA-UPGRADES.md) |
-| Review Windows boundaries | [Service host](NATIVE-SERVICE-HOST.md), [runtime health](NATIVE-RUNTIME-HEALTH.md), [uninstall](../installer/UNINSTALL.md) |
+| Review Windows boundaries | [Service host](NATIVE-SERVICE-HOST.md), [installer architecture](installer-architecture-review.md), [uninstall](../installer/UNINSTALL.md) |
 | Redistribute binaries | [Distribution review](DISTRIBUTION-LICENSE-REVIEW.md), [version source](INSTALLER-VERSION-SOURCE.md) |
 
 Native PLAN, CHECKPOINT, HANDOFF, dated acceptance and evidence reports describe

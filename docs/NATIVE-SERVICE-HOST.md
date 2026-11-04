@@ -1,4 +1,4 @@
-> Historical account of checkpoint 2621ea6. The current installed entry and its remaining authority gates are described in [NATIVE-INSTALLED-ADMISSION.md](NATIVE-INSTALLED-ADMISSION.md).
+> Historical account of a removed design. The current installer, service and update design is in [installer-architecture-review.md](installer-architecture-review.md).
 
 # Native SCM host source checkpoint
 

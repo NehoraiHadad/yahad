@@ -2,15 +2,15 @@
 
 Latest private FFmpeg/Caddy and recovery checkpoint: [Private dependency and recovery checkpoint](NATIVE-DEPENDENCIES-CHECKPOINT.md).
 
-This increment adds an auditable Windows runtime **candidate**, native host/update contracts and an installer-only LAN planning window. It is not a complete installer, a registered service or a claim of successful tablet access. Previous evidence remains in `NATIVE-PORTABILITY.md`; the current checkpoint supersedes its dependency status.
+> The installer design this page assumed (a privileged Authority, recovery helpers, a C++ bootstrap and an installer LAN planning window) was removed. The current design is in [installer-architecture-review.md](installer-architecture-review.md); the runtime package contents and dependency supply status below still apply.
+
+This increment adds an auditable Windows runtime **candidate**. It is not a complete installer, a registered service or a claim of successful tablet access. Previous evidence remains in `NATIVE-PORTABILITY.md`; the current checkpoint supersedes its dependency status.
 
 ## Installation boundary
 
 Stage one installs private dependencies, provisions the reviewed service/data boundaries, starts the server, establishes web reachability and opens the existing web app. Stage two is the existing web UI for parent/child setup, WhatsApp QR and chat permissions. It is not recreated in WPF. Existing families go to normal login.
 
-`WebHandoff` consumes the existing `complete`/`ready`/`closed` states from `/api/setup/status`. Existing families discard any obsolete capability; fresh setup uses the existing short-lived `/#setup=...` fragment. The token is excluded from object serialization and diagnostic string output. Closed/expired setup never silently creates a new family. Only configured loopback or private-LAN HTTPS origins are accepted. This is a tested contract, not a wired transport: the eventual service-to-owner capability channel still needs authenticated, owner-only IPC. Do not relax the existing administrator-owned/read-only bootstrap ACL to make the UI read it.
 
-`LanPlanWindow` enumerates current private IPv4 adapters read-only, requires explicit selection, explains changing IPs and per-device local-CA trust, and saves only an `ActionsAuthorized=false` plan. It makes no firewall, CA, DNS, service or router changes. Host health and observed second-device reachability are distinct; a completed network installation requires the latter and confirmed trust. Child entry is an optional end-to-end integration check through the existing web UI. The window does not generate an active link/QR, claim a stable hostname or report successful reachability. A reliable GUI launch route remains unavailable, so this screen is compiled but has not been visually inspected.
 
 Managed DNS-01 certificates remain an unselected future provider; no domain, DNS credentials, tunnel or infrastructure was created. Internet access is disabled. Local CA trust cannot silently extend to tablets. The future execution consent must identify the exact program, TCP 443, Private profile and LocalSubnet scope and handle a port/address change without disturbing unrelated listeners.
 
@@ -30,11 +30,7 @@ The `full` content contract requires Node 24, the prebuilt server bundle (`app/s
 
 ## Native host/update ownership
 
-`AppLifecycle` serializes lifecycle transitions with a bounded deadline. `IPrivateAppLauncher` owns a validated private executable and contained app session; `IAppRecoveryBarrier` must allow every start. Graceful root exit with code zero plus a fully empty contained process tree are required before an internal `QuiescentApp` grant reaches the sole `IAppUpdateAuthority`.
-
-`JobProcess.WaitForTreeEmptyAsync` uses the retained native Job Object accounting handle, not PID scanning. Tests demonstrate that an exited root with a living child cannot pass this barrier. A cancelled/stuck/unclean shutdown cannot activate an update. Uncertain activation or failed new health leaves recovery required; the host does not automatically restart the old payload or restore/overwrite a database after a possible schema write.
-
-These are interfaces/controller and tested native process primitives, **not concrete production SCM/updater/recovery adapters**. The future updater must preserve policy/pins, durable journals, backups and recovery barriers. The installer owns bootstrap/host; the updater owns versioned payloads. No second update authority was added.
+Removed. The lifecycle, update and recovery machinery this section described (`IAppRecoveryBarrier`, `IAppUpdateAuthority`, the Authority and recovery services) no longer exists. Updates are now installed by `Setup --quiet-upgrade`, launched by the `Yahad.Updater` service, with a health-checked rollback; see [installer-architecture-review.md](installer-architecture-review.md) §3 and its status section.
 
 Quota integration is coordinated separately. The latest parent update targets **schema 5**, commit `d5f787fe1a924a0689541abed1a24c6c185dd004`; the parent reports independent Linux validation passed (305 JavaScript tests, typecheck/build, migrations 1/2/3/4 to 5 and 365 Python tests, with 57 root-gated skips). This branch makes no quota/store/schema/recovery edits. Its runtime test reads the recorded build schema instead of hardcoding a number. The two branches' independent Windows ChatCelebration filename fixes must be deduplicated at integration.
 
@@ -46,7 +42,7 @@ Quota integration is coordinated separately. The latest parent update targets **
 | .NET helper | Complete private 10.0.14 runtime folder, dependency manifest and PE audit; actual app uses it | Servicing policy, protected service payload/identity and clean supported OS acceptance |
 | Caddy | Official v2.11.7 archive SHA256 matched release API; SHA512 matched official checksums; extracted and PE-inspected without execution | Bundle integration, TLS config with trust auto-install disabled, explicit consent, network/trust/reboot acceptance |
 | ffmpeg | Full-candidate input/provenance/legal contract and failure tests | A verified Windows build from official source plus required libopus/codec features, licenses/source/relink information and media tests |
-| Python/OpenSSL | Windows production replacement interfaces remain incomplete; Linux candidate explicitly inventories them | Windows updater/recovery adapters; Linux app-private runtime/ABI integration and real amd64/Pi arm64 acceptance |
+| Python/OpenSSL | Windows production replacement interfaces remain incomplete; Linux candidate explicitly inventories them | Windows updater (see the architecture review); Linux app-private runtime/ABI integration and real amd64/Pi arm64 acceptance |
 
 The source app currently invokes ffmpeg for voice-to-Opus conversion and JPEG previews (`src/media.ts`). This is local media processing. FFmpeg publishes source and links community Windows builders; those are not FFmpeg-published binaries. Under the delegated official-source restriction, no community build or unrelated installed Gyan binary was repackaged. This host lacks a Windows C++ build toolchain; no compiler, MSYS, machine runtime or global dependency was installed to fill that gap. Full production packaging remains incomplete and fails closed when ffmpeg is absent.
 
@@ -54,6 +50,6 @@ The observed Caddy checksum file uses SHA512. An initial comparison using SHA256
 
 ## Remaining acceptance
 
-Clean supported Windows x64 with no runtimes; SCM before login and dedicated identity; authenticated host/UI IPC; private environment/handle inheritance and full descendant cleanup; updater/backup/recovery with schema 5 coordination; cancellation/reboot resume; offline/disk-full/AV-lock failures; data-preserving uninstall/reinstall; LAN/TLS/second-device access; and actual UI/RTL/resizing remain required. Linux amd64 and Pi arm64 each need real runtime and install acceptance; no general distro or Windows ARM64 promise is made. No deployment, signing purchase/key enrollment, live service, firewall/CA mutation or current-release change was performed.
+Clean supported Windows x64 with no runtimes; SCM before login and dedicated identity; private environment/handle inheritance and full descendant cleanup; updater upgrade/rollback acceptance; cancellation/reboot resume; offline/disk-full/AV-lock failures; data-preserving uninstall/reinstall; LAN/TLS/second-device access; and actual UI/RTL/resizing remain required. Linux amd64 and Pi arm64 each need real runtime and install acceptance; no general distro or Windows ARM64 promise is made. No deployment, signing purchase/key enrollment, live service, firewall/CA mutation or current-release change was performed.
 
 Primary references: [PE format](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format), [Job Object query](https://learn.microsoft.com/en-us/windows/win32/api/jobapi2/nf-jobapi2-queryinformationjobobject), [active process accounting](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_accounting_information), [Windows BCryptPrimitives contract](https://learn.microsoft.com/en-us/windows/win32/seccng/processprng), [Node addon loading](https://github.com/nodejs/node-gyp/blob/main/src/win_delay_load_hook.cc), [FFmpeg distribution sources](https://ffmpeg.org/download.html), [FFmpeg licensing](https://ffmpeg.org/legal.html), [Caddy installation](https://caddyserver.com/docs/install), [Caddy signature verification](https://caddyserver.com/docs/signature-verification).
