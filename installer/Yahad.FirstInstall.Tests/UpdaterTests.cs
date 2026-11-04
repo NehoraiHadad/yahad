@@ -363,6 +363,17 @@ internal static class UpdaterTests
             // No server: a clean reason after the connect bound, and nothing listening is trusted.
             await DenyAsync("PIPE_CONNECT:1460",()=>UpdaterClient.AskAsync("yahad-updater-test-"+Guid.NewGuid().ToString("N"),_=>throw new Exception("VERIFIED_NOTHING"),new(1,"status"),stop.Token));
         });
+        await check("updater: a fresh process identifies a client at Identification level, which can open no file",async()=>
+        {
+            var name="yahad-updater-test-"+Guid.NewGuid().ToString("N");using var stop=new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            using var probe=System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath!,["--updater-pipe-probe",name,WindowsIdentity.GetCurrent().User!.Value]){RedirectStandardOutput=true,UseShellExecute=false})!;
+            try
+            {
+                Assert(await probe.StandardOutput.ReadLineAsync(stop.Token)=="READY","the probe did not start");
+                Assert(await UpdaterClient.AskAsync(name,_=>{},new(1,"status"),stop.Token) is {Ok:true,Code:"PROBE"},"probe reply");
+            }
+            finally{probe.Kill();await probe.WaitForExitAsync(CancellationToken.None);}
+        });
         await check("platform: replies carry exactly what the app's status schema reads, and a refusal for anything else",async()=>
         {
             UpdaterOperator Owner()=>new("family","user");

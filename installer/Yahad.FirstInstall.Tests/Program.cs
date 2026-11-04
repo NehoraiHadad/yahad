@@ -12,6 +12,8 @@ using Yahad.Install;
 using Yahad.Service;
 using Yahad.Setup;
 
+if(args is ["--updater-pipe-probe",var probePipe,var probeAllowed])return await UpdaterPipeProbe.RunAsync(probePipe,probeAllowed);
+
 await using var storeCompilerLifetime=StoreFixtureModules.OwnInvocation();
 
 if(args is ["--packaged-native-start-only",var preparedRuntime,var startupReport])
