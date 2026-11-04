@@ -80,26 +80,45 @@ a Setup installs normally and refuses every upgrade; `--verify-package` reports
 `"releaseKeyId":null` and `"upgrades":"refused: built without a release key"`,
 and `package.ps1` prints a warning.
 
-One-time, on the maintainer's PC (the tool refuses a directory inside a checkout):
+Maintainer runbook. The key stays on this PC: no GitHub secret, no Authenticode
+certificate (Windows SmartScreen warns on the first install; that is accepted).
 
-```powershell
-node scripts/windows-release-key.mjs keygen C:/Users/<you>/yahad-release-key
-```
+1. **Once: create the key** outside any checkout (the tool refuses a directory inside one):
 
-Back up `key.pem` offline. Losing it means existing installations can never be
-upgraded again, and anyone holding it can sign their upgrades. `key.spki` is the
-public half. Pass it to every release build:
+   ```powershell
+   node scripts/windows-release-key.mjs keygen C:/Users/<you>/yahad-release-key
+   ```
 
-```powershell
-./installer/package.ps1 @inputs -ReleaseKey C:/Users/<you>/yahad-release-key/key.spki
-```
+   Back up `key.pem` in a password manager. Losing it means existing installations
+   can never be upgraded again, and anyone holding it can sign their upgrades.
+2. **Once: commit the public half**, `key.spki` (91 bytes), as `installer/release-key.spki`.
+   It is public. Until it is committed, `release-windows.mjs` refuses to run.
+3. **Each release**: bump `version` in package.json, commit, push, then work from a
+   clean checkout of that commit (`package.ps1` refuses a leftover
+   `installer/artifacts/Yahad.Platform.Bundle`; a fresh clone with `npm ci` is clean):
 
-This writes `<output>/release/` with the manifest and `Yahad.Setup-<version>.exe`,
-and prints the path. Signing is then one local command:
+   ```powershell
+   node scripts/release-windows.mjs C:/Users/<you>/yahad-release-key/key.pem --out C:/Users/<you>/yahad-release-1.2.3
+   ```
 
-```powershell
-node scripts/windows-release-key.mjs sign C:/Users/<you>/yahad-release-key/key.pem <output>/release/yahad-windows-<version>.json
-```
+   It builds with `installer/package.ps1 -ReleaseKey installer/release-key.spki` (the
+   same script CI runs), signs with `windows-release-key.mjs sign`, verifies the
+   signature against the committed key, and writes `<out>/assets/` with
+   `yahad-windows-<version>.json`, `.json.sig` and `Yahad.Setup-<version>.exe`.
+   Input paths default to `.local/` (see `--node-dir`, `--dotnet`, `--npm-cache`,
+   `--vendors`, `--package-cache`, `--python`, `--pwsh`).
+   It refuses when `installer/release-key.spki` is not committed, the key file is not
+   its private half, the working tree is dirty, the key path is inside a checkout, or
+   the built package trusts a different key. It never publishes.
+4. **Publish by hand**: the command ends by printing the exact `gh release create v<version> ...`
+   line (tag `v<version>`, the three assets, `--target` the built commit). Review the
+   assets, then run it. The release must be a normal one: the Updater ignores drafts
+   and prereleases and follows GitHub's "latest".
+
+The lower-level steps the command wraps, for reference:
+`./installer/package.ps1 @inputs -ReleaseKey <key.spki>` writes `<output>/release/`
+with the unsigned manifest and `Yahad.Setup-<version>.exe`, and
+`node scripts/windows-release-key.mjs sign <key.pem> <manifest>` writes `<manifest>.sig`.
 
 Installation writes the build's key to `%ProgramFiles%\Yahad.FirstInstall\release-key.spki`,
 and that file is the trust root from then on. A machine installed from a keyless

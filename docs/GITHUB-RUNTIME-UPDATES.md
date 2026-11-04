@@ -240,3 +240,31 @@ artifact with runtime 1.0.1; never replace the already published 1.0.0 archive.
 The runtime now records a worker-liveness heartbeat on scheduled deferred/no-op
 transport results, preserving app `checkedAt` and its existing outcome. This
 keeps parent controls usable after 24 hours without claiming a new app preflight.
+
+## Windows installations
+
+Windows does not use the HTTPS-trust profile above. It has its own signed channel,
+checked by `Yahad.Updater` (a service of the native installer).
+
+- **Release.** The maintainer builds and signs locally with
+  `node scripts/release-windows.mjs <key.pem> --out <dir>` and publishes by hand
+  (runbook: [installer/README.md](../installer/README.md#release-signing)). The
+  private key stays on the maintainer's PC: no GitHub secret, no Authenticode
+  certificate. A stable release `v<version>` carries `yahad-windows-<version>.json`,
+  `yahad-windows-<version>.json.sig` and `Yahad.Setup-<version>.exe`.
+- **Discovery.** The Updater reads only GitHub's `/releases/latest` for the fixed
+  repository (`NehoraiHadad/yahad`); drafts, prereleases and non-newer versions are ignored.
+- **Verification.** The ECDSA P-256 signature is checked over a fixed prefix plus the
+  **raw manifest bytes** with the installed key before the manifest is parsed. Then
+  the strict parse, the key id, the version order and the minimum-from-version and
+  database-schema rules. The Setup is downloaded only up to the signed size and
+  accepted only if its SHA-256 matches.
+- **Upgrade.** Setup runs `--quiet-upgrade`, with no prompt. The database is migrated
+  as the app starts; the application health check decides whether the release stays.
+- **Rollback.** If the new version does not become healthy, the previous version and
+  its pre-upgrade data are restored automatically.
+- **Fail closed.** The trusted key is the one installed at
+  `%ProgramFiles%\Yahad.FirstInstallelease-key.spki`, and the running Setup must carry
+  the same one. A build without a key installs but refuses every upgrade; a missing,
+  foreign, unsigned or tampered signature is refused and nothing falls back to HTTPS trust.
+  Losing the private key means installed machines can only be reinstalled, not upgraded.
