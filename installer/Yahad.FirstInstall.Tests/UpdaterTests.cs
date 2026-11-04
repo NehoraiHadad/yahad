@@ -115,7 +115,7 @@ internal static class UpdaterTests
         public void Register(string name,Func<uint,uint> handler)=>Handler=handler;
         public void Publish(ServiceReport report)=>Reports.Add(report);
     }
-    private static UpdaterStatus SampleStatus()=>new(true,"notify","available","1.0.0","9.9.9",new("9.9.9",new string('f',64)),5,6,null,new(Id(),"check","succeeded",1,2,null,null),new(Id(),"auto","applied"));
+    private static UpdaterStatus SampleStatus()=>new(true,"notify","available","1.0.0","9.9.9",new("9.9.9",new string('f',64)),5,6,null,new(Id(),"install","succeeded",1,2,null,new("9.9.9",new string('f',64))),new(Id(),"auto","applied"));
 
     internal static async Task RunAsync(Func<string,Func<Task>,Task> check)
     {
@@ -167,6 +167,10 @@ internal static class UpdaterTests
             await DenyAsync("UPDATER_FRAME",()=>UpdaterProtocol.WriteAsync(new MemoryStream(),new UpdaterRequest(1,new string('x',UpdaterProtocol.MaximumFrame)),default));
             var round=new MemoryStream();await UpdaterProtocol.WriteAsync(round,new UpdaterRequest(1,"status"),default);round.Position=0;
             Assert((await UpdaterProtocol.ReadAsync<UpdaterRequest>(round,default)).Op=="status","round trip");
+            // The deepest reply there is: what every status says after the first install.
+            var fullest=new UpdaterReply(1,true,Status:SampleStatus());var deep=new MemoryStream();await UpdaterProtocol.WriteAsync(deep,fullest,default);deep.Position=0;
+            var deepReply=await UpdaterProtocol.ReadAsync<UpdaterReply>(deep,default);
+            Assert(deepReply.Status?.LastRequest?.Target==fullest.Status!.LastRequest!.Target&&deepReply.Status!.InstallTarget==fullest.Status.InstallTarget,"the deepest reply");
             Assert(UpdaterProtocol.IsId(Id())&&!UpdaterProtocol.IsId(null)&&!UpdaterProtocol.IsId(Id().ToUpperInvariant())&&!UpdaterProtocol.IsId("x"),"id shape");
             Assert(UpdaterProtocol.IsFingerprint(new string('a',64))&&!UpdaterProtocol.IsFingerprint(new string('A',64))&&!UpdaterProtocol.IsFingerprint(new string('a',64)+"\n"),"fingerprint shape");
         });
@@ -342,7 +346,8 @@ internal static class UpdaterTests
             var me=WindowsIdentity.GetCurrent().User!;var descriptor=$"D:P(A;;GA;;;{me.Value})";var handled=0;
             UpdaterReply Handle(UpdaterRequest request){Interlocked.Increment(ref handled);return new(1,true,Status:SampleStatus());}
             var name="yahad-updater-test-"+Guid.NewGuid().ToString("N");using var stop=new CancellationTokenSource(TimeSpan.FromSeconds(60));
-            using var end=CancellationTokenSource.CreateLinkedTokenSource(stop.Token);var server=new UpdaterPipe(name,me,descriptor,Handle).RunAsync(end.Token);
+            var reports=0;void Report(Exception error)=>Interlocked.Increment(ref reports);
+            using var end=CancellationTokenSource.CreateLinkedTokenSource(stop.Token);var server=new UpdaterPipe(name,me,descriptor,Handle,Report).RunAsync(end.Token);
             uint seen=0;var reply=await UpdaterClient.AskAsync(name,process=>seen=process,new(1,"status"),stop.Token);
             Assert(reply.Ok&&reply.Status==SampleStatus() with{LastRequest=reply.Status!.LastRequest,LastModeRequest=reply.Status.LastModeRequest,InstallTarget=reply.Status.InstallTarget}&&seen==(uint)Environment.ProcessId,"round trip");
             // The client refuses a server it cannot verify before sending a byte.
@@ -351,17 +356,29 @@ internal static class UpdaterTests
             // Oversized and garbage frames: the server drops them and stays up.
             foreach(var frame in new byte[][]{BitConverter.GetBytes(int.MaxValue),[..BitConverter.GetBytes(3),1,2,3]})
             {await using var raw=new NamedPipeClientStream(".",name,PipeDirection.InOut,PipeOptions.Asynchronous);await raw.ConnectAsync(3000,stop.Token);await raw.WriteAsync(frame,stop.Token);await raw.FlushAsync(stop.Token);try{Assert(await raw.ReadAsync(new byte[1],stop.Token)==0,"a bad frame was answered");}catch(IOException){}}
-            Assert(handled==before,"a refused or malformed request reached the engine");
+            Assert(handled==before&&reports==0,"a refused or malformed request reached the engine, or counted as a failure of the service");
             Assert((await UpdaterClient.AskAsync(name,_=>{},new(1,"status"),stop.Token)).Ok,"the server did not survive");
             await end.CancelAsync();try{await server;}catch(OperationCanceledException){}
             // Admitted by the DACL but not the account the service expects: no reply.
             var strict="yahad-updater-test-"+Guid.NewGuid().ToString("N");handled=0;using var over=CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
-            var guarded=new UpdaterPipe(strict,new SecurityIdentifier(WellKnownSidType.LocalSystemSid,null),descriptor,Handle).RunAsync(over.Token);
+            var guarded=new UpdaterPipe(strict,new SecurityIdentifier(WellKnownSidType.LocalSystemSid,null),descriptor,Handle,Report).RunAsync(over.Token);
             try{await UpdaterClient.AskAsync(strict,_=>{},new(1,"status"),stop.Token);throw new Exception("PEER_NOT_REFUSED");}catch(UpdaterRefusal refusal)when(refusal.Message.StartsWith("EXCHANGE",StringComparison.Ordinal)){}
-            Assert(handled==0,"an unexpected account reached the engine");
+            Assert(handled==0&&reports==0,"an unexpected account reached the engine, or counted as a failure of the service");
             await over.CancelAsync();try{await guarded;}catch(OperationCanceledException){}
             // No server: a clean reason after the connect bound, and nothing listening is trusted.
             await DenyAsync("PIPE_CONNECT:1460",()=>UpdaterClient.AskAsync("yahad-updater-test-"+Guid.NewGuid().ToString("N"),_=>throw new Exception("VERIFIED_NOTHING"),new(1,"status"),stop.Token));
+        });
+        await check("updater: the service's own failure answers INTERNAL, is reported, and leaves it serving",async()=>
+        {
+            var me=WindowsIdentity.GetCurrent().User!;var name="yahad-updater-test-"+Guid.NewGuid().ToString("N");using var stop=new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            // Each is what the client could not tell from a refusal: IO kinds, one unforeseen, and a reply that cannot be framed.
+            var failures=new Queue<Func<UpdaterReply>>([()=>throw new IOException("X"),()=>throw new FileNotFoundException(),()=>throw new NotSupportedException(),()=>new(1,false,new string('x',UpdaterProtocol.MaximumFrame))]);
+            var count=failures.Count;var reported=new List<Exception>();
+            using var end=CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
+            var server=new UpdaterPipe(name,me,$"D:P(A;;GA;;;{me.Value})",_=>failures.TryDequeue(out var next)?next():new(1,true),reported.Add).RunAsync(end.Token);
+            for(var i=0;i<count;i++)Assert(await UpdaterClient.AskAsync(name,_=>{},new(1,"status"),stop.Token) is {Ok:false,Code:"INTERNAL"},"failure "+i);
+            Assert(reported.Count==count,"reported");Assert((await UpdaterClient.AskAsync(name,_=>{},new(1,"status"),stop.Token)).Ok,"the server did not survive");
+            await end.CancelAsync();try{await server;}catch(OperationCanceledException){}
         });
         await check("updater: a fresh process identifies a client at Identification level, which can open no file",async()=>
         {

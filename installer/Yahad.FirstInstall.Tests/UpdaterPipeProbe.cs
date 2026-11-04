@@ -10,7 +10,7 @@ internal static class UpdaterPipeProbe
     internal static async Task<int> RunAsync(string name,string allowed)
     {
         using var limit=new CancellationTokenSource(TimeSpan.FromSeconds(60));
-        var serving=new UpdaterPipe(name,new SecurityIdentifier(allowed),$"D:P(A;;GA;;;{allowed})",_=>new(1,true,"PROBE")).RunAsync(limit.Token);
+        var serving=new UpdaterPipe(name,new SecurityIdentifier(allowed),$"D:P(A;;GA;;;{allowed})",_=>new(1,true,"PROBE"),_=>{}).RunAsync(limit.Token);
         Console.WriteLine("READY");
         try{await serving;}catch(OperationCanceledException){}
         return 0;

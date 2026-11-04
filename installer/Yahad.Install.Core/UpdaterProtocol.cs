@@ -33,15 +33,19 @@ internal static class UpdaterProtocol
 {
     internal const string PipeName="Yahad.Updater",Auto="auto",Notify="notify";
     internal const int MaximumFrame=4096;
+    // Reply, status, last request, target: four objects, and the serializer refuses a
+    // value at the limit, so the values of the deepest one need a fifth level.
     internal static readonly JsonSerializerOptions Options=new()
-    {MaxDepth=4,PropertyNamingPolicy=JsonNamingPolicy.CamelCase,UnmappedMemberHandling=JsonUnmappedMemberHandling.Disallow,AllowDuplicateProperties=false};
+    {MaxDepth=5,PropertyNamingPolicy=JsonNamingPolicy.CamelCase,UnmappedMemberHandling=JsonUnmappedMemberHandling.Disallow,AllowDuplicateProperties=false};
     internal static bool IsId(string? value)=>value is not null&&Guid.TryParseExact(value,"D",out var id)&&id.ToString("D")==value;
     internal static bool IsFingerprint(string? value)=>value is not null&&Regex.IsMatch(value,@"\A[a-f0-9]{64}\z");
-    internal static async Task WriteAsync<T>(Stream stream,T value,CancellationToken cancellation)
+    internal static byte[] Frame<T>(T value)
     {
         var body=JsonSerializer.SerializeToUtf8Bytes(value,Options);if(body.Length>MaximumFrame)throw new IOException("UPDATER_FRAME");
-        await stream.WriteAsync((byte[])[..BitConverter.GetBytes(body.Length),..body],cancellation);await stream.FlushAsync(cancellation);
+        return [..BitConverter.GetBytes(body.Length),..body];
     }
+    internal static async Task WriteAsync<T>(Stream stream,T value,CancellationToken cancellation)
+    {await stream.WriteAsync(Frame(value),cancellation);await stream.FlushAsync(cancellation);}
     // The length is checked before anything is allocated, and the body is parsed
     // only once all of it arrived.
     internal static async Task<T> ReadAsync<T>(Stream stream,CancellationToken cancellation)

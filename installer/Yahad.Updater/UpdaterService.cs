@@ -41,7 +41,7 @@ internal sealed class UpdaterService(IScmApi scm,Func<Action,CancellationToken,T
             ()=>File.Exists(key)?NativeInstallFiles.ReadOwned(key,runtime.Value):null,TrustedReleaseKey.Embedded,source,UpdateLauncher.Launch,()=>DateTimeOffset.UtcNow);
         engine.Start(cancellation);
         using var linked=CancellationTokenSource.CreateLinkedTokenSource(cancellation);
-        var pipe=new UpdaterPipe(UpdaterProtocol.PipeName,runtime,$"D:P(A;;GA;;;SY)(A;;GRGW;;;{runtime.Value})",engine.Handle);
+        var pipe=new UpdaterPipe(UpdaterProtocol.PipeName,runtime,$"D:P(A;;GA;;;SY)(A;;GRGW;;;{runtime.Value})",engine.Handle,error=>ServiceStartupDiagnostic.TryRecord(StartupDiagnosticRole.Updater,error));
         var serving=pipe.RunAsync(linked.Token);ready();
         var scheduled=engine.RunScheduleAsync(linked.Token);
         // Either one ending means the service can no longer do its job.
