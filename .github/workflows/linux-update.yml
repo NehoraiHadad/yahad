@@ -1,0 +1,154 @@
+name: Linux update acceptance
+
+# Will the Pi upgrade cleanly from the published v0.5.3 to this commit, keeping its
+# data? Runs the updater and npm suites on arm64, then real acceptance as root with
+# real systemd: install v0.5.3 through its own deploy/install.py, create a family
+# through the API, and upgrade with the parent update button through the unmodified
+# deploy/updater.py (tests/linux/update-acceptance.py). The updater's GitHub is
+# stood in for on the runner, with a throwaway CA; it publishes nothing and holds no
+# real key or secret.
+on:
+  push:
+    branches: [main, windows-install-acceptance]
+    paths:
+      - 'src/**'
+      - 'web/**'
+      - 'deploy/**'
+      - 'installer/linux/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/linux-update.yml'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: linux-update-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  NODE_VERSION: v24.22.2
+  NODE_TARBALL_SHA256: eb187837a2230d4047161ac0be008584e16b46f726e9c9490ee35dc6b17d9ba8
+
+jobs:
+  suites:
+    # Standard runners are free only for public repositories; never spend minutes.
+    if: github.repository == 'NehoraiHadad/yahad' && github.event.repository.private == false
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Install pinned Node and system tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          curl -fsSL "https://nodejs.org/dist/$NODE_VERSION/node-$NODE_VERSION-linux-arm64.tar.xz" -o "$RUNNER_TEMP/node.tar.xz"
+          echo "$NODE_TARBALL_SHA256  $RUNNER_TEMP/node.tar.xz" | sha256sum --check --strict
+          sudo tar -xJf "$RUNNER_TEMP/node.tar.xz" -C /usr/local --strip-components=1 --no-same-owner
+          echo /usr/local/bin >> "$GITHUB_PATH"
+      - name: Install locked npm dependencies and build
+        run: |
+          test "$(node --version)" = "$NODE_VERSION"
+          npm ci --no-audit --no-fund
+          npm run build
+      - name: Python updater tests
+        run: |
+          mkdir -p "$RUNNER_TEMP/suites"
+          uname -m | grep -qx aarch64
+          npm run test:updater 2>&1 | tee "$RUNNER_TEMP/suites/updater.log"
+      - name: npm tests
+        if: success() || failure()
+        run: npm test 2>&1 | tee "$RUNNER_TEMP/suites/npm.log"
+      - name: Report results and skips
+        if: always()
+        run: |
+          {
+            echo '### Python updater tests'
+            echo '```'
+            grep -E '^(Ran [0-9]+ test|OK|FAILED)' "$RUNNER_TEMP/suites/updater.log" || echo 'No result line'
+            grep -E ' \.\.\. skipped ' "$RUNNER_TEMP/suites/updater.log" || echo 'No skipped tests'
+            echo '```'
+            echo '### npm tests'
+            echo '```'
+            grep -E '^(# |ℹ )(tests|pass|fail|skipped|todo) ' "$RUNNER_TEMP/suites/npm.log" || echo 'No result line'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep suite logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-suites-${{ github.sha }}
+          path: ${{ runner.temp }}/suites/
+          retention-days: 14
+          if-no-files-found: warn
+
+  acceptance:
+    # Standard runners are free only for public repositories; never spend minutes.
+    if: github.repository == 'NehoraiHadad/yahad' && github.event.repository.private == false
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # upgrade: crash rollback from v0.5.3, the real upgrade, same-schema rollback.
+        # migrated-failure: readiness fails after the migration committed. That one is
+        # terminal by design (recovery_required), so it needs its own machine.
+        scenario: [upgrade, migrated-failure]
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Install the Pi's prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg caddy
+          # The package's own service is not part of this installation.
+          sudo systemctl disable --now caddy.service
+          curl -fsSL "https://nodejs.org/dist/$NODE_VERSION/node-$NODE_VERSION-linux-arm64.tar.xz" -o "$RUNNER_TEMP/node.tar.xz"
+          echo "$NODE_TARBALL_SHA256  $RUNNER_TEMP/node.tar.xz" | sha256sum --check --strict
+          sudo tar -xJf "$RUNNER_TEMP/node.tar.xz" -C /usr/local --strip-components=1 --no-same-owner
+          test "$(/usr/local/bin/node --version)" = "$NODE_VERSION"
+      - name: Package the candidate and the broken variants
+        run: python3 tests/linux/update-acceptance.py package --output "$RUNNER_TEMP/candidates" --commit "$GITHUB_SHA"
+      - name: Real upgrade acceptance
+        run: |
+          sudo env -i PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin LANG=C.UTF-8 HOME=/root \
+            /usr/bin/python3 -I tests/linux/update-acceptance.py run --disposable \
+            --scenario "${{ matrix.scenario }}" --candidates "$RUNNER_TEMP/candidates" \
+            --output "$RUNNER_TEMP/acceptance" --commit "$GITHUB_SHA"
+      - name: Report the result
+        if: always()
+        run: |
+          summary="$RUNNER_TEMP/acceptance/summary.json"
+          test -f "$summary" || { echo 'No summary.json was written' >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+          jq -r '"### \(.scenario): \(.result) in \(.totalSeconds)s, \(.assertionsPassed) assertions passed",
+                 (.failure.message // empty),
+                 (.steps[] | "- \(if .ok then "ok" else "FAILED" end) \(.seconds)s: \(.name)")' "$summary" >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the summary and diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-update-${{ matrix.scenario }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/acceptance/
+            ${{ runner.temp }}/candidates/build.json
+          retention-days: 14
+          if-no-files-found: warn
