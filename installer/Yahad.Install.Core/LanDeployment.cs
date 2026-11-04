@@ -17,6 +17,9 @@ public sealed record LanFirewallRule(
     bool EdgeTraversal = false, string ServiceName = "")
 {
     public bool Matches(LanFirewallRule observed) => this == observed;
+    /// <summary>The same rule, for this release's program or the other release of an upgrade.</summary>
+    public bool MatchesEitherRelease(LanFirewallRule observed, string? otherProgram) =>
+        Matches(observed) || otherProgram is not null && this with { ApplicationName = otherProgram } == observed;
 }
 
 /// <summary>No plan is consent. The caller must obtain explicit owner consent and recheck the adapter before execution.</summary>

@@ -5,15 +5,19 @@
 #   the parent reads and changes update settings through app, Platform and the
 #   Updater's pipe -> restart the service and time it -> repair stopped services
 #   and a missing task -> the Repair task repairs as SYSTEM -> refuse foreign,
-#   unsigned and tampered releases -> the parent installs a signed staged release
+#   unsigned and tampered releases -> a home-network proxy is placed -> the parent installs a signed staged release
 #   with a schema change through the Updater, the ACLs proven again -> refuse a replay -> a broken release
-#   rolls both services back with the data restored -> an upgrade killed mid-way is
+#   rolls both services back with the data restored, leaving the paused proxy stopped -> an upgrade killed mid-way is
 #   undone by repair -> uninstall keeping data -> reinstall -> the same account signs
 #   in -> uninstall deleting data -> nothing remains.
 # Only the Updater's download from GitHub into its staging folder is not driven
 # here: GitHub carries no release signed by CI's throwaway key and the source URL is
 # fixed by design. The Updater's real check against GitHub does run; the download
 # path has unit tests in Yahad.FirstInstall.Tests.
+# Neither is the home-network enable itself, which only a person can start and whose
+# https origin would end this script's http session: PlaceLanProxy leaves what enable
+# leaves, a real service and real Caddy on a real address. The upgrade, rollback, repair
+# and uninstall that act on it are the product's own.
 # Changes services and machine folders, so it runs only on a disposable
 # administrator machine (CI), never a family PC. Diagnostics and summary.json
 # are written even on failure. The one-time setup link and the generated
@@ -44,6 +48,10 @@ $runtime = 'Yahad.Acceptance'
 $updater = 'Yahad.Acceptance.Updater'
 $installedServices = @($runtime, $updater)
 $runningServices = @($runtime, $updater)
+$lanService = 'Yahad.FirstInstall.Lan'
+$lanRoot = Join-Path $env:ProgramData $lanService
+$lanAddress = $null
+$lanRuleName = $null
 # Layout the installer no longer creates; each must stay absent.
 $removedProgramFilesEntries = @('payloads', 'bootstrap', 'system-slots', '.authority', 'intake')
 $removedProgramDataEntries = @('update-authority.json', 'activation.json', 'epoch.json', 'web.json', 'bootstrap.json')
@@ -210,6 +218,120 @@ function RequireSignedInAccount($Session) {
     if ($me.user.name -ne $account.Name -or $me.user.role -ne 'parent') { throw 'Signed-in account is not the acceptance parent' }
     return $me.user.familyId
 }
+function LanProxySid {
+    $match = [regex]::Match((& sc.exe showsid $lanService | Out-String), 'S-1-5-80(-\d+)+')
+    if (!$match.Success) { throw "sc.exe gave no service SID for $lanService" }
+    return $match.Value
+}
+function LanCaddy([string]$Version) { Join-Path $programFiles "versions\$Version\payload\runtime\caddy\caddy.exe" }
+function LanImage([string]$Version) { '"' + (Join-Path $programFiles "versions\$Version\host\Yahad.ServiceHost.exe") + '" --lan-service' }
+function LanRule {
+    foreach ($rule in (New-Object -ComObject HNetCfg.FwPolicy2).Rules) { if ($rule.Name -eq $lanRuleName) { return $rule } }
+}
+function NewLanDirectory([string]$Path, [string]$Descriptor) {
+    $security = [Security.AccessControl.DirectorySecurity]::new()
+    $security.SetSecurityDescriptorSddlForm($Descriptor)
+    [IO.FileSystemAclExtensions]::Create([IO.DirectoryInfo]::new($Path), $security)
+}
+# What a finished home-network enable leaves: the two ACLs of NativeLanInstall, its
+# records, LanDeployment's Caddyfile and firewall rule, and the service. A machine
+# without a private address fails here, naming what it has.
+function PlaceLanProxy([string]$Version) {
+    $adapters = @([Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() | Where-Object OperationalStatus -eq 'Up')
+    $choices = @(foreach ($adapter in $adapters) {
+        $properties = $adapter.GetIPProperties()
+        foreach ($unicast in $properties.UnicastAddresses) {
+            if ($unicast.Address.AddressFamily -eq 'InterNetwork') { [pscustomobject]@{ Id=$adapter.Id; Address=$unicast.Address.ToString(); Routed=$properties.GatewayAddresses.Count -gt 0 } }
+        }
+    })
+    $choice = $choices | Where-Object Address -match '^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)' | Sort-Object Routed -Descending | Select-Object -First 1
+    if (!$choice) { throw "No private IPv4 address on an adapter that is up: $(($choices | ForEach-Object Address) -join ',')" }
+    Write-Output ("LAN address={0} category={1}" -f $choice.Address, ((Get-NetConnectionProfile | ForEach-Object { "$($_.InterfaceAlias):$($_.NetworkCategory)" }) -join ','))
+    $script:lanAddress = $choice.Address
+    $installation = Get-Content -LiteralPath (Join-Path $programData 'installer-state.json') -Raw | ConvertFrom-Json
+    $script:lanRuleName = "Yahad.LAN.$($installation.InstallationId).TCP.443"
+
+    $sid = LanProxySid
+    $administrators = 'O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)'
+    $serviceData = "$administrators(A;OICI;0x1301bf;;;$sid)(A;OICI;0x1301bf;;;OW)"
+    NewLanDirectory $lanRoot "$administrators(A;OICI;0x1200a9;;;$sid)"
+    foreach ($name in 'data', 'temporary') { NewLanDirectory (Join-Path $lanRoot $name) $serviceData }
+    New-Item -ItemType Directory -Path (Join-Path $lanRoot 'join-public') | Out-Null
+    $records = @{
+        'proxy.json' = Json @{ AdapterId=$choice.Id; Address=$choice.Address }
+        'owner.json' = Json @{ Phase='enabled'; AdapterId=$choice.Id; Address=$choice.Address; HttpHelp=$false; RootSha256='' }
+        'Caddyfile' = @(
+            '{', '    admin off', '    persist_config off', '    skip_install_trust', '    auto_https disable_redirects',
+            '    log {', '        output discard', '    }',
+            '    storage file_system {', ('        root "' + (Join-Path $lanRoot 'data').Replace('\', '/') + '"'), '    }',
+            '    servers {', '        protocols h1 h2', '    }', '}',
+            "https://$($choice.Address) {", "    bind $($choice.Address)", '    tls internal',
+            '    @ownerOnly path /health /health/* /api/setup /api/setup/*', '    respond @ownerOnly 404',
+            "    reverse_proxy 127.0.0.1:$($installation.Port) {", '        flush_interval -1', '    }', '}', ''
+        ) -join "`n"
+    }
+    foreach ($name in $records.Keys) { [IO.File]::WriteAllText((Join-Path $lanRoot $name), $records[$name], [Text.UTF8Encoding]::new($false)) }
+
+    $rule = New-Object -ComObject HNetCfg.FWRule
+    $rule.Name = $lanRuleName
+    $rule.Description = "Yahad home network; installation $($installation.InstallationId); TCP 443"
+    $rule.Grouping = "Yahad.LAN.$($installation.InstallationId)"
+    $rule.ApplicationName = LanCaddy $Version
+    $rule.Protocol = 6
+    $rule.Direction = 1
+    $rule.LocalPorts = '443'
+    $rule.RemotePorts = '*'
+    $rule.LocalAddresses = $choice.Address
+    $rule.RemoteAddresses = 'LocalSubnet'
+    $rule.InterfaceTypes = 'All'
+    $rule.Profiles = 2
+    $rule.Action = 1
+    $rule.EdgeTraversal = $false
+    $rule.Enabled = $true
+    (New-Object -ComObject HNetCfg.FwPolicy2).Rules.Add($rule)
+
+    & sc.exe create $lanService binPath= (LanImage $Version) obj= "NT SERVICE\$lanService" start= delayed-auto type= own DisplayName= 'Yahad home network HTTPS' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "sc.exe create ended $LASTEXITCODE" }
+    & sc.exe sidtype $lanService unrestricted | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "sc.exe sidtype ended $LASTEXITCODE" }
+    & sc.exe privs $lanService SeChangeNotifyPrivilege | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "sc.exe privs ended $LASTEXITCODE" }
+    Start-Service -Name $lanService
+}
+function PauseLanProxy {
+    Stop-Service -Name $lanService
+    & sc.exe config $lanService start= demand | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "sc.exe config ended $LASTEXITCODE" }
+}
+function ResumeLanProxy {
+    & sc.exe config $lanService start= delayed-auto | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "sc.exe config ended $LASTEXITCODE" }
+    Start-Service -Name $lanService
+}
+# The proxy's service, its firewall rule and, when it should run, its two processes
+# and its HTTPS answer are all at this release.
+function RequireLanProxyAt([string]$Version, [bool]$Running) {
+    if ((ImagePathOf $lanService) -ne (LanImage $Version)) { throw "The proxy's ImagePath is $(ImagePathOf $lanService), expected version $Version" }
+    $rule = LanRule
+    if (!$rule) { throw 'The proxy has no firewall rule' }
+    if ($rule.ApplicationName -ne (LanCaddy $Version)) { throw "The firewall rule names $($rule.ApplicationName) for $($rule.LocalAddresses), expected version $Version" }
+    $service = Get-CimInstance -ClassName Win32_Service -Filter "Name='$lanService'"
+    if (!$Running) {
+        if ($service.State -ne 'Stopped') { throw "The proxy is $($service.State), expected Stopped" }
+        return
+    }
+    if ($service.State -ne 'Running') { throw "The proxy is $($service.State) at $Version, expected Running" }
+    $image = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$($service.ProcessId)"
+    $caddy = @(Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId=$($service.ProcessId) AND Name='caddy.exe'")
+    if ($image.ExecutablePath -ne (Join-Path $programFiles "versions\$Version\host\Yahad.ServiceHost.exe")) { throw "The proxy runs $($image.ExecutablePath), expected version $Version" }
+    if ($caddy.Count -ne 1 -or $caddy[0].ExecutablePath -ne (LanCaddy $Version)) { throw "Caddy runs $($caddy.ExecutablePath -join ','), expected version $Version" }
+    $deadline = [Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        try { $null = Invoke-WebRequest -Uri "https://$lanAddress/" -SkipCertificateCheck -SkipHttpErrorCheck -UseBasicParsing -TimeoutSec 5; break }
+        catch { if ($deadline.Elapsed -ge [TimeSpan]::FromMinutes(1)) { throw "The proxy does not answer on https://$lanAddress/ at ${Version}: $($_.Exception.Message)" } }
+        Start-Sleep -Seconds 1
+    }
+}
 $effectiveAccessSource = @'
 using System;
 using System.ComponentModel;
@@ -341,6 +463,7 @@ function RequireAccessBoundaries([string]$Version) {
     $stateDirectories = @($programData) + @($everything | Where-Object { $_.PSIsContainer -and !(& $inWritable $_.FullName) } | ForEach-Object FullName)
     $stateFiles = @($everything | Where-Object { !$_.PSIsContainer -and !(& $inWritable $_.FullName) } | ForEach-Object FullName)
     $installDirectories = @($programFiles, (Join-Path $programFiles 'versions'), $release, (Join-Path $release 'host'), (Join-Path $release 'updater'))
+    $proxyToken = @((LanProxySid), 'S-1-5-6', 'S-1-5-80-0', 'S-1-5-32-545', 'S-1-5-11', 'S-1-1-0')
 
     foreach ($path in @($installDirectories + (RetainedSetup $Version) + $stateDirectories + $stateFiles)) {
         try { $granted = EffectiveRights $path $runtimeToken } catch [Management.Automation.ItemNotFoundException] { continue }
@@ -355,6 +478,17 @@ function RequireAccessBoundaries([string]$Version) {
     foreach ($path in @($programData) + @($everything | ForEach-Object FullName)) {
         try { $granted = EffectiveRights $path $userToken } catch [Management.Automation.ItemNotFoundException] { continue }
         if ($granted -ne 0) { throw ('Users hold rights 0x{0:x} on {1}' -f $granted, $path) }
+    }
+
+    # The proxy's account reads the binary tree to run from it, and nothing of the state.
+    foreach ($path in @($installDirectories + (RetainedSetup $Version) + (LanCaddy $Version))) {
+        try { $granted = EffectiveRights $path $proxyToken } catch [Management.Automation.ItemNotFoundException] { continue }
+        if ($granted -band $anyChange) { throw ('The proxy account holds change rights 0x{0:x} on {1}' -f $granted, $path) }
+        if (!($granted -band 0x1)) { throw ('The proxy account cannot read {0}' -f $path) }
+    }
+    foreach ($path in @($programData) + @($everything | ForEach-Object FullName)) {
+        try { $granted = EffectiveRights $path $proxyToken } catch [Management.Automation.ItemNotFoundException] { continue }
+        if ($granted -ne 0) { throw ('The proxy account holds rights 0x{0:x} on {1}' -f $granted, $path) }
     }
 
     $sealedFiles = @((RetainedSetup $Version), (Join-Path $programData 'installer-state.json'), (Join-Path $programData 'installed.json'), (Join-Path $programData "datasets\$($state.DataId)\master-key"))
@@ -384,7 +518,7 @@ try {
         $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
         $policy = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
         Write-Output ("MACHINE os={0} admin={1} EnableLUA={2} ConsentPromptBehaviorAdmin={3}" -f [Environment]::OSVersion.Version, $principal.IsInRole('Administrators'), $policy.EnableLUA, $policy.ConsentPromptBehaviorAdmin)
-        if ((YahadServices).Count -or (Test-Path -LiteralPath $programData) -or (Test-Path -LiteralPath $programFiles)) { throw 'Machine is not clean: an existing Yahad installation is present' }
+        if ((YahadServices).Count -or (Test-Path -LiteralPath $programData) -or (Test-Path -LiteralPath $programFiles) -or (Test-Path -LiteralPath $lanRoot)) { throw 'Machine is not clean: an existing Yahad installation is present' }
     }
     $install = $null
     Phase 'install' { $script:install = RunSetup @('--quiet-install', '--updates', 'notify') (Join-Path $out 'install-result.json') @('--setup-link', 'stdout') }
@@ -506,6 +640,10 @@ try {
         $null = RunSetupExpecting $baseSetup @('--quiet-upgrade', $upgradeDirectory) (Join-Path $out 'refuse-mismatch-result.json') 'RELEASE_SETUP_MISMATCH' 2
         RequireInstalled $version $schema @($version)
     }
+    Phase 'lan-proxy' {
+        PlaceLanProxy $version
+        RequireLanProxyAt $version $true
+    }
     Phase 'upgrade' {
         # The Updater's own install path from the parent's click on. The release is
         # placed where the Updater's download would leave it (the staging folder only
@@ -558,20 +696,28 @@ try {
         $retained = (Get-FileHash -LiteralPath (RetainedSetup $upgradeRelease.version) -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($retained -ne $upgradeRelease.setup.sha256) { throw 'The retained Setup is not the signed one' }
         RequireAccessBoundaries $upgradeRelease.version
+        RequireLanProxyAt $upgradeRelease.version $true
     }
     Phase 'refuse-replay' {
         $null = RunSetupExpecting $baseSetup @('--quiet-upgrade', $baseDirectory) (Join-Path $out 'refuse-downgrade-result.json') 'RELEASE_NOT_NEWER' 2
         $null = RunSetupExpecting $upgradeSetup @('--quiet-upgrade', $upgradeDirectory) (Join-Path $out 'refuse-same-result.json') 'RELEASE_NOT_NEWER' 2
     }
     Phase 'broken-upgrade' {
+        # A paused proxy moves with the release and is not started by it.
+        PauseLanProxy
         $result = RunSetupExpecting $brokenSetup @('--quiet-upgrade', $brokenDirectory) (Join-Path $out 'broken-result.json') 'ROLLED_BACK_UNHEALTHY' 4
         if (!$result.RolledBack) { throw 'A broken release did not report its rollback' }
         $began = @($result.Phases | Where-Object Phase -eq 'rolling_back')
         if ($began.Count -ne 1) { throw 'The result does not show the rollback' }
         $script:rollbackSeconds = [math]::Round($result.Seconds - $began[0].Seconds, 1)
     }
-    Phase 'rolled-back' { RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema @($version, $upgradeRelease.version) }
+    Phase 'rolled-back' {
+        RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema @($version, $upgradeRelease.version)
+        RequireLanProxyAt $upgradeRelease.version $false
+    }
     Phase 'repair-resume' {
+        ResumeLanProxy
+        RequireLanProxyAt $upgradeRelease.version $true
         # A real kill, with no help from the product: the broken release has migrated
         # the database and is failing health when its Setup disappears.
         $killed = Start-Process -FilePath $brokenSetup -ArgumentList @('--quiet-upgrade', ('"' + $brokenDirectory + '"'), '--result', ('"' + (Join-Path $out 'killed-result.json') + '"')) -PassThru -WindowStyle Hidden
@@ -602,7 +748,10 @@ try {
         if (!$result.RolledBack) { throw 'Repair did not roll back the interrupted upgrade' }
         $script:resumeSeconds = $result.Seconds
     }
-    Phase 'resumed' { RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema @($version, $upgradeRelease.version) }
+    Phase 'resumed' {
+        RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema @($version, $upgradeRelease.version)
+        RequireLanProxyAt $upgradeRelease.version $true
+    }
     # Removal and reinstall from here belong to the upgraded release.
     $setupPath = $upgradeSetup
     Phase 'uninstall-keep' {
@@ -616,6 +765,10 @@ try {
         RequireNoRepairTask
         if (!(Test-Path -LiteralPath (Join-Path $updaterRoot 'state.json'))) { throw 'A keep-data uninstall lost the update mode' }
         if (Test-Path -LiteralPath (Join-Path $updaterRoot 'staging')) { throw 'A keep-data uninstall kept downloaded releases' }
+        if (LanRule) { throw 'A keep-data uninstall left the firewall rule' }
+        if (!(Test-Path -LiteralPath (Join-Path $lanRoot 'data'))) { throw 'A keep-data uninstall lost the home-network authority' }
+        if ((Get-Content -LiteralPath (Join-Path $lanRoot 'owner.json') -Raw | ConvertFrom-Json).Phase -ne 'disabled') { throw 'A keep-data uninstall left the home network enabled' }
+        if (Test-Path -LiteralPath "$programFiles.lan-uninstall.json") { throw 'The home-network removal receipt remains' }
     }
     $reinstall = $null
     Phase 'reinstall' { $script:reinstall = RunSetup @('--quiet-install', '--updates', 'notify') (Join-Path $out 'reinstall-result.json') @('--setup-link', 'stdout') }
@@ -629,7 +782,7 @@ try {
     Phase 'uninstall' { RunSetup @('--quiet-uninstall', '--data', 'delete') (Join-Path $out 'uninstall-result.json') | Out-Null }
     Phase 'removed' {
         RequireRemovedServices
-        foreach ($path in $programData, $programFiles, (Join-Path $env:windir 'System32\Tasks\Yahad')) { if (Test-Path -LiteralPath $path) { throw "$path remains after removal" } }
+        foreach ($path in $programData, $programFiles, $lanRoot, "$programFiles.lan-uninstall.json", (Join-Path $env:windir 'System32\Tasks\Yahad')) { if (Test-Path -LiteralPath $path) { throw "$path remains after removal" } }
         RequireNoRepairTask
     }
     $state = 'Passed'

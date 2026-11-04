@@ -25,9 +25,30 @@ internal static class NativeLanFirewall
         if(interfaces is not null && (interfaces is not Array list||list.Length!=0))throw new IOException("LAN_FIREWALL_CHANGED");
         if((int)rule.EdgeTraversalOptions!=0)throw new IOException("LAN_FIREWALL_CHANGED");
         return new((string)rule.Name,(string)rule.Description,(string)rule.Grouping,
-            (string)rule.ApplicationName,(string)rule.LocalAddresses,(string)rule.LocalPorts,(string)rule.RemoteAddresses,
+            (string)rule.ApplicationName,SingleAddress((string)rule.LocalAddresses),(string)rule.LocalPorts,(string)rule.RemoteAddresses,
             (string)rule.RemotePorts,(string)rule.InterfaceTypes,(int)rule.Profiles,(int)rule.Protocol,(int)rule.Direction,
             (int)rule.Action,(bool)rule.Enabled,(bool)rule.EdgeTraversal,(string?)rule.ServiceName??"");
+    }
+    // Windows reports a single IPv4 address with its full mask.
+    internal static string SingleAddress(string reported)=>reported.EndsWith("/255.255.255.255",StringComparison.Ordinal)?reported[..^"/255.255.255.255".Length]:reported;
+    // The rule names the proxy's program, which lives in the release folder. Changed
+    // in place, so an interrupted upgrade finds each rule at one release or the other.
+    // A rule someone else changed is left as it is: it stays reported as needing
+    // repair, and is no reason to hold up the Runtime's upgrade or its rollback.
+    internal static void Move(IReadOnlyList<LanFirewallRule> rules,string? otherProgram)
+    {
+        dynamic policy=Policy();
+        try
+        {
+            foreach(var expected in rules)
+            {
+                dynamic? observed;
+                try{observed=Find(policy,expected.Name);if(observed is null||!expected.MatchesEitherRelease(Read(observed),otherProgram))continue;}
+                catch(IOException){continue;}
+                observed!.ApplicationName=expected.ApplicationName;
+            }
+        }
+        finally{Marshal.FinalReleaseComObject(policy);}
     }
     internal static void RequireNoDrift(IReadOnlyList<LanFirewallRule> rules)
     {

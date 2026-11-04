@@ -10,14 +10,14 @@ internal static class LanProxyPaths
 {
     internal const string ServiceName = "Yahad.FirstInstall.Lan";
     internal static string State => Path.Combine(MachineFolders.Required(Environment.SpecialFolder.CommonApplicationData), ServiceName);
-    internal static string Binaries => Path.Combine(MachineFolders.Required(Environment.SpecialFolder.ProgramFiles), ServiceName);
     internal static string Receipt => Path.Combine(State, "proxy.json");
     internal static string Config => Path.Combine(State, "Caddyfile");
     internal static string Data => Path.Combine(State, "data");
     internal static string Temporary => Path.Combine(State, "temporary");
     internal static string PublicJoin => Path.Combine(State, "join-public");
-    internal static string Caddy => Path.Combine(Binaries, "caddy.exe");
-    internal static string ServiceImage => Path.Combine(Binaries, "host", "Yahad.ServiceHost.exe");
+    // The proxy runs from the installed release's own folder, like the Runtime.
+    internal static string Caddy(string version) => Path.Combine(InstalledLayout.VersionRoot(version), "payload", "runtime", "caddy", "caddy.exe");
+    internal static string Command(string version) => "\"" + Path.Combine(InstalledLayout.VersionRoot(version), "host", "Yahad.ServiceHost.exe") + "\" --lan-service";
 }
 
 // The address the proxy may serve on, and nothing else: Setup wrote it and this
@@ -26,12 +26,18 @@ internal sealed record LanProxyReceipt(string AdapterId, string Address);
 
 internal static class LanProxyPolicy
 {
+    private const uint NeverStarted = 1077, AutomaticStart = 2;
+    // Only an enabled proxy starts automatically: pausing and disabling set it back
+    // to demand start. Enabled but with its address gone, it cannot serve.
+    internal static bool ShouldRun(uint startType, LanProxyReceipt? receipt, IEnumerable<AdapterAddress> addresses) =>
+        startType == AutomaticStart && receipt is not null && AddressPresent(receipt, addresses);
     // Our runtime publishes STOPPED only after its exact proxy tree is empty.
-    // A known reported failure can therefore be repaired, while an OS crash,
-    // active PID or unknown service status is never treated as cleanup proof.
+    // A known reported failure can therefore be repaired, and a service that never
+    // started has no tree. An OS crash, active PID or unknown service status is
+    // never treated as cleanup proof.
     internal static void RequireConfirmedStopped(uint state, uint pid, uint win32, uint specific)
     {
-        var clean = win32 == 0 && specific == 0;
+        var clean = win32 is 0 or NeverStarted && specific == 0;
         var reportedQuiescentFailure = win32 == 1066 && (ServiceFailure)specific is
             ServiceFailure.ActivationUnavailable or ServiceFailure.StartFailed or ServiceFailure.UnexpectedExit or ServiceFailure.ArgumentsRejected;
         if (state != (uint)ServiceState.Stopped || pid != 0 || !(clean || reportedQuiescentFailure))
@@ -73,7 +79,7 @@ internal sealed class WindowsLanProxyAdmission : ILanProxyAdmission
         environment["HOME"] = LanProxyPaths.Data;
         environment["XDG_DATA_HOME"] = LanProxyPaths.Data;
         environment["XDG_CONFIG_HOME"] = LanProxyPaths.Temporary;
-        return new OwnedLanProxyProcess(JobProcess.Start(LanProxyPaths.Caddy,
+        return new OwnedLanProxyProcess(JobProcess.Start(LanProxyPaths.Caddy(ApplicationRelease.Version),
             ["run", "--config", LanProxyPaths.Config, "--adapter", "caddyfile"], LanProxyPaths.State, environment));
     }, cancellation);
     private sealed class OwnedLanProxyProcess(JobProcess job) : ILanProxyProcess

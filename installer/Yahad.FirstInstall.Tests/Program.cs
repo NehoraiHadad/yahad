@@ -269,7 +269,7 @@ Console.WriteLine($"{cases.Count-failures-blockedStore} passed; {failures} faile
 
 (byte[] Zip,byte[] Manifest) Package(bool duplicate=false)
 {
- var names=new[]{"host/Yahad.ServiceHost.exe","host/Yahad.ServiceHost.runtimeconfig.json","payload/bundle.json","payload/runtime/node/node.exe","payload/runtime/ffmpeg/ffmpeg.exe","payload/runtime/caddy/caddy.exe","payload/app/server/main.mjs","payload/app/dist/index.html","payload/app/native/Yahad.Platform.exe","payload/legal/build-inputs.json"};
+ var names=new[]{"host/Yahad.ServiceHost.exe","host/Yahad.ServiceHost.runtimeconfig.json","updater/Yahad.Updater.exe","updater/Yahad.Updater.runtimeconfig.json","payload/bundle.json","payload/runtime/node/node.exe","payload/runtime/ffmpeg/ffmpeg.exe","payload/runtime/caddy/caddy.exe","payload/app/server/main.mjs","payload/app/dist/index.html","payload/app/native/Yahad.Platform.exe","payload/legal/build-inputs.json"};
  var records=new List<InstallMember>();using var data=new MemoryStream();string digest="";
  using(var zip=new ZipArchive(data,ZipArchiveMode.Create,true))foreach(var name in names)
  {var bytes=Encoding.UTF8.GetBytes(name=="payload/bundle.json"?JsonSerializer.Serialize(new{version=ApplicationRelease.Version}):name=="payload/app/server/main.mjs"?"synthetic-app-not-executed":"synthetic");if(name=="payload/bundle.json")digest=Convert.ToHexStringLower(SHA256.HashData(bytes));var entry=zip.CreateEntry(name);using(var stream=entry.Open())stream.Write(bytes);records.Add(new(name,bytes.Length,Convert.ToHexStringLower(SHA256.HashData(bytes))));if(duplicate&&name==names[0]){using var stream=zip.CreateEntry(name).Open();stream.Write(bytes);}}

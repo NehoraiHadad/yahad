@@ -164,12 +164,22 @@ internal static class FullInstallerIntegrationTests
             finally{Directory.Delete(root,true);Directory.Delete(other,true);}
             return Task.CompletedTask;
         });
-        await check("LAN proxy copies only the installed release's own host closure",()=>
+        await check("LAN proxy runs from the installed release's folder and its image follows the version",()=>
         {
-            var files=new[]{new InstallMember("host/Yahad.ServiceHost.exe",1,new string('a',64)),new("host/Yahad.ServiceHost.runtimeconfig.json",3,new string('c',64)),
-                new("payload/runtime/caddy/caddy.exe",4,new string('d',64)),new("hostX/foreign.dll",5,new string('e',64))};
-            var members=NativeLanInstall.HostBinaryMembers(files);
-            Assert(members.Length==2&&members[0]==new LanOwnedFile("host/Yahad.ServiceHost.exe",1,new string('a',64))&&members[1].Path=="host/Yahad.ServiceHost.runtimeconfig.json");return Task.CompletedTask;
+            var version=Path.Combine(InstallLocations.Binaries,"versions","1.2.3");
+            Assert(ServiceSpec.Lan.Command("1.2.3")=="\""+Path.Combine(version,"host","Yahad.ServiceHost.exe")+"\" --lan-service");
+            Assert(ServiceSpec.Lan.Command("1.2.4")!=ServiceSpec.Lan.Command("1.2.3"));
+            Assert(LanProxyPaths.Caddy("1.2.3")==Path.Combine(version,"payload","runtime","caddy","caddy.exe"));
+            DenyCode("PAYLOAD_VERSION",()=>ServiceSpec.Lan.Command("../other"));
+            return Task.CompletedTask;
+        });
+        await check("LAN proxy's account reads the binary tree only: the state root does not name it",()=>
+        {
+            var proxy=InstallLocations.ServiceSidFor(LanProxyPaths.ServiceName);
+            Assert(NativeSetupHost.BinaryAcl==NativeInstallFiles.InstallAcl(InstallLocations.ServiceSid)+$"(A;OICI;0x1200a9;;;{proxy})");
+            Assert(!NativeInstallFiles.InstallAcl(InstallLocations.ServiceSid).Contains(proxy,StringComparison.Ordinal));
+            Assert(!NativeInstallFiles.DataAcl(InstallLocations.ServiceSid).Contains(proxy,StringComparison.Ordinal));
+            return Task.CompletedTask;
         });
         await check("installer partial cleanup recognizes only exact generated record names with canonical nonces",()=>
         {

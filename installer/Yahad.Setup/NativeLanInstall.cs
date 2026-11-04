@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -10,8 +11,7 @@ using Yahad.Install;
 using Yahad.Service;
 namespace Yahad.Setup;
 
-internal sealed record LanOwnedFile(string Path,long Size,string Sha256);
-internal sealed record LanOwnedState(string Phase,string AdapterId,string Address,bool HttpHelp,string RootSha256,LanOwnedFile[] Files);
+internal sealed record LanOwnedState(string Phase,string AdapterId,string Address,bool HttpHelp,string RootSha256);
 internal sealed record LanRemovalIntent(UninstallMode Mode,LanOwnedState State);
 
 // Production adapter, entered only from the elevated in-process Setup operation.
@@ -21,7 +21,7 @@ internal sealed class NativeLanInstall(InstallerState application)
     private static string StateFile=>Path.Combine(LanProxyPaths.State,"owner.json");
     private static string JournalFile=>Path.Combine(LanProxyPaths.State,"web-change.json");
     private static string PreparationFile=>Path.Combine(InstallLocations.State,"lan-preparation.json");
-    private static string RemovalFile=>LanProxyPaths.Binaries+".uninstall.json";
+    private static string RemovalFile=>InstallLocations.Binaries+".lan-uninstall.json";
     private static string RootCertificate=>Path.Combine(LanProxyPaths.Data,"pki","authorities","local","root.crt");
     private static byte[] Json<T>(T value)=>JsonSerializer.SerializeToUtf8Bytes(value);
     private static string Hash(byte[] bytes)=>Convert.ToHexStringLower(SHA256.HashData(bytes));
@@ -51,8 +51,8 @@ internal sealed class NativeLanInstall(InstallerState application)
         if(removing&&!File.Exists(StateFile)&&File.Exists(PreparationFile))
         {
             var pending=NativeJson.Read<LanSetupRequest>(NativeInstallFiles.ReadRecord(PreparationFile,8192));
-            if(!NativeService.Exists(ServiceSpec.Lan)&&!Directory.Exists(LanProxyPaths.State)&&!Directory.Exists(LanProxyPaths.Binaries))return null;
-            return new("preparing",pending.AdapterId!,pending.Address!,pending.HttpHelp,"",ExpectedBinaries());
+            if(!NativeService.Exists(ServiceSpec.Lan)&&!Directory.Exists(LanProxyPaths.State))return null;
+            return new("preparing",pending.AdapterId!,pending.Address!,pending.HttpHelp,"");
         }
         if(!Directory.Exists(LanProxyPaths.State))return null;
         WindowsFileBoundary.RequireAdministratorOwned(LanProxyPaths.State);
@@ -61,7 +61,7 @@ internal sealed class NativeLanInstall(InstallerState application)
     }
     private LanDeploymentPlan Plan(LanOwnedState state)=>LanDeployment.Create(application.InstallationId,
         [new(state.AdapterId,"selected",state.Address)],state.AdapterId,state.Address,application.Port,
-        LanProxyPaths.Caddy,LanProxyPaths.Data,LanProxyPaths.PublicJoin,state.HttpHelp);
+        LanProxyPaths.Caddy(application.Version),LanProxyPaths.Data,LanProxyPaths.PublicJoin,state.HttpHelp);
     private void Save(LanOwnedState state)=>Record(StateFile,Json(state));
     // The caller has stopped the Runtime service: a pending change of the launch
     // file goes back to the bytes it replaced.
@@ -81,14 +81,6 @@ internal sealed class NativeLanInstall(InstallerState application)
     private static async Task StopProxyAsync(NativeService proxy,CancellationToken cancellation)
     {using var bound=CancellationTokenSource.CreateLinkedTokenSource(cancellation);bound.CancelAfter(TimeSpan.FromSeconds(35));await proxy.StopAsync(bound.Token);}
     private static void RequireConfirmedStop(NativeService proxy){var state=proxy.Observed();LanProxyPolicy.RequireConfirmedStopped(state.State,state.Pid,state.Win32,state.Specific);}
-    internal static void RequireConfigurationStop(uint state,uint pid,uint win32,uint specific)
-    {
-        // ERROR_SERVICE_NEVER_STARTED is the normal stopped state of a freshly
-        // created service. It is safe for configuration, not proof that an
-        // application previously running completed an uninstall shutdown.
-        if(win32==1077){if(state!=1||pid!=0||specific!=0)throw new IOException("LAN_QUIESCENCE_UNCONFIRMED");}
-        else LanProxyPolicy.RequireConfirmedStopped(state,pid,win32,specific);
-    }
     private NativeService OpenProxyForConfiguration()
     {
         if(!NativeService.Exists(ServiceSpec.Lan))return NativeService.Create(application.Version,application.OwnerSid,ServiceSpec.Lan);
@@ -112,33 +104,6 @@ internal sealed class NativeLanInstall(InstallerState application)
             !marker.GetProperty("exactAdditionalOrigins").GetBoolean()||!marker.GetProperty("ownerLoopbackBootstrap").GetBoolean()||
             marker.GetProperty("publicHelpTemplate").GetString()!="deploy/lan-help.html")throw new IOException("LAN_PAYLOAD_NOT_SUPPORTED");
         return new UTF8Encoding(false,true).GetString(PayloadBytes("app/deploy/lan-help.html"));
-    }
-    internal static LanOwnedFile[] HostBinaryMembers(InstallMember[] files)=>
-        files.Where(f=>f.Path.StartsWith("host/",StringComparison.Ordinal)).Select(f=>new LanOwnedFile(f.Path,f.Size,f.Sha256)).ToArray();
-    private LanOwnedFile[] ExpectedBinaries()=>HostBinaryMembers(application.Files).Append(CaddyMember()).ToArray();
-    private LanOwnedFile CaddyMember()
-    {
-        var member=application.Files.SingleOrDefault(f=>f.Path=="payload/runtime/caddy/caddy.exe")??throw new IOException("LAN_PAYLOAD_NOT_SUPPORTED");
-        return new("caddy.exe",member.Size,member.Sha256);
-    }
-    private void PublishBinaries(LanOwnedState owned)
-    {
-        foreach(var member in owned.Files)
-        {
-            var target=Path.Combine(LanProxyPaths.Binaries,member.Path.Replace('/',Path.DirectorySeparatorChar));
-            NativeInstallFiles.EnsureDirectoryUnder(LanProxyPaths.Binaries,Path.GetDirectoryName(target)!);
-            if(File.Exists(target)){VerifyBinary(target,member);continue;}
-            var version=InstallLocations.VersionRoot(application.Version);
-            var source=member.Path=="caddy.exe"?Path.Combine(version,"payload","runtime","caddy","caddy.exe"):Path.Combine(version,member.Path.Replace('/',Path.DirectorySeparatorChar));
-            using var input=new FileStream(source,FileMode.Open,FileAccess.Read,FileShare.Read);
-            if(input.Length!=member.Size||Convert.ToHexStringLower(SHA256.HashData(input))!=member.Sha256)throw new IOException("LAN_PAYLOAD_CHANGED");
-            input.Position=0;using(var output=NativeInstallFiles.CreateNewFile(target)){input.CopyTo(output);output.Flush(true);}
-        }
-    }
-    private static void VerifyBinary(string path,LanOwnedFile member)
-    {
-        using var input=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read);
-        if(input.Length!=member.Size||Convert.ToHexStringLower(SHA256.HashData(input))!=member.Sha256)throw new IOException("LAN_BINARY_CHANGED");
     }
     private static byte[] CertificateBytes()
     {
@@ -194,19 +159,18 @@ internal sealed class NativeLanInstall(InstallerState application)
         var resuming=request.Action==LanSetupAction.Enable&&PreparationMatches(request,!File.Exists(StateFile));var owned=Read(preparing:resuming);
         if(request.Action==LanSetupAction.Disable){if(owned is not null)await DisableAsync(owned,cancellation);return;}
         var template=RequirePayload();
-        if(owned is null&&!resuming&&(Directory.Exists(LanProxyPaths.Binaries)||File.Exists(LanProxyPaths.Binaries)||NativeService.Exists(ServiceSpec.Lan)))throw new IOException("LAN_INSTALL_COLLISION");
+        if(owned is null&&!resuming&&NativeService.Exists(ServiceSpec.Lan))throw new IOException("LAN_INSTALL_COLLISION");
         if(owned is null&&!resuming)Record(PreparationFile,Json(request));
         using var proxy=OpenProxyForConfiguration();
         var sid=InstallLocations.ServiceSidFor(LanProxyPaths.ServiceName);
-        await StopProxyAsync(proxy,cancellation);var stopped=proxy.Observed();RequireConfigurationStop(stopped.State,stopped.Pid,stopped.Win32,stopped.Specific);proxy.DisableStartup();
+        await StopProxyAsync(proxy,cancellation);RequireConfirmedStop(proxy);proxy.DisableStartup();
         if(owned is not null)NativeLanFirewall.Remove(Plan(owned).FirewallRules);
-        MakeDirectory(LanProxyPaths.State,NativeInstallFiles.InstallAcl(sid));MakeDirectory(LanProxyPaths.Binaries,NativeInstallFiles.InstallAcl(sid));
+        MakeDirectory(LanProxyPaths.State,NativeInstallFiles.InstallAcl(sid));
         MakeDirectory(LanProxyPaths.Data,NativeInstallFiles.DataAcl(sid));MakeDirectory(LanProxyPaths.Temporary,NativeInstallFiles.DataAcl(sid));MakeDirectory(LanProxyPaths.PublicJoin);
-        var next=new LanOwnedState("preparing",request.AdapterId!,request.Address!,request.HttpHelp,owned?.RootSha256??"",ExpectedBinaries());
+        var next=new LanOwnedState("preparing",request.AdapterId!,request.Address!,request.HttpHelp,owned?.RootSha256??"");
         var plan=Plan(next);Save(next);
         try
         {
-            PublishBinaries(next);
             // Caddy may resume its own unpublished first initialization. Once
             // any root was shown/exported, never silently replace that authority.
             if(Directory.EnumerateFileSystemEntries(LanProxyPaths.Data).Any()&&!File.Exists(RootCertificate)&&
@@ -230,13 +194,18 @@ internal sealed class NativeLanInstall(InstallerState application)
             NativeLanFirewall.Add(plan.FirewallRules);proxy.EnableStartup();await StartProxyAsync(proxy,cancellation);
             Save(next with{Phase="enabled"});CompleteWebChange();RemovePreparation();
         }
-        catch
+        catch(Exception failure)
         {
             // Preserve CA and family state on failure. Never fall back to HTTP
             // or a broad bind. Failure to stop/remove/restore remains a failure.
-            using var cleanup=new CancellationTokenSource(TimeSpan.FromSeconds(45));
-            proxy.DisableStartup();await StopProxyAsync(proxy,cleanup.Token);RequireConfirmedStop(proxy);
-            NativeLanFirewall.Remove(plan.FirewallRules);RecoverWebJournal();Save(next with{Phase="paused"});RemovePreparation();throw;
+            try
+            {
+                using var cleanup=new CancellationTokenSource(TimeSpan.FromSeconds(45));
+                proxy.DisableStartup();await StopProxyAsync(proxy,cleanup.Token);RequireConfirmedStop(proxy);
+                NativeLanFirewall.Remove(plan.FirewallRules);RecoverWebJournal();Save(next with{Phase="paused"});RemovePreparation();
+            }
+            catch(Exception incomplete){throw SetupFailureDetail.Besides(failure,incomplete);}
+            throw;
         }
     }
     private async Task DisableAsync(LanOwnedState owned,CancellationToken cancellation)
@@ -248,6 +217,35 @@ internal sealed class NativeLanInstall(InstallerState application)
     {
         if(!NativeService.Exists(ServiceSpec.Lan))return;
         using var proxy=NativeService.Open(application.Version,ServiceSpec.Lan);proxy.DisableStartup();await StopProxyAsync(proxy,cancellation);RequireConfirmedStop(proxy);
+    }
+    // An upgrade moves the proxy with the release: stopped, then its image and its
+    // firewall rule, and started again only if it should be running.
+    internal static Task StopForUpgradeAsync(NativeService proxy)=>StopProxyAsync(proxy,CancellationToken.None);
+    internal void Move(NativeService proxy,string? otherVersion){proxy.SwitchImage(application.Version);MoveFirewall(otherVersion);}
+    internal void MoveFirewall(string? otherVersion)
+    {
+        var owned=Read(removing:true,preparing:true);if(owned is null)return;
+        NativeLanFirewall.Move(Plan(owned).FirewallRules,otherVersion is null?null:LanProxyPaths.Caddy(otherVersion));
+    }
+    private static bool ShouldRun(NativeService proxy)
+    {
+        var receipt=File.Exists(LanProxyPaths.Receipt)?NativeJson.Read<LanProxyReceipt>(NativeInstallFiles.ReadRecord(LanProxyPaths.Receipt,4096)):null;
+        return LanProxyPolicy.ShouldRun(proxy.StartType(),receipt,LanProxyPolicy.Addresses());
+    }
+    // Serving TLS under the family's own authority, not merely a running process.
+    internal async Task StartAfterUpgradeAsync(NativeService proxy)
+    {
+        if(!ShouldRun(proxy))return;
+        await StartProxyAsync(proxy,CancellationToken.None);
+        if(Read(removing:true,preparing:true) is {} owned)await WaitForCertificateAsync(owned,CancellationToken.None);
+    }
+    // Back on the release it ran from, or on a repair: a proxy that cannot serve says
+    // nothing about the Runtime, must not hold up its recovery, and may be retried.
+    internal static async Task<bool> TryRestartAsync(NativeService proxy)
+    {
+        if(proxy.IsRunning()||!ShouldRun(proxy))return false;
+        try{await StartProxyAsync(proxy,CancellationToken.None);return true;}
+        catch(Exception failure)when(failure is OperationCanceledException or Win32Exception or IOException{Message:"SERVICE_START_FAILED"}){return false;}
     }
     internal async Task<LanSetupResult?> ObserveAsync(CancellationToken cancellation)
     {
@@ -282,16 +280,7 @@ internal sealed class NativeLanInstall(InstallerState application)
             using var wait=CancellationTokenSource.CreateLinkedTokenSource(cancellation);wait.CancelAfter(TimeSpan.FromSeconds(10));
             while(NativeService.Exists(ServiceSpec.Lan))await Task.Delay(100,wait.Token);
         }
-        // Refuse unknown/modified binaries rather than deleting a coincidentally
-        // named installation. Public roots/CA state survive data-preserving uninstall.
-        if(Directory.Exists(LanProxyPaths.Binaries))
-        {
-            var expected=owned.Files.ToDictionary(f=>Path.Combine(LanProxyPaths.Binaries,f.Path.Replace('/',Path.DirectorySeparatorChar)),StringComparer.OrdinalIgnoreCase);
-            var tree=RemovalTree.Inspect(LanProxyPaths.Binaries,(path,directory)=>
-            {if(!directory){if(!expected.TryGetValue(path,out var member))throw new IOException("LAN_BINARY_CHANGED");VerifyBinary(path,member);}});
-            tree.DeleteContents(WindowsFileBoundary.DeleteNoFollow,_=>{},cancellation);
-            WindowsFileBoundary.DeleteNoFollow(LanProxyPaths.Binaries,true);
-        }
+        // Public roots/CA state survive data-preserving uninstall.
         if(mode==UninstallMode.DeleteData&&Directory.Exists(LanProxyPaths.State))
         {
             var tree=RemovalTree.Inspect(LanProxyPaths.State,WindowsFileBoundary.RequireNoLink);

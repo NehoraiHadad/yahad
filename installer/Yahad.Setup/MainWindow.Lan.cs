@@ -15,7 +15,7 @@ public partial class MainWindow
         if(uninstall){LanPanel.Visibility=Visibility.Collapsed;return;}
         try{LanAddress.ItemsSource=(choices??LanSetupRequest.Choices()).Select(c=>new LanDisplay(c,c.DisplayName+" · "+c.Address)).ToArray();}
         catch{LanAddress.ItemsSource=Array.Empty<LanDisplay>();}
-        LanProgram.Text=LanProxyPaths.Caddy;
+        LanProgram.Text=LanProxyPaths.Caddy(ApplicationRelease.Version);
         existingNetworkAccess=existingAccess;
         KeepLan.Content=existingAccess?"להשאיר את אפשרויות הגישה הקיימות":"רק במחשב הזה";
         LanKeepHint.Text=existingAccess?"הגישה שכבר הוגדרה תישמר. הבחירה הזאת אינה מכבה גישה קיימת מהטלפון.":"יחד תהיה זמינה במחשב הזה בלבד. אפשר להוסיף גישה מהטלפון בהמשך.";

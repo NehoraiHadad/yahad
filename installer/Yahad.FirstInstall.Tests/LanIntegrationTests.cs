@@ -37,17 +37,45 @@ internal static class LanIntegrationTests
             Refuse(()=>NativeNetworkProfile.RequirePrivateCategory(NativeNetworkProfile.RequireConsistentCategory([0,0])));
             return Task.CompletedTask;
         });
-        await check("new LAN service configuration accepts never-started while post-start cleanup guard stays strict",()=>
+        await check("a stopped or never-started LAN service counts as stopped; anything still running or unknown does not",()=>
         {
-            NativeLanInstall.RequireConfigurationStop(1,0,1077,0);
-            NativeLanInstall.RequireConfigurationStop(1,0,0,0);
-            NativeLanInstall.RequireConfigurationStop(1,0,1066,(uint)ServiceFailure.ActivationUnavailable);
-            Refuse(()=>LanProxyPolicy.RequireConfirmedStopped(1,0,1077,0));
-            Refuse(()=>NativeLanInstall.RequireConfigurationStop(4,0,1077,0));
-            Refuse(()=>NativeLanInstall.RequireConfigurationStop(1,123,1077,0));
-            Refuse(()=>NativeLanInstall.RequireConfigurationStop(1,0,1077,1));
-            Refuse(()=>NativeLanInstall.RequireConfigurationStop(1,0,1067,0));
-            Refuse(()=>NativeLanInstall.RequireConfigurationStop(1,0,1066,(uint)ServiceFailure.QuiescenceUnknown));
+            LanProxyPolicy.RequireConfirmedStopped(1,0,1077,0);
+            LanProxyPolicy.RequireConfirmedStopped(1,0,0,0);
+            LanProxyPolicy.RequireConfirmedStopped(1,0,1066,(uint)ServiceFailure.ActivationUnavailable);
+            Refuse(()=>LanProxyPolicy.RequireConfirmedStopped(4,0,1077,0));
+            Refuse(()=>LanProxyPolicy.RequireConfirmedStopped(1,123,1077,0));
+            Refuse(()=>LanProxyPolicy.RequireConfirmedStopped(1,0,1077,1));
+            Refuse(()=>LanProxyPolicy.RequireConfirmedStopped(1,0,1067,0));
+            Refuse(()=>LanProxyPolicy.RequireConfirmedStopped(1,0,1066,(uint)ServiceFailure.QuiescenceUnknown));
+            return Task.CompletedTask;
+        });
+        await check("a failed LAN cleanup is reported beside the failure that caused it, whose code survives",()=>
+        {
+            var cause=new IOException("LAN_PAYLOAD_NOT_SUPPORTED");var incomplete=new IOException("LAN_QUIESCENCE_UNCONFIRMED");
+            var both=SetupFailureDetail.Besides(cause,incomplete);
+            Require(SetupOperation.Code(both)=="LAN_PAYLOAD_NOT_SUPPORTED"&&SetupOperation.Code(new SetupOperationException(UninstallPhase.FullNetwork,both))=="LAN_PAYLOAD_NOT_SUPPORTED");
+            Require(both.InnerExceptions.Contains(incomplete));
+            return Task.CompletedTask;
+        });
+        await check("an upgrade starts only an enabled proxy whose address is still here",()=>
+        {
+            var receipt=new LanProxyReceipt("adapter-home","192.168.1.50");var here=new[]{new AdapterAddress("adapter-home","Home","192.168.1.50",true)};
+            Require(LanProxyPolicy.ShouldRun(2,receipt,here));
+            foreach(var startType in new uint[]{3,4})Require(!LanProxyPolicy.ShouldRun(startType,receipt,here));
+            Require(!LanProxyPolicy.ShouldRun(2,null,here));
+            Require(!LanProxyPolicy.ShouldRun(2,receipt,[new("adapter-home","Home","192.168.1.51",true)]));
+            return Task.CompletedTask;
+        });
+        await check("a LAN firewall rule moves only between the two releases of an upgrade, and reads back as Windows reports it",()=>
+        {
+            var rule=new LanFirewallRule("n","d","g",@"C:\v2\caddy.exe","192.168.1.50","443");
+            Require(rule.MatchesEitherRelease(rule,null));
+            Require(rule.MatchesEitherRelease(rule with{ApplicationName=@"C:\v1\caddy.exe"},@"C:\v1\caddy.exe"));
+            Require(!rule.MatchesEitherRelease(rule with{ApplicationName=@"C:\v1\caddy.exe"},null));
+            Require(!rule.MatchesEitherRelease(rule with{ApplicationName=@"C:\other.exe"},@"C:\v1\caddy.exe"));
+            Require(!rule.MatchesEitherRelease(rule with{ApplicationName=@"C:\v1\caddy.exe",LocalAddresses="*"},@"C:\v1\caddy.exe"));
+            Require(NativeLanFirewall.SingleAddress("192.168.1.50/255.255.255.255")=="192.168.1.50"&&NativeLanFirewall.SingleAddress("192.168.1.50")=="192.168.1.50");
+            Require(NativeLanFirewall.SingleAddress("192.168.1.0/255.255.255.0")=="192.168.1.0/255.255.255.0");
             return Task.CompletedTask;
         });
         await check("LAN request requires explicit consent, canonical private address and well-formed action", () =>
@@ -128,7 +156,7 @@ internal static class LanIntegrationTests
         });
         await check("LAN removal receipt alone preserves the confirmed mode after owner-record removal", () =>
         {
-            var owned = new LanOwnedState("disabled", "fixture-home", "192.168.4.5", true, string.Join(':', Enumerable.Repeat("AB", 32)), []);
+            var owned = new LanOwnedState("disabled", "fixture-home", "192.168.4.5", true, string.Join(':', Enumerable.Repeat("AB", 32)));
             foreach (var mode in new[] { UninstallMode.KeepData, UninstallMode.DeleteData })
             {
                 // No owner.json read callback exists here: this is exactly the

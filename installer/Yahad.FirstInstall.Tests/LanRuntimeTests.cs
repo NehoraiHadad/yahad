@@ -23,7 +23,7 @@ internal static class LanRuntimeTests
         });
         await check("LAN service runs its own image argument under its own account", () =>
         {
-            Require(ServiceSpec.Lan.Command("x").EndsWith(" --lan-service", StringComparison.Ordinal));
+            Require(ServiceSpec.Lan.Command("1.2.3").EndsWith(" --lan-service", StringComparison.Ordinal));
             Require(ServiceSpec.Lan.Name != ServiceDefinition.Name && ServiceSpec.Lan.Account != ServiceDefinition.Account);
             return Task.CompletedTask;
         });

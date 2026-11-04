@@ -64,13 +64,13 @@ internal static class UpgradeFiles
     }
     internal static long HealthDeadline()=>DateTimeOffset.UtcNow.ToUnixTimeSeconds()+UpgradeRules.HealthWindowSeconds;
 }
-// --quiet-upgrade: the release's own Setup, carrying the new payload, moves both
-// services to the new version directory, or back. A service's image is its
+// --quiet-upgrade: the release's own Setup, carrying the new payload, moves the
+// services and any home-network proxy to the new version directory, or back. A service's image is its
 // version pointer; one SCM call moves it and nothing else follows it. The Updater
 // that launched this Setup is stopped and replaced here like any other part of it.
 internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Action<SetupProgress> progress):IDisposable
 {
-    private InstallerState installed=installed;private UpgradeState state=state;private NativeService? service,updater;
+    private InstallerState installed=installed;private UpgradeState state=state;private NativeService? service,updater,proxy;
     private string Dataset=>Path.Combine(InstallLocations.State,"datasets",installed.DataId);
     private string DataPath=>Path.Combine(Dataset,"data");
     private string BackupRoot=>Path.Combine(Dataset,"upgrade-backup");
@@ -141,13 +141,14 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
             service=NativeService.Open(state.From);updater=NativeService.Open(state.From,ServiceSpec.Updater);
             UpgradeFiles.EnsureUpdaterState(installed.Consent.Automatic);
             Prepare(package,setupBytes);service.ClearFailureActions();updater.ClearFailureActions();Advance("prepared");
-            await updater.StopAsync(CancellationToken.None);await service.StopAsync(CancellationToken.None);Advance("stopped");
+            await updater.StopAsync(CancellationToken.None);await StopProxyAsync();await service.StopAsync(CancellationToken.None);Advance("stopped");
             if(state.SchemaChanged)DatabaseBackup.Create(DataPath,Backup);
             Advance("backed_up");
-            service.SwitchImage(state.To);updater.SwitchImage(state.To);Advance("switched");
+            service.SwitchImage(state.To);updater.SwitchImage(state.To);MoveProxy(state.To,state.From);Advance("switched");
             state=state with{HealthDeadlineUnix=UpgradeFiles.HealthDeadline()};
             await service.StartAsync(CancellationToken.None);Advance("started");
             await UpgradeFiles.RequireHealthyAsync(service,installed.Port,state.To,state.ToSchema,state.HealthDeadlineUnix);
+            if(Proxy() is {} lan)await Network(state.To).StartAfterUpgradeAsync(lan);
             await updater.StartAsync(CancellationToken.None);Advance("healthy");
         }
         catch(Exception failure){return await RecoverAsync(failure);}
@@ -187,6 +188,11 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
     }
     private NativeService Service(){service??=NativeService.OpenAt(state.To,state.From);return service;}
     private NativeService Updater(){updater??=NativeService.OpenAt(state.To,state.From,ServiceSpec.Updater);return updater;}
+    private NativeService? Proxy(){if(proxy is null&&NativeService.Exists(ServiceSpec.Lan))proxy=NativeService.OpenAt(state.To,state.From,ServiceSpec.Lan);return proxy;}
+    private NativeLanInstall Network(string version)=>new(installed with{Version=version});
+    private async Task StopProxyAsync(){if(Proxy() is {} lan)await NativeLanInstall.StopForUpgradeAsync(lan);}
+    private void MoveProxy(string version,string other){if(Proxy() is {} lan)Network(version).Move(lan,other);}
+    private async Task RestartProxyAsync(){if(Proxy() is {} lan)await NativeLanInstall.TryRestartAsync(lan);}
     private static async Task RunningAsync(NativeService value)
     {
         value.EnableStartup();
@@ -197,19 +203,19 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
     internal async Task DiscardAsync(string? failure)
     {
         state=state with{Failure=failure??state.Failure};
-        await RunningAsync(Service());await RunningAsync(Updater());
+        await RunningAsync(Service());await RunningAsync(Updater());await RestartProxyAsync();
         FinishRollback();
     }
     internal async Task RollBackAsync(string failure)
     {
         state=state with{Phase="rolling_back",Failure=failure,RestoreData=UpgradeRules.RestoresData(state),Attempts=state.Attempts+1};UpgradeFiles.Save(state);progress(new("rolling_back",0));
         var runtime=Service();var self=Updater();
-        await self.StopAsync(CancellationToken.None);await runtime.StopAsync(CancellationToken.None);
-        runtime.SwitchImage(state.From);self.SwitchImage(state.From);
+        await self.StopAsync(CancellationToken.None);await StopProxyAsync();await runtime.StopAsync(CancellationToken.None);
+        runtime.SwitchImage(state.From);self.SwitchImage(state.From);MoveProxy(state.From,state.To);
         if(state.RestoreData)DatabaseBackup.Restore(DataPath,Backup);
         await runtime.StartAsync(CancellationToken.None);
         await UpgradeFiles.RequireHealthyAsync(runtime,installed.Port,state.From,state.FromSchema,UpgradeFiles.HealthDeadline());
-        await self.StartAsync(CancellationToken.None);
+        await self.StartAsync(CancellationToken.None);await RestartProxyAsync();
         runtime.EnableStartup();self.EnableStartup();Advance("rolled_back");FinishRollback();
     }
     internal void FinishRollback()
@@ -235,5 +241,5 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
         {if(Path.GetFileName(directory)!=state.To)UpgradeFiles.Remove(directory);}
         UpgradeFiles.DeleteState();
     }
-    public void Dispose(){service?.Dispose();service=null;updater?.Dispose();updater=null;}
+    public void Dispose(){service?.Dispose();service=null;updater?.Dispose();updater=null;proxy?.Dispose();proxy=null;}
 }

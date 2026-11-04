@@ -17,7 +17,7 @@ internal sealed record ServiceSpec(string Name,string Account,Func<string,string
     internal static readonly ServiceSpec Runtime=new(ServiceDefinition.Name,ServiceDefinition.Account,InstallLocations.ServiceCommand,[5000,30000,120000],true,false,ServiceDefinition.Name,InstallLocations.ServiceSid);
     internal static readonly ServiceSpec Updater=new(ServiceDefinition.UpdaterName,ServiceDefinition.UpdaterAccount,
         version=>{InstallLocations.RequireVersion(version);return InstalledLayout.UpdaterCommand(version);},[60000,300000,600000],false,true,ServiceDefinition.UpdaterName,InstallLocations.ServiceSid);
-    internal static readonly ServiceSpec Lan=new(LanProxyPaths.ServiceName,"NT SERVICE\\"+LanProxyPaths.ServiceName,_=>"\""+LanProxyPaths.ServiceImage+"\" --lan-service",[],true,true,"Yahad home network HTTPS",null);
+    internal static readonly ServiceSpec Lan=new(LanProxyPaths.ServiceName,"NT SERVICE\\"+LanProxyPaths.ServiceName,version=>{InstallLocations.RequireVersion(version);return LanProxyPaths.Command(version);},[],true,true,"Yahad home network HTTPS",null);
 }
 // Installer-only SCM writer. The names, accounts and images come from compiled
 // constants and the verified package version; no CLI, file or runtime peer can
@@ -152,6 +152,7 @@ internal sealed class NativeService:IDisposable
     }
     private void SetImage()
     {if(!ChangeServiceConfigW(service,0xffffffff,0xffffffff,0xffffffff,command,null,IntPtr.Zero,null,null,null,null))throw new Win32Exception();}
+    internal uint StartType()=>RequireConfigurationIdentity();
     internal bool IsStopped()=>Status().State==1;
     internal bool IsRunning()=>Status().State==4;
     internal bool StartupConfigured()

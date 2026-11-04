@@ -67,6 +67,16 @@ internal static class RepairHost
         using var service=await Restore(ServiceSpec.Runtime);
         UpgradeFiles.EnsureUpdaterState(installed.Consent.Automatic);
         using var updater=await Restore(ServiceSpec.Updater);
+        if(NativeService.Exists(ServiceSpec.Lan))
+        {
+            var repointed=false;using var proxy=NativeService.OpenRepointed(installed.Version,ref repointed,ServiceSpec.Lan);
+            if(repointed)
+            {
+                repaired=true;await NativeLanInstall.StopForUpgradeAsync(proxy);
+                new NativeLanInstall(installed).MoveFirewall(installed.Previous?.Version);
+            }
+            repaired|=await NativeLanInstall.TryRestartAsync(proxy);
+        }
         if(!RepairTask.Matches(installed.Version)){RepairTask.Register(installed.Version,DateTimeOffset.Now);repaired=true;}
         try{await UpgradeFiles.RequireHealthyAsync(service,installed.Port,installed.Version,null,UpgradeFiles.HealthDeadline());}
         catch(IOException failure){return new(new(false,"REPAIR_UNHEALTHY",url,Failure:SetupFailureDetail.From(failure)),installed.Version);}

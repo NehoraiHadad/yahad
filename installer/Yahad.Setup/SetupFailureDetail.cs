@@ -21,8 +21,14 @@ internal sealed class SetupOperationException(UninstallPhase phase, Exception ca
 
 internal sealed record SetupFailureDetail(string? Phase, int? NativeError, int HResult,string[]? Sites=null)
 {
-    internal static Exception Cause(Exception error) =>
-        error is SetupOperationException { InnerException: { } cause } ? cause : error;
+    internal static Exception Cause(Exception error) => error switch
+    {
+        SetupOperationException { InnerException: { } cause } => Cause(cause),
+        AggregateException { InnerExceptions: [var first, ..] } => first,
+        _ => error
+    };
+    // A cleanup that also failed is reported beside what caused it, not in its place.
+    internal static AggregateException Besides(Exception cause, Exception incomplete) => new(cause, incomplete);
 
     internal static SetupFailureDetail From(Exception error)
     {
