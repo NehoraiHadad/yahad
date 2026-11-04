@@ -341,7 +341,6 @@ function RequireAccessBoundaries([string]$Version) {
     $stateDirectories = @($programData) + @($everything | Where-Object { $_.PSIsContainer -and !(& $inWritable $_.FullName) } | ForEach-Object FullName)
     $stateFiles = @($everything | Where-Object { !$_.PSIsContainer -and !(& $inWritable $_.FullName) } | ForEach-Object FullName)
     $installDirectories = @($programFiles, (Join-Path $programFiles 'versions'), $release, (Join-Path $release 'host'), (Join-Path $release 'updater'))
-    if (!(Test-Path -LiteralPath (Join-Path $updaterRoot 'staging'))) { throw 'The staging folder is missing' }
 
     foreach ($path in @($installDirectories + (RetainedSetup $Version) + $stateDirectories + $stateFiles)) {
         try { $granted = EffectiveRights $path $runtimeToken } catch [Management.Automation.ItemNotFoundException] { continue }
@@ -516,6 +515,8 @@ try {
         $stage = Join-Path $updaterRoot "staging\$($upgradeRelease.version)"
         New-Item -ItemType Directory -Force -Path $stage | Out-Null
         Copy-Item -Path (Join-Path $upgradeDirectory '*') -Destination $stage
+        # The folder exists only while it holds a release, so it is checked now.
+        RequireAccessBoundaries $version
         Restart-Service -Name $updater
         $status = UpdatesStatus
         $manifest = Join-Path $upgradeDirectory "yahad-windows-$($upgradeRelease.version).json"
