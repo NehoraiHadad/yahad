@@ -528,6 +528,10 @@ def assert_update_panel(recorder, api, **expected):
 
 # Steps ----------------------------------------------------------------------------
 
+class InstallStopped(AcceptanceFailure):
+    pass
+
+
 class Installer:
     """deploy/install.py insists on a terminal, so it gets one, and it is answered like an owner."""
 
@@ -542,6 +546,18 @@ class Installer:
         os.close(slave)
         self.pump = threading.Thread(target=self.read, daemon=True)
         self.pump.start()
+        self.database_at_exit = None
+        self.waiter = threading.Thread(target=self.note_exit, daemon=True)
+        self.waiter.start()
+
+    def note_exit(self):
+        # Observed the moment the process ends: the app creates the database about a second later.
+        self.process.wait()
+        self.database_at_exit = DATABASE.exists()
+
+    def stopped_before_database(self):
+        self.waiter.join()
+        return self.process.returncode == 1 and self.database_at_exit is False and 'INSTALL_STOPPED' in self.tail()
 
     def read(self):
         with self.log.open('w', encoding='utf8') as log:
@@ -567,7 +583,7 @@ class Installer:
             match = re.search(r'#setup=([A-Za-z0-9_-]{43})', self.output)
         if not match and self.process.poll() is not None:
             time.sleep(1)
-            raise AcceptanceFailure(f'deploy/install.py exited {self.process.returncode} before printing a setup link:\n' + self.tail())
+            raise InstallStopped(f'deploy/install.py exited {self.process.returncode} before printing a setup link:\n' + self.tail())
         return match and match[1]
 
     def tail(self):
@@ -581,7 +597,18 @@ def install_base(recorder, github, work, family):
     with zipfile.ZipFile(work / 'base-assets/yachad-app.zip') as archive:
         archive.extractall(source)
     installer = Installer(source, work / 'install.log')
-    token = wait_until(installer.setup_token, 1200, 'deploy/install.py to print the setup link', 2)
+    try:
+        token = wait_until(installer.setup_token, 1200, 'deploy/install.py to print the setup link', 2)
+    except InstallStopped:
+        # deploy/install.py restarts the app and calls health(), which reads the schema from a database
+        # the app has not created yet (deploy/updater.py:428). v0.5.3 is published and cannot change, so
+        # the test does what its owner would: run the same command again, which resumes from its receipt.
+        if not installer.stopped_before_database():
+            raise
+        recorder.check(True, 'the first run stopped because health() read the database before the app created it')
+        wait_healthy(BASE_VERSION)
+        installer = Installer(source, work / 'install-rerun.log')
+        token = wait_until(installer.setup_token, 1200, 'the rerun of deploy/install.py to print the setup link', 2)
     api = Api()
     code, value = api.json('GET', '/api/setup/status')
     recorder.check(code == 200 and value == {'state': 'ready'}, 'setup is open through the managed HTTPS origin', value)
