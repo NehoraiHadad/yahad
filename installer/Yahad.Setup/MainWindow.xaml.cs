@@ -12,7 +12,7 @@ public partial class MainWindow:Window
     {
         InitializeComponent();VersionBadge.Text=ApplicationRelease.Version+" · Windows";this.uninstall=uninstall;Closing+=OnClosing;InitializeLan(lanChoices,existingAccess??(lanChoices is null&&HasExistingAccess()));
         InitializeUpdate(existingUpdate??ExistingInstallation.Present());
-        if(!uninstall&&(existingAccess??(System.IO.Directory.Exists(InstallLocations.Binaries)||PendingRemoval()))||!uninstall&&existingUpdateProfile)RemovalEntry.Visibility=Visibility.Visible;
+        if(!uninstall&&existingUpdateProfile)RemovalEntry.Visibility=Visibility.Visible;
         if(uninstall)
         {
             Title="יחד | הסרה";Eyebrow.Text="הסרת יחד";Heading.Text="מסירים את יחד.\nמה עושים עם הנתונים?";
@@ -21,12 +21,6 @@ public partial class MainWindow:Window
             SideHeading.Text="בוחרים איך\nלהיפרד.";SideIllustration.Visibility=Visibility.Collapsed;InstallSideDetails.Visibility=Visibility.Collapsed;UninstallSideDetails.Visibility=Visibility.Visible;
             NoticeText.Text="תוכנות ושירותים אחרים במחשב לא יוסרו.";UpdateRemovalUi();
         }
-    }
-    private static bool PendingRemoval()
-    {
-        // Presence of the fixed receipt name only; its contents are read and
-        // verified by the removal operation itself.
-        try{return System.IO.Directory.EnumerateFileSystemEntries(System.IO.Path.GetDirectoryName(InstallLocations.RemovalStateFile)!,System.IO.Path.GetFileName(InstallLocations.RemovalStateFile),System.IO.SearchOption.TopDirectoryOnly).Any();}catch{return false;}
     }
     private void RemovalOptions_Click(object sender,RoutedEventArgs e)
     {
@@ -86,7 +80,6 @@ public partial class MainWindow:Window
             "INSTALL_TIMEOUT"=>"שלב ההתקנה חרג מהזמן המותר. ההתקנה לא הושלמה; הקבצים שנוצרו נשמרו לבדיקה לפני המשך.",
             "UPDATE_CONSENT_ALREADY_CAPTURED"=>"הבחירה בעדכונים כבר נשמרה בניסיון הקודם. בהמשך ההתקנה היא תישמר; אפשר לשנות אותה בהגדרות של יחד אחרי ההתקנה.",
             "UPDATE_CONSENT_REQUIRED"=>"יש לבחור איך לקבל עדכונים ולאשר את מנגנון העדכון לפני ההתקנה.",
-            "LEGACY_INSTALL_UNINSTALL_FIRST"=>"במחשב מותקנת גרסה ישנה של יחד. לא שינינו דבר. הסירו אותה קודם עם המתקין שלה ובחרו לשמור את הנתונים, ואז הפעילו שוב את המתקין הזה.",
             "INSTALL_UPGRADE_REQUIRED"=>"במחשב מותקנת גרסה אחרת של יחד. כדי לעבור לגרסה הזו הסירו את יחד ובחרו לשמור את הנתונים, ואז הפעילו שוב את המתקין הזה. המשפחה והנתונים יישמרו.",
             "INSTALL_DOWNGRADE_REFUSED"=>"במחשב מותקנת או נשמרה גרסה חדשה יותר של יחד. המתקין הזה ישן יותר ולכן לא שינינו דבר.",
             "INSTALL_TARGET_CHANGED"=>"קובצי ההתקנה בתיקייה אינם תואמים לחבילה. ההתקנה נעצרה ולא שינתה אותם.",

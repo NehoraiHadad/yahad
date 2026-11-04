@@ -1,8 +1,5 @@
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
-using System.Security.Cryptography;
-using System.Security.Principal;
-using System.Text.RegularExpressions;
 using Yahad.Install;
 
 namespace Yahad.Service;
@@ -21,11 +18,11 @@ internal static class LanProxyPaths
     internal static string PublicJoin => Path.Combine(State, "join-public");
     internal static string Caddy => Path.Combine(Binaries, "caddy.exe");
     internal static string ServiceImage => Path.Combine(Binaries, "host", "Yahad.ServiceHost.exe");
-    internal static string ServiceSid() => ((SecurityIdentifier)new NTAccount("NT SERVICE", ServiceName).Translate(typeof(SecurityIdentifier))).Value;
 }
 
-internal sealed record LanProxyReceipt(int Format, string InstallationId, string ServiceSid, string AdapterId,
-    string Address, int AppPort, string CaddySha256, string ConfigSha256);
+// The address the proxy may serve on, and nothing else: Setup wrote it and this
+// service can only read it.
+internal sealed record LanProxyReceipt(string AdapterId, string Address);
 
 internal static class LanProxyPolicy
 {
@@ -36,21 +33,10 @@ internal static class LanProxyPolicy
     {
         var clean = win32 == 0 && specific == 0;
         var reportedQuiescentFailure = win32 == 1066 && (ServiceFailure)specific is
-            ServiceFailure.IdentityDenied or ServiceFailure.BootstrapUnavailable or ServiceFailure.ActivationUnavailable or
-            ServiceFailure.StartFailed or ServiceFailure.UnexpectedExit or ServiceFailure.ArgumentsRejected;
+            ServiceFailure.ActivationUnavailable or ServiceFailure.StartFailed or ServiceFailure.UnexpectedExit or ServiceFailure.ArgumentsRejected;
         if (state != (uint)ServiceState.Stopped || pid != 0 || !(clean || reportedQuiescentFailure))
             throw new IOException("LAN_QUIESCENCE_UNCONFIRMED");
     }
-    internal static void Require(LanProxyReceipt receipt, string expectedServiceSid)
-    {
-        if (receipt.Format != 1 || !Guid.TryParseExact(receipt.InstallationId, "N", out _) ||
-            !expectedServiceSid.StartsWith("S-1-5-80-", StringComparison.Ordinal) || receipt.ServiceSid != expectedServiceSid ||
-            receipt.AdapterId.Length is <1 or >512 || receipt.AdapterId.Any(char.IsControl) ||
-            !NetworkPlan.IsPrivateLanV4(receipt.Address) || receipt.AppPort is <1024 or >65535 ||
-            !Digest(receipt.CaddySha256) || !Digest(receipt.ConfigSha256))
-            throw new IOException("LAN_PROXY_RECEIPT");
-    }
-    private static bool Digest(string value) => Regex.IsMatch(value, "^[a-f0-9]{64}$", RegexOptions.CultureInvariant);
     internal static bool AddressPresent(LanProxyReceipt receipt, IEnumerable<AdapterAddress> addresses) =>
         addresses.Any(a => a.Up && a.AdapterId == receipt.AdapterId && a.Address == receipt.Address && NetworkPlan.IsPrivateLanV4(a.Address));
     internal static IEnumerable<AdapterAddress> Addresses() => NetworkInterface.GetAllNetworkInterfaces()
@@ -69,10 +55,6 @@ internal interface ILanProxyAdmission
     Task<ILanProxyProcess> StartAsync(CancellationToken cancellation);
     bool SelectedAddressPresent();
 }
-internal sealed class LanProxyStartUnconfirmed(ILanProxyProcess process, Exception cause) : IOException("LAN_PROXY_START_UNCONFIRMED", cause)
-{
-    internal ILanProxyProcess Process => process;
-}
 
 internal sealed class WindowsLanProxyAdmission : ILanProxyAdmission
 {
@@ -81,12 +63,7 @@ internal sealed class WindowsLanProxyAdmission : ILanProxyAdmission
     public Task<ILanProxyProcess> StartAsync(CancellationToken cancellation) => Task.Run<ILanProxyProcess>(() =>
     {
         cancellation.ThrowIfCancellationRequested();
-        var expected = LanProxyPaths.ServiceSid();
-        ServiceIdentityPolicy.Require(new WindowsServiceTokenReader().Read(), expected);
-        var candidate = NativeJson.Read<LanProxyReceipt>(NativeInstallFiles.ReadRecord(LanProxyPaths.Receipt, 4096)); LanProxyPolicy.Require(candidate, expected);
-        if (Convert.ToHexStringLower(SHA256.HashData(NativeInstallFiles.ReadRecord(LanProxyPaths.Config, 131072))) != candidate.ConfigSha256) throw new IOException("LAN_PROXY_CONFIG_CHANGED");
-        using (var image = WindowsFileBoundary.OpenRead(LanProxyPaths.Caddy))
-            if (image.Length < 1024 || image.Sha256(268435456) != candidate.CaddySha256) throw new IOException("LAN_PROXY_IMAGE_CHANGED");
+        var candidate = NativeJson.Read<LanProxyReceipt>(NativeInstallFiles.ReadRecord(LanProxyPaths.Receipt, 4096));
         if (!LanProxyPolicy.AddressPresent(candidate, LanProxyPolicy.Addresses())) throw new IOException("LAN_ADDRESS_CHANGED");
         receipt = candidate;
         cancellation.ThrowIfCancellationRequested();
@@ -96,55 +73,27 @@ internal sealed class WindowsLanProxyAdmission : ILanProxyAdmission
         environment["HOME"] = LanProxyPaths.Data;
         environment["XDG_DATA_HOME"] = LanProxyPaths.Data;
         environment["XDG_CONFIG_HOME"] = LanProxyPaths.Temporary;
-        try
-        {
-            return new OwnedLanProxyProcess(JobProcess.Start(LanProxyPaths.Caddy,
-                ["run", "--config", LanProxyPaths.Config, "--adapter", "caddyfile"], LanProxyPaths.State, environment));
-        }
-        catch (JobStartQuiescenceUnconfirmedException failure)
-        {
-            throw new LanProxyStartUnconfirmed(new OwnedLanProxyProcess(failure.OwnedProcess), failure);
-        }
+        return new OwnedLanProxyProcess(JobProcess.Start(LanProxyPaths.Caddy,
+            ["run", "--config", LanProxyPaths.Config, "--adapter", "caddyfile"], LanProxyPaths.State, environment));
     }, cancellation);
     private sealed class OwnedLanProxyProcess(JobProcess job) : ILanProxyProcess
     {
-        private bool empty;
         public Task<int> WaitForExitAsync(CancellationToken cancellation) => job.WaitAsync(cancellation);
-        public async Task StopAsync(CancellationToken cancellation)
-        {
-            // Admin API is disabled. Terminating this contained proxy tree is
-            // intentional: it has no app DB and cannot outlive its service.
-            await job.TerminateAndWaitForTreeEmptyAsync(cancellation); empty = true;
-        }
-        public void Dispose()
-        {
-            if (!empty) throw new IOException("LAN_PROXY_QUIESCENCE_UNCONFIRMED");
-            job.Dispose();
-        }
+        // Admin API is disabled. Terminating this contained proxy tree is
+        // intentional: it has no app DB and cannot outlive its service.
+        public Task StopAsync(CancellationToken cancellation) => job.TerminateAndWaitForTreeEmptyAsync(cancellation);
+        public void Dispose() => job.Dispose();
     }
 }
 
 internal sealed class LanProxyServiceController(ILanProxyAdmission admission, TimeSpan? addressInterval = null,
-    TimeSpan? admissionBudget = null, TimeSpan? cleanupBudget = null)
+    TimeSpan? admissionBudget = null, TimeSpan? cleanupBudget = null) : ScmController
 {
-    private readonly TaskCompletionSource stop = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private ILanProxyProcess? unresolved;
-    private Task<ILanProxyProcess>? unresolvedStart;
-    private int terminal;
-    internal uint Control(uint control)
-    {
-        if (control == ServiceDefinition.Interrogate) return 0;
-        if (control is not (ServiceDefinition.Stop or ServiceDefinition.Shutdown)) return 120;
-        if (Volatile.Read(ref terminal) != 0) return 1062;
-        stop.TrySetResult(); return 0;
-    }
-    internal async Task<ServiceRunResult> RunAsync(Action<ServiceReport> publish)
+    internal override async Task<ServiceRunResult> RunAsync(Action<ServiceReport> publish)
     {
         var startBudget = admissionBudget ?? TimeSpan.FromSeconds(30);
         var stopBudget = cleanupBudget ?? TimeSpan.FromSeconds(10);
         var interval = addressInterval ?? TimeSpan.FromSeconds(5);
-        if (startBudget <= TimeSpan.Zero || startBudget > TimeSpan.FromSeconds(30) || stopBudget <= TimeSpan.Zero ||
-            stopBudget > TimeSpan.FromSeconds(20) || interval <= TimeSpan.Zero || interval > TimeSpan.FromSeconds(30)) throw new ArgumentOutOfRangeException();
         ILanProxyProcess? child = null; Task<ILanProxyProcess>? starting = null;
         var failure = ServiceFailure.None; var quiescent = true;
         using var startCancellation = new CancellationTokenSource(startBudget);
@@ -164,7 +113,7 @@ internal sealed class LanProxyServiceController(ILanProxyAdmission admission, Ti
                 // cleanup; cancellation is not proof that no process exists.
                 try { child = await starting.WaitAsync(stopBudget); }
                 catch (OperationCanceledException) when (starting.IsCanceled) { }
-                catch (TimeoutException) { unresolvedStart = starting; quiescent = false; failure = ServiceFailure.QuiescenceUnknown; }
+                catch (TimeoutException) { quiescent = false; failure = ServiceFailure.QuiescenceUnknown; }
             }
             else child = await starting;
             if (child is not null && failure == ServiceFailure.None && !stop.Task.IsCompleted)
@@ -190,7 +139,6 @@ internal sealed class LanProxyServiceController(ILanProxyAdmission admission, Ti
             }
             }
         }
-        catch (LanProxyStartUnconfirmed owned) { child = owned.Process; failure = ServiceFailure.StartFailed; }
         catch { if (failure == ServiceFailure.None) failure = ServiceFailure.StartFailed; }
         finally
         {
@@ -204,40 +152,18 @@ internal sealed class LanProxyServiceController(ILanProxyAdmission admission, Ti
                     using var cleanup = new CancellationTokenSource(stopBudget);
                     await child.StopAsync(cleanup.Token).WaitAsync(cleanup.Token); child.Dispose();
                 }
-                catch { unresolved = child; quiescent = false; failure = ServiceFailure.QuiescenceUnknown; }
+                catch { quiescent = false; failure = ServiceFailure.QuiescenceUnknown; }
             }
-            if (starting is { IsCompleted: false }) { unresolvedStart = starting; quiescent = false; failure = ServiceFailure.QuiescenceUnknown; }
+            if (starting is { IsCompleted: false }) { quiescent = false; failure = ServiceFailure.QuiescenceUnknown; }
             Volatile.Write(ref terminal, 1);
         }
+        // On uncertainty do not publish STOPPED: the dispatcher exits the process
+        // at once, and only that ends what may still be running.
         if (quiescent)
         {
             try { publish(new(ServiceState.Stopped, 0, 0, 0, failure == ServiceFailure.None ? 0u : 1066u, (uint)failure)); }
             catch { return new(ServiceFailure.StatusTransport, true); }
         }
-        // Fields retain all unresolved owners until the application exits. Do
-        // not publish STOPPED or release pinned CA/config paths on uncertainty.
-        GC.KeepAlive(unresolved); GC.KeepAlive(unresolvedStart);
         return new(failure, quiescent);
-    }
-}
-
-internal sealed class LanProxyServiceApplication(IScmApi api, Action<int> unsafeExit, ILanProxyAdmission? admission = null)
-{
-    internal int Run()
-    {
-        var result = new ServiceRunResult(ServiceFailure.StatusTransport, false);
-        api.Dispatch(LanProxyPaths.ServiceName, arguments =>
-        {
-            var controller = new LanProxyServiceController(admission ?? new WindowsLanProxyAdmission());
-            api.Register(LanProxyPaths.ServiceName, controller.Control);
-            if (arguments.Length != 1 || arguments[0] != LanProxyPaths.ServiceName)
-            {
-                api.Publish(new(ServiceState.Stopped, 0, 0, 0, 1066, (uint)ServiceFailure.ArgumentsRejected));
-                result = new(ServiceFailure.ArgumentsRejected, true); return;
-            }
-            result = controller.RunAsync(api.Publish).GetAwaiter().GetResult();
-            if (!result.QuiescenceConfirmed || result.Failure == ServiceFailure.StatusTransport) unsafeExit(1);
-        });
-        return result.Failure == ServiceFailure.None && result.QuiescenceConfirmed ? 0 : 1;
     }
 }

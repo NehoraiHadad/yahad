@@ -110,7 +110,6 @@ internal sealed class StoreFixtureModules
             "--rootDir",Path.Combine(repo,"src"),"--outDir",output,Path.Combine(repo,"src/store.ts"),Path.Combine(repo,"src/platform-files.ts")};
         FixtureProcesses.JobOwner seed;
         try{seed=processes.StartJob(node,arguments,repo,LaunchEnvironment.Clean(temporary));}
-        catch(JobStartQuiescenceUnconfirmedException failure){throw await StoreFixture.StopPreparation(failure.OwnedProcess,failure);}
         catch(Exception failure){throw new FixturePreparationException(true,failure);}
         using var jobOwner=seed;var job=seed.Process;using var bound=new CancellationTokenSource(TimeSpan.FromSeconds(120));
         try

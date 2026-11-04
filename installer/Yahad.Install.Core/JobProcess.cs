@@ -5,15 +5,6 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Yahad.Install;
 
-/// <summary>Retains the exact owned process/job after an unconfirmed failed start.
-/// Do not release data reservations until a later observed cleanup succeeds.</summary>
-public sealed class JobStartQuiescenceUnconfirmedException:IOException
-{
-    public JobProcess OwnedProcess {get;}
-    internal JobStartQuiescenceUnconfirmedException(JobProcess owned,Exception start,Exception cleanup)
-        :base("JOB_START_QUIESCENCE_UNCONFIRMED",new AggregateException(start,cleanup)){OwnedProcess=owned;}
-}
-
 /// <summary>Native owned process tree. No service registration APIs.</summary>
 public sealed class JobProcess : IDisposable
 {
@@ -49,22 +40,19 @@ public sealed class JobProcess : IDisposable
             if (Native.ResumeThread(process.Thread) == uint.MaxValue) throw new Win32Exception();
             return child;
         }
-        catch(Exception startFailure)
+        catch
         {
             if(child is null)job.Dispose();
             else
             {
+                // Closing the job handle is what ends anything still running: it is
+                // kill-on-close. A handed-off data lease stays held until the child is gone.
                 try
                 {
                     using var cleanup=new CancellationTokenSource(TimeSpan.FromSeconds(5));
                     child.TerminateAndWaitForTreeEmptyAsync(cleanup.Token).GetAwaiter().GetResult();
                 }
-                catch(Exception cleanupFailure)
-                {
-                    // Keep the exact root and job handles owned. The service
-                    // launcher must transfer this owner into its failed session.
-                    throw new JobStartQuiescenceUnconfirmedException(child,startFailure,cleanupFailure);
-                }
+                catch{}
                 child.Dispose();
             }
             throw;
@@ -100,8 +88,8 @@ public sealed class JobProcess : IDisposable
         while (true)
         {
             cancellation.ThrowIfCancellationRequested();
-            var accounting=JobAccounting.Read(job);
-            if (accounting.TreeEmpty)return;
+            if (!Native.QueryInformationJobObject(job, 1, out var accounting, (uint)Marshal.SizeOf<JobAccounting>(), IntPtr.Zero)) throw new Win32Exception();
+            if (accounting.ActiveProcesses == 0) return;
             await Task.Delay(20, cancellation).ConfigureAwait(false);
         }
     }
@@ -130,6 +118,13 @@ public sealed class JobProcess : IDisposable
         return b.Append('\\', slashes * 2).Append('"').ToString();
     }
 
+    // JOBOBJECT_BASIC_ACCOUNTING_INFORMATION: TotalProcesses is lifetime accounting;
+    // only ActiveProcesses observes emptiness.
+    [StructLayout(LayoutKind.Sequential)] private struct JobAccounting
+    {
+        public long TotalUser, TotalKernel, PeriodUser, PeriodKernel;
+        public uint PageFaults, TotalProcesses, ActiveProcesses, TerminatedProcesses;
+    }
     [StructLayout(LayoutKind.Sequential)] private struct BasicLimit
     {
         public long ProcessTime, JobTime;
@@ -166,6 +161,8 @@ public sealed class JobProcess : IDisposable
         internal static extern bool CreateProcessW(string app, StringBuilder command, IntPtr processAttributes,
             IntPtr threadAttributes, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint flags, IntPtr environment,
             string directory, ref StartupInfo startup, out ProcessInfo process);
+        [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool QueryInformationJobObject(SafeFileHandle job, int kind, out JobAccounting accounting, uint length, IntPtr returned);
         [DllImport("kernel32.dll", SetLastError = true)] internal static extern uint ResumeThread(IntPtr thread);
         [DllImport("kernel32.dll", SetLastError = true)] internal static extern uint WaitForSingleObject(SafeProcessHandle process, uint milliseconds);
         [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]

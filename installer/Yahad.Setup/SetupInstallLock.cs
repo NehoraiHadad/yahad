@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Security.AccessControl;
+using Yahad.Install;
 using Microsoft.Win32.SafeHandles;
 namespace Yahad.Setup;
 
@@ -34,8 +34,8 @@ internal sealed class SetupInstallLock:IDisposable
     }
     private static SafeWaitHandle Create()
     {
-        var acl=new RawSecurityDescriptor("O:BAD:P(A;;GA;;;SY)(A;;GA;;;BA)");var bytes=new byte[acl.BinaryLength];acl.GetBinaryForm(bytes,0);var pin=GCHandle.Alloc(bytes,GCHandleType.Pinned);
-        var attributes=new Attributes{Length=Marshal.SizeOf<Attributes>(),Descriptor=pin.AddrOfPinnedObject()};
+        var bytes=NativeInstallFiles.Bytes("O:BAD:P(A;;GA;;;SY)(A;;GA;;;BA)");var pin=GCHandle.Alloc(bytes,GCHandleType.Pinned);
+        var attributes=new NativeInstallFiles.Attributes{Length=Marshal.SizeOf<NativeInstallFiles.Attributes>(),Descriptor=pin.AddrOfPinnedObject()};
         try
         {
             var handle=CreateMutexW(ref attributes,false,@"Global\Yahad.FirstInstall.Setup");
@@ -45,8 +45,7 @@ internal sealed class SetupInstallLock:IDisposable
         finally{pin.Free();}
     }
     public void Dispose(){if(release.IsSet)return;release.Set();holder.Join();release.Dispose();}
-    [StructLayout(LayoutKind.Sequential)]private struct Attributes{public int Length;public IntPtr Descriptor;public int Inherit;}
-    [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)]private static extern SafeWaitHandle CreateMutexW(ref Attributes attributes,bool initialOwner,string name);
+    [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)]private static extern SafeWaitHandle CreateMutexW(ref NativeInstallFiles.Attributes attributes,bool initialOwner,string name);
     [DllImport("kernel32.dll",SetLastError=true)]private static extern uint WaitForSingleObject(SafeWaitHandle mutex,uint timeout);
     [DllImport("kernel32.dll",SetLastError=true)]private static extern bool ReleaseMutex(SafeWaitHandle mutex);
 }

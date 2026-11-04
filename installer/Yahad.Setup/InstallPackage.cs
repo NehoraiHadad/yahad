@@ -8,13 +8,8 @@ namespace Yahad.Setup;
 
 internal sealed record InstallMember(string Path,long Size,string Sha256);
 internal sealed record InstallPackageManifest(int Format,string Version,string SourceCommit,string ZipSha256,string PayloadDigest,InstallMember[] Files);
-// Where Extract writes. The private default serves synthetic tests; Setup
-// supplies protected directories, protected files and a no-replace commit.
-internal sealed record ExtractTarget(Action<string> CreateDirectory,Func<string,FileStream> CreateFile,Action<string,string> Commit,Func<string,InstallMember,bool> ExistingMatches)
-{
-    internal static ExtractTarget Private{get;}=new(path=>Directory.CreateDirectory(path),path=>new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.None,1048576,FileOptions.WriteThrough),
-        (partial,path)=>File.Move(partial,path,false),(path,record)=>{using var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read);return file.Length==record.Size&&Convert.ToHexStringLower(SHA256.HashData(file))==record.Sha256;});
-}
+// Where Extract writes: protected directories, protected files and a no-replace commit.
+internal sealed record ExtractTarget(Action<string> CreateDirectory,Func<string,FileStream> CreateFile,Action<string,string> Commit,Func<string,InstallMember,bool> ExistingMatches);
 // One Format-1 archive holding host/ (the service host), updater/ (the Updater
 // service) and payload/ (node, the application, ffmpeg and caddy). Nothing else.
 internal sealed class InstallPackage:IDisposable
@@ -54,9 +49,9 @@ internal sealed class InstallPackage:IDisposable
     // Writes every member under root through a same-directory partial that is
     // committed by a no-replace rename, so a present member is always whole.
     // A present member is never rewritten: it must already be byte-identical.
-    internal void Extract(string root,Action<int> progress,CancellationToken cancellation,ExtractTarget? target=null)
+    internal void Extract(string root,Action<int> progress,CancellationToken cancellation,ExtractTarget target)
     {
-        target??=ExtractTarget.Private;var count=0;var full=Path.GetFullPath(root);
+        var count=0;var full=Path.GetFullPath(root);
         foreach(var record in Manifest.Files)
         {
             cancellation.ThrowIfCancellationRequested();var path=Path.GetFullPath(Path.Combine(full,record.Path.Replace('/',Path.DirectorySeparatorChar)));

@@ -19,7 +19,6 @@ internal static class ServiceStartupDiagnostic
 {
     internal static string Encode(StartupDiagnosticRole role,Exception error,IReadOnlyList<StartupStep>? steps=null)
     {
-        if(!Enum.IsDefined(role))throw new ArgumentOutOfRangeException(nameof(role));
         var cause=error;int? native=null,exit=null;
         for(var depth=0;depth<8;depth++)
         {
@@ -38,20 +37,17 @@ internal static class ServiceStartupDiagnostic
         .Where(site=>site.Length<=512).Take(4).ToArray();
     internal static string? KnownCode(string value)=>value switch
     {
-        "SERVICE_TOKEN_BOUND" or "SERVICE_TOKEN_USER" or "NATIVE_REPARSE_KIND_OR_HARDLINK" or "NATIVE_LOCAL_PATH"=>value,
+        "NATIVE_REPARSE_KIND_OR_HARDLINK" or "NATIVE_LOCAL_PATH"=>value,
         "SERVICE_CHILD_EXITED" or "SERVICE_CHILD_EOF" or "SERVICE_CHILD_PEER" or "SERVICE_CHILD_READY"=>value,
-        "INSTALLED_LAUNCH_BOUND" or "INSTALLED_LAUNCH_FORMAT" or "INSTALLED_LAUNCH_PORT" or "INSTALLED_LAUNCH_ORIGIN" or "INSTALLED_LAUNCH_IDENTIFIER" or
-        "INSTALLED_LAUNCH_CHANGED" or "INSTALLED_LAUNCH_IMAGE_LOCATION" or "INSTALLED_ALREADY_STARTED"=>value,
+        "INSTALLED_LAUNCH_BOUND" or "INSTALLED_LAUNCH_FORMAT" or "INSTALLED_LAUNCH_PORT" or "INSTALLED_LAUNCH_ORIGIN" or "INSTALLED_LAUNCH_IDENTIFIER"=>value,
         _=>null
     };
-    internal static bool TryRecord(StartupDiagnosticRole role,Exception error,IReadOnlyList<StartupStep>? steps=null)=>TryRecord(role,error,Write,steps);
-    internal static bool TryRecord(StartupDiagnosticRole role,Exception error,Func<string,bool> write,IReadOnlyList<StartupStep>? steps=null)
-    {try{return write(Encode(role,error,steps));}catch{return false;}}
+    internal static bool TryRecord(StartupDiagnosticRole role,Exception error,IReadOnlyList<StartupStep>? steps=null)
+    {try{return Write(Encode(role,error,steps),1001);}catch{return false;}}
     // The repair gave up on an upgrade; an administrator has to act. Versions and
     // the upgrade identifier only.
     internal static bool TryRecordUpgrade(string id,string from,string to,int attempts)
     {try{return Write(JsonSerializer.Serialize(new{Format=1,Upgrade=id,From=from,To=to,Attempts=attempts}),3003);}catch{return false;}}
-    private static bool Write(string value)=>Write(value,1001);
     private static bool Write(string value,uint id)
     {
         // RegisterEventSource retrieves a handle; an unregistered fixed source

@@ -13,7 +13,7 @@ internal static class FailureDiagnosticTests
         static void Require(bool value){if(!value)throw new IOException("FAILURE_DIAGNOSTIC_REGRESSION");}
         await check("fixed installer refusal codes survive without exposing arbitrary exception text",()=>
         {
-            foreach(var code in new[]{"INSTALL_TARGET_CHANGED","INSTALL_SERVICE_GENERATION_CHANGED","INSTALL_SERVICE_STOP_STALLED","INSTALL_NOT_PREPARED","INSTALL_NOT_COMMITTED","INSTALL_KEY_INVALID","UNINSTALL_REGISTRATION_CHANGED","UNINSTALL_INCOMPLETE","UNINSTALL_QUIESCENCE_UNCONFIRMED","UNINSTALL_SERVICE_REAPPEARED"})Require(SetupOperation.Code(new IOException(code))==code);
+            foreach(var code in new[]{"INSTALL_TARGET_CHANGED","INSTALL_SERVICE_GENERATION_CHANGED","INSTALL_SERVICE_STOP_STALLED","UNINSTALL_INCOMPLETE","UNINSTALL_QUIESCENCE_UNCONFIRMED","UNINSTALL_SERVICE_REAPPEARED"})Require(SetupOperation.Code(new IOException(code))==code);
             Require(SetupOperation.Code(new IOException(@"C:\private-family\connection.json"))=="INSTALL_FAILED");
             foreach(var retired in new[]{"INSTALL_STAGING_CHANGED","UPDATE_PREPARING_CANCEL_REFUSED","UPDATE_SERVICE_START_FAILED"})Require(SetupOperation.Code(new IOException(retired))=="INSTALL_FAILED");
             return Task.CompletedTask;
@@ -37,19 +37,6 @@ internal static class FailureDiagnosticTests
             Require(refused&&Directory.Exists(collision)&&Directory.GetFiles(root,"occupied.partial-*").Length==0);
             return Task.CompletedTask;
         });
-        await check("persisted diagnostic is sanitized bound to one installation and cannot authorize removal",()=>
-        {
-            var state=FullInstallerIntegrationTests.State("removing_all_data");
-            var failure=new SetupOperationException(UninstallPhase.ProtectRemovalReceipt,new Win32Exception(87,"private exception text"));
-            var record=UninstallDiagnosticRecord.Create(state,UninstallMode.DeleteData,failure);
-            var bytes=JsonSerializer.SerializeToUtf8Bytes(record);var text=System.Text.Encoding.UTF8.GetString(bytes);
-            Require(bytes.Length<8192&&!text.Contains("private",StringComparison.Ordinal));
-            var copy=JsonSerializer.Deserialize<UninstallDiagnosticRecord>(bytes)!;copy.RequireSameInstallation(state);
-            var refused=false;try{copy.RequireSameInstallation(state with{InstallationId=Guid.NewGuid().ToString("N")});}catch(IOException){refused=true;}Require(refused);
-            Require(copy.Mode=="DeleteData"&&copy.Phase=="ProtectRemovalReceipt"&&copy.NativeError==87);
-            Require(InstallLocations.RemovalDiagnosticFile==InstallLocations.Binaries+".uninstall-diagnostic.json");
-            return Task.CompletedTask;
-        });
         await check("native error codes survive operation context without changing established failure meanings",()=>
         {
             foreach(var (native,code) in new[]{(5,"ACCESS_DENIED"),(32,"FILE_LOCKED"),(112,"DISK_SPACE"),(87,"INSTALL_FAILED")})
@@ -67,19 +54,19 @@ internal static class FailureDiagnosticTests
                 (new IOException("UNINSTALL_MODE_CHANGED"),"UNINSTALL_MODE_CHANGED"),
                 (new UnauthorizedAccessException("private owner"),"ACCESS_DENIED"),
                 (new OperationCanceledException(),"INSTALL_TIMEOUT")})
-                Require(SetupOperation.Code(new SetupOperationException(UninstallPhase.ReadState,cause))==code);
+                Require(SetupOperation.Code(new SetupOperationException(UninstallPhase.StopService,cause))==code);
             return Task.CompletedTask;
         });
         await check("setup result serializes bounded numeric diagnostics without private exception text",()=>
         {
             const string secret="C:\\private-family\\secret-connection.json";
-            var failure=new SetupOperationException(UninstallPhase.ProtectRemovalReceipt,new Win32Exception(87,secret));
+            var failure=new SetupOperationException(UninstallPhase.WriteRemovalReceipt,new Win32Exception(87,secret));
             var result=new SetupResult(false,SetupOperation.Code(failure),DataPreserved:false,Failure:SetupFailureDetail.From(failure));
             var bytes=JsonSerializer.SerializeToUtf8Bytes(result);
             var text=System.Text.Encoding.UTF8.GetString(bytes);
             Require(!text.Contains("private-family",StringComparison.Ordinal)&&!text.Contains("secret-connection",StringComparison.Ordinal));
             var copy=JsonSerializer.Deserialize<SetupResult>(bytes)!;
-            Require(copy is {Ok:false,DataPreserved:false,Failure:{Phase:"ProtectRemovalReceipt",NativeError:87}});
+            Require(copy is {Ok:false,DataPreserved:false,Failure:{Phase:"WriteRemovalReceipt",NativeError:87}});
             var copiedDetail=copy.Failure??throw new IOException("FAILURE_DETAIL_MISSING");
             Require(copiedDetail.Display().Contains("Windows 87",StringComparison.Ordinal));
             return Task.CompletedTask;
@@ -92,8 +79,6 @@ internal static class FailureDiagnosticTests
             var failure=new SetupOperationException(UninstallPhase.FullUninstall,thrown!);
             var detail=SetupFailureDetail.From(failure);
             Require(SetupOperation.Code(failure)=="INSTALL_FAILED"&&detail.Sites is {Length:>0} sites&&sites[0].Contains("Refuse",StringComparison.Ordinal)&&sites.All(site=>site.Contains("+IL_",StringComparison.Ordinal)));
-            var encoded=System.Text.Encoding.UTF8.GetString(FullInstallDiagnostics.Encode(new string('a',32),failure,123));
-            Require(encoded.Contains("Refuse",StringComparison.Ordinal)&&!encoded.Contains("UNLISTED",StringComparison.Ordinal)&&!encoded.Contains("hidden",StringComparison.Ordinal));
             return Task.CompletedTask;
         });
         await check("non-native exceptions retain only stage and HRESULT",()=>

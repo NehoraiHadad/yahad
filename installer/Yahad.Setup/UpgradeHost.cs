@@ -138,7 +138,7 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
         ClearStateResidue();Advance("preparing");
         try
         {
-            service=NativeService.Open(state.From,installed.OwnerSid);updater=NativeService.Open(state.From,installed.OwnerSid,ServiceSpec.Updater);
+            service=NativeService.Open(state.From);updater=NativeService.Open(state.From,ServiceSpec.Updater);
             UpgradeFiles.EnsureUpdaterState(installed.Consent.Automatic);
             Prepare(package,setupBytes);service.ClearFailureActions();updater.ClearFailureActions();Advance("prepared");
             await updater.StopAsync(CancellationToken.None);await service.StopAsync(CancellationToken.None);Advance("stopped");
@@ -185,8 +185,8 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
         }
         catch(Exception failure){return Result("ROLLBACK_FAILED",failure:failure);}
     }
-    private NativeService Service(){service??=NativeService.OpenAt(state.To,state.From,installed.OwnerSid);return service;}
-    private NativeService Updater(){updater??=NativeService.OpenAt(state.To,state.From,installed.OwnerSid,ServiceSpec.Updater);return updater;}
+    private NativeService Service(){service??=NativeService.OpenAt(state.To,state.From);return service;}
+    private NativeService Updater(){updater??=NativeService.OpenAt(state.To,state.From,ServiceSpec.Updater);return updater;}
     private static async Task RunningAsync(NativeService value)
     {
         value.EnableStartup();
@@ -225,7 +225,7 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
         {
             var previous=new RetainedRelease(state.From,installed.SetupSha256,new FileInfo(InstallLocations.InstallerImage(state.From)).Length,installed.Files);
             var next=installed with{Version=state.To,PackageDigest=state.Target.PackageDigest,PayloadDigest=state.Target.PayloadDigest,SourceCommit=state.Target.SourceCommit,SetupSha256=state.Target.SetupSha256,Files=state.Target.Files,Previous=previous};
-            next.Require();NativeInstallFiles.Publish(InstallLocations.StateFile,JsonSerializer.SerializeToUtf8Bytes(next));installed=next;
+            NativeInstallFiles.Publish(InstallLocations.StateFile,JsonSerializer.SerializeToUtf8Bytes(next));installed=next;
         }
         else if(installed.Version!=state.To)throw new IOException("INSTALL_STATE_INVALID");
         Advance("committed");NativeSetupHost.Register(installed);RepairTask.Register(installed.Version,DateTimeOffset.Now);

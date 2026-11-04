@@ -43,7 +43,7 @@ internal static class StoreIntegrationTests
             f.ClearSignals();var lease=WindowsFileBoundary.AcquireDataLease(f.Data);var launcher=f.CreateLauncher(f.RawSpec(lease));IContainedAppSession? session=null;
             try
             {
-                session=await launcher.StartAsync(new("lease-test"),default);using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(20));await launcher.WaitForHealthyAsync(session,deadline.Token);lease.Dispose();
+                session=await launcher.StartAsync(default);using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(20));await launcher.WaitForHealthyAsync(session,deadline.Token);lease.Dispose();
                 try{using var wrong=WindowsFileBoundary.AcquireDataLease(f.Data);throw new Exception("second writer entered");}catch(Win32Exception e)when(e.NativeErrorCode==32){}
                 await session.RequestGracefulStopAsync(deadline.Token);await session.WaitForRootExitAsync(deadline.Token);await session.WaitForTreeEmptyAsync(deadline.Token);Require(f.Control.HeldAfterClose);
             }
@@ -90,7 +90,7 @@ internal static class StoreIntegrationTests
         public Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)
         {
             var lease=WindowsFileBoundary.AcquireDataLease(fixture.Data);
-            try{return Task.FromResult(new AuthorizedServiceStart(new("store"),fixture.CreateLauncher(fixture.RawSpec(lease)),lease));}
+            try{return Task.FromResult(new AuthorizedServiceStart(fixture.CreateLauncher(fixture.RawSpec(lease)),lease));}
             catch{lease.Dispose();throw;}
         }
     }

@@ -15,7 +15,7 @@ internal static class LifecycleCleanupTests
     {
         public readonly string PidFile=Path.Combine(root,"grandchild.pid");
         public int RootPid;
-        public Task<IContainedAppSession> StartAsync(AppRelease release,CancellationToken cancellation)
+        public Task<IContainedAppSession> StartAsync(CancellationToken cancellation)
         {
             var environment=LaunchEnvironment.Clean(root);
             environment["DOTNET_ROOT"]=Environment.GetEnvironmentVariable("DOTNET_ROOT")??throw new IOException("FIXTURE_DOTNET_ROOT");
@@ -36,7 +36,7 @@ internal static class LifecycleCleanupTests
         await check(timeout?"native health timeout cleans complete job before returning failure":"native failed health cleans root and grandchild before returning failure",async()=>
         {
             var directory=PrivateSession.Create(root);var fixture=new NativeFixture(directory,timeout);
-            await using var host=new AppLifecycle(new("fixture"),fixture,TimeSpan.FromSeconds(3));
+            await using var host=new AppLifecycle(fixture,TimeSpan.FromSeconds(3));
             try{await host.StartAsync();throw new Exception("expected startup failure");}
             catch(Exception e)when(e is IOException or OperationCanceledException){}
             if(host.State!=AppLifecycleState.Failed||Alive(fixture.RootPid))throw new Exception("root cleanup unconfirmed");

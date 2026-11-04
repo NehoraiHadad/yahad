@@ -9,20 +9,7 @@ public partial class MainWindow
 {
     private sealed record LanDisplay(LanChoice Choice, string Label);
     private bool existingNetworkAccess;
-    private static bool HasExistingAccess()
-    {
-        // Presence only through public parent directories. The window never reads
-        // installation records or CA contents; the operation verifies them.
-        try
-        {
-            var root=LanProxyPaths.State;
-            var binaries=InstallLocations.Binaries;var removal=InstallLocations.RemovalStateFile;
-            return Directory.EnumerateFileSystemEntries(Path.GetDirectoryName(binaries)!,Path.GetFileName(binaries),SearchOption.TopDirectoryOnly).Any()||
-                Directory.EnumerateFileSystemEntries(Path.GetDirectoryName(removal)!,Path.GetFileName(removal),SearchOption.TopDirectoryOnly).Any()||
-                Directory.EnumerateFileSystemEntries(Path.GetDirectoryName(root)!,Path.GetFileName(root),SearchOption.TopDirectoryOnly).Any();
-        }
-        catch{return true;} // Unknown existing state must not be called local-only.
-    }
+    private static bool HasExistingAccess()=>new[]{InstallLocations.Binaries,InstallLocations.RemovalStateFile,LanProxyPaths.State}.Any(Path.Exists);
     private void InitializeLan(IReadOnlyList<LanChoice>? choices=null,bool existingAccess=false)
     {
         if(uninstall){LanPanel.Visibility=Visibility.Collapsed;return;}
@@ -69,7 +56,7 @@ public partial class MainWindow
         SaveLanCertificate.Visibility=lan.CertificateDerBase64 is null?Visibility.Collapsed:Visibility.Visible;
         LanResultText.Text="כתובת יחד בבית: "+lan.Origin+"\n"+
             (lan.HelpOrigin is null?"דף HTTP אינו מופעל. ניתן להעביר את התעודה הציבורית מהמחשב באמצעות ערוץ עצמאי.":"דף ההצטרפות: "+lan.HelpOrigin)+"\n"+
-            (lan.HostConnectionVerified?"חיבור HTTPS מהמחשב נבדק. כניסה ממכשיר נוסף עדיין לא נבדקה.":"הגישה הביתית נעצרה. לפני התקנה מחדש אפשר להסיר את האמון בתעודה הזו מכל מכשיר לפי מדריך ההצטרפות.");
+            "חיבור HTTPS מהמחשב נבדק. כניסה ממכשיר נוסף עדיין לא נבדקה.";
     }
     private void SaveLanCertificate_Click(object sender,RoutedEventArgs e)
     {

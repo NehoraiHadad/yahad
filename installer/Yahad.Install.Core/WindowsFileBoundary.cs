@@ -76,7 +76,7 @@ public static class WindowsFileBoundary
         try
         {
             // OPEN_ALWAYS + no-follow: atomically create or open without following a final link.
-            gate = Native.CreateFileW(Extended(Path.Combine(directory, "process.lock")), GenericRead | GenericWrite, 0, IntPtr.Zero, 4, FollowNothing, IntPtr.Zero);
+            gate = Native.CreateFileW(NativeInstallFiles.Extended(Path.Combine(directory, "process.lock")), GenericRead | GenericWrite, 0, IntPtr.Zero, 4, FollowNothing, IntPtr.Zero);
             if (gate.IsInvalid) throw new Win32Exception();
             CheckKind(gate, false);
             return new(pinned, gate);
@@ -91,7 +91,6 @@ public static class WindowsFileBoundary
         internal ulong DuplicateTo(SafeProcessHandle child)
         {
             if (gate.IsClosed || child.IsInvalid || child.IsClosed) throw new IOException("NATIVE_HANDOFF_CLOSED");
-            RequireSameIdentity(child);
             if (!Native.DuplicateHandle(Native.GetCurrentProcess(), gate.DangerousGetHandle(), child.DangerousGetHandle(), out var copy, 0, false, 2)) throw new Win32Exception();
             return unchecked((ulong)copy.ToInt64()); // child owns this noninheritable duplicate until exit
         }
@@ -119,32 +118,17 @@ public static class WindowsFileBoundary
         using var expected = Pin(Path.Combine(directory, "process.lock"), false, false);
         if (!Native.GetFileInformationByHandle(duplicate, out var actual) || !Native.GetFileInformationByHandle(expected.Leaf, out var other)) throw new Win32Exception();
         if (actual.Volume != other.Volume || actual.IndexHigh != other.IndexHigh || actual.IndexLow != other.IndexLow) throw new IOException("NATIVE_HANDOFF_FILE");
-        var contender = Native.CreateFileW(Extended(Path.Combine(directory, "process.lock")), GenericRead | GenericWrite, 0, IntPtr.Zero, 3, FollowNothing, IntPtr.Zero);
+        var contender = Native.CreateFileW(NativeInstallFiles.Extended(Path.Combine(directory, "process.lock")), GenericRead | GenericWrite, 0, IntPtr.Zero, 3, FollowNothing, IntPtr.Zero);
         using (contender) { if (!contender.IsInvalid) throw new IOException("NATIVE_HANDOFF_NOT_LOCKED"); if (Marshal.GetLastPInvokeError() != 32) throw new IOException("NATIVE_HANDOFF_UNOBSERVED"); }
     }
 
+    // Pin walks a path one component at a time from its drive root.
     public static string CanonicalLocalPath(string path)
-    {
-        CanonicalName(path);
-        var volume = Path.GetPathRoot(path)!;
-        if (!Native.GetVolumeInformationW(volume, null, 0, out _, out _, out var flags, null, 0) || (flags & 8) == 0)
-            throw new IOException("NATIVE_PERSISTENT_ACL_REQUIRED");
-        return path;
-    }
-
-    private static void CanonicalName(string path)
     {
         if (!Path.IsPathFullyQualified(path) || path.Length < 4 || path[1] != ':' || path[2] != '\\' ||
             !char.IsAsciiLetter(path[0]) || !string.Equals(Path.GetFullPath(path), path, StringComparison.OrdinalIgnoreCase))
             throw new IOException("NATIVE_LOCAL_PATH");
-        foreach (var part in path[3..].Split('\\'))
-        {
-            var device = part.Split('.')[0].ToUpperInvariant();
-            if (part.Length == 0 || part is "." or ".." || part.EndsWith('.') || part.EndsWith(' ') ||
-                part.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || device is "CON" or "PRN" or "AUX" or "NUL" ||
-                System.Text.RegularExpressions.Regex.IsMatch(device, "^(COM|LPT)[0-9]$"))
-                throw new IOException("NATIVE_LOCAL_PATH");
-        }
+        return path;
     }
 
     private static PinnedPath Pin(string path, bool leafDirectory, bool readContents, bool delete = false)
@@ -168,11 +152,10 @@ public static class WindowsFileBoundary
         catch { result.Dispose(); throw; }
     }
 
-    private static string Extended(string canonical) => @"\\?\" + canonical;
 
     private static SafeFileHandle Open(string path, bool directory, bool contents, bool delete = false)
     {
-        var handle = Native.CreateFileW(Extended(path), ReadAttributes | (contents ? GenericRead : 0) | (delete ? Delete : 0),
+        var handle = Native.CreateFileW(NativeInstallFiles.Extended(path), ReadAttributes | (contents ? GenericRead : 0) | (delete ? Delete : 0),
             contents ? 1u : 3u, IntPtr.Zero, 3, FollowNothing | DirectoriesToo, IntPtr.Zero);
         if (handle.IsInvalid) { var error = Marshal.GetLastPInvokeError(); handle.Dispose(); throw new Win32Exception(error); }
         try { CheckKind(handle, directory); return handle; }
@@ -193,7 +176,7 @@ public static class WindowsFileBoundary
         public void Dispose() { for (var i = Handles.Count - 1; i >= 0; i--) Handles[i].Dispose(); }
     }
 
-    private static class Native
+    internal static class Native
     {
         [StructLayout(LayoutKind.Sequential)] internal struct FileInfo
         { public uint Attributes, CreationLow, CreationHigh, AccessLow, AccessHigh, WriteLow, WriteHigh, Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow; }
@@ -203,9 +186,6 @@ public static class WindowsFileBoundary
         internal static extern bool GetFileInformationByHandle(SafeFileHandle handle, out FileInfo info);
         [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool GetFileSizeEx(SafeFileHandle handle, out long size);
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
-        internal static extern bool GetVolumeInformationW(string root, System.Text.StringBuilder? name, uint nameSize,
-            out uint serial, out uint maximum, out uint flags, System.Text.StringBuilder? fileSystem, uint fileSystemSize);
         [DllImport("kernel32.dll", SetLastError = true)] internal static extern SafeProcessHandle OpenProcess(uint rights, [MarshalAs(UnmanagedType.Bool)] bool inherit, int id);
         [DllImport("advapi32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool OpenProcessToken(SafeProcessHandle process, uint rights, out SafeAccessTokenHandle token);

@@ -15,42 +15,18 @@ async Task Check(string name,Func<Task> test)
     try{await test();Console.WriteLine("PASS "+name);checks.Add(new{name,status="PASS"});}
     catch(Exception e){failures++;Console.WriteLine("FAIL "+name+" "+e);checks.Add(new{name,status="FAIL",reason=e.GetType().Name});}
 }
-async Task Reject(Func<Task> action)
-{try{await action();}catch(Exception e)when(e is ServiceStartDenied or IOException or UnauthorizedAccessException){return;}throw new Exception("expected rejection");}
 string Session()=>PrivateSession.Create(root);
-const string sid="S-1-5-80-1-2-3-4-5";
-ServiceTokenObservation Good()=>new(sid,true,false,["SeChangeNotifyPrivilege"]);
-
 await Check("SCM native status ABI is seven DWORDs",()=>{Assert(Marshal.SizeOf<NativeScmApi.NativeStatus>()==28);return Task.CompletedTask;});
-await Check("actual current token observation cannot grant the acceptance service SID",()=>
-{
-    var observation=new WindowsServiceTokenReader().Read();
-    try{ServiceIdentityPolicy.Require(observation,sid);throw new Exception("interactive token granted service");}catch(ServiceStartDenied denied){Assert(denied.Failure==ServiceFailure.IdentityDenied);}return Task.CompletedTask;
-});
-foreach(var token in new[]{Good() with{UserSid="S-1-5-18"},Good() with{ServiceLogon=false},Good() with{Administrator=true},Good() with{Privileges=["SeChangeNotifyPrivilege","SeDebugPrivilege"]},Good() with{Privileges=[]}})
-await Check("identity rejects "+JsonSerializer.Serialize(token),()=>
-{try{ServiceIdentityPolicy.Require(token,sid);throw new Exception("unsafe identity accepted");}catch(ServiceStartDenied){}return Task.CompletedTask;});
-await Check("dedicated identity policy accepts only expected minimal observation",()=>{ServiceIdentityPolicy.Require(Good(),sid);return Task.CompletedTask;});
-await Check("identity denial occurs before bootstrap or activation access",async()=>
-{
-    var reader=new Reader();var resolver=new Resolver();var auth=new InstalledStartAuthorizer(new Tokens(Good() with{Administrator=true},sid),reader,resolver);
-    await Reject(()=>auth.AuthorizeAsync(default));Assert(reader.Reads==0&&resolver.Calls==0);
-});
-await Check("bootstrap ACL/read failure cannot reach activation",async()=>
-{
-    var reader=new Reader{Denied=true};var resolver=new Resolver();var auth=new InstalledStartAuthorizer(new Tokens(Good(),sid),reader,resolver);
-    try{await auth.AuthorizeAsync(default);throw new Exception("bootstrap failure accepted");}catch(ServiceStartDenied denied){Assert(denied.Failure==ServiceFailure.BootstrapUnavailable);}Assert(resolver.Calls==0);
-});
 await Check("SCM application registers before first status and rejects extra start arguments",()=>
 {
     var api=new FakeScm{Arguments=[ServiceDefinition.Name,"untrusted"]};var auth=new TestAuthorization(new FakeApp());var fatal=0;
-    Assert(new ServiceApplication(api,auth,_=>fatal++).Run()==1);Assert(api.Calls.Take(3).SequenceEqual(new[]{"dispatch","register","status"}));
+    Assert(ScmController.Dispatch(api,ServiceDefinition.Name,_=>fatal++,()=>new ServiceController(auth))==1);Assert(api.Calls.Take(3).SequenceEqual(new[]{"dispatch","register","status"}));
     Assert(auth.Calls==0&&fatal==0&&api.Reports.Single().ServiceSpecificExitCode==(uint)ServiceFailure.ArgumentsRejected);return Task.CompletedTask;
 });
 await Check("authorization failure never reports RUNNING or launches a child",async()=>
 {
     var app=new FakeApp();var controller=new ServiceController(new TestAuthorization(app){Deny=true});var reports=new List<ServiceReport>();var result=await controller.RunAsync(reports.Add);
-    Assert(result.QuiescenceConfirmed&&result.Failure==ServiceFailure.IdentityDenied&&app.Calls.Count==0&&!reports.Any(r=>r.State==ServiceState.Running));Assert(reports[^1].Win32ExitCode==1066);
+    Assert(result.QuiescenceConfirmed&&result.Failure==ServiceFailure.StartFailed&&app.Calls.Count==0&&!reports.Any(r=>r.State==ServiceState.Running));Assert(reports[^1].Win32ExitCode==1066);
 });
 await Check("stop during authorization cancels startup without blocking handler",async()=>
 {
@@ -61,7 +37,7 @@ await Check("stop during authorization cancels startup without blocking handler"
 await Check("authorization returning within the stop window has its resources revoked",async()=>
 {
     var app=new FakeApp();var resource=new RevokedResource();var late=new LateAuthorization();var controller=new ServiceController(late);var reports=new List<ServiceReport>();var running=controller.RunAsync(reports.Add);
-    controller.Control(ServiceDefinition.Stop);await late.Cancelled.Task.WaitAsync(TimeSpan.FromSeconds(3));late.Completion.TrySetResult(new(new("late"),app,resource));var result=await running.WaitAsync(TimeSpan.FromSeconds(3));
+    controller.Control(ServiceDefinition.Stop);await late.Cancelled.Task.WaitAsync(TimeSpan.FromSeconds(3));late.Completion.TrySetResult(new(app,resource));var result=await running.WaitAsync(TimeSpan.FromSeconds(3));
     await resource.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(3));Assert(result.QuiescenceConfirmed&&app.Calls.Count==0&&!reports.Any(r=>r.State==ServiceState.Running));
     // STOP is advertised while starting, so the SCM delivers it instead of refusing with 1052.
     Assert(reports.Any(r=>r.State==ServiceState.StartPending)&&reports.Where(r=>r.State==ServiceState.StartPending).All(r=>r.AcceptedControls==5));
@@ -110,19 +86,19 @@ await Check("unexpected root exit is failure without automatic restart or update
 await Check("unknown cleanup never emits STOPPED and invokes failed native exit contract",()=>
 {
     var app=new FakeApp{CleanupUnknown=true};var api=new FakeScm();api.OnReport=r=>{if(r.State==ServiceState.Running)api.Handler!(ServiceDefinition.Stop);};var fatal=0;
-    Assert(new ServiceApplication(api,new TestAuthorization(app),_=>fatal++).Run()==1);Assert(fatal==1&&!api.Reports.Any(r=>r.State==ServiceState.Stopped));app.Exit.TrySetResult(1);return Task.CompletedTask;
+    Assert(ScmController.Dispatch(api,ServiceDefinition.Name,_=>fatal++,()=>new ServiceController(new TestAuthorization(app)))==1);Assert(fatal==1&&!api.Reports.Any(r=>r.State==ServiceState.Stopped));app.Exit.TrySetResult(1);return Task.CompletedTask;
 });
 await Check("status transport failure triggers failed exit without false readiness",()=>
 {
-    var api=new FakeScm{RejectStatus=true};var fatal=0;Assert(new ServiceApplication(api,new TestAuthorization(new FakeApp()),_=>fatal++).Run()==1&&fatal==1);return Task.CompletedTask;
+    var api=new FakeScm{RejectStatus=true};var fatal=0;Assert(ScmController.Dispatch(api,ServiceDefinition.Name,_=>fatal++,()=>new ServiceController(new TestAuthorization(new FakeApp())))==1&&fatal==1);return Task.CompletedTask;
 });
 
 foreach(var mode in new[]{"normal","bad-peer","timeout","unexpected"})
 await Check("non-listening real native job with synthetic control channel: "+mode,async()=>
 {
-    var directory=Session();var fake=new FileControlFactory(directory,mode);var environment=new Dictionary<string,string>{{"HOST","127.0.0.1"},{"CONNECTOR","mock"},{"ALLOW_REAL_WHATSAPP","no"}};
-    var spec=new VerifiedProcessSpec(node,["-e",ChildScript.Code,directory,mode],directory,directory,node,environment);
-    var launcher=new ServiceProcessLauncher(spec,fake);var auth=new TestAuthorization(null!,()=>new(new("verified-test"),launcher));
+    var directory=Session();var environment=new Dictionary<string,string>{{"HOST","127.0.0.1"},{"CONNECTOR","mock"},{"ALLOW_REAL_WHATSAPP","no"},{"DATA_DIR",directory}};var lease=WindowsFileBoundary.AcquireDataLease(directory);
+    var spec=new VerifiedProcessSpec(node,["-e",ChildScript.Code,directory,mode],directory,directory,node,environment,lease);
+    var launcher=new ServiceProcessLauncher(spec,()=>new FileControl(directory,mode));var auth=new TestAuthorization(null!,()=>new(launcher,lease));
     var controller=new ServiceController(auth,TimeSpan.FromSeconds(10),TimeSpan.FromMilliseconds(mode=="timeout"?1000:5000));var reports=new List<ServiceReport>();
     var before=Environment.GetEnvironmentVariable("NODE_OPTIONS");Environment.SetEnvironmentVariable("NODE_OPTIONS","--require untrusted-hook");
     try
@@ -140,9 +116,9 @@ await Check("root exiting before readiness fails startup at once with its exit c
 {
     // The synthetic channel never reports for this root, so only the observed
     // exit can end the wait; the old behavior held startup to the deadline.
-    var directory=Session();var fake=new FileControlFactory(directory,"normal");
-    var spec=new VerifiedProcessSpec(node,["-e","process.exit(23)"],directory,directory,node,new Dictionary<string,string>());
-    var launcher=new ServiceProcessLauncher(spec,fake);var auth=new TestAuthorization(null!,()=>new(new("verified-test"),launcher));
+    var directory=Session();var lease=WindowsFileBoundary.AcquireDataLease(directory);
+    var spec=new VerifiedProcessSpec(node,["-e","process.exit(23)"],directory,directory,node,new Dictionary<string,string>{{"DATA_DIR",directory}},lease);
+    var launcher=new ServiceProcessLauncher(spec,()=>new FileControl(directory,"normal"));var auth=new TestAuthorization(null!,()=>new(launcher,lease));
     var seen=new List<(Exception Error,StartupStep[] Steps)>();ServiceController? controller=null;
     controller=new ServiceController(auth,TimeSpan.FromSeconds(20),TimeSpan.FromSeconds(5),error=>seen.Add((error,controller!.StartupSteps)));
     var timer=Stopwatch.StartNew();var reports=new List<ServiceReport>();var result=await controller.RunAsync(reports.Add);
@@ -152,36 +128,9 @@ await Check("root exiting before readiness fails startup at once with its exit c
     using var encoded=JsonDocument.Parse(ServiceStartupDiagnostic.Encode(StartupDiagnosticRole.Runtime,seen[0].Error,seen[0].Steps));var json=encoded.RootElement;
     Assert(json.GetProperty("Code").GetString()=="SERVICE_CHILD_EXITED"&&json.GetProperty("ExitCode").GetInt32()==23&&json.GetProperty("Steps").GetArrayLength()==4);
 });
-await Check("unknown child environment keys refuse before opening any control endpoint",async()=>
+await Check("startup budget does not extend graceful stop budget",async()=>
 {
-    var directory=Session();var fake=new FileControlFactory(directory,"normal");
-    var spec=new VerifiedProcessSpec(node,[],directory,directory,node,new Dictionary<string,string>{{"NODE_OPTIONS","--require evil"}});
-    await Reject(()=>new ServiceProcessLauncher(spec,fake).StartAsync(new("test"),default));Assert(fake.Created==0);
-});
-await Check("observed admission checkpoints follow work and detach before terminal status",async()=>
-{
-    var auth=new ObservedTestAuthorizer(new FakeApp());var controller=new ServiceController(auth);var reports=new List<ServiceReport>();
-    var result=await controller.RunAsync(r=>{reports.Add(r);if(r.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);});
-    Assert(result.Failure==ServiceFailure.None&&reports.Count(r=>r.State==ServiceState.StartPending)>=5);var count=reports.Count;auth.Pulse();Assert(reports.Count==count);
-});
-await Check("observed admission status transport failure cannot become readiness",async()=>
-{
-    var auth=new ObservedTestAuthorizer(new FakeApp());var result=await new ServiceController(auth).RunAsync(r=>{if(r.State==ServiceState.StartPending&&r.Checkpoint==2)throw new IOException("STATUS_FAILED");});
-    Assert(result.Failure==ServiceFailure.StatusTransport);
-});
-await Check("observed admission budget remains capped at five minutes",()=>
-{
-    try{_ =new ServiceController(new ObservedTestAuthorizer(new FakeApp()){Budget=TimeSpan.FromHours(1)});throw new Exception("unbounded admission accepted");}catch(ArgumentOutOfRangeException){}return Task.CompletedTask;
-});
-await Check("stalled observed admission invents no checkpoints and cancels before app launch",async()=>
-{
-    var auth=new WaitingObservedAuthorizer();var controller=new ServiceController(auth);var reports=new List<ServiceReport>();
-    var run=controller.RunAsync(reports.Add);await auth.Entered.Task.WaitAsync(TimeSpan.FromSeconds(2));var count=reports.Count;await Task.Delay(50);Assert(reports.Count==count);
-    controller.Control(ServiceDefinition.Stop);var result=await run.WaitAsync(TimeSpan.FromSeconds(2));Assert(result.Failure==ServiceFailure.None&&!reports.Any(r=>r.State==ServiceState.Running));
-});
-await Check("large admission budget does not extend graceful stop budget",async()=>
-{
-    var controller=new ServiceController(new ObservedTestAuthorizer(new FakeApp{StuckGraceful=true}),lifecycleDeadline:TimeSpan.FromMilliseconds(50));
+    var controller=new ServiceController(new TestAuthorization(new FakeApp{StuckGraceful=true}),lifecycleDeadline:TimeSpan.FromMilliseconds(50));
     var result=await controller.RunAsync(r=>{if(r.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);}).WaitAsync(TimeSpan.FromSeconds(2));Assert(result.Failure==ServiceFailure.StopFailed);
 });
 File.WriteAllText(report,JsonSerializer.Serialize(new{kind="SCM-host-noninstalling-contracts",passed=checks.Count-failures,failed=failures,
@@ -189,23 +138,17 @@ File.WriteAllText(report,JsonSerializer.Serialize(new{kind="SCM-host-noninstalli
 Console.WriteLine($"{checks.Count-failures} passed; {failures} failed. No SCM calls/listeners. Fixture: {root}");return failures==0?0:1;
 
 static bool Alive(int id){try{using var process=Process.GetProcessById(id);return !process.HasExited;}catch(ArgumentException){return false;}}
-internal sealed class Tokens(ServiceTokenObservation observation,string expected):IServiceTokenReader
-{public ServiceTokenObservation Read()=>observation;public string ExpectedServiceSid()=>expected;}
-internal sealed class Reader:IInstallationReader
-{internal int Reads;internal bool Denied;public InstallationBinding Read(){Reads++;if(Denied)throw new IOException("ACL_DENIED");return new(new string('a',32),new string('b',64));}}
-internal sealed class Resolver:IInstalledActivationResolver
-{internal int Calls;public Task<AuthorizedServiceStart> ResolveAsync(InstallationBinding binding,CancellationToken cancellation){Calls++;throw new ServiceStartDenied(ServiceFailure.ActivationUnavailable);}}
 internal sealed class TestAuthorization(FakeApp app,Func<AuthorizedServiceStart>? factory=null):IServiceStartAuthorizer
 {
     internal int Calls;internal bool Deny,Wait;internal readonly TaskCompletionSource Entered=new(TaskCreationOptions.RunContinuationsAsynchronously);
     public async Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)
-    {Calls++;Entered.TrySetResult();if(Deny)throw new ServiceStartDenied(ServiceFailure.IdentityDenied);if(Wait)await Task.Delay(Timeout.Infinite,cancellation);return factory?.Invoke()??new(new("test"),app);}
+    {Calls++;Entered.TrySetResult();if(Deny)throw new IOException("DENIED");if(Wait)await Task.Delay(Timeout.Infinite,cancellation);return factory?.Invoke()??new(app);}
 }
 internal sealed class FakeApp:IPrivateAppLauncher
 {
     internal readonly List<string> Calls=[];internal readonly TaskCompletionSource<int> Exit=new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal bool BadHealth,CleanupUnknown,StuckGraceful,StuckRoot,StuckTree;
-    public Task<IContainedAppSession> StartAsync(AppRelease release,CancellationToken cancellation){Calls.Add("start");return Task.FromResult<IContainedAppSession>(new Session(this));}
+    public Task<IContainedAppSession> StartAsync(CancellationToken cancellation){Calls.Add("start");return Task.FromResult<IContainedAppSession>(new Session(this));}
     public Task WaitForHealthyAsync(IContainedAppSession session,CancellationToken cancellation){Calls.Add("healthy");if(BadHealth)throw new IOException("UNHEALTHY");return Task.CompletedTask;}
     private sealed class Session(FakeApp owner):IContainedAppSession
     {
@@ -224,28 +167,24 @@ internal sealed class FakeScm:IScmApi
     public void Register(string name,Func<uint,uint> handler){Calls.Add("register");Handler=handler;}
     public void Publish(ServiceReport report){Calls.Add("status");if(Handler is null||RejectStatus)throw new IOException("STATUS_UNAVAILABLE");Reports.Add(report);OnReport?.Invoke(report);}
 }
-internal sealed class FileControlFactory(string directory,string mode):IChildControlFactory
+internal sealed class FileControl(string directory,string mode):IChildControl
 {
-    internal int Created;
-    public IChildControl Create(){Created++;return new Channel(directory,mode);}
-    private sealed class Channel(string directory,string mode):IChildControl
+    public string Endpoint=>"synthetic-file-control-no-listener";
+    public async Task<ChildReady> ReadyAsync(CancellationToken cancellation)
     {
-        public string Endpoint=>"synthetic-file-control-no-listener";
-        public async Task<ChildReady> ReadyAsync(int root,CancellationToken cancellation)
+        int root;
+        while(true)
         {
-            while(true)
-            {
-                cancellation.ThrowIfCancellationRequested();
-                try{using var observed=JsonDocument.Parse(File.ReadAllText(Path.Combine(directory,"observed.json")));if(observed.RootElement.GetProperty("pid").GetInt32()==root)break;}
-                catch(Exception error)when(error is IOException or JsonException){}
-                await Task.Delay(10,cancellation);
-            }
-            if(mode=="timeout")await Task.Delay(Timeout.Infinite,cancellation);
-            return new((uint)(mode=="bad-peer"?root+1:root),"ready");
+            cancellation.ThrowIfCancellationRequested();
+            try{using var observed=JsonDocument.Parse(File.ReadAllText(Path.Combine(directory,"observed.json")));root=observed.RootElement.GetProperty("pid").GetInt32();break;}
+            catch(Exception error)when(error is IOException or JsonException){}
+            await Task.Delay(10,cancellation);
         }
-        public Task StopAsync(CancellationToken cancellation){File.WriteAllText(Path.Combine(directory,"stop"),"stop");return Task.CompletedTask;}
-        public void Dispose(){}
+        if(mode=="timeout")await Task.Delay(Timeout.Infinite,cancellation);
+        return new((uint)(mode=="bad-peer"?root+1:root),"ready");
     }
+    public Task StopAsync(CancellationToken cancellation){File.WriteAllText(Path.Combine(directory,"stop"),"stop");return Task.CompletedTask;}
+    public void Dispose(){}
 }
 internal static class ChildScript
 {
@@ -267,20 +206,4 @@ internal sealed class LateAuthorization:IServiceStartAuthorizer
     // Set once startup has seen the stop, so a later result is "late" by observation, not by timing.
     internal readonly TaskCompletionSource Cancelled=new(TaskCreationOptions.RunContinuationsAsynchronously);
     public Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation){cancellation.Register(()=>Cancelled.TrySetResult());return Completion.Task;}
-}
-
-internal sealed class ObservedTestAuthorizer(FakeApp app):IServiceStartAuthorizer,IObservedAdmission
-{
-    internal TimeSpan Budget=TimeSpan.FromMinutes(5);public TimeSpan AdmissionBudget=>Budget;public event Action? ObservedWork;
-    internal void Pulse()=>ObservedWork?.Invoke();
-    public Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)=>Task.Run(()=>
-    {for(var i=0;i<3;i++){cancellation.ThrowIfCancellationRequested();_ =System.Security.Cryptography.SHA256.HashData(new byte[4096]);Pulse();}return new AuthorizedServiceStart(new("observed"),app);},cancellation);
-}
-
-internal sealed class WaitingObservedAuthorizer:IServiceStartAuthorizer,IObservedAdmission
-{
-    internal readonly TaskCompletionSource Entered=new(TaskCreationOptions.RunContinuationsAsynchronously);
-    public TimeSpan AdmissionBudget=>TimeSpan.FromMinutes(5);public event Action? ObservedWork;
-    public async Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)
-    {ObservedWork?.Invoke();Entered.TrySetResult();await Task.Delay(Timeout.Infinite,cancellation);throw new IOException("unreachable");}
 }

@@ -45,7 +45,7 @@ internal static class QuietSetup
             if(result.Ok&&request.Uninstall)ShortcutCleanup.TryRemove(result.Url);
         }
         catch(Exception error){result=new(false,SetupOperation.Code(error),Failure:SetupFailureDetail.From(error));}
-        File.WriteAllBytes(request.ResultPath,JsonSerializer.SerializeToUtf8Bytes(new{result.Ok,result.Code,result.Url,result.DataPreserved,result.Failure,result.FullProfileInstallationId,Phases=phases,Seconds=Math.Round(clock.Elapsed.TotalSeconds,1)}));
+        File.WriteAllBytes(request.ResultPath,JsonSerializer.SerializeToUtf8Bytes(new{result.Ok,result.Code,result.Url,result.DataPreserved,result.Failure,Phases=phases,Seconds=Math.Round(clock.Elapsed.TotalSeconds,1)}));
         if(request.SetupLinkToStdout&&result.Ok&&result.Url is not null&&result.SetupToken is not null)
         {Console.Out.WriteLine(result.Url+"#setup="+result.SetupToken);Console.Out.Flush();}
         return result.Ok?0:1;

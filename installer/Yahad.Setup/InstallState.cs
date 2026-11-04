@@ -13,9 +13,6 @@ internal sealed record InstallerState(int Format,string InstallationId,string Da
     string OwnerSid,int Port,string Phase,string SetupSha256,FirstOwnerBinding FirstOwner,UpdateSetupChoice Consent,InstallMember[] Files,string ServiceSid,string? ReleaseKeySha256=null,RetainedRelease? Previous=null)
 {
     internal const int CurrentFormat=6;
-    // Formats 3, 4 and 5 are the retired four-service installer records. They
-    // are never adopted or reinterpreted; their own installer must remove them.
-    internal static readonly int[] LegacyFormats=[3,4,5];
     internal static readonly string[] Phases=["preparing","committed","uninstalled","removing_keep_data","removing_all_data"];
     internal void Require()
     {
@@ -44,24 +41,15 @@ internal sealed record InstallerState(int Format,string InstallationId,string Da
 internal sealed record RetainedRelease(string Version,string SetupSha256,long SetupBytes,InstallMember[] Files);
 internal static class ExistingInstallation
 {
-    internal static bool Present()
-    {
-        // Presence through public parents only. A preserved computer-only
-        // installation has no binaries/LAN state but still has enrollment.
-        try
-        {
-            return Present(path=>Directory.EnumerateFileSystemEntries(Path.GetDirectoryName(path)!,Path.GetFileName(path),SearchOption.TopDirectoryOnly).Any());
-        }
-        catch{return true;}
-    }
-    internal static bool Present(Func<string,bool> present)
-        =>new[]{InstallLocations.State,InstallLocations.Binaries,InstallLocations.RemovalStateFile}.Any(present);
+    // A preserved computer-only installation has no binaries or LAN state but
+    // still has its state root.
+    internal static bool Present()=>new[]{InstallLocations.State,InstallLocations.Binaries,InstallLocations.RemovalStateFile}.Any(Path.Exists);
 }
 internal static class InstallLocations
 {
     internal static string State=>InstalledLayout.StateRoot;
     internal static string Binaries=>InstalledLayout.BinaryRoot;
-    internal static string VersionRoot(string version){RequireVersion(version);return InstalledLaunch.VersionRoot(version);}
+    internal static string VersionRoot(string version){RequireVersion(version);return InstalledLayout.VersionRoot(version);}
     internal static string ServiceImage(string version)=>Path.Combine(VersionRoot(version),"host","Yahad.ServiceHost.exe");
     internal static string ServiceCommand(string version)=>"\""+ServiceImage(version)+"\" --service";
     // Each release keeps its own Setup, so no running image ever has to be
@@ -70,22 +58,18 @@ internal static class InstallLocations
     internal static string ReleaseKeyFile=>Path.Combine(Binaries,TrustedReleaseKey.InstalledName);
     internal static string UpgradeStateFile=>Path.Combine(State,"upgrade-state.json");
     internal static string RemovalStateFile=>Binaries+".uninstall-state.json";
-    internal static string RemovalDiagnosticFile=>Binaries+".uninstall-diagnostic.json";
     internal static string StateFile=>Path.Combine(State,"installer-state.json");
     internal static void RequireStateRoot()=>WindowsFileBoundary.RequireAdministratorOwned(State);
     internal static string LaunchFile=>Path.Combine(State,InstalledLaunch.FileName);
-    internal static string ServiceName=>ServiceDefinition.Name;
-    internal static string ServiceAccount=>ServiceDefinition.Account;
     // A service SID is derived from the service name alone (SHA-1 of the
     // upper-case UTF-16LE name), so the installer knows it before CreateService.
-    internal static string ServiceSid=>ServiceSidFor(ServiceName);
+    internal static string ServiceSid=>ServiceSidFor(ServiceDefinition.Name);
     internal static string ServiceSidFor(string name)
     {
         var hash=SHA1.HashData(Encoding.Unicode.GetBytes(name.ToUpperInvariant()));
         return "S-1-5-80-"+string.Join('-',Enumerable.Range(0,5).Select(i=>BitConverter.ToUInt32(hash,i*4).ToString(System.Globalization.CultureInfo.InvariantCulture)));
     }
     internal static void RequireVersion(string version)
-    {if(version.Length>40||!Regex.IsMatch(version,@"\A(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\z",RegexOptions.CultureInvariant))throw new IOException("PAYLOAD_VERSION");}
+    {if(!ReleaseManifest.IsVersion(version))throw new IOException("PAYLOAD_VERSION");}
     internal static void RequireDigest(string? value){if(value is null||!Regex.IsMatch(value,"^[a-f0-9]{64}$"))throw new IOException("INSTALL_STATE_INVALID");}
-    internal static Version Ordered(string version){RequireVersion(version);return System.Version.Parse(version);}
 }

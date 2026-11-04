@@ -46,7 +46,7 @@ internal static class NativeBoundaryTests
             using (var first = WindowsFileBoundary.AcquireDataLease(root)) Reject(() => { using var second = WindowsFileBoundary.AcquireDataLease(root); });
             using var next = WindowsFileBoundary.AcquireDataLease(root); return Task.CompletedTask;
         });
-        foreach (var path in new[] { @"\\server\share\secret", @"C:\one\..\secret", @"C:\path\secret:ads", @"C:\path\secret.", @"C:\path\CON.txt" })
+        foreach (var path in new[] { @"\\server\share\secret", @"C:\one\..\secret", @"C:\path\secret." })
             await check("native path refuses " + path, () => { Reject(() => WindowsFileBoundary.CanonicalLocalPath(path)); return Task.CompletedTask; });
     }
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]

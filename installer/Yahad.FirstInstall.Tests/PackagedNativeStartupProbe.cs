@@ -45,7 +45,7 @@ internal static class PackagedNativeStartupProbe
             lease = WindowsFileBoundary.AcquireDataLease(data);
             var spec = new VerifiedProcessSpec(node, ["server/main.mjs"],
                 Path.Combine(prepared, "app"), temporary, Path.Combine(prepared, "runtime", "ffmpeg", "ffmpeg.exe"), environment, lease);
-            var launcher = jobs.Launcher(new ServiceProcessLauncher(spec, new LocalChildControlFactory()));
+            var launcher = jobs.Launcher(new ServiceProcessLauncher(spec, () => new LocalChildControl()));
             controller = new ServiceController(new Start(launcher), TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(20));
             run = controller.RunAsync(status => { if (status.State == ServiceState.Running) ready.TrySetResult(); });
             await Task.WhenAny(ready.Task, run).WaitAsync(TimeSpan.FromSeconds(35));
@@ -82,7 +82,7 @@ internal static class PackagedNativeStartupProbe
             }
             catch (Exception error) { cleanupFailure = (cleanupFailure is null ? "" : cleanupFailure + ";") + "fixture_" + error.GetType().Name; }
             var observed = new { healthy, cleaned, failure, cleanupFailure, elapsedMilliseconds = timer.ElapsedMilliseconds,
-                result, startup = controller?.StartupObservation, rootExit = controller?.RootExitObservation,
+                result, startup = controller?.StartupSteps,
                 installedServicesChanged = false, realProvider = false };
             File.WriteAllText(report, JsonSerializer.Serialize(observed, new JsonSerializerOptions { WriteIndented = true }));
             Console.WriteLine(JsonSerializer.Serialize(observed));
@@ -92,28 +92,26 @@ internal static class PackagedNativeStartupProbe
     internal static async Task<int> CheckBudget()
     {
         var launcher = new SlowReady();
-        var controller = new ServiceController(new Start(launcher, TimeSpan.FromSeconds(2)),
+        var controller = new ServiceController(new Start(launcher),
             TimeSpan.FromSeconds(2), TimeSpan.FromMilliseconds(50));
         var result = await controller.RunAsync(status =>
         { if (status.State == ServiceState.Running) controller.Control(ServiceDefinition.Stop); });
         var passed = result is { Failure: ServiceFailure.None, QuiescenceConfirmed: true }
-            && controller.StartupObservation.Stage == ServiceStartupStage.Running && launcher.Session.Disposed;
+            && controller.StartupSteps[^1].Stage == "Running" && launcher.Session.Disposed;
         Console.WriteLine(JsonSerializer.Serialize(new { suite="startup-budget-is-independent-of-stop-budget", passed,
             readinessMilliseconds=150, stopBudgetMilliseconds=50, startupBudgetMilliseconds=2000, result,
-            startup=controller.StartupObservation, realServices=false }));
+            startup=controller.StartupSteps, realServices=false }));
         return passed ? 0 : 1;
     }
-    private sealed class Start(IPrivateAppLauncher launcher, TimeSpan? budget = null) : IServiceStartAuthorizer, IObservedAdmission
+    private sealed class Start(IPrivateAppLauncher launcher) : IServiceStartAuthorizer
     {
-        public TimeSpan AdmissionBudget => budget ?? TimeSpan.FromSeconds(30);
-        public event Action? ObservedWork { add { } remove { } }
         public Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)
-            => Task.FromResult(new AuthorizedServiceStart(new(new string('a', 64)), launcher));
+            => Task.FromResult(new AuthorizedServiceStart(launcher));
     }
     private sealed class SlowReady : IPrivateAppLauncher
     {
         internal readonly EndedSession Session = new();
-        public Task<IContainedAppSession> StartAsync(AppRelease release, CancellationToken cancellation)
+        public Task<IContainedAppSession> StartAsync(CancellationToken cancellation)
             => Task.FromResult<IContainedAppSession>(Session);
         public Task WaitForHealthyAsync(IContainedAppSession session, CancellationToken cancellation)
             => Task.Delay(150, cancellation);

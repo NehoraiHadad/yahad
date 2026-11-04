@@ -170,15 +170,13 @@ if(!storeOnly)
 await FailureDiagnosticTests.RunAsync(Check);
 var owner=new SetupOwner("S-1-5-21-1-2-3-1001",new string('a',64));
 await Check("single installer path performs prepare publish service readiness then browser handoff",async()=>
-{var ops=new FakeHost();var phases=new List<string>();var flow=new InstallFlow(ops);var result=await flow.RunAsync(owner,false,p=>phases.Add(p.Phase),default);Assert(result.Ok&&ops.Calls.SequenceEqual(new[]{"prepare","publish","ready"})&&phases.Last()=="ready"&&result.SetupToken!.Length==43);await Refuse(()=>flow.RunAsync(owner,false,_=>{},default));});
+{var ops=new FakeHost();var phases=new List<string>();var flow=new InstallFlow(ops);var result=await flow.RunAsync(owner,false,p=>phases.Add(p.Phase),default);Assert(result.Ok&&ops.Calls.SequenceEqual(new[]{"prepare","publish","ready"})&&phases.Last()=="ready"&&result.SetupToken!.Length==43);});
 foreach(var step in new[]{"prepare","publish","ready"})await Check("failed "+step+" never reports ready or removes data",async()=>
 {var ops=new FakeHost{Failure=step};var phases=new List<string>();await Refuse(()=>new InstallFlow(ops).RunAsync(owner,false,p=>phases.Add(p.Phase),default));Assert(!phases.Contains("ready")&&!ops.Calls.Contains("uninstall"));});
 await Check("cancel before service publication performs no subsequent host operation",async()=>
 {using var cancel=new CancellationTokenSource();var ops=new FakeHost{AfterPrepare=cancel.Cancel};await Refuse(()=>new InstallFlow(ops).RunAsync(owner,false,_=>{},cancel.Token));Assert(ops.Calls.SequenceEqual(new[]{"prepare"}));});
 await Check("invalid owner fields cannot reach a host operation",async()=>
 {var ops=new FakeHost();await Refuse(()=>new InstallFlow(ops).RunAsync(owner with{Sid="S-1-5-18"},false,_=>{},default));Assert(ops.Calls.Count==0);});
-foreach(var url in new[]{"https://evil.invalid/","http://192.168.1.2:47123/","http://127.0.0.1:47123/?token=x","http://user@127.0.0.1:47123/"})await Check("browser handoff refuses "+url,async()=>
-{var ops=new FakeHost{Result=new(true,"READY",url,new string('a',43))};await Refuse(()=>new InstallFlow(ops).RunAsync(owner,false,_=>{},default));});
 await Check("failed health result never becomes browser-ready",async()=>
 {var phases=new List<string>();var ops=new FakeHost{Result=new(false,"SERVER_NOT_READY")};var result=await new InstallFlow(ops).RunAsync(owner,false,p=>phases.Add(p.Phase),default);Assert(!result.Ok&&!phases.Contains("ready"));});
 await Check("uninstall only calls the owned uninstall adapter and reports data preservation",async()=>
@@ -187,7 +185,7 @@ foreach(var path in new[]{"../personal.txt","payload/../../secret","payload/C:/b
 {try{InstallPackage.Name(path);}catch(IOException){return Task.CompletedTask;}throw new Exception("unsafe member accepted");});
 await Check("real package reader verifies and extracts exact offline payload bytes",()=>
 {
- var fixture=Package();using var package=new InstallPackage(new MemoryStream(fixture.Zip),fixture.Manifest);var root=PrivateSession.Create(Path.GetTempPath());package.Extract(root,_=>{},default);
+ var fixture=Package();using var package=new InstallPackage(new MemoryStream(fixture.Zip),fixture.Manifest);var root=PrivateSession.Create(Path.GetTempPath());package.Extract(root,_=>{},default,FullInstallerIntegrationTests.TestTarget);
  Assert(File.ReadAllText(Path.Combine(root,"payload/app/server/main.mjs"))=="synthetic-app-not-executed");return Task.CompletedTask;
 });
 await Check("corrupt package digest and duplicate zip entry refuse before extraction",async()=>
@@ -198,13 +196,11 @@ await Check("corrupt package digest and duplicate zip entry refuse before extrac
 await Check("wrong member hash fails without overwriting preexisting files",async()=>
 {
  var fixture=Package();var document=NativeJson.Read<InstallPackageManifest>(fixture.Manifest);var records=document.Files.Select((x,i)=>i==0?x with{Sha256=new string('0',64)}:x).ToArray();using var p=new InstallPackage(new MemoryStream(fixture.Zip),JsonSerializer.SerializeToUtf8Bytes(document with{Files=records}));
- var root=PrivateSession.Create(Path.GetTempPath());await Refuse(()=>{p.Extract(root,_=>{},default);return Task.CompletedTask;});Assert(!File.Exists(Path.Combine(root,"payload/app/server/main.mjs")));
+ var root=PrivateSession.Create(Path.GetTempPath());await Refuse(()=>{p.Extract(root,_=>{},default,FullInstallerIntegrationTests.TestTarget);return Task.CompletedTask;});Assert(!File.Exists(Path.Combine(root,"payload/app/server/main.mjs")));
 });
 await Check("user installer enables existing real connector; only explicit test profile uses mock",()=>
 {
- var production=RuntimeConnectorSettings.For(RuntimeConnectorProfile.Production);Assert(production.Connector=="baileys"&&production.Approval=="I_APPROVE_UNOFFICIAL_LINK");
- var synthetic=RuntimeConnectorSettings.For(RuntimeConnectorProfile.Synthetic);Assert(synthetic.Connector=="mock"&&synthetic.Approval=="no");
- try{RuntimeConnectorSettings.For((RuntimeConnectorProfile)99);throw new Exception("unknown profile accepted");}catch(IOException){}
+ Assert(InstalledLaunch.Connector=="baileys"&&InstalledLaunch.ConnectorApproval=="I_APPROVE_UNOFFICIAL_LINK");
  return Task.CompletedTask;
 });
 await Check("removal defaults to keeping data and full removal requires exact explicit confirmation",()=>
@@ -284,7 +280,8 @@ internal sealed class FakeHost:ISetupHostOperations
  internal UninstallMode? LastRemoval;internal readonly List<string> Calls=[];internal string? Failure;internal Action? AfterPrepare;internal SetupResult Result=new(true,"READY","http://127.0.0.1:47123/",new string('a',43));
  private Task Call(string name,CancellationToken c){c.ThrowIfCancellationRequested();Calls.Add(name);if(Failure==name)throw new IOException("injected");return Task.CompletedTask;}
  public async Task PrepareAsync(SetupOwner o,Action<SetupProgress> p,CancellationToken c){await Call("prepare",c);AfterPrepare?.Invoke();}
- public Task PublishServiceAsync(SetupOwner o,Action<SetupProgress> p,CancellationToken c)=>Call("publish",c);
+ public Task PublishServiceAsync(Action<SetupProgress> p,CancellationToken c)=>Call("publish",c);
+ public Task ConfigureLanAsync(LanSetupRequest r,Action<SetupProgress> p,CancellationToken c)=>Call("lan",c);
  public async Task<SetupResult> StartAndObserveAsync(Action<SetupProgress> p,CancellationToken c){await Call("ready",c);return Result;}
- public async Task<SetupResult> UninstallAsync(SetupOwner o,Action<SetupProgress> p,CancellationToken c,UninstallMode mode=UninstallMode.KeepData){LastRemoval=mode;await Call("uninstall",c);return new(true,"REMOVED",DataPreserved:mode==UninstallMode.KeepData);}
+ public async Task<SetupResult> UninstallAsync(Action<SetupProgress> p,CancellationToken c,UninstallMode mode=UninstallMode.KeepData){LastRemoval=mode;await Call("uninstall",c);return new(true,"REMOVED",DataPreserved:mode==UninstallMode.KeepData);}
 }

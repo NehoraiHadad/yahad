@@ -2,21 +2,22 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Security.AccessControl;
-using System.Security.Principal;
 using Microsoft.Win32.SafeHandles;
 using Yahad.Install;
 using Yahad.Service;
 namespace Yahad.Setup;
 
-// All that differs between the two services. The Runtime holds one privilege and
+// All that differs between the services. The Runtime holds one privilege and
 // restarts quickly; the Updater is LocalSystem, starts after everything else and
-// has no reason to hurry back.
-internal sealed record ServiceSpec(string Name,string Account,Func<string,string> Command,uint[] FailureDelays,bool Restricted,bool Delayed)
+// has no reason to hurry back; the home-network proxy holds one privilege, starts
+// late and is never restarted by the SCM. The installer's own account and the
+// Runtime may read the Runtime's and the Updater's configuration.
+internal sealed record ServiceSpec(string Name,string Account,Func<string,string> Command,uint[] FailureDelays,bool Restricted,bool Delayed,string Display,string? QueryGrant)
 {
-    internal static readonly ServiceSpec Runtime=new(ServiceDefinition.Name,ServiceDefinition.Account,InstallLocations.ServiceCommand,[5000,30000,120000],true,false);
+    internal static readonly ServiceSpec Runtime=new(ServiceDefinition.Name,ServiceDefinition.Account,InstallLocations.ServiceCommand,[5000,30000,120000],true,false,ServiceDefinition.Name,InstallLocations.ServiceSid);
     internal static readonly ServiceSpec Updater=new(ServiceDefinition.UpdaterName,ServiceDefinition.UpdaterAccount,
-        version=>{InstallLocations.RequireVersion(version);return InstalledLayout.UpdaterCommand(version);},[60000,300000,600000],false,true);
+        version=>{InstallLocations.RequireVersion(version);return InstalledLayout.UpdaterCommand(version);},[60000,300000,600000],false,true,ServiceDefinition.UpdaterName,InstallLocations.ServiceSid);
+    internal static readonly ServiceSpec Lan=new(LanProxyPaths.ServiceName,"NT SERVICE\\"+LanProxyPaths.ServiceName,_=>"\""+LanProxyPaths.ServiceImage+"\" --lan-service",[],true,true,"Yahad home network HTTPS",null);
 }
 // Installer-only SCM writer. The names, accounts and images come from compiled
 // constants and the verified package version; no CLI, file or runtime peer can
@@ -34,20 +35,12 @@ internal sealed class NativeService:IDisposable
     }
     internal static NativeService Create(string version,string owner,ServiceSpec? kind=null)
     {
-        var spec=kind??ServiceSpec.Runtime;NativeInstallFiles.RequireAdministrator();var command=spec.Command(version);
+        var spec=kind??ServiceSpec.Runtime;var command=spec.Command(version);
         var manager=new Handle(OpenSCManagerW(null,null,3));if(manager.IsInvalid){manager.Dispose();throw new Win32Exception();}
-        var service=new Handle(CreateServiceW(manager,spec.Name,spec.Name,0xf01ff,16,DemandStart,1,command,null,IntPtr.Zero,null,spec.Account,null));
+        var service=new Handle(CreateServiceW(manager,spec.Name,spec.Display,0xf01ff,16,DemandStart,1,command,null,IntPtr.Zero,null,spec.Account,null));
         if(service.IsInvalid){service.Dispose();manager.Dispose();throw new Win32Exception();}
         var value=new NativeService(spec,command,manager,service);
-        try
-        {
-            // This handle is the result of a successful CREATE, never adoption
-            // of an existing name. Give only the administrative group ownership
-            // before the narrow service ACL is published to other principals.
-            var ownerOnly=new RawSecurityDescriptor("O:BAD:P(A;;GA;;;SY)(A;;GA;;;BA)");var descriptor=new byte[ownerOnly.BinaryLength];ownerOnly.GetBinaryForm(descriptor,0);
-            if(!SetServiceObjectSecurity(service,5,descriptor))throw new Win32Exception();
-            value.Provision(owner);var status=value.Status();RequireProvisioningState(value.RequireConfigurationIdentity(),status.State,status.Pid,status.Win32,status.Specific);return value;
-        }
+        try{value.Provision(owner);return value;}
         catch{value.Dispose();throw;} // The durable preparing record owns a created service; no guessed rollback.
     }
     // Only a same-package preparing record enters this path. An interruption
@@ -59,42 +52,40 @@ internal sealed class NativeService:IDisposable
         try
         {
             var status=value.Status();RequireProvisioningState(value.RequireConfigurationIdentity(),status.State,status.Pid,status.Win32,status.Specific);
-            var acl=value.Security();try{RequireProtection(acl,owner);}catch(IOException){RequireAdministrativeWriters(acl);}
-            value.Provision(owner);value.SetFailureActions(false);value.Change(4,0u);value.RequireOwned();return value;
+            value.Provision(owner);return value;
         }
         catch{value.Dispose();throw;}
     }
-    internal static NativeService Open(string version,string owner,ServiceSpec? kind=null)
+    internal static NativeService Open(string version,ServiceSpec? kind=null)
     {
         var value=OpenHandle(version,kind);
-        try{value.RequireOwned();RequireProtection(value.Security(),owner);return value;}catch{value.Dispose();throw;}
+        try{value.RequireConfigurationIdentity();return value;}catch{value.Dispose();throw;}
     }
     // During an upgrade the image is one of exactly two recorded versions.
-    internal static NativeService OpenAt(string version,string other,string owner,ServiceSpec? kind=null)
+    internal static NativeService OpenAt(string version,string other,ServiceSpec? kind=null)
     {
-        try{return Open(version,owner,kind);}catch(IOException error)when(error.Message=="SERVICE_NOT_OWNED"){return Open(other,owner,kind);}
+        try{return Open(version,kind);}catch(IOException error)when(error.Message=="SERVICE_NOT_OWNED"){return Open(other,kind);}
     }
     // Repair: an image pointing anywhere else is set back to the installed
     // release. Type and account are still required to be the service's own.
-    internal static NativeService OpenRepointed(string version,string owner,ref bool repointed,ServiceSpec? kind=null)
+    internal static NativeService OpenRepointed(string version,ref bool repointed,ServiceSpec? kind=null)
     {
         var value=OpenHandle(version,kind);
         try
         {
-            RequireProtection(value.Security(),owner);
-            try{value.RequireOwned();}
-            catch(IOException error)when(error.Message=="SERVICE_NOT_OWNED"){value.SetImage();value.RequireOwned();repointed=true;}
+            try{value.RequireConfigurationIdentity();}
+            catch(IOException error)when(error.Message=="SERVICE_NOT_OWNED"){value.SetImage();value.RequireConfigurationIdentity();repointed=true;}
             return value;
         }
         catch{value.Dispose();throw;}
     }
-    internal static async Task<NativeService?> OpenForRemovalAsync(string version,string owner,CancellationToken cancellation,ServiceSpec? kind=null)
+    internal static async Task<NativeService?> OpenForRemovalAsync(string version,CancellationToken cancellation,ServiceSpec? kind=null)
     {
         var until=Stopwatch.StartNew();
         while(true)
         {
             cancellation.ThrowIfCancellationRequested();if(!Exists(kind))return null;
-            try{return Open(version,owner,kind);}
+            try{return Open(version,kind);}
             catch(Win32Exception error)when(error.NativeErrorCode==1072)
             {if(until.Elapsed>=TimeSpan.FromSeconds(15))throw new IOException("UNINSTALL_SERVICE_REMOVAL_PENDING",error);await Task.Delay(100,cancellation);}
             catch(Win32Exception error)when(error.NativeErrorCode==1060){return null;}
@@ -102,7 +93,7 @@ internal sealed class NativeService:IDisposable
     }
     private static NativeService OpenHandle(string version,ServiceSpec? kind)
     {
-        var spec=kind??ServiceSpec.Runtime;NativeInstallFiles.RequireAdministrator();var command=spec.Command(version);var manager=new Handle(OpenSCManagerW(null,null,1));
+        var spec=kind??ServiceSpec.Runtime;var command=spec.Command(version);var manager=new Handle(OpenSCManagerW(null,null,1));
         if(manager.IsInvalid){manager.Dispose();throw new Win32Exception();}var handle=new Handle(OpenServiceW(manager,spec.Name,0xf01ff));
         if(handle.IsInvalid){handle.Dispose();manager.Dispose();throw new Win32Exception();}return new(spec,command,manager,handle);
     }
@@ -114,18 +105,10 @@ internal sealed class NativeService:IDisposable
             var names=Marshal.StringToHGlobalUni("SeChangeNotifyPrivilege\0\0");
             try{Change(6,new Privileges{Names=names});}finally{Marshal.FreeHGlobal(names);}
         }
-        RequireOwned();var acl=new RawSecurityDescriptor(ServiceDescriptor(owner,Sid()));var bytes=new byte[acl.BinaryLength];acl.GetBinaryForm(bytes,0);
-        if(!SetServiceObjectSecurity(service,4,bytes))throw new Win32Exception();
-        RequireProtection(Security(),owner);
+        if(!SetServiceObjectSecurity(service,4,NativeInstallFiles.Bytes(ServiceDescriptor(owner,spec.QueryGrant))))throw new Win32Exception();
     }
-    // The account the SCM resolves for the service must be the SID the
-    // installer granted its files to before the service existed.
-    internal static string Sid()
-    {
-        var resolved=((SecurityIdentifier)new NTAccount(InstallLocations.ServiceAccount).Translate(typeof(SecurityIdentifier))).Value;
-        if(resolved!=InstallLocations.ServiceSid)throw new IOException("INSTALL_SERVICE_IDENTITY");return resolved;
-    }
-    internal void RequireOwned(){RequireConfigurationIdentity();RequireRestrictedIdentity();}
+    // A proxy created by an interrupted Setup may never have got its identity.
+    internal void ProvisionIfNeverStarted(string owner){if(Status().Win32==1077)Provision(owner);}
     private uint RequireConfigurationIdentity()
     {
         QueryServiceConfigW(service,IntPtr.Zero,0,out var count);if(count<(uint)Marshal.SizeOf<Configuration>()||count>16384)throw new IOException("INSTALL_SERVICE_CONFIG_BOUND");var memory=Marshal.AllocHGlobal((int)count);
@@ -137,71 +120,17 @@ internal sealed class NativeService:IDisposable
         }
         finally{Marshal.FreeHGlobal(memory);}
     }
-    private void RequireRestrictedIdentity()
-    {
-        if(ReadConfig2(5,(p,_)=>Marshal.ReadInt32(p))!=1)throw new IOException("INSTALL_SERVICE_SID_TYPE");
-        if(!spec.Restricted)return;
-        _=ReadConfig2(6,(p,n)=>
-        {
-            if(n<IntPtr.Size)throw new IOException("INSTALL_SERVICE_PRIVILEGES");
-            var text=Marshal.ReadIntPtr(p);var privileges=ReadString(text,p,n);
-            if(privileges!="SeChangeNotifyPrivilege")throw new IOException("INSTALL_SERVICE_PRIVILEGES");
-            var terminator=text+checked((privileges.Length+1)*2);
-            if(terminator.ToInt64()<p.ToInt64()||terminator.ToInt64()+2>p.ToInt64()+n||Marshal.ReadInt16(terminator)!=0)throw new IOException("INSTALL_SERVICE_PRIVILEGES");return 0;
-        });
-    }
     internal static void RequireProvisioningState(uint start,uint state,uint pid,uint win32,uint specific)
     {if(start!=DemandStart||state!=1||pid!=0||win32!=1077||specific!=0)throw new IOException("INSTALL_SERVICE_PROVISIONING_UNCONFIRMED");}
-    private RawSecurityDescriptor Security()
-    {
-        QueryServiceObjectSecurity(service,5,IntPtr.Zero,0,out var size);if(size is <20 or >65536)throw new IOException("INSTALL_SERVICE_DACL_BOUND");var memory=Marshal.AllocHGlobal((int)size);
-        try{if(!QueryServiceObjectSecurity(service,5,memory,size,out _))throw new Win32Exception();var bytes=new byte[size];Marshal.Copy(memory,bytes,0,bytes.Length);return new(bytes,0);}
-        finally{Marshal.FreeHGlobal(memory);}
-    }
-    internal static void RequireAdministrativeWriters(RawSecurityDescriptor acl)
-    {
-        RequireAdministrativeOwner(acl);if(acl.DiscretionaryAcl is null)throw new IOException("INSTALL_SERVICE_DACL");
-        foreach(GenericAce raw in acl.DiscretionaryAcl)
-        {
-            if(raw is not CommonAce ace||ace.IsCallback)throw new IOException("INSTALL_SERVICE_DACL");
-            if(ace.AceQualifier==AceQualifier.AccessDenied)continue;
-            if(ace.AceQualifier!=AceQualifier.AccessAllowed)throw new IOException("INSTALL_SERVICE_DACL");
-            if(ace.SecurityIdentifier.Value is "S-1-5-18" or "S-1-5-32-544")continue;
-            // Generic/service read only: query config/status/dependents,
-            // interrogate and READ_CONTROL. No start/stop, config or ownership.
-            if((ace.AccessMask&~unchecked((int)0x8002008d))!=0)throw new IOException("INSTALL_SERVICE_DACL");
-        }
-    }
-    internal static void RequireAdministrativeOwner(RawSecurityDescriptor acl)
-    {if(acl.Owner?.Value is not("S-1-5-18" or "S-1-5-32-544"))throw new IOException("INSTALL_SERVICE_OWNER");}
     // 0x5 = query-config + query-status for the administrator who installed
-    // and for the service itself. No start/stop, change-config, delete or
+    // and for the Runtime. No start/stop, change-config, delete or
     // write-DACL/owner outside the machine administrators.
-    internal static string ServiceDescriptor(string originalOwner,string runtimeSid)
-    {
-        if(!originalOwner.StartsWith("S-1-5-21-",StringComparison.Ordinal)||!new SecurityIdentifier(originalOwner).IsAccountSid()||!runtimeSid.StartsWith("S-1-5-80-",StringComparison.Ordinal))throw new IOException("INSTALL_SERVICE_GRANT");
-        return $"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x00000005;;;{originalOwner})(A;;0x00000005;;;{runtimeSid})";
-    }
-    internal static void RequireProtection(RawSecurityDescriptor acl,string originalOwner)
-    {
-        RequireAdministrativeOwner(acl);if(acl.DiscretionaryAcl is null||acl.DiscretionaryAcl.Count!=4)throw new IOException("INSTALL_SERVICE_DACL");
-        var wanted=new Dictionary<string,int>(StringComparer.Ordinal){{"S-1-5-18",0xf01ff},{"S-1-5-32-544",0xf01ff},{originalOwner,5},{InstallLocations.ServiceSid,5}};
-        foreach(GenericAce raw in acl.DiscretionaryAcl)
-        {
-            if(raw is not CommonAce ace||ace.IsCallback||ace.AceQualifier!=AceQualifier.AccessAllowed||ace.AceFlags!=AceFlags.None||!wanted.Remove(ace.SecurityIdentifier.Value,out var expected))throw new IOException("INSTALL_SERVICE_DACL");
-            var observed=ace.AccessMask==0x10000000?0xf01ff:ace.AccessMask;if(observed!=expected)throw new IOException("INSTALL_SERVICE_DACL");
-        }
-    }
+    internal static string ServiceDescriptor(string originalOwner,string? grantSid)
+        =>$"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x00000005;;;{originalOwner})"+(grantSid is null?"":$"(A;;0x00000005;;;{grantSid})");
     private T ReadConfig2<T>(uint kind,Func<IntPtr,uint,T> read)
     {
         QueryServiceConfig2W(service,kind,IntPtr.Zero,0,out var bytes);if(bytes is <4 or >65536)throw new IOException("INSTALL_SERVICE_CONFIG_BOUND");var memory=Marshal.AllocHGlobal((int)bytes);
         try{if(!QueryServiceConfig2W(service,kind,memory,bytes,out _))throw new Win32Exception();return read(memory,bytes);}finally{Marshal.FreeHGlobal(memory);}
-    }
-    private static string ReadString(IntPtr text,IntPtr memory,uint bytes)
-    {
-        if(text==IntPtr.Zero)return "";var start=text.ToInt64();var lower=memory.ToInt64();var end=lower+bytes;
-        if(start<lower||start>=end||(start-lower)%2!=0)throw new IOException("INSTALL_SERVICE_CONFIG_POINTER");var result=new System.Text.StringBuilder();
-        for(var offset=0;start+offset+2<=end&&offset<65536;offset+=2){var c=(char)Marshal.ReadInt16(text,offset);if(c=='\0')return result.ToString();result.Append(c);}throw new IOException("INSTALL_SERVICE_CONFIG_STRING");
     }
     private void Change<T>(uint kind,T value)where T:struct
     {var memory=Marshal.AllocHGlobal(Marshal.SizeOf<T>());try{Marshal.StructureToPtr(value,memory,false);if(!ChangeServiceConfig2W(service,kind,memory))throw new Win32Exception();}finally{Marshal.FreeHGlobal(memory);}}
@@ -209,19 +138,18 @@ internal sealed class NativeService:IDisposable
     // A reported (non-crash) failure also restarts the service.
     internal void EnableStartup()
     {
-        RequireOwned();if(!ChangeServiceConfigW(service,0xffffffff,AutoStart,0xffffffff,null,null,IntPtr.Zero,null,null,null,null))throw new Win32Exception();
+        if(!ChangeServiceConfigW(service,0xffffffff,AutoStart,0xffffffff,null,null,IntPtr.Zero,null,null,null,null))throw new Win32Exception();
         if(spec.Delayed)Change(3,1u);
         SetFailureActions(true);Change(4,1u);
-        if(ReadConfig2(4,(p,_)=>Marshal.ReadInt32(p))!=1)throw new IOException("INSTALL_SERVICE_FAILURE_FLAGS");
-        RequireStartType(AutoStart);
     }
+    internal void DisableStartup()
+    {if(!ChangeServiceConfigW(service,0xffffffff,DemandStart,0xffffffff,null,null,IntPtr.Zero,null,null,null,null))throw new Win32Exception();}
     // While an upgrade moves the service nothing may restart it behind Setup's back.
-    internal void ClearFailureActions(){RequireOwned();SetFailureActions(false);Change(4,0u);}
+    internal void ClearFailureActions(){SetFailureActions(false);Change(4,0u);}
     internal void SwitchImage(string version)
     {
-        RequireStoppedForSwitch();command=spec.Command(version);SetImage();RequireOwned();
+        ConfirmStopped();command=spec.Command(version);SetImage();
     }
-    private void RequireStoppedForSwitch(){var observed=Status();RequireStopped(observed.State,observed.Pid);}
     private void SetImage()
     {if(!ChangeServiceConfigW(service,0xffffffff,0xffffffff,0xffffffff,command,null,IntPtr.Zero,null,null,null,null))throw new Win32Exception();}
     internal bool IsStopped()=>Status().State==1;
@@ -230,7 +158,8 @@ internal sealed class NativeService:IDisposable
     {
         try
         {
-            RequireOwned();RequireStartType(AutoStart);VerifyFailureActions(true);
+            if(RequireConfigurationIdentity()!=AutoStart)return false;
+            VerifyFailureActions();
             if(spec.Delayed&&ReadConfig2(3,(p,_)=>Marshal.ReadInt32(p))!=1)return false;
             return ReadConfig2(4,(p,_)=>Marshal.ReadInt32(p))==1;
         }
@@ -238,15 +167,9 @@ internal sealed class NativeService:IDisposable
     }
     internal void FenceForRemoval()
     {
-        RequireOwned();if(spec.Delayed)Change(3,0u);
+        if(spec.Delayed)Change(3,0u);
         if(!ChangeServiceConfigW(service,0xffffffff,Disabled,0xffffffff,null,null,IntPtr.Zero,null,null,null,null))throw new Win32Exception();
         SetFailureActions(false);Change(4,0u);
-        RequireStartType(Disabled);if(ReadConfig2(4,(p,_)=>Marshal.ReadInt32(p))!=0)throw new IOException("INSTALL_SERVICE_FAILURE_FLAGS");
-    }
-    private void RequireStartType(uint expected)
-    {
-        QueryServiceConfigW(service,IntPtr.Zero,0,out var bytes);if(bytes<(uint)Marshal.SizeOf<Configuration>()||bytes>16384)throw new IOException("INSTALL_SERVICE_CONFIG_BOUND");var memory=Marshal.AllocHGlobal((int)bytes);
-        try{if(!QueryServiceConfigW(service,memory,bytes,out _))throw new Win32Exception();if(Marshal.PtrToStructure<Configuration>(memory).Start!=expected)throw new IOException("INSTALL_SERVICE_START_TYPE");}finally{Marshal.FreeHGlobal(memory);}
     }
     internal const uint FailureReset=86400;
     internal static FailureAction[] FailurePlan(bool configured,ServiceSpec? kind=null)
@@ -267,36 +190,35 @@ internal sealed class NativeService:IDisposable
             if(plan.Length==0)Marshal.StructureToPtr(new FailureAction(),action,false);
             for(var i=0;i<plan.Length;i++)Marshal.StructureToPtr(plan[i],action+i*stride,false);
             Change(2,new FailureActions{Reset=configured?FailureReset:0u,Command=text,Count=(uint)plan.Length,Actions=action});
-            VerifyFailureActions(configured);
         }
         finally{Marshal.FreeHGlobal(text);Marshal.FreeHGlobal(action);}
     }
-    private void VerifyFailureActions(bool configured)
+    private void VerifyFailureActions()
     {
-        var plan=FailurePlan(configured,spec);var stride=Marshal.SizeOf<FailureAction>();
+        var plan=FailurePlan(true,spec);var stride=Marshal.SizeOf<FailureAction>();
         _=ReadConfig2(2,(p,n)=>
         {
             if(n<(uint)Marshal.SizeOf<FailureActions>())throw new IOException("INSTALL_SERVICE_FAILURE_ACTIONS");
-            var observed=Marshal.PtrToStructure<FailureActions>(p);if(ReadString(observed.Command,p,n)!=""||observed.Count!=plan.Length)throw new IOException("INSTALL_SERVICE_FAILURE_ACTIONS");
+            var observed=Marshal.PtrToStructure<FailureActions>(p);if(observed.Count!=plan.Length)throw new IOException("INSTALL_SERVICE_FAILURE_ACTIONS");
             var actual=new List<FailureAction>();
             if(plan.Length>0)
             {
                 var offset=observed.Actions.ToInt64()-p.ToInt64();if(offset<0||offset>n-stride*plan.Length)throw new IOException("INSTALL_SERVICE_FAILURE_ACTIONS");
                 for(var i=0;i<plan.Length;i++)actual.Add(Marshal.PtrToStructure<FailureAction>(observed.Actions+i*stride));
             }
-            RequireFailurePlan(configured,observed.Reset,actual,spec);return 0;
+            RequireFailurePlan(true,observed.Reset,actual,spec);return 0;
         });
     }
     internal async Task StartAsync(CancellationToken cancellation)
     {
-        RequireOwned();if(!StartServiceW(service,0,IntPtr.Zero)&&Marshal.GetLastPInvokeError()!=1056)throw new Win32Exception();
+        if(!StartServiceW(service,0,IntPtr.Zero)&&Marshal.GetLastPInvokeError()!=1056)throw new Win32Exception();
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancellation);deadline.CancelAfter(TimeSpan.FromMinutes(6));
         while(true){deadline.Token.ThrowIfCancellationRequested();var state=Status();if(state.State==4&&state.Pid!=0)return;if(state.State==1)throw new IOException("SERVICE_START_FAILED");await Task.Delay(250,deadline.Token);}
     }
     internal async Task StopAsync(CancellationToken cancellation)
     {
-        RequireOwned();using var process=await StopSettledAsync(cancellation);await WaitForExitAsync(process,cancellation);
-        var stopped=Status();RequireStopped(stopped.State,stopped.Pid);
+        using var process=await StopSettledAsync(cancellation);await WaitForExitAsync(process,cancellation);
+        ConfirmStopped();
     }
     // The SCM refuses STOP (1052/1061) unless the current state accepts it, as
     // with a START_PENDING service that does not. STOP is sent only when
@@ -308,9 +230,9 @@ internal sealed class NativeService:IDisposable
     // A process opened while RUNNING is the service's own while the SCM still
     // reports its PID; a requested STOP moving it to STOP_PENDING is expected.
     internal static bool SameGeneration(uint pid,uint state,uint observedPid)=>state is 3 or 4&&observedPid==pid;
-    internal void RequestStop()
+    private void RequestStop()
     {
-        RequireOwned();var state=Status();if(!SendsStop(state.State,state.Accepted,stopRequested))return;
+        var state=Status();if(!SendsStop(state.State,state.Accepted,stopRequested))return;
         if(ControlService(service,1,out _)){stopRequested=true;return;}
         // The state moved between query and control. The settle loop re-reads it.
         var error=Marshal.GetLastPInvokeError();if(error is not(1052 or 1061 or 1062))throw new Win32Exception(error);
@@ -356,23 +278,9 @@ internal sealed class NativeService:IDisposable
     // gone; a survivor would still hold the data lease that any next user must take.
     internal static void RequireStopped(uint state,uint pid)
     {if(state!=1||pid!=0)throw new IOException("UNINSTALL_QUIESCENCE_UNCONFIRMED");}
-    internal void RequireFencedStoppedForRemoval()
-    {RequireRemovalFence();var observed=Status();RequireStopped(observed.State,observed.Pid);}
-    private void RequireRemovalFence()
-    {
-        RequireOwned();RequireStartType(Disabled);
-        if(ReadConfig2(4,(p,_)=>Marshal.ReadInt32(p))!=0)throw new IOException("INSTALL_SERVICE_FAILURE_FLAGS");
-        VerifyFailureActions(false);
-    }
-    // Observation only: the uninstaller still holds the data lease before any
-    // destructive step, so STOPPED alone is never taken as writer quiescence.
-    internal async Task StopForRemovalAsync(CancellationToken cancellation)
-    {
-        RequireRemovalFence();using var process=await StopSettledAsync(cancellation);await WaitForExitAsync(process,cancellation);
-        RequireFencedStoppedForRemoval();
-    }
-    internal void Delete()
-    {RequireOwned();var state=Status();if(state.State!=1||state.Pid!=0)throw new IOException("UNINSTALL_QUIESCENCE_UNCONFIRMED");if(!DeleteService(service))throw new Win32Exception();}
+    internal void ConfirmStopped(){var observed=Status();RequireStopped(observed.State,observed.Pid);}
+    internal (uint State,uint Pid,uint Win32,uint Specific) Observed(){var status=Status();return(status.State,status.Pid,status.Win32,status.Specific);}
+    internal void Delete(){if(!DeleteService(service))throw new Win32Exception();}
     private StatusProcess Status(){if(!QueryServiceStatusEx(service,0,out var value,(uint)Marshal.SizeOf<StatusProcess>(),out _))throw new Win32Exception();return value;}
     public void Dispose(){service.Dispose();manager.Dispose();}
     [StructLayout(LayoutKind.Sequential)]private struct Privileges{public IntPtr Names;}
@@ -390,7 +298,6 @@ internal sealed class NativeService:IDisposable
     [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)]private static extern bool ChangeServiceConfigW(Handle service,uint type,uint start,uint error,string? image,string? group,IntPtr tag,string? dependencies,string? account,string? password,string? display);
     [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)]private static extern bool ChangeServiceConfig2W(Handle service,uint kind,IntPtr value);
     [DllImport("advapi32.dll",SetLastError=true)]private static extern bool SetServiceObjectSecurity(Handle service,uint information,byte[] descriptor);
-    [DllImport("advapi32.dll",SetLastError=true)]private static extern bool QueryServiceObjectSecurity(Handle service,uint information,IntPtr descriptor,uint bytes,out uint needed);
     [DllImport("advapi32.dll",SetLastError=true)]private static extern bool QueryServiceStatusEx(Handle service,uint level,out StatusProcess status,uint bytes,out uint needed);
     [DllImport("advapi32.dll",SetLastError=true)]private static extern bool StartServiceW(Handle service,uint argc,IntPtr argv);
     [DllImport("advapi32.dll",SetLastError=true)]private static extern bool ControlService(Handle service,uint control,out StatusBasic status);

@@ -31,7 +31,7 @@ internal static class NativeInstallFiles
     {using var file=WindowsFileBoundary.OpenRead(path);return file.Small(maximum);}
     internal static FileStream CreateNewFile(string path)
     {
-        var handle=CreateFileW(Extended(path),0x40000000,0,IntPtr.Zero,1,0x80200080,IntPtr.Zero);
+        var handle=WindowsFileBoundary.Native.CreateFileW(Extended(path),0x40000000,0,IntPtr.Zero,1,0x80200080,IntPtr.Zero);
         if(handle.IsInvalid){handle.Dispose();throw new Win32Exception();}
         return new FileStream(handle,FileAccess.Write,1048576,false);
     }
@@ -46,10 +46,9 @@ internal static class NativeInstallFiles
     }
     internal static void WriteNew(string path,byte[] bytes)
     {using var file=CreateNewFile(path);file.Write(bytes);file.Flush(true);}
-    internal static void PublishNew(string path,byte[] bytes,Action? beforeCommit=null)
+    internal static void PublishNew(string path,byte[] bytes)
     {
         var partial=path+".partial-"+Guid.NewGuid().ToString("N");WriteNew(partial,bytes);
-        beforeCommit?.Invoke(); // Internal synthetic crash cut; never supplied by product input.
         CommitNew(partial,path);
     }
     // No replacement: a competing canonical file is never overwritten, so a
@@ -71,9 +70,8 @@ internal static class NativeInstallFiles
     // Installed trees nest digests and preserved copies past MAX_PATH; the raw
     // Win32 calls below need the extended form that System.IO adds itself.
     internal static string Extended(string path)=>@"\\?\"+Path.GetFullPath(path);
-    private static byte[] Bytes(string descriptor){var acl=new RawSecurityDescriptor(descriptor);var bytes=new byte[acl.BinaryLength];acl.GetBinaryForm(bytes,0);return bytes;}
-    [StructLayout(LayoutKind.Sequential)]private struct Attributes{public int Length;public IntPtr Descriptor;public int Inherit;}
-    [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)]private static extern SafeFileHandle CreateFileW(string path,uint access,uint share,IntPtr attributes,uint creation,uint flags,IntPtr template);
+    internal static byte[] Bytes(string descriptor){var acl=new RawSecurityDescriptor(descriptor);var bytes=new byte[acl.BinaryLength];acl.GetBinaryForm(bytes,0);return bytes;}
+    [StructLayout(LayoutKind.Sequential)]internal struct Attributes{public int Length;public IntPtr Descriptor;public int Inherit;}
     [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)]private static extern bool CreateDirectoryW(string path,ref Attributes attributes);
     [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)]private static extern bool MoveFileExW(string old,string target,uint flags);
 }

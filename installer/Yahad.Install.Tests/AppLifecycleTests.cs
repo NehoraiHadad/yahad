@@ -16,11 +16,11 @@ internal static class AppLifecycleTests
             public Task TerminateAndWaitForTreeEmptyAsync(CancellationToken cancellation) { owner.Calls.Add("abort-tree-empty"); if(owner.FailCleanup) throw new IOException("QUIESCENCE_UNKNOWN"); return Task.CompletedTask; }
             public ValueTask DisposeAsync() { owner.Calls.Add("dispose-session"); return ValueTask.CompletedTask; }
         }
-        public Task<IContainedAppSession> StartAsync(AppRelease release, CancellationToken cancellation)
-        { Calls.Add("start:" + release.Id); return Task.FromResult<IContainedAppSession>(new Session(this)); }
+        public Task<IContainedAppSession> StartAsync(CancellationToken cancellation)
+        { Calls.Add("start:current"); return Task.FromResult<IContainedAppSession>(new Session(this)); }
         public Task WaitForHealthyAsync(IContainedAppSession session, CancellationToken cancellation)
         { Calls.Add("health"); if (FailHealth) throw new IOException("UNHEALTHY"); return Task.CompletedTask; }
-        public AppLifecycle Host() => new(new("current"), this, TimeSpan.FromMilliseconds(250));
+        public AppLifecycle Host() => new(this, TimeSpan.FromMilliseconds(250));
     }
     public static async Task Run(Func<string, Func<Task>, Task> check)
     {

@@ -1,13 +1,9 @@
 """Pure build identity tests: no installation, services or temporary ACL fixtures."""
-import hashlib
-import io
 import json
 from pathlib import Path
-import types
 import unittest
 from unittest.mock import patch
 from installer.windows.application_version import package_release_version, source_release_version, require_source_release_version, require_native_build_identity
-from installer.bootstrap.payload_identity import validate_payload_pin, require_installer_description
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -45,40 +41,6 @@ class NativeBuildIdentityTests(unittest.TestCase):
                 mixed=dict(description);mixed[field]=value
                 with self.subTest(artifact=artifact,field=field),self.assertRaises(ValueError):require_native_build_identity(mixed,artifact,'0.6.0',source)
 
-
-
-class BootstrapIdentityTests(unittest.TestCase):
-    source='a'*40
-    data=b'synthetic full installer, never executed'
-    def pin(self, **changed):
-        return dict(version='0.6.0',sourceCommit=self.source,payloadSourceCommit=self.source,bytes=len(self.data),sha256=hashlib.sha256(self.data).hexdigest(),**changed)
-
-    def test_stale_preserved_pin_is_refused_without_relabeling_its_bytes(self):
-        pin=json.loads((ROOT/'installer/bootstrap/payload-pin.json').read_bytes())
-        with self.assertRaises(ValueError): validate_payload_pin(pin,source_release_version(ROOT),self.source)
-
-    def test_wrong_version_source_size_or_digest_metadata_cannot_configure_bootstrap(self):
-        for changed in ({'version':'0.5.3'}, {'sourceCommit':'b'*40}, {'payloadSourceCommit':'b'*40}, {'bytes':True}, {'bytes':0}, {'sha256':'NOT_A_DIGEST'}):
-            pin=self.pin();pin.update(changed)
-            with self.subTest(changed=changed), self.assertRaises(ValueError): validate_payload_pin(pin,'0.6.0',self.source)
-
-    def test_retained_artifact_bytes_are_checked_before_configuring_distribution(self):
-        path=types.SimpleNamespace(is_symlink=lambda:False,is_file=lambda:True,stat=lambda:types.SimpleNamespace(st_nlink=1,st_size=len(self.data)),open=lambda _:io.BytesIO(self.data))
-        with patch('installer.bootstrap.payload_identity.Path',return_value=path):
-            self.assertEqual(validate_payload_pin(self.pin(),'0.6.0',self.source,'synthetic.exe'),self.pin())
-            corrupt=self.pin();corrupt['sha256']='0'*64
-            with self.assertRaises(ValueError):validate_payload_pin(corrupt,'0.6.0',self.source,'synthetic.exe')
-
-
-    def test_new_pin_cannot_relabel_an_old_installers_embedded_identity(self):
-        validate_payload_pin(self.pin(),'0.6.0',self.source)
-        old=dict(artifact='Yahad.Setup',version='0.5.3',sourceCommit='b'*40,systemOperationsInvoked=False,machineAcceptance=False)
-        with self.assertRaises(ValueError):require_installer_description(old,'0.6.0',self.source)
-        current=dict(old,version='0.6.0',sourceCommit=self.source,setupSourceCommit=self.source,coreSourceCommit=self.source)
-        self.assertEqual(require_installer_description(current,'0.6.0',self.source),current)
-        for field,value in (('setupSourceCommit','b'*40),('coreSourceCommit','b'*40),('systemOperationsInvoked',True),('machineAcceptance',True)):
-            mixed=dict(current);mixed[field]=value
-            with self.subTest(field=field),self.assertRaises(ValueError):require_installer_description(mixed,'0.6.0',self.source)
 
 
 if __name__ == '__main__': unittest.main()

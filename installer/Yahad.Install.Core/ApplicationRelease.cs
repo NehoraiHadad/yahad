@@ -31,8 +31,7 @@ public static class ApplicationRelease
         var fields = document.RootElement.EnumerateObject().Where(p => p.Name == "version").ToArray();
         if (fields.Length != 1 || fields[0].Value.ValueKind != JsonValueKind.String) throw new IOException("APPLICATION_VERSION_FORMAT");
         var version = fields[0].Value.GetString()!;
-        if (version.Length > 40 || !Regex.IsMatch(version, @"\A(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\z", RegexOptions.CultureInvariant))
-            throw new IOException("APPLICATION_VERSION_FORMAT");
+        if (!ReleaseManifest.IsVersion(version)) throw new IOException("APPLICATION_VERSION_FORMAT");
         return version;
     }
 }

@@ -41,10 +41,10 @@ internal sealed class FixtureProcesses
     }
     private sealed class LauncherOwner(FixtureProcesses owner,IPrivateAppLauncher inner):IPrivateAppLauncher
     {
-        public async Task<IContainedAppSession> StartAsync(AppRelease release,CancellationToken cancellation)
+        public async Task<IContainedAppSession> StartAsync(CancellationToken cancellation)
         {
             lock(owner.gate){if(owner.closing)throw new IOException("FIXTURE_ALREADY_CLOSING");owner.starting++;}
-            try{var session=new Session(await inner.StartAsync(release,cancellation));lock(owner.gate)owner.sessions.Add(session);return session;}
+            try{var session=new Session(await inner.StartAsync(cancellation));lock(owner.gate)owner.sessions.Add(session);return session;}
             finally{lock(owner.gate)owner.starting--;}
         }
         public Task WaitForHealthyAsync(IContainedAppSession session,CancellationToken cancellation)

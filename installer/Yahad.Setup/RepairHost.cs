@@ -75,6 +75,6 @@ internal static class RepairHost
     private static NativeService OpenOrCreate(InstallerState installed,ServiceSpec spec,ref bool repaired)
     {
         if(!NativeService.Exists(spec)){repaired=true;return NativeService.Create(installed.Version,installed.OwnerSid,spec);}
-        return NativeService.OpenRepointed(installed.Version,installed.OwnerSid,ref repaired,spec);
+        return NativeService.OpenRepointed(installed.Version,ref repaired,spec);
     }
 }

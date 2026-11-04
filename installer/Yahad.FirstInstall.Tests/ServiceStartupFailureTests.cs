@@ -13,7 +13,7 @@ internal static class ServiceStartupFailureTests
     internal static async Task RunAsync(Func<string,Func<Task>,Task> check)
     {
         foreach(var diagnosticUnavailable in new[]{false,true})
-        foreach(var cause in new Exception[]{new IOException("RUNTIME_INSTALLATION_ANCHOR"),new ServiceStartDenied(ServiceFailure.IdentityDenied),new OperationCanceledException()})
+        foreach(var cause in new Exception[]{new IOException("RUNTIME_INSTALLATION_ANCHOR"),new OperationCanceledException()})
         await check("Runtime failure observer preserves original refusal and STOPPED verdict "+cause.GetType().Name+" unavailable "+diagnosticUnavailable,async()=>
         {
             var reports=new List<ServiceReport>();Exception? seen=null;var calls=0;
@@ -21,15 +21,15 @@ internal static class ServiceStartupFailureTests
             {seen=error;calls++;if(diagnosticUnavailable)throw new IOException("DIAGNOSTIC_UNAVAILABLE");});
             var result=await controller.RunAsync(reports.Add);
             Require(ReferenceEquals(seen,cause)&&calls==1&&result.QuiescenceConfirmed);
-            Require(result.Failure==(cause is ServiceStartDenied?ServiceFailure.IdentityDenied:ServiceFailure.StartFailed));
+            Require(result.Failure==ServiceFailure.StartFailed);
             Require(reports[^1].State==ServiceState.Stopped&&reports[^1].Win32ExitCode==1066&&reports.All(r=>r.State!=ServiceState.Running));
         });
-        foreach(var cause in new Exception[]{new IOException("RUNTIME_INSTALLATION_ANCHOR"),new ServiceStartDenied(ServiceFailure.IdentityDenied),new OperationCanceledException()})
+        foreach(var cause in new Exception[]{new IOException("RUNTIME_INSTALLATION_ANCHOR"),new OperationCanceledException()})
         await check("Runtime failure report carries the stage history and its latched verdict "+cause.GetType().Name,async()=>
         {
             StartupStep[]? steps=null;ServiceController? controller=null;
             controller=new ServiceController(new RefusedStart(cause),reportFailure:_=>steps=controller!.StartupSteps);await controller.RunAsync(_=>{});
-            var verdict=cause switch{ServiceStartDenied=>"admission_denied",OperationCanceledException=>"startup_timeout",_=>"startup_failed"};
+            var verdict=cause switch{OperationCanceledException=>"startup_timeout",_=>"startup_failed"};
             Require(steps is [{Stage:"Authorizing",Failure:null},{Stage:"Authorizing"} last]&&last.Failure==verdict);
             using var json=JsonDocument.Parse(ServiceStartupDiagnostic.Encode(StartupDiagnosticRole.Runtime,cause,steps));
             Require(json.RootElement.GetProperty("Steps")[1].GetProperty("Failure").GetString()==verdict&&json.RootElement.GetProperty("ExitCode").ValueKind==JsonValueKind.Null);
@@ -93,11 +93,6 @@ internal static class ServiceStartupFailureTests
             var encoded=ServiceStartupDiagnostic.Encode(StartupDiagnosticRole.Runtime,new IOException("SERVICE_CHILD_PEER",new Win32Exception(5)));
             using var json=JsonDocument.Parse(encoded);var root=json.RootElement;Require(root.GetProperty("Code").GetString()=="SERVICE_CHILD_PEER"&&root.GetProperty("NativeError").GetInt32()==5&&root.GetProperty("Role").GetString()=="Runtime");
             Require(root.GetProperty("SourceCommit").GetString()==ApplicationRelease.SourceCommit);return Task.CompletedTask;
-        });
-        await check("unavailable diagnostics cannot mask startup failure or invoke another writer",()=>
-        {
-            var calls=0;Require(!ServiceStartupDiagnostic.TryRecord(StartupDiagnosticRole.Runtime,new IOException("INSTALLED_LAUNCH_CHANGED"),_=>{calls++;throw new UnauthorizedAccessException();}));Require(calls==1);
-            Require(!ServiceStartupDiagnostic.TryRecord((StartupDiagnosticRole)99,new IOException(),_=>{calls++;return true;}));Require(calls==1);return Task.CompletedTask;
         });
     }
     private sealed class RefusedStart(Exception cause):IServiceStartAuthorizer

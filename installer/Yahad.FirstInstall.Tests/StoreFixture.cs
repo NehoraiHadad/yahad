@@ -9,10 +9,10 @@ internal sealed class FixturePreparationException(bool quiescenceConfirmed,Excep
 {
     internal bool QuiescenceConfirmed{get;}=quiescenceConfirmed;
 }
-internal sealed class FileControl(StoreFixture fixture):IChildControlFactory
+internal sealed class FileControl(StoreFixture fixture)
 {
     internal int Creates;internal bool HeldAfterClose;internal string? StopError;
-    public IChildControl Create(){Creates++;HeldAfterClose=false;StopError=null;return new Channel(this,fixture);}
+    internal IChildControl Create(){Creates++;HeldAfterClose=false;StopError=null;return new Channel(this,fixture);}
     private sealed class Channel(FileControl owner,StoreFixture fixture):IChildControl
     {
         public string Endpoint=>"synthetic-control-no-network-listener";
@@ -24,8 +24,8 @@ internal sealed class FileControl(StoreFixture fixture):IChildControlFactory
                 await Task.Delay(10,cancellation);
             }
         }
-        public async Task<ChildReady> ReadyAsync(int root,CancellationToken cancellation)
-        {await Wait("native-ready",cancellation);using var value=JsonDocument.Parse(File.ReadAllBytes(Path.Combine(fixture.Data,"native-ready")));if(value.RootElement.GetProperty("pid").GetInt32()!=root||value.RootElement.GetProperty("PATH").GetString()!=""||!value.RootElement.GetProperty("clean").GetBoolean())throw new IOException("STORE_CHILD_ENV_OR_PID");return new((uint)root,"ready");}
+        public async Task<ChildReady> ReadyAsync(CancellationToken cancellation)
+        {await Wait("native-ready",cancellation);using var value=JsonDocument.Parse(File.ReadAllBytes(Path.Combine(fixture.Data,"native-ready")));var root=value.RootElement.GetProperty("pid").GetInt32();if(value.RootElement.GetProperty("PATH").GetString()!=""||!value.RootElement.GetProperty("clean").GetBoolean())throw new IOException("STORE_CHILD_ENV_OR_PID");return new((uint)root,"ready");}
         public async Task StopAsync(CancellationToken cancellation)
         {File.WriteAllText(Path.Combine(fixture.Data,"native-stop"),"stop");await Wait("native-closed",cancellation);try{using var wrong=WindowsFileBoundary.AcquireDataLease(fixture.Data);throw new IOException("EARLY_LEASE_RELEASE");}catch(Win32Exception e)when(e.NativeErrorCode==32){owner.HeldAfterClose=true;}catch(Exception e){owner.StopError=e.GetType().Name+":"+e.Message;throw;}File.WriteAllText(Path.Combine(fixture.Data,"native-exit"),"exit");}
         public void Dispose(){}
@@ -82,7 +82,7 @@ internal sealed class StoreFixture:IDisposable
         if(File.Exists(PathOf("worker-error.json")))File.Delete(PathOf("worker-error.json"));
     }
     internal IPrivateAppLauncher CreateLauncher(VerifiedProcessSpec spec)
-        =>processes.Launcher(new ServiceProcessLauncher(spec,Control));
+        =>processes.Launcher(new ServiceProcessLauncher(spec,Control.Create));
     internal FixtureProcesses.JobOwner StartJob(string image,IEnumerable<string> arguments,string directory,IReadOnlyDictionary<string,string> environment,
         Action<Microsoft.Win32.SafeHandles.SafeProcessHandle,int>? beforeResume=null)
         =>processes.StartJob(image,arguments,directory,environment,beforeResume);
@@ -107,7 +107,6 @@ internal sealed class StoreFixture:IDisposable
         // cache in Root, and bound slow dependency preparation separately.
         FixtureProcesses.JobOwner seed;
         try{seed=processes.StartJob(node,["--input-type=module","-e",script],Repo,LaunchEnvironment.Clean(PathOf("temporary")));}
-        catch(JobStartQuiescenceUnconfirmedException failure){throw await StopPreparation(failure.OwnedProcess,failure);}
         catch(Exception failure){throw new FixturePreparationException(true,failure);}
         using var seedOwner=seed;var job=seed.Process;using var bound=new CancellationTokenSource(TimeSpan.FromSeconds(120));
         try

@@ -13,7 +13,7 @@ if(args is ["--describe"])
 }
 if(args is ["--lan-service"])
 {
-    try{return new LanProxyServiceApplication(new NativeScmApi(),Environment.Exit).Run();}
+    try{return ScmController.Dispatch(new NativeScmApi(),LanProxyPaths.ServiceName,Environment.Exit,()=>new LanProxyServiceController(new WindowsLanProxyAdmission()));}
     catch{Console.Error.WriteLine("YAHAD_LAN_DISPATCH_REFUSED");return 1;}
 }
 if(args is not ["--service"]){Console.Error.WriteLine("YAHAD_SERVICE_ARGUMENTS_REFUSED");return 2;}

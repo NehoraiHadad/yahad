@@ -1,44 +1,31 @@
-using System.Security.Cryptography;
 using Yahad.Install;
 
 namespace Yahad.Service;
 
 // The single Runtime service's launch configuration. Setup writes it as an
 // administrator-owned, application-read-only file; nothing else selects what
-// the service launches. The binaries are the version directory this host was
-// started from (the service ImagePath), never a path named by a file.
+// the service launches. The binaries are the version directory of this host's own
+// release (the service ImagePath), never a path named by a file.
 internal sealed record InstalledLaunchConfiguration(int Format,string InstallationId,string DataId,int Port,string Origin);
 internal static class InstalledLaunch
 {
     internal const string FileName="installed.json";
-    internal static string StateRoot=>InstalledLayout.StateRoot;
-    internal static string VersionsRoot=>Path.Combine(InstalledLayout.BinaryRoot,"versions");
-    internal static string VersionRoot(string version)=>Path.Combine(VersionsRoot,version);
+    // This enables the existing connector, not an account connection. A new family
+    // remains unlinked until its authenticated parent uses POST /api/parent/connect
+    // in the existing web UI (origin + CSRF checked). Linked families retain their
+    // previously requested reconnect behavior. No native QR/account setup is added.
+    internal const string Connector="baileys",ConnectorApproval="I_APPROVE_UNOFFICIAL_LINK";
     internal static int Run()
     {
-        var root=StateRoot;var reader=new InstalledLaunchReader(root);
-        var resolver=new InstalledLaunchResolver(root,RunningVersionRoot(),new LocalChildControlFactory());
-        return new ServiceApplication(new NativeScmApi(),new InstalledStartAuthorizer(new WindowsServiceTokenReader(),reader,resolver),Environment.Exit,
-            (error,steps)=>ServiceStartupDiagnostic.TryRecord(StartupDiagnosticRole.Runtime,error,steps)).Run();
+        ServiceController? controller=null;
+        return ScmController.Dispatch(new NativeScmApi(),ServiceDefinition.Name,Environment.Exit,()=>controller=new ServiceController(new InstalledLaunchResolver(),reportFailure:
+            error=>ServiceStartupDiagnostic.TryRecord(StartupDiagnosticRole.Runtime,error,controller!.StartupSteps)));
     }
-    // The host runs from <versions>\<release>\host\. Its own release names the
-    // only version directory it may launch; a copy elsewhere is refused.
-    internal static string RunningVersionRoot()
-    {
-        var actual=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"..")));
-        var expected=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(VersionRoot(ApplicationRelease.Version)));
-        if(!actual.Equals(expected,StringComparison.OrdinalIgnoreCase))throw new IOException("INSTALLED_LAUNCH_IMAGE_LOCATION");
-        return expected;
-    }
-    internal static byte[] Encode(InstalledLaunchConfiguration value)
-    {var bytes=System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(Validate(value));Parse(bytes);return bytes;}
+    internal static byte[] Encode(InstalledLaunchConfiguration value)=>System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(value);
     internal static InstalledLaunchConfiguration Parse(byte[] bytes)
     {
         if(bytes.Length is <1 or >4096)throw new IOException("INSTALLED_LAUNCH_BOUND");
-        return Validate(NativeJson.Read<InstalledLaunchConfiguration>(bytes));
-    }
-    internal static InstalledLaunchConfiguration Validate(InstalledLaunchConfiguration value)
-    {
+        var value=NativeJson.Read<InstalledLaunchConfiguration>(bytes);
         if(value.Format!=1)throw new IOException("INSTALLED_LAUNCH_FORMAT");
         Id(value.InstallationId);Id(value.DataId);
         if(value.Port is <1024 or >65535)throw new IOException("INSTALLED_LAUNCH_PORT");
@@ -54,56 +41,34 @@ internal static class InstalledLaunch
         return origin;
     }
     internal static void Id(string id){if(!Guid.TryParseExact(id,"N",out var parsed)||parsed.ToString("N")!=id)throw new IOException("INSTALLED_LAUNCH_IDENTIFIER");}
-    internal static string Hash(byte[] bytes)=>Convert.ToHexStringLower(SHA256.HashData(bytes));
 }
-internal sealed class InstalledLaunchReader(string root):IInstallationReader
+internal sealed class InstalledLaunchResolver:IServiceStartAuthorizer
 {
-    public InstallationBinding Read()
+    // File work and taking the lease must not occupy the SCM entry/control thread.
+    public Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)=>Task.Run(()=>
     {
-        var bytes=NativeInstallFiles.ReadRecord(Path.Combine(root,InstalledLaunch.FileName),4096);
-        return new(InstalledLaunch.Parse(bytes).InstallationId,InstalledLaunch.Hash(bytes));
-    }
-}
-internal sealed class InstalledLaunchResolver(string root,string versionRoot,IChildControlFactory channels,
-    RuntimeConnectorProfile connectorProfile=RuntimeConnectorProfile.Production,Func<VerifiedProcessSpec,IPrivateAppLauncher>? processFactory=null):IInstalledActivationResolver
-{
-    public Task<AuthorizedServiceStart> ResolveAsync(InstallationBinding binding,CancellationToken cancellation)
-    {
-        cancellation.ThrowIfCancellationRequested();var held=new HeldResources();
+        cancellation.ThrowIfCancellationRequested();
+        var state=InstalledLayout.StateRoot;var binaries=InstalledLayout.VersionRoot(ApplicationRelease.Version);
+        var config=InstalledLaunch.Parse(NativeInstallFiles.ReadRecord(Path.Combine(state,InstalledLaunch.FileName),4096));
+        var origin=InstalledLaunch.Origin(config.Origin,config.Port);
+        var node=Path.Combine(binaries,"payload","runtime","node","node.exe");var app=Path.Combine(binaries,"payload","app");
+        // Only temporary/ and data/ are application-writable.
+        var dataset=Path.Combine(state,"datasets",config.DataId);var key=Path.Combine(dataset,"master-key");
+        var temporary=Path.Combine(state,"temporary");
+        var data=Path.Combine(dataset,"data");
+        // The data lease taken here is held until the service stops.
+        var lease=WindowsFileBoundary.AcquireDataLease(data);
         try
         {
-            var state=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(root));
-            var bytes=NativeInstallFiles.ReadRecord(Path.Combine(state,InstalledLaunch.FileName),4096);
-            if(InstalledLaunch.Hash(bytes)!=binding.ActivationReceiptDigest)throw new IOException("INSTALLED_LAUNCH_CHANGED");
-            var config=InstalledLaunch.Parse(bytes);if(config.InstallationId!=binding.InstallationId)throw new IOException("INSTALLED_LAUNCH_CHANGED");
-            var origin=InstalledLaunch.Origin(config.Origin,config.Port);
-            var binaries=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(versionRoot));
-            var node=Path.Combine(binaries,"payload","runtime","node","node.exe");var app=Path.Combine(binaries,"payload","app");
-            // Only temporary/ and data/ are application-writable.
-            var dataset=Path.Combine(state,"datasets",config.DataId);var key=Path.Combine(dataset,"master-key");
-            var temporary=Path.Combine(state,"temporary");
-            var data=Path.Combine(dataset,"data");var lease=WindowsFileBoundary.AcquireDataLease(data);held.Add(lease);
-            var connector=RuntimeConnectorSettings.For(connectorProfile);
             var environment=new Dictionary<string,string>{{"HOST","127.0.0.1"},{"PORT",config.Port.ToString(System.Globalization.CultureInfo.InvariantCulture)},
                 {"APP_ORIGIN",origin.GetLeftPart(UriPartial.Authority)},{"COOKIE_SECURE",origin.Scheme=="https"?"true":"false"},{"DATA_DIR",data},{"MASTER_KEY_FILE",key},
-                {"CONNECTOR",connector.Connector},{"ALLOW_REAL_WHATSAPP",connector.Approval},{"SETUP_CAPABILITY_FILE",Path.Combine(state,"Secrets","setup-capability.json")}};
+                {"CONNECTOR",InstalledLaunch.Connector},{"ALLOW_REAL_WHATSAPP",InstalledLaunch.ConnectorApproval},{"SETUP_CAPABILITY_FILE",Path.Combine(state,"Secrets","setup-capability.json")}};
             // LAN HTTPS keeps Secure cookies. Only the fixed local loopback origin
             // is added for bootstrap; remote origins are never inferred here.
             if(origin.Scheme=="https"&&NetworkPlan.IsPrivateLanV4(origin.Host))environment["APP_ADDITIONAL_ORIGINS"]=$"http://127.0.0.1:{config.Port}";
-            var release=new AppRelease(ApplicationRelease.Version);
-            var spec=new VerifiedProcessSpec(node,["server/main.mjs"],app,temporary,Path.Combine(binaries,"payload","runtime","ffmpeg","ffmpeg.exe"),environment,lease,held.BeginMutableStart);
-            var launcher=processFactory is null?new ServiceProcessLauncher(spec,channels):processFactory(spec)??throw new IOException("INSTALLED_PROCESS_FACTORY_NULL");
-            return Task.FromResult(new AuthorizedServiceStart(release,launcher,held));
+            var spec=new VerifiedProcessSpec(node,["server/main.mjs"],app,temporary,Path.Combine(binaries,"payload","runtime","ffmpeg","ffmpeg.exe"),environment,lease);
+            return new AuthorizedServiceStart(new ServiceProcessLauncher(spec,()=>new LocalChildControl()),lease);
         }
-        catch{held.Dispose();throw;}
-    }
-    // The data lease taken during admission is held until the service stops, and
-    // admits exactly one start.
-    private sealed class HeldResources:IDisposable
-    {
-        private readonly List<IDisposable> resources=[];private bool disposed,started;
-        internal void Add(IDisposable item)=>resources.Add(item);
-        internal void BeginMutableStart(){ObjectDisposedException.ThrowIf(disposed,this);if(started)throw new IOException("INSTALLED_ALREADY_STARTED");started=true;}
-        public void Dispose(){if(disposed)return;disposed=true;for(var i=resources.Count-1;i>=0;i--)resources[i].Dispose();}
-    }
+        catch{lease.Dispose();throw;}
+    },cancellation);
 }

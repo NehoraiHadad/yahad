@@ -2,9 +2,6 @@ namespace Yahad.Install;
 
 public enum AppLifecycleState { Stopped, Starting, Running, Quiescing, Failed }
 
-/// <summary>A release identity, never an arbitrary executable supplied by UI.</summary>
-public sealed record AppRelease(string Id);
-
 /// <summary>The launcher contains all of the session's descendants.</summary>
 public interface IContainedAppSession : IAsyncDisposable
 {
@@ -15,7 +12,7 @@ public interface IContainedAppSession : IAsyncDisposable
 }
 public interface IPrivateAppLauncher
 {
-    Task<IContainedAppSession> StartAsync(AppRelease release, CancellationToken cancellation);
+    Task<IContainedAppSession> StartAsync(CancellationToken cancellation);
     Task WaitForHealthyAsync(IContainedAppSession session, CancellationToken cancellation);
 }
 
@@ -25,16 +22,14 @@ public sealed class AppLifecycle : IAsyncDisposable
     private readonly IPrivateAppLauncher launcher;
     private readonly TimeSpan deadline,startupDeadline;
     private readonly SemaphoreSlim serial = new(1, 1);
-    private readonly AppRelease active;
     private IContainedAppSession? session;
     private bool disposed;
     public AppLifecycleState State { get; private set; } = AppLifecycleState.Stopped;
 
-    public AppLifecycle(AppRelease active, IPrivateAppLauncher launcher,
-        TimeSpan deadline, TimeSpan? startupDeadline=null)
+    public AppLifecycle(IPrivateAppLauncher launcher,TimeSpan deadline,TimeSpan? startupDeadline=null)
     {
         if (deadline <= TimeSpan.Zero || deadline > TimeSpan.FromMinutes(5)) throw new ArgumentOutOfRangeException(nameof(deadline));
-        this.active = active; this.launcher = launcher; this.deadline = deadline;
+        this.launcher = launcher; this.deadline = deadline;
         this.startupDeadline=startupDeadline??deadline;
         if(this.startupDeadline<=TimeSpan.Zero||this.startupDeadline>TimeSpan.FromMinutes(5))throw new ArgumentOutOfRangeException(nameof(startupDeadline));
     }
@@ -58,7 +53,7 @@ public sealed class AppLifecycle : IAsyncDisposable
     private async Task StartCoreAsync(CancellationToken cancellation)
     {
         State = AppLifecycleState.Starting;
-        session = await launcher.StartAsync(active, cancellation);
+        session = await launcher.StartAsync(cancellation);
         await launcher.WaitForHealthyAsync(session, cancellation).WaitAsync(cancellation);
         State = AppLifecycleState.Running;
     }

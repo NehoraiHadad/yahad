@@ -36,19 +36,8 @@ real service or exercise privileged uninstall on the working ASUS installation.
 The running installed 9fc810d image is unchanged and still has its previous behavior;
 these choices are available in the newly built installer, not silently patched in.
 
-The recovery installer reports a fixed operation stage and numeric Windows error
-or HRESULT instead of discarding these details. After validating the original
-owner and removal choice, it also tries to write
-`C:\Program Files\Yahad.FirstInstall.uninstall-diagnostic.json`. This file contains
-only an opaque installation binding, removal mode, UTC time, Setup source revision
-and sanitized error identifiers. It contains no exception messages, private paths,
-file lists, payloads, account identifiers or credentials. Administrators and SYSTEM
-can write it; the original owner can read it. Existing files must pass ownership,
-no-link, bounded-format and installation-binding checks before replacement or
-deletion. A logging failure never hides the original failure. Successful removal
-deletes its owned diagnostic file before deleting the pending removal receipt.
-The diagnostic file never authorizes removal or changes its fixed targets. A
-legacy `INSTALL_FAILED` without these details does not identify the failing call.
+The installer reports a fixed operation stage and numeric Windows error or HRESULT
+in its result instead of discarding these details. It writes no diagnostic file.
 
 Store authorization fixtures prepare dependencies in the same private temporary
 directory used by the admitted child. Their separate preparation budget is 120

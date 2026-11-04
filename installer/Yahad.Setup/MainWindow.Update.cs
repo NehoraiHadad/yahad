@@ -11,7 +11,7 @@ public partial class MainWindow
         if(existing)
         {
             UpdateChoices.Visibility=Visibility.Collapsed;
-            UpdateExplanation.Text="בהתקנה קיימת נשמרים אישור העדכון והבחירה הקיימים. אפשר לשנות אותם בהגדרות של יחד. אם זו התקנה ישנה ללא המנגנון, המתקין יסביר איזה צעד נדרש.";
+            UpdateExplanation.Text="בהתקנה קיימת נשמרים אישור העדכון והבחירה הקיימים. אפשר לשנות אותם בהגדרות של יחד.";
         }
         UpdateLanUi();
     }

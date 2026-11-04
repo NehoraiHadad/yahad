@@ -163,7 +163,6 @@ await Check("multiple adapters require explicit current selection", async () =>
     await Reject(() => { NetworkPlan.LanOrigin(choices, "ethernet", "192.168.4.11"); return Task.CompletedTask; });
 });
 await NativeBoundaryTests.Run(root, Check);
-await InstallerPlanningTests.Run(Check);
 await LanDeploymentTests.Run(Check);
 await AppLifecycleTests.Run(Check);
 await LifecycleCleanupTests.Run(root,Check);

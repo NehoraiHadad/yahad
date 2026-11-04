@@ -15,6 +15,9 @@ internal static class FullInstallerIntegrationTests
     private static void Assert(bool value){if(!value)throw new Exception("FULL_INSTALLER_ASSERTION");}
     private static void Deny(Action action){try{action();}catch(Exception e)when(e is IOException or UnauthorizedAccessException){return;}throw new Exception("FULL_INSTALLER_UNEXPECTED_ADMISSION");}
     private static void DenyCode(string code,Action action){try{action();}catch(IOException e)when(e.Message==code){return;}throw new Exception("FULL_INSTALLER_EXPECTED_"+code);}
+    // A plain private target: the production target's protection needs elevation.
+    internal static readonly ExtractTarget TestTarget=new(path=>Directory.CreateDirectory(path),path=>new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.None),
+        (partial,path)=>File.Move(partial,path,false),(path,record)=>{using var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read);return file.Length==record.Size&&Convert.ToHexStringLower(SHA256.HashData(file))==record.Sha256;});
     internal static InstallerState State(string phase="committed",string? version=null)
     {
         var installation=Guid.NewGuid().ToString("N");
@@ -52,31 +55,22 @@ internal static class FullInstallerIntegrationTests
         });
         await check("the one service binds its own virtual account and grants the installer and Runtime query only",()=>
         {
-            Assert(InstallLocations.ServiceName=="Yahad.Acceptance"&&InstallLocations.ServiceAccount==@"NT SERVICE\Yahad.Acceptance");
+            Assert(ServiceDefinition.Name=="Yahad.Acceptance"&&ServiceDefinition.Account==@"NT SERVICE\Yahad.Acceptance");
             // The installer grants files to the service SID before CreateService: it is SHA-1 of the upper-case name.
             Assert(InstallLocations.ServiceSidFor("TrustedInstaller")=="S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464");
             Assert(InstallLocations.ServiceSidFor("yahad.acceptance")==InstallLocations.ServiceSid&&InstallLocations.ServiceSid.StartsWith("S-1-5-80-",StringComparison.Ordinal));
             var exact="O:BA"+NativeService.ServiceDescriptor(Owner,InstallLocations.ServiceSid);var acl=new RawSecurityDescriptor(exact);Assert(acl.DiscretionaryAcl!.Count==4);
-            NativeService.RequireProtection(acl,Owner);
             Assert(acl.DiscretionaryAcl.Cast<CommonAce>().Where(a=>a.SecurityIdentifier.Value is not("S-1-5-18" or "S-1-5-32-544")).All(a=>a.AccessMask==5));
-            Deny(()=>NativeService.RequireProtection(new(exact.Replace("0x00000005;;;"+Owner,"0x00000035;;;"+Owner)),Owner));
-            Deny(()=>NativeService.RequireProtection(new(exact+"(A;;0x00000005;;;AU)"),Owner));
-            Deny(()=>NativeService.RequireProtection(new(exact.Replace("O:BA","O:"+Owner)),Owner));
-            Deny(()=>NativeService.RequireProtection(acl,"S-1-5-21-1-2-3-1002"));
-            Deny(()=>NativeService.ServiceDescriptor("S-1-5-32-545",InstallLocations.ServiceSid));Deny(()=>NativeService.ServiceDescriptor(Owner,"S-1-5-21-1-2-3-4"));
+            Assert(new RawSecurityDescriptor("O:BA"+NativeService.ServiceDescriptor(Owner,null)).DiscretionaryAcl!.Count==3);
             Assert(InstallLocations.ServiceCommand("1.2.3")=="\""+Path.Combine(InstallLocations.Binaries,"versions","1.2.3","host","Yahad.ServiceHost.exe")+"\" --service");
             foreach(var bad in new[]{"1.2","01.2.3","1.2.3-beta","..","1.2.3\\..\\x"})Deny(()=>InstallLocations.ServiceCommand(bad));
             return Task.CompletedTask;
         });
-        await check("interrupted service provisioning admits only the same never-started demand registration and administrative writers",()=>
+        await check("interrupted service provisioning admits only the same never-started demand registration",()=>
         {
             NativeService.RequireProvisioningState(3,1,0,1077,0);
             foreach(var value in new(uint,uint,uint,uint,uint)[]{(2,1,0,1077,0),(4,1,0,1077,0),(3,4,123,0,0),(3,1,0,0,0),(3,1,0,1066,1),(3,1,123,1077,0)})Deny(()=>NativeService.RequireProvisioningState(value.Item1,value.Item2,value.Item3,value.Item4,value.Item5));
-            NativeService.RequireAdministrativeWriters(new("O:BAD:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x2008d;;;AU)"));
-            Deny(()=>NativeService.RequireAdministrativeWriters(new("O:BAD:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x35;;;AU)")));
-            var exact="O:BA"+NativeService.ServiceDescriptor(Owner,InstallLocations.ServiceSid);NativeService.RequireAdministrativeOwner(new(exact));
-            Deny(()=>NativeService.RequireAdministrativeOwner(new(exact.Replace("O:BA","O:"+Owner))));
-            Deny(()=>NativeService.RequireAdministrativeWriters(new(exact.Replace("O:BA","O:"+Owner))));return Task.CompletedTask;
+            return Task.CompletedTask;
         });
         await check("quiet setup accepts only explicit choices and builds the window's update consent",()=>
         {
@@ -114,14 +108,6 @@ internal static class FullInstallerIntegrationTests
                 state with{Version="1.2"},state with{InstallationId="x"},state with{SourceCommit=new string('g',40)},state with{SetupSha256="x"},state with{Files=state.Files[..9]},
                 state with{Files=[..state.Files,state.Files[0]]},state with{Files=[..state.Files[..9],new("bootstrap/authority/Yahad.Authority.exe",1,new string('d',64))]},
                 state with{FirstOwner=state.FirstOwner with{installationId=Guid.NewGuid().ToString("N")}},state with{Consent=state.Consent with{Accepted=false}}})Deny(bad.Require);
-            return Task.CompletedTask;
-        });
-        await check("retired four-service records are refused for install and removal and never adopted",()=>
-        {
-            foreach(var format in InstallerState.LegacyFormats)DenyCode("LEGACY_INSTALL_UNINSTALL_FIRST",()=>NativeSetupHost.RequireCurrentFormat(Json(new{Format=format,Phase="committed"})));
-            Assert(InstallerState.LegacyFormats.SequenceEqual(new[]{3,4,5}));
-            NativeSetupHost.RequireCurrentFormat(Json(State()));
-            foreach(var bytes in new[]{Json(new{Format=2}),Json(new{Format=7}),Json(new{Phase="committed"}),Json(new{Format="6"}),"not json"u8.ToArray()})DenyCode("INSTALL_STATE_INVALID",()=>NativeSetupHost.RequireCurrentFormat(bytes));
             return Task.CompletedTask;
         });
         await check("removal intent retains owner, exact binaries and choice beyond partial root deletion",()=>
@@ -168,11 +154,11 @@ internal static class FullInstallerIntegrationTests
             string[] Extracted(string directory)=>Directory.EnumerateFiles(directory,"*",SearchOption.AllDirectories).Select(f=>Path.GetRelativePath(directory,f).Replace(Path.DirectorySeparatorChar,'/')).Where(f=>f!=".yahad-fixture").Order(StringComparer.Ordinal).ToArray();
             try
             {
-                package.Extract(root,_=>{},default);package.Extract(root,_=>{},default);
+                package.Extract(root,_=>{},default,TestTarget);package.Extract(root,_=>{},default,TestTarget);
                 Assert(Extracted(root).SequenceEqual(package.Manifest.Files.Select(f=>f.Path).Order(StringComparer.Ordinal)));
-                var node=Path.Combine(root,"payload","runtime","node","node.exe");File.WriteAllBytes(node,[2]);DenyCode("INSTALL_TARGET_CHANGED",()=>package.Extract(root,_=>{},default));
+                var node=Path.Combine(root,"payload","runtime","node","node.exe");File.WriteAllBytes(node,[2]);DenyCode("INSTALL_TARGET_CHANGED",()=>package.Extract(root,_=>{},default,TestTarget));
                 Assert(File.ReadAllBytes(node).SequenceEqual(new byte[]{2}));
-                var failing=new ExtractTarget(d=>Directory.CreateDirectory(d),ExtractTarget.Private.CreateFile,(_,_)=>throw new IOException("COMMIT_CUT"),ExtractTarget.Private.ExistingMatches);
+                var failing=TestTarget with{Commit=(_,_)=>throw new IOException("COMMIT_CUT")};
                 DenyCode("COMMIT_CUT",()=>package.Extract(other,_=>{},default,failing));Assert(Extracted(other).Length==0);
             }
             finally{Directory.Delete(root,true);Directory.Delete(other,true);}
@@ -185,26 +171,6 @@ internal static class FullInstallerIntegrationTests
             var members=NativeLanInstall.HostBinaryMembers(files);
             Assert(members.Length==2&&members[0]==new LanOwnedFile("host/Yahad.ServiceHost.exe",1,new string('a',64))&&members[1].Path=="host/Yahad.ServiceHost.runtimeconfig.json");return Task.CompletedTask;
         });
-        await check("LAN origin changes rewrite only the launch file's origin and recover only its two exact versions",()=>
-        {
-            var state=State();var before=new LanWebSnapshot(InstalledLaunch.Encode(new(1,state.InstallationId,state.DataId,state.Port,"http://127.0.0.1:"+state.Port)));
-            LanWebConfiguration.Require(before,state);var after=LanWebConfiguration.WithOrigin(before,state,"https://192.168.4.5");
-            var launch=InstalledLaunch.Parse(after.Installed);Assert(launch.Origin=="https://192.168.4.5"&&launch.InstallationId==state.InstallationId&&launch.DataId==state.DataId&&launch.Port==state.Port);
-            Assert(LanWebConfiguration.Names.SequenceEqual(new[]{"installed.json"}));
-            foreach(var origin in new[]{"https://8.8.8.8","http://192.168.4.5","https://192.168.4.5:8443","http://127.0.0.1:47124"})Deny(()=>LanWebConfiguration.WithOrigin(before,state,origin));
-            foreach(var other in new[]{state with{InstallationId=Guid.NewGuid().ToString("N")},state with{DataId=Guid.NewGuid().ToString("N")},state with{Port=47124}})DenyCode("LAN_APP_CONFIGURATION_CHANGED",()=>LanWebConfiguration.Require(before,other));
-            DenyCode("LAN_APP_CONFIGURATION_CHANGED",()=>LanWebConfiguration.Require(new([1,2,3]),state));
-            var journal=new LanWebJournal(1,state.InstallationId,before,after);
-            foreach(var current in new[]{before.Installed,after.Installed})LanWebConfiguration.RequireRecoverable(journal,state,_=>current);
-            DenyCode("LAN_JOURNAL_CHANGED",()=>LanWebConfiguration.RequireRecoverable(journal,state,_=>InstalledLaunch.Encode(new(1,state.InstallationId,state.DataId,state.Port,"https://192.168.4.6"))));
-            DenyCode("LAN_JOURNAL_CHANGED",()=>LanWebConfiguration.RequireRecoverable(journal with{InstallationId=Guid.NewGuid().ToString("N")},state,_=>before.Installed));
-            return Task.CompletedTask;
-        });
-        await check("state-only preserved installation never displays a fresh updater consent choice",()=>
-        {
-            var observed=new List<string>();Assert(ExistingInstallation.Present(path=>{observed.Add(path);return path==InstallLocations.State;}));Assert(observed.SequenceEqual(new[]{InstallLocations.State}));
-            Assert(!ExistingInstallation.Present(_=>false));Assert(ExistingInstallation.Present(path=>path==InstallLocations.RemovalStateFile));return Task.CompletedTask;
-        });
         await check("installer partial cleanup recognizes only exact generated record names with canonical nonces",()=>
         {
             Assert(FullInstallerResidue.Metadata.SequenceEqual(new[]{"installer-state.json","upgrade-state.json","installed.json","lan-preparation.json","setup-capability.json","master-key"}));
@@ -215,16 +181,9 @@ internal static class FullInstallerIntegrationTests
             }
             foreach(var other in new[]{"activation.json","pending.json","epoch.json","bootstrap.json","process.lock"})Assert(!FullInstallerResidue.IsOwnedName(other+".partial-"+new string('a',32)));return Task.CompletedTask;
         });
-        await check("install diagnostic records contain fixed stages and numeric failure evidence without private exception text",()=>
+        await check("installer failure codes name upgrade and changed-target refusals",()=>
         {
-            var failure=new SetupOperationException(UninstallPhase.FullStart,new IOException("private-token fake-secret-path C:\\private\\data"));
-            var bytes=FullInstallDiagnostics.Encode(new string('a',32),failure,123);var text=global::System.Text.Encoding.UTF8.GetString(bytes);using var json=JsonDocument.Parse(bytes);
-            Assert(!text.Contains("private",StringComparison.OrdinalIgnoreCase)&&!text.Contains("secret",StringComparison.OrdinalIgnoreCase)&&!text.Contains("StackTrace",StringComparison.Ordinal));
-            Assert(json.RootElement.GetProperty("Stage").GetString()=="FullStart"&&json.RootElement.GetProperty("Code").GetString()=="INSTALL_FAILED");return Task.CompletedTask;
-        });
-        await check("installer failure codes name legacy, upgrade and changed-target refusals",()=>
-        {
-            foreach(var code in new[]{"LEGACY_INSTALL_UNINSTALL_FIRST","INSTALL_UPGRADE_REQUIRED","INSTALL_DOWNGRADE_REFUSED","INSTALL_TARGET_CHANGED","PACKAGE_PAYLOAD_ANCHOR"})Assert(SetupOperation.Code(new IOException(code))==code);
+            foreach(var code in new[]{"INSTALL_UPGRADE_REQUIRED","INSTALL_DOWNGRADE_REFUSED","INSTALL_TARGET_CHANGED","PACKAGE_PAYLOAD_ANCHOR"})Assert(SetupOperation.Code(new IOException(code))==code);
             Assert(SetupOperation.Code(new IOException("UPDATE_LEGACY_PROFILE_REQUIRES_REMOVAL"))=="INSTALL_FAILED");
             Assert(SetupOperation.OperationTimeout("install")==TimeSpan.FromMinutes(48)&&SetupOperation.OperationTimeout("uninstall")==TimeSpan.FromMinutes(96));
             return Task.CompletedTask;

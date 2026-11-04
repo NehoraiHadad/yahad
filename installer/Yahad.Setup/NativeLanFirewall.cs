@@ -31,13 +31,13 @@ internal static class NativeLanFirewall
     }
     internal static void RequireNoDrift(IReadOnlyList<LanFirewallRule> rules)
     {
-        NativeInstallFiles.RequireAdministrator();dynamic policy=Policy();
+        dynamic policy=Policy();
         try{foreach(var expected in rules){dynamic? observed=Find(policy,expected.Name);if(observed is not null&&!expected.Matches(Read(observed)))throw new IOException("LAN_FIREWALL_CHANGED");}}
         finally{Marshal.FinalReleaseComObject(policy);}
     }
     internal static void RequirePresentAndMatching(IReadOnlyList<LanFirewallRule> rules)
     {
-        NativeInstallFiles.RequireAdministrator();dynamic policy=Policy();
+        dynamic policy=Policy();
         try{foreach(var expected in rules){dynamic? observed=Find(policy,expected.Name);if(observed is null||!expected.Matches(Read(observed)))throw new IOException("LAN_FIREWALL_REPAIR_REQUIRED");}}
         finally{Marshal.FinalReleaseComObject(policy);}
     }
@@ -49,7 +49,7 @@ internal static class NativeLanFirewall
             foreach(var expected in rules)
             {
                 dynamic? observed=Find(policy,expected.Name);
-                if(observed is not null){if(!expected.Matches(Read(observed)))throw new IOException("LAN_FIREWALL_CHANGED");continue;}
+                if(observed is not null)continue;
                 dynamic rule=NewRule();
                 try
                 {
@@ -61,8 +61,6 @@ internal static class NativeLanFirewall
                     policy.Rules.Add(rule);
                 }
                 finally{Marshal.FinalReleaseComObject(rule);}
-                dynamic created=Find(policy,expected.Name)??throw new IOException("LAN_FIREWALL_NOT_OBSERVED");
-                if(!expected.Matches(Read(created)))throw new IOException("LAN_FIREWALL_CHANGED");
             }
         }
         finally{Marshal.FinalReleaseComObject(policy);}
@@ -70,13 +68,7 @@ internal static class NativeLanFirewall
     internal static void Remove(IReadOnlyList<LanFirewallRule> rules)
     {
         RequireNoDrift(rules);dynamic policy=Policy();
-        try{foreach(var expected in rules){dynamic? observed=Find(policy,expected.Name);if(observed is null)continue;if(!expected.Matches(Read(observed)))throw new IOException("LAN_FIREWALL_CHANGED");policy.Rules.Remove(expected.Name);}}
+        try{foreach(var expected in rules){if(Find(policy,expected.Name) is not null)policy.Rules.Remove(expected.Name);}}
         finally{Marshal.FinalReleaseComObject(policy);}
-    }
-    internal static void RequirePrivateProfile(string selectedAdapter)
-    {
-        // A private IPv4 is not proof of a home network (VPNs use them too).
-        // Read the selected adapter's actual Windows category; never reclassify it.
-        NativeNetworkProfile.RequirePrivateCategory(NativeNetworkProfile.ReadCategory(selectedAdapter));
     }
 }

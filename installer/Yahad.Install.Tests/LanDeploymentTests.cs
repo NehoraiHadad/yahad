@@ -81,19 +81,10 @@ internal static class LanDeploymentTests
             Assert(plan.FirewallRules[0].LocalPorts == "443" && plan.FirewallRules[1].LocalPorts == "80");
             return Task.CompletedTask;
         });
-        await check("LAN Caddy paths reject interpolation, control tokens, device paths and public-private overlap", () =>
+        await check("LAN Caddy paths are quoted with forward slashes", () =>
         {
-            LanDeploymentPlan With(string storage, string join, string executable = @"C:\Tools\caddy.exe") =>
-                LanDeployment.Create(id, choices, "home", "192.168.4.5", 47123, executable, storage, join);
-            foreach (var bad in new[] { "relative", @"\\server\share\ca", "C:\\ca\nadmin on", @"C:\ca{env.SECRET}", @"C:\ca`bad", "C:\\ca\"bad", @"C:\ca:stream", @"C:\ca*", @"C:\ca?", @"C:\ca|bad" })
-                Reject(() => With(bad, @"C:\join"));
-            Reject(() => With(@"C:\private", @"C:\private\public"));
-            Reject(() => With(@"C:\public\private", @"C:\public"));
-            Reject(() => With(@"C:\same", @"C:\same"));
-            Reject(() => With(@"C:\Tools", @"C:\join"));
-            Reject(() => With(@"C:\ca", @"C:\join", @"C:\Tools\caddy.cmd"));
-            Reject(() => LanDeployment.Create("not-a-guid", choices, "home", "192.168.4.5", 47123, @"C:\caddy.exe", @"C:\ca", @"C:\join"));
-            Reject(() => LanDeployment.Create(id, choices, "home", "192.168.4.5", 443, @"C:\caddy.exe", @"C:\ca", @"C:\join"));
+            LanDeploymentPlan With(string storage, string join) =>
+                LanDeployment.Create(id, choices, "home", "192.168.4.5", 47123, @"C:\Tools\caddy.exe", storage, join);
             Assert(With(@"C:\A B\ca", @"C:\A B\join").Caddyfile.Contains("root \"C:/A B/ca\"", StringComparison.Ordinal));
             return Task.CompletedTask;
         });

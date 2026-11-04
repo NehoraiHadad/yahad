@@ -39,21 +39,20 @@ internal static class LanIntegrationTests
         });
         await check("new LAN service configuration accepts never-started while post-start cleanup guard stays strict",()=>
         {
-            LanServiceRegistration.RequireConfigurationStop(1,0,1077,0);
-            LanServiceRegistration.RequireConfigurationStop(1,0,0,0);
-            LanServiceRegistration.RequireConfigurationStop(1,0,1066,(uint)ServiceFailure.ActivationUnavailable);
+            NativeLanInstall.RequireConfigurationStop(1,0,1077,0);
+            NativeLanInstall.RequireConfigurationStop(1,0,0,0);
+            NativeLanInstall.RequireConfigurationStop(1,0,1066,(uint)ServiceFailure.ActivationUnavailable);
             Refuse(()=>LanProxyPolicy.RequireConfirmedStopped(1,0,1077,0));
-            Refuse(()=>LanServiceRegistration.RequireConfigurationStop(4,0,1077,0));
-            Refuse(()=>LanServiceRegistration.RequireConfigurationStop(1,123,1077,0));
-            Refuse(()=>LanServiceRegistration.RequireConfigurationStop(1,0,1077,1));
-            Refuse(()=>LanServiceRegistration.RequireConfigurationStop(1,0,1067,0));
-            Refuse(()=>LanServiceRegistration.RequireConfigurationStop(1,0,1066,(uint)ServiceFailure.QuiescenceUnknown));
+            Refuse(()=>NativeLanInstall.RequireConfigurationStop(4,0,1077,0));
+            Refuse(()=>NativeLanInstall.RequireConfigurationStop(1,123,1077,0));
+            Refuse(()=>NativeLanInstall.RequireConfigurationStop(1,0,1077,1));
+            Refuse(()=>NativeLanInstall.RequireConfigurationStop(1,0,1067,0));
+            Refuse(()=>NativeLanInstall.RequireConfigurationStop(1,0,1066,(uint)ServiceFailure.QuiescenceUnknown));
             return Task.CompletedTask;
         });
         await check("LAN request requires explicit consent, canonical private address and well-formed action", () =>
         {
             Enable().Require(); Enable(false).Require();
-            new LanSetupRequest(LanSetupAction.KeepCurrent).Require();
             new LanSetupRequest(LanSetupAction.Disable).Require();
             Refuse(() => (Enable() with { FirewallConsent = false }).Require());
             foreach (var adapter in new[] { "", "  ", "home\n", new string('x', 257) })
@@ -63,7 +62,7 @@ internal static class LanIntegrationTests
             Refuse(() => (Enable() with { Address = null }).Require());
             Refuse(() => new LanSetupRequest((LanSetupAction)999).Require());
             Refuse(() => new LanSetupRequest(LanSetupAction.Disable, Address: "192.168.4.5").Require());
-            Refuse(() => new LanSetupRequest(LanSetupAction.KeepCurrent, FirewallConsent: true).Require());
+            Refuse(() => new LanSetupRequest(LanSetupAction.Disable, FirewallConsent: true).Require());
             return Task.CompletedTask;
         });
         await check("installer passes validated LAN request and owner between publication and server observation", async () =>
@@ -97,22 +96,13 @@ internal static class LanIntegrationTests
             await RefuseAsync(() => new InstallFlow(host).RunAsync(Owner, false, _ => { }, cancel.Token, lan: Enable()));
             Require(host.Calls.SequenceEqual(["prepare"]));
         });
-        await check("keep-current and omitted LAN preserve ordinary install while disable is explicitly conveyed", async () =>
+        await check("omitted LAN preserves ordinary install while disable is explicitly conveyed", async () =>
         {
-            foreach (var request in new LanSetupRequest?[] { null, new(LanSetupAction.KeepCurrent) })
-            {
-                var host = new NetworkHost(); await new InstallFlow(host).RunAsync(Owner, false, _ => { }, default, lan: request);
-                Require(host.Calls.SequenceEqual(["prepare", "publish", "start"]) && host.Request is null);
-            }
+            var host = new NetworkHost(); await new InstallFlow(host).RunAsync(Owner, false, _ => { }, default);
+            Require(host.Calls.SequenceEqual(["prepare", "publish", "start"]) && host.Request is null);
             var disableHost = new NetworkHost();
             await new InstallFlow(disableHost).RunAsync(Owner, false, _ => { }, default, lan: new(LanSetupAction.Disable));
             Require(disableHost.Calls.SequenceEqual(["prepare", "publish", "lan:Disable", "start"]));
-        });
-        await check("unsupported LAN host refuses before server or browser observation", async () =>
-        {
-            var host = new BasicHost(); var phases = new List<string>();
-            await RefuseAsync(() => new InstallFlow(host).RunAsync(Owner, false, p => phases.Add(p.Phase), default, lan: Enable()));
-            Require(host.Calls.SequenceEqual(["prepare", "publish"]) && !phases.Contains("ready"));
         });
         await check("uninstall preserves keep/delete mode and never calls LAN configuration", async () =>
         {
@@ -127,98 +117,31 @@ internal static class LanIntegrationTests
             Require(forbidden.Calls.Count == 0);
         });
 
-        var state = FixtureState(); var before = FixtureSnapshot(state);
-        await check("LAN preparation survives the service-created owner-not-yet-saved checkpoint without changing consent", () =>
+        await check("LAN preparation resumes only the owner's exact selection", () =>
         {
             var request = Enable();
-            var initial = new LanPreparation(1, state.InstallationId, state.OwnerSid, state.PayloadDigest, request);
-            LanRecoveryPolicy.RequirePreparation(initial, state, request);
-            var created = initial with { ServiceSid = "S-1-5-80-9-8-7-6-5" };
-            LanRecoveryPolicy.RequirePreparation(NativeJson.Read<LanPreparation>(Json(created)), state, request);
-            Refuse(() => LanRecoveryPolicy.RequirePreparation(initial with { Format = 2 }, state, request));
-            Refuse(() => LanRecoveryPolicy.RequirePreparation(initial with { InstallationId = new string('f', 32) }, state, request));
-            Refuse(() => LanRecoveryPolicy.RequirePreparation(initial with { OwnerSid = "S-1-5-21-4-3-2-1001" }, state, request));
-            Refuse(() => LanRecoveryPolicy.RequirePreparation(initial with { PayloadDigest = new string('f', 64) }, state, request));
-            Refuse(() => LanRecoveryPolicy.RequirePreparation(initial with { ServiceSid = state.ServiceSid }, state, request));
-            Refuse(() => LanRecoveryPolicy.RequirePreparation(initial with { ServiceSid = "S-1-5-18" }, state, request));
-            Refuse(() => LanRecoveryPolicy.RequirePreparation(initial with { Request = request with { FirewallConsent = false } }, state));
-            Refuse(() => LanRecoveryPolicy.RequirePreparation(initial with { Request = new(LanSetupAction.Disable) }, state));
-            Refuse(() => LanRecoveryPolicy.RequirePreparation(created, state, request with { Address = "192.168.4.6" }));
-            Refuse(() => LanRecoveryPolicy.RequirePreparation(created, state, request with { HttpHelp = false }));
+            var prepared = NativeJson.Read<LanSetupRequest>(Json(request));
+            NativeLanInstall.RequireSameSelection(prepared, request);
+            Refuse(() => NativeLanInstall.RequireSameSelection(prepared, request with { Address = "192.168.4.6" }));
+            Refuse(() => NativeLanInstall.RequireSameSelection(prepared, request with { HttpHelp = false }));
             return Task.CompletedTask;
         });
-        await check("LAN removal receipt alone preserves confirmed mode and identity after owner-record removal", () =>
+        await check("LAN removal receipt alone preserves the confirmed mode after owner-record removal", () =>
         {
-            LanDeploymentPlan plan;
-            try{plan = LanDeployment.Create(state.InstallationId, [new("fixture-home", "Synthetic home", "192.168.4.5")],
-                "fixture-home", "192.168.4.5", state.Port, LanProxyPaths.Caddy, LanProxyPaths.Data, LanProxyPaths.PublicJoin);}
-            catch(InvalidDataException failure){throw new InvalidDataException("LAN_REMOVAL_FIXTURE_PATHS "+JsonSerializer.Serialize(new{caddy=LanProxyPaths.Caddy,data=LanProxyPaths.Data,publicJoin=LanProxyPaths.PublicJoin}),failure);}
-            var owned = new LanOwnedState(1, state.InstallationId, state.OwnerSid, "S-1-5-80-9-8-7-6-5", "disabled",
-                "fixture-home", "192.168.4.5", state.Port, true, string.Join(':', Enumerable.Repeat("AB", 32)), plan.FirewallRules.ToArray(), []);
+            var owned = new LanOwnedState("disabled", "fixture-home", "192.168.4.5", true, string.Join(':', Enumerable.Repeat("AB", 32)), []);
             foreach (var mode in new[] { UninstallMode.KeepData, UninstallMode.DeleteData })
             {
                 // No owner.json read callback exists here: this is exactly the
                 // surviving external receipt, serialized and read on its own.
-                var receipt = NativeJson.Read<LanRemovalIntent>(Json(new LanRemovalIntent(1, mode, owned)));
-                LanRecoveryPolicy.RequireRemoval(receipt, state, mode);
-                LanRecoveryPolicy.RequireRemoval(receipt, state);
-                Refuse(() => LanRecoveryPolicy.RequireRemoval(receipt, state, mode == UninstallMode.KeepData ? UninstallMode.DeleteData : UninstallMode.KeepData));
-                Refuse(() => LanRecoveryPolicy.RequireRemoval(receipt with { Format = 2 }, state));
-                Refuse(() => LanRecoveryPolicy.RequireRemoval(receipt with { Mode = (UninstallMode)999 }, state));
-                Refuse(() => LanRecoveryPolicy.RequireRemoval(receipt with { State = owned with { OwnerSid = "S-1-5-21-4-3-2-1001" } }, state));
-                Refuse(() => LanRecoveryPolicy.RequireRemoval(receipt with { State = owned with { InstallationId = new string('f', 32) } }, state));
-                Refuse(() => LanRecoveryPolicy.RequireRemoval(receipt with { State = owned with { AppPort = state.Port + 1 } }, state));
-                Refuse(() => LanRecoveryPolicy.RequireRemoval(receipt with { State = owned with { ServiceSid = state.ServiceSid } }, state));
-                Refuse(() => LanRecoveryPolicy.RequireRemoval(receipt with { State = owned with { ServiceSid = "S-1-5-18" } }, state));
+                var receipt = NativeJson.Read<LanRemovalIntent>(Json(new LanRemovalIntent(mode, owned)));
+                Require(receipt.State.Address == owned.Address && receipt.State.RootSha256 == owned.RootSha256);
+                NativeLanInstall.RequireRemovalMode(receipt, mode);
+                Refuse(() => NativeLanInstall.RequireRemovalMode(receipt, mode == UninstallMode.KeepData ? UninstallMode.DeleteData : UninstallMode.KeepData));
             }
-            return Task.CompletedTask;
-        });
-        await check("LAN origin transaction rewrites only the launch origin and restores the exact loopback file", () =>
-        {
-            var after = LanWebConfiguration.WithOrigin(before, state, "https://192.168.4.5");
-            Require(InstalledLaunch.Parse(after.Installed) == new InstalledLaunchConfiguration(1, state.InstallationId, state.DataId, state.Port, "https://192.168.4.5"));
-            var restored = LanWebConfiguration.WithOrigin(after, state, "http://127.0.0.1:" + state.Port);
-            Require(restored.Installed.SequenceEqual(before.Installed));
-            return Task.CompletedTask;
-        });
-        await check("LAN origin transaction refuses public, HTTP LAN, noncanonical and credential-bearing browser URLs", () =>
-        {
-            foreach (var url in new[] { "https://evil.example", "https://8.8.8.8", "http://192.168.4.5", "https://192.168.4.5:444", "https://user@192.168.4.5", "https://192.168.4.5/path", "https://192.168.4.5/?q=1", "https://192.168.4.5/#x", "http://localhost:" + state.Port, "http://127.0.0.1:47124" })
-                Refuse(() => LanWebConfiguration.WithOrigin(before, state, url));
-            return Task.CompletedTask;
-        });
-        await check("LAN journal validates both snapshots and the current launch file before recovery", () =>
-        {
-            var after = LanWebConfiguration.WithOrigin(before, state, "https://192.168.4.5");
-            var journal = new LanWebJournal(1, state.InstallationId, before, after);
-            foreach (var current in new[] { before.Installed, after.Installed })
-            {
-                var read = new List<string>();
-                LanWebConfiguration.RequireRecoverable(journal, state, name => { read.Add(name); return current; });
-                Require(read.SequenceEqual(LanWebConfiguration.Names) && LanWebConfiguration.Names.SequenceEqual(new[] { InstalledLaunch.FileName }));
-            }
-            Refuse(() => LanWebConfiguration.RequireRecoverable(journal, state, _ => Encoding.UTF8.GetBytes("changed current control")));
-            Refuse(() => LanWebConfiguration.RequireRecoverable(journal with { Format = 2 }, state, _ => throw new Exception("read before journal validation")));
-            Refuse(() => LanWebConfiguration.RequireRecoverable(journal with { InstallationId = new string('f', 32) }, state, _ => throw new Exception("read before identity validation")));
-            var foreign = FixtureState();
-            Refuse(() => LanWebConfiguration.RequireRecoverable(journal with { After = FixtureSnapshot(foreign) }, state, _ => throw new Exception("read before snapshot validation")));
-            return Task.CompletedTask;
-        });
-        await check("LAN snapshot validation rejects a malformed launch file or foreign data identity", () =>
-        {
-            foreach (var bytes in new[] { Encoding.UTF8.GetBytes("{}"), Json(new { Format = 2, state.InstallationId, state.DataId, state.Port, Origin = "http://127.0.0.1:" + state.Port }), Array.Empty<byte>() })
-                Refuse(() => LanWebConfiguration.Require(new(bytes), state));
-            Refuse(() => LanWebConfiguration.Require(before, state with { DataId = Guid.NewGuid().ToString("N") }));
-            Refuse(() => LanWebConfiguration.Require(before, state with { InstallationId = Guid.NewGuid().ToString("N") }));
-            Refuse(() => LanWebConfiguration.Require(before, state with { Port = state.Port + 1 }));
             return Task.CompletedTask;
         });
         await check("LAN native UI renders synthetic RTL choices, explicit consent and preserved uninstall options without showing", RenderUiAsync);
     }
-
-    private static InstallerState FixtureState() => FullInstallerIntegrationTests.State();
-    private static LanWebSnapshot FixtureSnapshot(InstallerState state) =>
-        new(InstalledLaunch.Encode(new(1, state.InstallationId, state.DataId, state.Port, "http://127.0.0.1:" + state.Port)));
 
     private static Task RenderUiAsync()
     {
@@ -260,7 +183,7 @@ internal static class LanIntegrationTests
                     address.SelectedIndex = 0; consent.IsChecked = true;
                     Control<ScrollViewer>("ContentScroll").ScrollToEnd(); Snapshot(window, size, output, "lan-home-consent");
                     var fingerprint = string.Join(':', Enumerable.Repeat("AB", 32));
-                    Invoke(window, "ShowLanResult", new LanSetupResult("https://192.168.4.5", "http://192.168.4.5", fingerprint, true));
+                    Invoke(window, "ShowLanResult", new LanSetupResult("https://192.168.4.5", "http://192.168.4.5", fingerprint));
                     Require(Control<TextBox>("LanRootFingerprint").Text == fingerprint && Control<TextBox>("LanRootFingerprint").IsReadOnly);
                     Require(Control<Border>("LanResultPanel").Visibility == Visibility.Visible && Control<StackPanel>("LanPanel").Visibility == Visibility.Collapsed);
                     Require(Control<TextBlock>("LanResultText").Text.Contains("https://192.168.4.5", StringComparison.Ordinal));
@@ -308,24 +231,21 @@ internal static class LanIntegrationTests
         var png = new PngBitmapEncoder(); png.Frames.Add(BitmapFrame.Create(bitmap));
         using var file = File.Create(Path.Combine(output, name + "-" + size.Width + ".png")); png.Save(file);
     }
-    private class BasicHost : ISetupHostOperations
+    private sealed class NetworkHost : ISetupHostOperations
     {
         internal readonly List<string> Calls = [];
         internal string? Failure; internal Action? AfterPrepare; internal UninstallMode? Removal;
-        protected void Step(string name) { Calls.Add(name); if (Failure == name) throw new IOException("SYNTHETIC_FAILURE"); }
+        internal LanSetupRequest? Request; internal SetupOwner? Owner;
+        private void Step(string name) { Calls.Add(name); if (Failure == name) throw new IOException("SYNTHETIC_FAILURE"); }
         public Task PrepareAsync(SetupOwner owner, Action<SetupProgress> progress, CancellationToken cancellation)
-        { Step("prepare"); AfterPrepare?.Invoke(); return Task.CompletedTask; }
-        public Task PublishServiceAsync(SetupOwner owner, Action<SetupProgress> progress, CancellationToken cancellation)
+        { Step("prepare"); Owner = owner; AfterPrepare?.Invoke(); return Task.CompletedTask; }
+        public Task PublishServiceAsync(Action<SetupProgress> progress, CancellationToken cancellation)
         { Step("publish"); return Task.CompletedTask; }
+        public Task ConfigureLanAsync(LanSetupRequest request, Action<SetupProgress> progress, CancellationToken cancellation)
+        { request.Require(); Step("lan:" + request.Action); Request = request; return Task.CompletedTask; }
         public Task<SetupResult> StartAndObserveAsync(Action<SetupProgress> progress, CancellationToken cancellation)
         { Step("start"); return Task.FromResult(new SetupResult(true, "READY", "http://127.0.0.1:47123/", new string('a', 43))); }
-        public Task<SetupResult> UninstallAsync(SetupOwner owner, Action<SetupProgress> progress, CancellationToken cancellation, UninstallMode mode = UninstallMode.KeepData)
+        public Task<SetupResult> UninstallAsync(Action<SetupProgress> progress, CancellationToken cancellation, UninstallMode mode = UninstallMode.KeepData)
         { Step("uninstall:" + mode); Removal = mode; return Task.FromResult(new SetupResult(true, "REMOVED", DataPreserved: mode == UninstallMode.KeepData)); }
-    }
-    private sealed class NetworkHost : BasicHost, ILanSetupHostOperations
-    {
-        internal LanSetupRequest? Request; internal SetupOwner? Owner;
-        public Task ConfigureLanAsync(SetupOwner owner, LanSetupRequest request, Action<SetupProgress> progress, CancellationToken cancellation)
-        { request.Require(); Step("lan:" + request.Action); Request = request; Owner = owner; return Task.CompletedTask; }
     }
 }

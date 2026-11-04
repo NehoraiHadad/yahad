@@ -26,7 +26,7 @@ internal static class SetupEntry
     private static void VerifyPackage()
     {
         using var package=InstallPackage.Embedded();var m=package.Manifest;var key=TrustedReleaseKey.Embedded;
-        Console.WriteLine(JsonSerializer.Serialize(new{artifact="Yahad.Setup",version=m.Version,sourceCommit=m.SourceCommit,setupSourceCommit=ApplicationRelease.CompiledSourceCommit(typeof(SetupEntry).Assembly),coreSourceCommit=ApplicationRelease.SourceCommit,payload=m.PayloadDigest,files=m.Files.Length,embeddedZip=m.ZipSha256,service=InstallLocations.ServiceName,serviceInstallerImplemented=true,
+        Console.WriteLine(JsonSerializer.Serialize(new{artifact="Yahad.Setup",version=m.Version,sourceCommit=m.SourceCommit,setupSourceCommit=ApplicationRelease.CompiledSourceCommit(typeof(SetupEntry).Assembly),coreSourceCommit=ApplicationRelease.SourceCommit,payload=m.PayloadDigest,files=m.Files.Length,embeddedZip=m.ZipSha256,service=Yahad.Service.ServiceDefinition.Name,serviceInstallerImplemented=true,
             releaseKeyId=key is null?null:TrustedReleaseKey.Id(key),upgrades=key is null?"refused: built without a release key":"signed releases of this key",windowingLoaded=WindowingLoaded(),systemOperationsInvoked=false,machineAcceptance=false}));
     }
 }
