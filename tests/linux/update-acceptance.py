@@ -718,8 +718,9 @@ def assert_rollback(recorder, family, request, current, *, attempt_version, back
 
 
 def let_start_limit_window_pass():
-    # yachad.service allows 12 starts in 120s. A crash loop takes up to 9 during the updater's 90s health wait
-    # and the rollback needs one more, which fits unless 3 more came just before: the install's own restarts do.
+    # yachad.service allows 12 starts in 120s, and the updater does not reset that count. A crash loop takes up to 9
+    # during its 90s health wait and the rollback one more, so this script's quick restarts would use up the rest:
+    # the updater's next start is then refused and it stops at recovery_required, seen in runs 41803772941 and 41804602065.
     started = int(show('yachad.service', 'ActiveEnterTimestampMonotonic')) / 1e6
     time.sleep(max(0, started + 120 - time.monotonic()))
 
@@ -779,6 +780,7 @@ def scenario_upgrade(recorder, github, candidates, build, family, api, database)
 
     with recorder.step(f'Candidate failing /health/ready at the same schema: rollback to {version}'):
         database = read_database()
+        let_start_limit_window_pass()
         github.publish(candidates / 'broken-same-schema', 'v' + broken_same)
         target = discover(recorder, api, broken_same, 'same-schema')
         request, current = update_action(recorder, api, dict(action='install', target=target), 'same-schema')
