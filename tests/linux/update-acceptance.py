@@ -748,6 +748,8 @@ def set_mode(recorder, api, mode):
 
 def as_the_timer_does(recorder, attempt):
     """What six hours passing does on the Pi: the timer starts `updater.py run`, which finds its last check old."""
+    # A run the real timer began owns the status file and would write over the aged check.
+    wait_until(lambda: show('yachad-update.service', 'ActiveState') != 'activating', 1800, 'the running updater to finish')
     current = status()
     info = STATUS.stat()
     temporary = STATUS.with_name('status.acceptance')
@@ -896,8 +898,10 @@ def reach_the_pi_state(recorder, github, work):
     recorder.check(json.loads(CONFIG.read_bytes())['mode'] == 'auto', 'the updater is in auto mode, as on the Pi')
     publish_release(github, work, BASE)
     let_start_limit_window_pass()
+    # A fresh install has never checked, so the real timer may install this during the wait above. The run below then
+    # finds nothing new and reports idle, which is what the Pi itself reports.
     current = as_the_timer_does(recorder, 'to-pi')
-    recorder.check(current['phase'] == 'healthy' and current['currentVersion'] == BASE_VERSION, f'the updater installed {BASE_VERSION} by itself', current)
+    recorder.check(current['phase'] in ('healthy', 'idle') and current['currentVersion'] == BASE_VERSION and current['error'] is None, f'the updater installed {BASE_VERSION} by itself', current)
     recorder.check('installTarget' not in current, 'this updater writes no installTarget, as on the Pi', current)
     assert_running(recorder, BASE_VERSION, BASE_SCHEMA)
 
