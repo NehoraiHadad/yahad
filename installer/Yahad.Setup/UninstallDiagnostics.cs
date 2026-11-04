@@ -1,6 +1,5 @@
 using System.IO;
 using System.Security.Cryptography;
-using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using Yahad.Install;
@@ -29,25 +28,16 @@ internal sealed record UninstallDiagnosticRecord(int Format,string InstallationB
 
 internal static class UninstallDiagnostics
 {
-    internal static string Descriptor(string owner)=>"O:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x120089;;;"+new SecurityIdentifier(owner).Value+")";
     private static void RequireOwned(InstallerState state)
-    {
-        using var file=WindowsFileBoundary.OpenInstallerDiagnostic(InstallLocations.RemovalDiagnosticFile,new SecurityIdentifier(state.OwnerSid));
-        NativeJson.Read<UninstallDiagnosticRecord>(file.Small(8192)).RequireSameInstallation(state);
-    }
+        =>NativeJson.Read<UninstallDiagnosticRecord>(NativeInstallFiles.ReadRecord(InstallLocations.RemovalDiagnosticFile,8192)).RequireSameInstallation(state);
     internal static bool TryRecord(InstallerState state,UninstallMode mode,Exception failure)
     {
         try
         {
             var bytes=JsonSerializer.SerializeToUtf8Bytes(UninstallDiagnosticRecord.Create(state,mode,failure));
             if(bytes.Length>8192)return false;
-            var descriptor=Descriptor(state.OwnerSid);
-            if(File.Exists(InstallLocations.RemovalDiagnosticFile))
-            {
-                RequireOwned(state);
-                NativeInstallFiles.ReplaceOwned(InstallLocations.RemovalDiagnosticFile,bytes,descriptor);
-            }
-            else NativeInstallFiles.WriteNew(InstallLocations.RemovalDiagnosticFile,bytes,descriptor);
+            if(File.Exists(InstallLocations.RemovalDiagnosticFile))RequireOwned(state);
+            NativeInstallFiles.Publish(InstallLocations.RemovalDiagnosticFile,bytes);
             return true;
         }
         catch{return false;} // Reporting must never hide the original removal failure.

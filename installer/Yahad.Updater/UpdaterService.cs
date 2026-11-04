@@ -34,11 +34,10 @@ internal sealed class UpdaterService(IScmApi scm,Func<Action,CancellationToken,T
         var actual=WindowsFileBoundary.CanonicalLocalPath(Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory)));
         if(!string.Equals(actual,expected,StringComparison.OrdinalIgnoreCase))throw new IOException("UPDATER_IMAGE_LOCATION");
         var runtime=(SecurityIdentifier)new NTAccount(ServiceDefinition.Account).Translate(typeof(SecurityIdentifier));
-        using(WindowsFileBoundary.PinInstallerRemovalRoot(InstalledLayout.UpdaterRoot,runtime)){}
         var key=Path.Combine(InstalledLayout.BinaryRoot,TrustedReleaseKey.InstalledName);
         using var source=new GitHubReleaseSource();
         var engine=new UpdaterEngine(UpdaterPaths.Installed,ApplicationRelease.Version,
-            ()=>File.Exists(key)?NativeInstallFiles.ReadOwned(key,runtime.Value):null,TrustedReleaseKey.Embedded,source,UpdateLauncher.Launch,()=>DateTimeOffset.UtcNow);
+            ()=>File.Exists(key)?NativeInstallFiles.ReadRecord(key):null,TrustedReleaseKey.Embedded,source,UpdateLauncher.Launch,()=>DateTimeOffset.UtcNow);
         engine.Start(cancellation);
         using var linked=CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         var pipe=new UpdaterPipe(UpdaterProtocol.PipeName,runtime,$"D:P(A;;GA;;;SY)(A;;GRGW;;;{runtime.Value})",engine.Handle,error=>ServiceStartupDiagnostic.TryRecord(StartupDiagnosticRole.Updater,error));

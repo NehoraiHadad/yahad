@@ -36,7 +36,7 @@ internal static class LifecycleCleanupTests
         foreach(var timeout in new[]{false,true})
         await check(timeout?"native health timeout cleans complete job before returning failure":"native failed health cleans root and grandchild before returning failure",async()=>
         {
-            var directory=SafeDirectory.CreatePrivateSession(root);var fixture=new NativeFixture(directory,timeout);
+            var directory=PrivateSession.Create(root);var fixture=new NativeFixture(directory,timeout);
             await using var host=new AppLifecycle(new("fixture"),fixture,fixture,TimeSpan.FromSeconds(3));
             try{await host.StartAsync();throw new Exception("expected startup failure");}
             catch(Exception e)when(e is IOException or OperationCanceledException){}

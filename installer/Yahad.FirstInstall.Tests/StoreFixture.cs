@@ -48,7 +48,7 @@ internal sealed class StoreFixture:IDisposable
         modules.AcquireUser();
         try{
         Directory.CreateDirectory(Path.Combine(Root,"datasets"));
-        var source=SafeDirectory.CreatePrivateSession(Path.Combine(Root,"datasets"));Dataset=Path.Combine(Root,"datasets",Guid.NewGuid().ToString("N"));
+        var source=PrivateSession.Create(Path.Combine(Root,"datasets"));Dataset=Path.Combine(Root,"datasets",Guid.NewGuid().ToString("N"));
         if(!Path.GetFullPath(source).StartsWith(Root+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)||!Path.GetFullPath(Dataset).StartsWith(Root+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))throw new IOException("TEST_MOVE_SCOPE");Directory.Move(source,Dataset);
         Package=Path.Combine(Root,"package");Directory.CreateDirectory(Path.Combine(Package,"runtime/node"));Control=new(this);
         Directory.CreateDirectory(Path.Combine(Root,"temporary"));Directory.CreateDirectory(Data);File.WriteAllText(Path.Combine(Dataset,"master-key"),Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)));

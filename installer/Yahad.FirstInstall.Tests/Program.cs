@@ -112,6 +112,8 @@ if(args is ["--full-installer-only"])
     {try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);}});
     await UpdaterTests.RunAsync(async(name,run)=>
     {try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);}});
+    await InstallAclTests.RunAsync(async(name,run)=>
+    {try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);}});
     Console.WriteLine(JsonSerializer.Serialize(new{suite="full-installer-integration-pure",passed,failed,nativeOperations=false}));return failed==0?0:1;
 }
 if(args is ["--version-only",var versionRepo])
@@ -185,7 +187,7 @@ foreach(var path in new[]{"../personal.txt","payload/../../secret","payload/C:/b
 {try{InstallPackage.Name(path);}catch(IOException){return Task.CompletedTask;}throw new Exception("unsafe member accepted");});
 await Check("real package reader verifies and extracts exact offline payload bytes",()=>
 {
- var fixture=Package();using var package=new InstallPackage(new MemoryStream(fixture.Zip),fixture.Manifest);var root=SafeDirectory.CreatePrivateSession(Path.GetTempPath());package.Extract(root,_=>{},default);
+ var fixture=Package();using var package=new InstallPackage(new MemoryStream(fixture.Zip),fixture.Manifest);var root=PrivateSession.Create(Path.GetTempPath());package.Extract(root,_=>{},default);
  Assert(File.ReadAllText(Path.Combine(root,"payload/app/server/main.mjs"))=="synthetic-app-not-executed");return Task.CompletedTask;
 });
 await Check("corrupt package digest and duplicate zip entry refuse before extraction",async()=>
@@ -196,7 +198,7 @@ await Check("corrupt package digest and duplicate zip entry refuse before extrac
 await Check("wrong member hash fails without overwriting preexisting files",async()=>
 {
  var fixture=Package();var document=NativeJson.Read<InstallPackageManifest>(fixture.Manifest);var records=document.Files.Select((x,i)=>i==0?x with{Sha256=new string('0',64)}:x).ToArray();using var p=new InstallPackage(new MemoryStream(fixture.Zip),JsonSerializer.SerializeToUtf8Bytes(document with{Files=records}));
- var root=SafeDirectory.CreatePrivateSession(Path.GetTempPath());await Refuse(()=>{p.Extract(root,_=>{},default);return Task.CompletedTask;});Assert(!File.Exists(Path.Combine(root,"payload/app/server/main.mjs")));
+ var root=PrivateSession.Create(Path.GetTempPath());await Refuse(()=>{p.Extract(root,_=>{},default);return Task.CompletedTask;});Assert(!File.Exists(Path.Combine(root,"payload/app/server/main.mjs")));
 });
 await Check("user installer enables existing real connector; only explicit test profile uses mock",()=>
 {
@@ -217,9 +219,6 @@ await Check("authenticated flow carries full removal mode and refuses unknown in
 {
  var ops=new FakeHost();var result=await new InstallFlow(ops).RunAsync(owner,true,_=>{},default,UninstallMode.DeleteData);Assert(result.Ok&&!result.DataPreserved&&ops.LastRemoval==UninstallMode.DeleteData);
  var invalid=new FakeHost();await Refuse(()=>new InstallFlow(invalid).RunAsync(owner,true,_=>{},default,(UninstallMode)99));Assert(invalid.Calls.Count==0);
- var serviceSid="S-1-5-80-123-456-789-123-456";
- WindowsFileBoundary.ValidateInstallerMetadataAcl(new System.Security.AccessControl.RawSecurityDescriptor(NativeInstallFiles.Descriptor(serviceSid)));
- await Refuse(()=>{WindowsFileBoundary.ValidateInstallerMetadataAcl(new System.Security.AccessControl.RawSecurityDescriptor(NativeInstallFiles.Descriptor(serviceSid,ownerSid:owner.Sid)));return Task.CompletedTask;});
  var s=FullInstallerIntegrationTests.State();
  Assert(UninstallChoice.SameInstallation(s,s with{Phase="removing_all_data",Files=[..s.Files]}));
  foreach(var other in new[]{s with{Port=47124},s with{PayloadDigest=new string('f',64)},s with{SetupSha256=new string('f',64)},s with{Files=[s.Files[0] with{Size=6},..s.Files[1..]]}})Assert(!UninstallChoice.SameInstallation(s,other));

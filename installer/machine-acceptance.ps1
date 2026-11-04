@@ -1,12 +1,12 @@
 # Real machine acceptance for a built Yahad.Setup.exe. Every check is what a
 # person or administrator observes (Setup results, services, HTTP answers, the
 # account they created), so it keeps gating when the mechanism behind it changes:
-#   install -> ready -> create the first family over the app's own HTTP API ->
+#   install -> ready, with the two ACLs proven by Windows -> create the first family over the app's own HTTP API ->
 #   the parent reads and changes update settings through app, Platform and the
 #   Updater's pipe -> restart the service and time it -> repair stopped services
 #   and a missing task -> the Repair task repairs as SYSTEM -> refuse foreign,
 #   unsigned and tampered releases -> the parent installs a signed staged release
-#   with a schema change through the Updater -> refuse a replay -> a broken release
+#   with a schema change through the Updater, the ACLs proven again -> refuse a replay -> a broken release
 #   rolls both services back with the data restored -> an upgrade killed mid-way is
 #   undone by repair -> uninstall keeping data -> reinstall -> the same account signs
 #   in -> uninstall deleting data -> nothing remains.
@@ -210,6 +210,157 @@ function RequireSignedInAccount($Session) {
     if ($me.user.name -ne $account.Name -or $me.user.role -ne 'parent') { throw 'Signed-in account is not the acceptance parent' }
     return $me.user.familyId
 }
+$effectiveAccessSource = @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
+public static class YahadEffectiveAccess
+{
+    [StructLayout(LayoutKind.Sequential)] private struct Request { public int Desired; public IntPtr Self; public IntPtr Types; public int TypeCount; public IntPtr Optional; }
+    [StructLayout(LayoutKind.Sequential)] private struct Reply { public int Length; public IntPtr Granted; public IntPtr Sacl; public IntPtr Error; }
+    [StructLayout(LayoutKind.Sequential)] private struct Group { public IntPtr Sid; public int Attributes; }
+    [DllImport("authz.dll", SetLastError = true, CharSet = CharSet.Unicode)] private static extern bool AuthzInitializeResourceManager(int flags, IntPtr check, IntPtr add, IntPtr free, string name, out IntPtr manager);
+    [DllImport("authz.dll", SetLastError = true)] private static extern bool AuthzInitializeContextFromSid(int flags, byte[] sid, IntPtr manager, IntPtr expiry, long id, IntPtr arguments, out IntPtr context);
+    [DllImport("authz.dll", SetLastError = true)] private static extern bool AuthzAddSidsToContext(IntPtr context, Group[] sids, int count, IntPtr restricted, int restrictedCount, out IntPtr updated);
+    [DllImport("authz.dll", SetLastError = true)] private static extern bool AuthzAccessCheck(int flags, IntPtr context, ref Request request, IntPtr audit, byte[] descriptor, IntPtr others, int otherCount, ref Reply reply, IntPtr results);
+    [DllImport("authz.dll")] private static extern bool AuthzFreeContext(IntPtr context);
+    [DllImport("authz.dll")] private static extern bool AuthzFreeResourceManager(IntPtr manager);
+    private const int MaximumAllowed = 0x02000000, NoAudit = 1, SkipTokenGroups = 2, GroupEnabled = 4;
+    private static byte[] Bytes(string sid) { var value = new SecurityIdentifier(sid); var bytes = new byte[value.BinaryLength]; value.GetBinaryForm(bytes, 0); return bytes; }
+    // The first SID is the principal, the rest are the groups its token would carry.
+    public static int Granted(byte[] descriptor, string[] sids)
+    {
+        IntPtr manager, context, grouped;
+        if (!AuthzInitializeResourceManager(NoAudit, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, "yahad-acceptance", out manager)) throw new Win32Exception();
+        var groups = new Group[sids.Length - 1];
+        try
+        {
+            if (!AuthzInitializeContextFromSid(SkipTokenGroups, Bytes(sids[0]), manager, IntPtr.Zero, 0, IntPtr.Zero, out context)) throw new Win32Exception();
+            try
+            {
+                for (var i = 0; i < groups.Length; i++)
+                {
+                    var bytes = Bytes(sids[i + 1]);
+                    groups[i].Sid = Marshal.AllocHGlobal(bytes.Length); groups[i].Attributes = GroupEnabled;
+                    Marshal.Copy(bytes, 0, groups[i].Sid, bytes.Length);
+                }
+                if (!AuthzAddSidsToContext(context, groups, groups.Length, IntPtr.Zero, 0, out grouped)) throw new Win32Exception();
+                var memory = Marshal.AllocHGlobal(8);
+                try
+                {
+                    var request = new Request { Desired = MaximumAllowed };
+                    var reply = new Reply { Length = 1, Granted = memory, Error = memory + 4 };
+                    if (!AuthzAccessCheck(0, grouped, ref request, IntPtr.Zero, descriptor, IntPtr.Zero, 0, ref reply, IntPtr.Zero)) throw new Win32Exception();
+                    return Marshal.ReadInt32(memory + 4) == 0 ? Marshal.ReadInt32(memory) : 0;
+                }
+                finally { Marshal.FreeHGlobal(memory); AuthzFreeContext(grouped); }
+            }
+            finally { foreach (var group in groups) if (group.Sid != IntPtr.Zero) Marshal.FreeHGlobal(group.Sid); AuthzFreeContext(context); }
+        }
+        finally { AuthzFreeResourceManager(manager); }
+    }
+}
+'@
+# What Windows' own access check grants these SIDs on a path as it stands now.
+function EffectiveRights([string]$Path, [string[]]$Sids) {
+    if (-not ('YahadEffectiveAccess' -as [type])) { Add-Type -TypeDefinition $effectiveAccessSource }
+    [YahadEffectiveAccess]::Granted((Get-Acl -LiteralPath $Path).GetSecurityDescriptorBinaryForm(), $Sids)
+}
+# Ran by the Runtime account itself, so its answers come from its real token.
+$accessProbeSource = @'
+$plan = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('PLAN')) | ConvertFrom-Json
+$answer = [ordered]@{ user = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; refused = 0; wrongly = @(); broken = @(); modified = 0 }
+$name = '.access-probe-' + [Guid]::NewGuid().ToString('N')
+foreach ($directory in $plan.refuse) {
+    try { $file = Join-Path $directory $name; [IO.File]::WriteAllText($file, 'probe'); [IO.File]::Delete($file); $answer.wrongly += $directory }
+    catch [UnauthorizedAccessException] { $answer.refused++ }
+    catch { $answer.broken += "$directory $($_.Exception.GetType().Name)" }
+}
+foreach ($file in $plan.sealed) {
+    try { $held = [IO.File]::Open($file, 'Open', 'Write', 'ReadWrite,Delete'); $held.Dispose(); $answer.wrongly += $file }
+    catch [UnauthorizedAccessException] { $answer.refused++ }
+    catch { $answer.broken += "$file $($_.Exception.GetType().Name)" }
+}
+foreach ($directory in $plan.modify) {
+    try {
+        $file = Join-Path $directory $name; $moved = $file + '.moved'
+        [IO.File]::WriteAllText($file, 'probe'); [IO.File]::AppendAllText($file, 'probe'); [IO.File]::Move($file, $moved)
+        if ([IO.File]::ReadAllText($moved) -cne 'probeprobe') { throw 'read back' }
+        [IO.File]::Delete($moved); $answer.modified++
+    } catch { $answer.broken += "$directory $($_.Exception.GetType().Name)" }
+}
+[IO.File]::WriteAllText($plan.result, ($answer | ConvertTo-Json -Compress))
+'@
+function RunAccessProbe([string]$Sid, [string[]]$Refuse, [string[]]$Sealed, [string[]]$Modify, [string]$Result) {
+    Remove-Item -LiteralPath $Result -Force -ErrorAction SilentlyContinue
+    $plan = @{ refuse = $Refuse; sealed = $Sealed; modify = $Modify; result = $Result } | ConvertTo-Json -Compress
+    $body = $accessProbeSource.Replace('PLAN', [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($plan)))
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($body))
+    $probeTask = 'YahadAcceptanceAccessProbe'
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -EncodedCommand $encoded"
+    $principal = New-ScheduledTaskPrincipal -UserId "NT SERVICE\$runtime" -LogonType ServiceAccount -RunLevel Limited
+    Register-ScheduledTask -TaskName $probeTask -Action $action -Principal $principal -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries) -Force | Out-Null
+    try {
+        Start-ScheduledTask -TaskName $probeTask
+        $deadline = [Diagnostics.Stopwatch]::StartNew()
+        $answer = $null
+        while (!$answer) {
+            try { if (Test-Path -LiteralPath $Result) { $answer = Get-Content -LiteralPath $Result -Raw | ConvertFrom-Json } } catch { }
+            if ($answer) { break }
+            if ($deadline.Elapsed -ge [TimeSpan]::FromMinutes(2)) { throw "The Runtime account's access probe wrote no result (task result $((Get-ScheduledTaskInfo -TaskName $probeTask).LastTaskResult))" }
+            Start-Sleep -Seconds 1
+        }
+    }
+    finally {
+        Stop-ScheduledTask -TaskName $probeTask -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $probeTask -Confirm:$false
+    }
+    Remove-Item -LiteralPath $Result -Force
+    if ($answer.user -ne $Sid) { throw "The access probe ran as $($answer.user), not the Runtime account $Sid" }
+    if (@($answer.broken).Count) { throw "The access probe could not decide: $(@($answer.broken) -join '; ')" }
+    if (@($answer.wrongly).Count) { throw "The Runtime account could write: $(@($answer.wrongly) -join '; ')" }
+    if ($answer.refused -ne $Refuse.Count + $Sealed.Count -or $answer.modified -ne $Modify.Count) { throw 'The access probe did not cover every path' }
+}
+# The two ACLs as Windows enforces them: the Runtime account changes nothing but the
+# data, and no ordinary user reaches anything in the machine's state folder.
+function RequireAccessBoundaries([string]$Version) {
+    $state = Get-Content -LiteralPath (Join-Path $programData 'installer-state.json') -Raw | ConvertFrom-Json
+    $data = Join-Path $programData "datasets\$($state.DataId)\data"
+    $temporary = Join-Path $programData 'temporary'
+    $sid = (New-Object Security.Principal.NTAccount "NT SERVICE\$runtime").Translate([Security.Principal.SecurityIdentifier]).Value
+    $runtimeToken = @($sid, 'S-1-5-6', 'S-1-5-80-0', 'S-1-5-32-545', 'S-1-5-11', 'S-1-1-0')
+    $userToken = @('S-1-5-21-1-2-3-1001', 'S-1-5-32-545', 'S-1-5-4', 'S-1-5-11', 'S-1-2-0', 'S-1-1-0')
+    $anyChange = 0x2 -bor 0x4 -bor 0x10 -bor 0x40 -bor 0x100 -bor 0x10000 -bor 0x40000 -bor 0x80000
+    $modify = 0x1 -bor 0x2 -bor 0x4 -bor 0x20 -bor 0x80 -bor 0x100 -bor 0x10000
+    $release = Join-Path $programFiles "versions\$Version"
+
+    $everything = @(Get-ChildItem -LiteralPath $programData -Recurse -Force -ErrorAction Stop)
+    $writable = @($data, $temporary)
+    $inWritable = { param($Path) foreach ($root in $writable) { if ($Path -eq $root -or $Path.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true } }; $false }
+    $stateDirectories = @($programData) + @($everything | Where-Object { $_.PSIsContainer -and !(& $inWritable $_.FullName) } | ForEach-Object FullName)
+    $stateFiles = @($everything | Where-Object { !$_.PSIsContainer -and !(& $inWritable $_.FullName) } | ForEach-Object FullName)
+    $installDirectories = @($programFiles, (Join-Path $programFiles 'versions'), $release, (Join-Path $release 'host'), (Join-Path $release 'updater'))
+    if (!(Test-Path -LiteralPath (Join-Path $updaterRoot 'staging'))) { throw 'The staging folder is missing' }
+
+    foreach ($path in @($installDirectories + (RetainedSetup $Version) + $stateDirectories + $stateFiles)) {
+        try { $granted = EffectiveRights $path $runtimeToken } catch [Management.Automation.ItemNotFoundException] { continue }
+        if ($granted -band $anyChange) { throw ('The Runtime account holds change rights 0x{0:x} on {1}' -f $granted, $path) }
+        if (!($granted -band 0x1)) { throw ('The Runtime account cannot read {0}' -f $path) }
+    }
+    foreach ($item in @($everything | Where-Object { & $inWritable $_.FullName }) + @(Get-Item -LiteralPath $data, $temporary)) {
+        try { $granted = EffectiveRights $item.FullName $runtimeToken } catch [Management.Automation.ItemNotFoundException] { continue }
+        if (($granted -band $modify) -ne $modify) { throw ('The Runtime account holds only 0x{0:x} on {1}' -f $granted, $item.FullName) }
+        if ($granted -band (0x40000 -bor 0x80000)) { throw ('The Runtime account can change the ACL of {0}' -f $item.FullName) }
+    }
+    foreach ($path in @($programData) + @($everything | ForEach-Object FullName)) {
+        try { $granted = EffectiveRights $path $userToken } catch [Management.Automation.ItemNotFoundException] { continue }
+        if ($granted -ne 0) { throw ('Users hold rights 0x{0:x} on {1}' -f $granted, $path) }
+    }
+
+    $sealedFiles = @((RetainedSetup $Version), (Join-Path $programData 'installer-state.json'), (Join-Path $programData 'installed.json'), (Join-Path $programData "datasets\$($state.DataId)\master-key"))
+    RunAccessProbe $sid ($installDirectories + $stateDirectories) $sealedFiles $writable (Join-Path $data ('.access-probe-result-' + [Guid]::NewGuid().ToString('N')))
+}
 function RequireRemovedServices { if ((YahadServices).Count) { throw ('Services remain after removal: ' + ((YahadServices).Name -join ',')) } }
 function Collect {
     @(YahadServices | ForEach-Object { [ordered]@{ Name=$_.Name; Status=[string]$_.Status; StartType=[string]$_.StartType; ImagePath=(Get-CimInstance -ClassName Win32_Service -Filter "Name='$($_.Name)'").PathName } }) | ConvertTo-Json | Set-Content -Encoding utf8NoBOM (Join-Path $out 'services.json')
@@ -241,6 +392,7 @@ try {
     Phase 'ready' {
         RequireInstalledAndReady $install.Result
         RequireServiceConfiguration
+        RequireAccessBoundaries $version
         if ((SetupState) -ne 'ready') { throw 'Fresh install does not offer first-family setup' }
     }
     $familyId = $null
@@ -404,6 +556,7 @@ try {
         RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema @($version, $upgradeRelease.version)
         $retained = (Get-FileHash -LiteralPath (RetainedSetup $upgradeRelease.version) -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($retained -ne $upgradeRelease.setup.sha256) { throw 'The retained Setup is not the signed one' }
+        RequireAccessBoundaries $upgradeRelease.version
     }
     Phase 'refuse-replay' {
         $null = RunSetupExpecting $baseSetup @('--quiet-upgrade', $baseDirectory) (Join-Path $out 'refuse-downgrade-result.json') 'RELEASE_NOT_NEWER' 2

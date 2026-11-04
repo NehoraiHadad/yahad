@@ -1,26 +1,13 @@
+using System.IO;
 using System.Security.AccessControl;
 using System.Security.Principal;
 
-namespace Yahad.Install;
-
-public static class SafeDirectory
+// A synthetic fixture root nobody else can reach, carrying the marker that lets a
+// test prove a directory it is about to delete is one it made.
+internal static class PrivateSession
 {
-    public static void NoReparseAncestors(string path)
+    internal static string Create(string parent)
     {
-        for (var p = Path.GetFullPath(path); p is not null; p = Path.GetDirectoryName(p))
-        {
-            try
-            {
-                if ((File.GetAttributes(p) & FileAttributes.ReparsePoint) != 0) throw new IOException("REPARSE_POINT");
-            }
-            catch (FileNotFoundException) { }
-            catch (DirectoryNotFoundException) { }
-        }
-    }
-
-    public static string CreatePrivateSession(string parent)
-    {
-        NoReparseAncestors(parent);
         Directory.CreateDirectory(parent);
         var path = Path.Combine(parent, "yahad-fixture-" + Guid.NewGuid().ToString("N"));
         var acl = new DirectorySecurity();
@@ -31,17 +18,14 @@ public static class SafeDirectory
                      new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null) }.Distinct())
             acl.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.FullControl,
                 InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
-        // Create with the DACL already attached, not via a later permissive-to-private transition.
         new DirectoryInfo(path).Create(acl);
         File.WriteAllText(Path.Combine(path, ".yahad-fixture"), "fixture-v1");
         return path;
     }
 
-    internal static void ValidateSession(string path)
+    internal static void Validate(string path)
     {
-        NoReparseAncestors(path);
-        NoReparseAncestors(Path.Combine(path, ".yahad-fixture"));
-        if (!Directory.Exists(path) || File.ReadAllText(Path.Combine(path, ".yahad-fixture")) != "fixture-v1")
+        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0 || File.ReadAllText(Path.Combine(path, ".yahad-fixture")) != "fixture-v1")
             throw new IOException("SESSION_NOT_OWNED");
         var acl = new DirectoryInfo(path).GetAccessControl();
         var user = WindowsIdentity.GetCurrent().User!;

@@ -72,6 +72,7 @@ internal static class InstallLocations
     internal static string RemovalStateFile=>Binaries+".uninstall-state.json";
     internal static string RemovalDiagnosticFile=>Binaries+".uninstall-diagnostic.json";
     internal static string StateFile=>Path.Combine(State,"installer-state.json");
+    internal static void RequireStateRoot()=>WindowsFileBoundary.RequireAdministratorOwned(State);
     internal static string LaunchFile=>Path.Combine(State,InstalledLaunch.FileName);
     internal static string ServiceName=>ServiceDefinition.Name;
     internal static string ServiceAccount=>ServiceDefinition.Account;

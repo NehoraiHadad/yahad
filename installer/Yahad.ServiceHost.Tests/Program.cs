@@ -8,7 +8,7 @@ using Yahad.Service;
 
 if(args is not ["--node",var node,"--report",var report])throw new IOException("PRIVATE_NODE_AND_REPORT_REQUIRED");
 node=Path.GetFullPath(node);var nodeHash=Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(node)));
-var root=SafeDirectory.CreatePrivateSession(Path.GetTempPath());var checks=new List<object>();var failures=0;
+var root=PrivateSession.Create(Path.GetTempPath());var checks=new List<object>();var failures=0;
 void Assert(bool condition,string reason="assertion failed"){if(!condition)throw new Exception(reason);}
 async Task Check(string name,Func<Task> test)
 {
@@ -17,7 +17,7 @@ async Task Check(string name,Func<Task> test)
 }
 async Task Reject(Func<Task> action)
 {try{await action();}catch(Exception e)when(e is ServiceStartDenied or IOException or UnauthorizedAccessException){return;}throw new Exception("expected rejection");}
-string Session()=>SafeDirectory.CreatePrivateSession(root);
+string Session()=>PrivateSession.Create(root);
 const string sid="S-1-5-80-1-2-3-4-5";
 ServiceTokenObservation Good()=>new(sid,true,false,["SeChangeNotifyPrivilege"]);
 

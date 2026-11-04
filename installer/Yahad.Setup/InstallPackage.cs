@@ -56,12 +56,12 @@ internal sealed class InstallPackage:IDisposable
     // A present member is never rewritten: it must already be byte-identical.
     internal void Extract(string root,Action<int> progress,CancellationToken cancellation,ExtractTarget? target=null)
     {
-        target??=ExtractTarget.Private;SafeDirectory.NoReparseAncestors(root);var count=0;var full=Path.GetFullPath(root);
+        target??=ExtractTarget.Private;var count=0;var full=Path.GetFullPath(root);
         foreach(var record in Manifest.Files)
         {
             cancellation.ThrowIfCancellationRequested();var path=Path.GetFullPath(Path.Combine(full,record.Path.Replace('/',Path.DirectorySeparatorChar)));
             if(!path.StartsWith(full+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))throw new IOException("PACKAGE_PATH");
-            target.CreateDirectory(Path.GetDirectoryName(path)!);SafeDirectory.NoReparseAncestors(path);
+            target.CreateDirectory(Path.GetDirectoryName(path)!);
             var entry=archive.GetEntry(record.Path)??throw new IOException("PACKAGE_MEMBER");if(entry.Length!=record.Size)throw new IOException("PACKAGE_SIZE");
             if(File.Exists(path)){if(!target.ExistingMatches(path,record))throw new IOException("INSTALL_TARGET_CHANGED");}
             else

@@ -66,7 +66,7 @@ if (args is ["--job-owner", var ownerPidPath])
     await Task.Delay(Timeout.Infinite); return 0;
 }
 
-var root = SafeDirectory.CreatePrivateSession(Path.GetTempPath());
+var root = PrivateSession.Create(Path.GetTempPath());
 
 var results = new List<object>(); var failed = 0;
 async Task Check(string name, Func<Task> test)

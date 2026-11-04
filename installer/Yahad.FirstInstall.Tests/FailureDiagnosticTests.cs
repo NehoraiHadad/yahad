@@ -25,77 +25,16 @@ internal static class FailureDiagnosticTests
             var refused=false;try{SetupOperation.OperationTimeout("unknown");}catch(IOException){refused=true;}Require(refused);
             return Task.CompletedTask;
         });
-        await check("installer diagnostic ACL refuses widened, foreign, inherited and owner-held descriptors",()=>
+        await check("record creation replacement and failed-publication cleanup use only synthetic owned files",()=>
         {
-            var owner=new SecurityIdentifier("S-1-5-21-1-2-3-1001");
-            var descriptor=NativeInstallFiles.Descriptor(ownerSid:owner.Value).Replace("OICI","");
-            foreach(var changed in new[]{descriptor.Replace("0x1200a9","0x1200ab"),descriptor.Replace("0x1200a9","0x1600a9"),descriptor.Replace("0x1200a9","0x1a00a9"),descriptor.Replace(owner.Value,"S-1-5-21-1-2-3-1002"),descriptor.Replace("(A;;0x1200a9","(A;ID;0x1200a9"),descriptor.Replace("D:P","D:"),descriptor.Replace("O:S-1-5-32-544","O:"+owner.Value)})
-            {
-                var refused=false;try{Yahad.Install.WindowsFileBoundary.ValidateInstallerDiagnosticAcl(new RawSecurityDescriptor(changed),owner);}catch(IOException){refused=true;}Require(refused);
-            }
-            return Task.CompletedTask;
-        });
-        await check("metadata ACL changes on a synthetic owned file need no audit-policy privilege",()=>
-        {
-            var root=Yahad.Install.SafeDirectory.CreatePrivateSession(Path.GetTempPath());
-            var path=Path.Combine(root,"synthetic-receipt.json");File.WriteAllText(path,"synthetic no private data");
-            var sid=WindowsIdentity.GetCurrent().User!.Value;
-            NativeInstallFiles.SetOwnedFile(path,$"O:{sid}D:P(A;;FA;;;{sid})(A;;FA;;;SY)(A;;FA;;;BA)");
-            var acl=new FileInfo(path).GetAccessControl();
-            Require(acl.AreAccessRulesProtected&&acl.GetOwner(typeof(SecurityIdentifier))?.Value==sid);
-            return Task.CompletedTask;
-        });
-        await check("protected diagnostic creation replacement and failed-publication cleanup use only synthetic owned files",()=>
-        {
-            var root=Yahad.Install.SafeDirectory.CreatePrivateSession(Path.GetTempPath());
-            var path=Path.Combine(root,"diagnostic.json");var sid=WindowsIdentity.GetCurrent().User!.Value;
-            var descriptor=$"O:{sid}D:P(A;;FA;;;{sid})(A;;FA;;;SY)(A;;FA;;;BA)";
-            NativeInstallFiles.WriteNew(path,"first"u8.ToArray(),descriptor);
-            Require(new FileInfo(path).GetAccessControl().AreAccessRulesProtected);
-            NativeInstallFiles.ReplaceOwned(path,"second"u8.ToArray(),descriptor);
+            var root=PrivateSession.Create(Path.GetTempPath());
+            var path=Path.Combine(root,"diagnostic.json");
+            NativeInstallFiles.Publish(path,"first"u8.ToArray());
+            NativeInstallFiles.Publish(path,"second"u8.ToArray());
             Require(File.ReadAllText(path)=="second");
             var collision=Path.Combine(root,"occupied");Directory.CreateDirectory(collision);
-            var refused=false;try{NativeInstallFiles.ReplaceOwned(collision,"refused"u8.ToArray(),descriptor);}catch(Win32Exception){refused=true;}
+            var refused=false;try{NativeInstallFiles.Replace(collision,"refused"u8.ToArray());}catch(Win32Exception){refused=true;}
             Require(refused&&Directory.Exists(collision)&&Directory.GetFiles(root,"occupied.partial-*").Length==0);
-            return Task.CompletedTask;
-        });
-        await check("diagnostic read-only owner grant never widens installer metadata authority",()=>
-        {
-            var owner=new SecurityIdentifier("S-1-5-21-1-2-3-1001");
-            var descriptor=UninstallDiagnostics.Descriptor(owner.Value);
-            Yahad.Install.WindowsFileBoundary.ValidateInstallerDiagnosticAcl(new RawSecurityDescriptor(descriptor),owner);
-            foreach(var changed in new[]{descriptor.Replace("0x120089","FA"),descriptor.Replace(owner.Value,"S-1-5-21-1-2-3-1002"),descriptor.Replace("D:P","D:"),descriptor.Replace("O:BA","O:"+owner.Value)})
-            {
-                var refused=false;try{Yahad.Install.WindowsFileBoundary.ValidateInstallerDiagnosticAcl(new RawSecurityDescriptor(changed),owner);}catch(IOException){refused=true;}Require(refused);
-            }
-            var controlRefused=false;try{Yahad.Install.WindowsFileBoundary.ValidateInstallerMetadataAcl(new RawSecurityDescriptor(descriptor));}catch(IOException){controlRefused=true;}Require(controlRefused);
-            return Task.CompletedTask;
-        });
-        await check("full installer diagnostic writer uses the same bounded read-only policy as its reader",()=>
-        {
-            var owner=new SecurityIdentifier("S-1-5-21-1-2-3-1001");
-            var descriptor=FullInstallDiagnostics.Descriptor(owner.Value);
-            Require(descriptor==UninstallDiagnostics.Descriptor(owner.Value));
-            Yahad.Install.WindowsFileBoundary.ValidateInstallerDiagnosticAcl(new RawSecurityDescriptor(descriptor),owner);
-            Require(!descriptor.Contains("0x1200a9",StringComparison.Ordinal));
-            return Task.CompletedTask;
-        });
-        await check("exact legacy full diagnostic owner read-execute grant is accepted without metadata authority",()=>
-        {
-            var owner=new SecurityIdentifier("S-1-5-21-1-2-3-1001");
-            var descriptor=NativeInstallFiles.Descriptor(ownerSid:owner.Value).Replace("OICI","");
-            Yahad.Install.WindowsFileBoundary.ValidateInstallerDiagnosticAcl(new RawSecurityDescriptor(descriptor),owner);
-            var refused=false;try{Yahad.Install.WindowsFileBoundary.ValidateInstallerMetadataAcl(new RawSecurityDescriptor(descriptor));}catch(IOException){refused=true;}Require(refused);
-            return Task.CompletedTask;
-        });
-        await check("legacy diagnostic compatibility still refuses writes other principals inheritance and invalid ownership",()=>
-        {
-            var owner=new SecurityIdentifier("S-1-5-21-1-2-3-1001");
-            var descriptor=NativeInstallFiles.Descriptor(ownerSid:owner.Value).Replace("OICI","");
-            foreach(var changed in new[]{descriptor.Replace("0x1200a9","0x1200ab"),descriptor.Replace("0x1200a9","0x1600a9"),descriptor.Replace("0x1200a9","0x1a00a9"),descriptor.Replace(owner.Value,"S-1-5-21-1-2-3-1002"),descriptor.Replace("(A;;0x1200a9","(A;ID;0x1200a9"),descriptor.Replace("D:P","D:"),descriptor.Replace("O:S-1-5-32-544","O:"+owner.Value)})
-            {
-                var refused=false;try{Yahad.Install.WindowsFileBoundary.ValidateInstallerDiagnosticAcl(new RawSecurityDescriptor(changed),owner);}catch(IOException){refused=true;}Require(refused);
-            }
             return Task.CompletedTask;
         });
         await check("persisted diagnostic is sanitized bound to one installation and cannot authorize removal",()=>

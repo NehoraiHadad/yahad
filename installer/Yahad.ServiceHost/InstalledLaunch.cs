@@ -60,7 +60,7 @@ internal sealed class InstalledLaunchReader(string root):IInstallationReader
 {
     public InstallationBinding Read()
     {
-        using var file=WindowsFileBoundary.OpenInstalledRead(Path.Combine(root,InstalledLaunch.FileName));var bytes=file.Small(4096);
+        var bytes=NativeInstallFiles.ReadRecord(Path.Combine(root,InstalledLaunch.FileName),4096);
         return new(InstalledLaunch.Parse(bytes).InstallationId,InstalledLaunch.Hash(bytes));
     }
 }
@@ -72,19 +72,16 @@ internal sealed class InstalledLaunchResolver(string root,string versionRoot,ICh
         cancellation.ThrowIfCancellationRequested();var held=new HeldResources();
         try
         {
-            var state=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(root));held.Add(WindowsFileBoundary.PinSingleServiceDirectory(state,true));
-            var file=WindowsFileBoundary.OpenInstalledRead(Path.Combine(state,InstalledLaunch.FileName));held.Add(file);var bytes=file.Small(4096);
+            var state=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(root));
+            var bytes=NativeInstallFiles.ReadRecord(Path.Combine(state,InstalledLaunch.FileName),4096);
             if(InstalledLaunch.Hash(bytes)!=binding.ActivationReceiptDigest)throw new IOException("INSTALLED_LAUNCH_CHANGED");
             var config=InstalledLaunch.Parse(bytes);if(config.InstallationId!=binding.InstallationId)throw new IOException("INSTALLED_LAUNCH_CHANGED");
             var origin=InstalledLaunch.Origin(config.Origin,config.Port);
-            // Administrator-owned, application read-only binaries for the whole run.
-            var binaries=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(versionRoot));held.Add(WindowsFileBoundary.PinSingleServiceDirectory(binaries,true));
+            var binaries=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(versionRoot));
             var node=Path.Combine(binaries,"payload","runtime","node","node.exe");var app=Path.Combine(binaries,"payload","app");
-            held.Add(WindowsFileBoundary.OpenInstalledRead(node));held.Add(WindowsFileBoundary.PinSingleServiceDirectory(app,true));
-            // Administrator-owned dataset and key; only temporary/ and data/ are application-writable.
-            var dataset=Path.Combine(state,"datasets",config.DataId);held.Add(WindowsFileBoundary.PinSingleServiceDirectory(dataset,true));
-            var key=Path.Combine(dataset,"master-key");held.Add(WindowsFileBoundary.OpenInstalledRead(key));
-            var temporary=Path.Combine(state,"temporary");held.Add(WindowsFileBoundary.PinSingleServiceDirectory(temporary,false));
+            // Only temporary/ and data/ are application-writable.
+            var dataset=Path.Combine(state,"datasets",config.DataId);var key=Path.Combine(dataset,"master-key");
+            var temporary=Path.Combine(state,"temporary");
             var data=Path.Combine(dataset,"data");var lease=WindowsFileBoundary.AcquireDataLease(data);held.Add(lease);
             var connector=RuntimeConnectorSettings.For(connectorProfile);
             var environment=new Dictionary<string,string>{{"HOST","127.0.0.1"},{"PORT",config.Port.ToString(System.Globalization.CultureInfo.InvariantCulture)},
@@ -101,7 +98,7 @@ internal sealed class InstalledLaunchResolver(string root,string versionRoot,ICh
         }
         catch{held.Dispose();throw;}
     }
-    // Every pin taken during admission is held until the service stops. The
+    // The data lease taken during admission is held until the service stops. The
     // start barrier admits exactly one start of exactly this release.
     private sealed class HeldResources:IAppRecoveryBarrier,IDisposable
     {

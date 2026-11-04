@@ -164,7 +164,7 @@ internal static class FullInstallerIntegrationTests
         });
         await check("extraction never rewrites a present member and leaves no partial when a member fails",()=>
         {
-            using var package=LayoutPackage();var root=SafeDirectory.CreatePrivateSession(Path.GetTempPath());var other=SafeDirectory.CreatePrivateSession(Path.GetTempPath());
+            using var package=LayoutPackage();var root=PrivateSession.Create(Path.GetTempPath());var other=PrivateSession.Create(Path.GetTempPath());
             string[] Extracted(string directory)=>Directory.EnumerateFiles(directory,"*",SearchOption.AllDirectories).Select(f=>Path.GetRelativePath(directory,f).Replace(Path.DirectorySeparatorChar,'/')).Where(f=>f!=".yahad-fixture").Order(StringComparer.Ordinal).ToArray();
             try
             {

@@ -4,9 +4,9 @@ using System.Text.Json;
 using Yahad.Install;
 namespace Yahad.Updater;
 
-internal sealed record UpdaterPaths(string Root,string DirectoryDescriptor,string FileDescriptor)
+internal sealed record UpdaterPaths(string Root)
 {
-    internal static UpdaterPaths Installed=>new(InstalledLayout.UpdaterRoot,NativeInstallFiles.Descriptor(),NativeInstallFiles.FileDescriptor());
+    internal static UpdaterPaths Installed=>new(InstalledLayout.UpdaterRoot);
     internal string State=>Path.Combine(Root,"state.json");
     internal string LastUpgrade=>Path.Combine(Root,"last-upgrade.json");
     internal string Staging=>Path.Combine(Root,"staging");
@@ -73,7 +73,7 @@ internal sealed class UpdaterEngine(UpdaterPaths paths,string current,Func<byte[
             CleanStaging();staged=Key() is {} key?Rediscover(key):null;Ingest();
         }
     }
-    private void Save()=>NativeInstallFiles.PublishProtectedFile(paths.State,record.Encode(),paths.FileDescriptor);
+    private void Save()=>NativeInstallFiles.Publish(paths.State,record.Encode());
     private UpdaterLastRequest Finished(UpdaterLastRequest request,string? error)=>request with{State=error is null?"succeeded":"failed",FinishedAt=Now,Error=error};
 
     internal UpdaterReply Handle(UpdaterRequest request)
@@ -156,14 +156,14 @@ internal sealed class UpdaterEngine(UpdaterPaths paths,string current,Func<byte[
     private async Task StageAsync(GitHubAsset setup,ReleaseManifest value,byte[] manifest,byte[] signature,CancellationToken cancellation)
     {
         var stage=paths.Stage(value.Version);if(Directory.Exists(stage))Directory.Delete(stage,true);
-        if(!Directory.Exists(paths.Staging))NativeInstallFiles.NewDirectory(paths.Staging,paths.DirectoryDescriptor);
-        NativeInstallFiles.NewDirectory(stage,paths.DirectoryDescriptor);
-        NativeInstallFiles.WriteNew(Path.Combine(stage,ReleaseManifest.ManifestName(value.Version)),manifest,paths.FileDescriptor);
-        NativeInstallFiles.WriteNew(Path.Combine(stage,ReleaseManifest.ManifestName(value.Version)+".sig"),signature,paths.FileDescriptor);
+        if(!Directory.Exists(paths.Staging))NativeInstallFiles.NewDirectory(paths.Staging);
+        NativeInstallFiles.NewDirectory(stage);
+        NativeInstallFiles.WriteNew(Path.Combine(stage,ReleaseManifest.ManifestName(value.Version)),manifest);
+        NativeInstallFiles.WriteNew(Path.Combine(stage,ReleaseManifest.ManifestName(value.Version)+".sig"),signature);
         var target=Path.Combine(stage,value.Setup.Name);var partial=target+".partial";
         try
         {
-            await using(var output=NativeInstallFiles.CreateNewFile(partial,paths.FileDescriptor))
+            await using(var output=NativeInstallFiles.CreateNewFile(partial))
             {await source.DownloadAsync(setup.BrowserDownloadUrl,output,value.Setup.Bytes,value.Setup.Sha256,cancellation);output.Flush(true);}
             NativeInstallFiles.CommitNew(partial,target);
         }

@@ -53,7 +53,6 @@ internal static class UpdaterTests
     private sealed class Bed:IDisposable
     {
         private readonly ECDsa signing=ECDsa.Create(ECCurve.NamedCurves.nistP256);
-        private readonly string sid=WindowsIdentity.GetCurrent().User!.Value;
         internal readonly Feed Network=new();internal readonly GitHubReleaseSource Source;
         internal readonly UpdaterPaths Paths;
         internal readonly List<(StagedRelease Release,string Result)> Launched=[];
@@ -63,7 +62,7 @@ internal static class UpdaterTests
         internal Bed()
         {
             var root=Path.Combine(Path.GetTempPath(),"yahad-updater-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
-            Paths=new(root,$"O:{sid}D:P(A;OICI;FA;;;{sid})",$"O:{sid}D:P(A;;FA;;;{sid})");Source=new(Network);
+            Paths=new(root);Source=new(Network);
         }
         internal UpdaterEngine Engine(string current="1.0.0",bool key=true)
         {

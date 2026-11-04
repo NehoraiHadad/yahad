@@ -65,7 +65,9 @@ internal static class SetupOperation
         var image=Environment.ProcessPath??throw new IOException("SETUP_IMAGE");
         if(RunsFromInstallation())
         {
-            var copy=Path.Combine(SafeDirectory.CreatePrivateSession(Path.GetTempPath()),"Yahad.Setup.exe");File.Copy(image,copy,false);
+            var directory=Path.Combine(Path.GetTempPath(),"yahad-removal-"+Guid.NewGuid().ToString("N"));
+            NativeInstallFiles.NewDirectory(directory,"O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)");
+            var copy=Path.Combine(directory,"Yahad.Setup.exe");File.Copy(image,copy,false);
             if(HashFile(copy)!=HashFile(image))throw new IOException("SETUP_COPY_CHANGED");image=copy;
         }
         // This process is already elevated; the child inherits its token, so no second prompt.

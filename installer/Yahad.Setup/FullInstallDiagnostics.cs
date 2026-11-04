@@ -1,5 +1,4 @@
 using System.IO;
-using System.Security.Principal;
 using System.Text.Json;
 using Yahad.Install;
 namespace Yahad.Setup;
@@ -10,15 +9,14 @@ internal static class FullInstallDiagnostics
     {
         try
         {
-            state.Require();var owner=new SecurityIdentifier(state.OwnerSid);
+            state.Require();
             if(File.Exists(PathOf))
-            {using var existing=WindowsFileBoundary.OpenInstallerDiagnostic(PathOf,owner);using var json=JsonDocument.Parse(existing.Small(8192));if(json.RootElement.GetProperty("InstallationId").GetString()!=state.InstallationId)return false;}
+            {using var json=JsonDocument.Parse(NativeInstallFiles.ReadRecord(PathOf,8192));if(json.RootElement.GetProperty("InstallationId").GetString()!=state.InstallationId)return false;}
             var bytes=Encode(state.InstallationId,failure,DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-            NativeInstallFiles.PublishProtectedFile(PathOf,bytes,Descriptor(state.OwnerSid));return true;
+            NativeInstallFiles.Publish(PathOf,bytes);return true;
         }
         catch{return false;}
     }
-    internal static string Descriptor(string ownerSid)=>UninstallDiagnostics.Descriptor(ownerSid);
     internal static byte[] Encode(string installationId,SetupOperationException failure,long at)
     {
         var detail=SetupFailureDetail.From(failure);
@@ -26,8 +24,8 @@ internal static class FullInstallDiagnostics
     }
     internal static void DeleteOwned(InstallerState state)
     {
-        if(!File.Exists(PathOf))return;using(var existing=WindowsFileBoundary.OpenInstallerDiagnostic(PathOf,new(state.OwnerSid)))
-        {using var json=JsonDocument.Parse(existing.Small(8192));if(json.RootElement.GetProperty("InstallationId").GetString()!=state.InstallationId)throw new IOException("UNINSTALL_DIAGNOSTIC_CHANGED");}
+        if(!File.Exists(PathOf))return;
+        {using var json=JsonDocument.Parse(NativeInstallFiles.ReadRecord(PathOf,8192));if(json.RootElement.GetProperty("InstallationId").GetString()!=state.InstallationId)throw new IOException("UNINSTALL_DIAGNOSTIC_CHANGED");}
         File.Delete(PathOf);
     }
 }

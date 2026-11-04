@@ -6,192 +6,121 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Yahad.Install;
 
-public enum SecretRole { MasterKey, SetupCapability }
-
-/// <summary>Windows app file boundary. Never changes an existing ACL to make a check pass.</summary>
+/// <summary>
+/// Reaches a file by a path a less privileged account may have shaped: a link is
+/// never followed, a hard link is refused, and no ancestor can be swapped while
+/// the file is held. Who may write where is the job of the two inherited ACLs in
+/// <see cref="NativeInstallFiles"/>; nothing here inspects them.
+/// </summary>
 public static class WindowsFileBoundary
 {
-    private const uint ReadControl = 0x20000, ReadAttributes = 0x80, GenericRead = 0x80000000;
+    private const uint ReadAttributes = 0x80, GenericRead = 0x80000000, GenericWrite = 0x40000000, Delete = 0x10000;
+    private const uint FollowNothing = 0x00200000, DirectoriesToo = 0x02000000;
     private const uint Reparse = 0x400, DirectoryAttribute = 0x10;
 
-    public static void ValidateAcl(RawSecurityDescriptor acl, SecurityIdentifier application, bool bootstrap)
-    {
-        var system = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
-        var admins = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
-        if (acl.Owner is null || !(acl.Owner.Equals(system) || acl.Owner.Equals(admins) || !bootstrap && acl.Owner.Equals(application)) ||
-            acl.DiscretionaryAcl is null || (acl.ControlFlags & ControlFlags.DiscretionaryAclPresent) == 0)
-            throw new IOException("NATIVE_OWNER_OR_DACL");
-        foreach (GenericAce entry in acl.DiscretionaryAcl)
-        {
-            // Reject conditional/object/unknown ACE shapes rather than accidentally treating them as restrictive.
-            if (entry is not CommonAce ace || ace.IsCallback) throw new IOException("NATIVE_DACL_SHAPE");
-            if (ace.AceQualifier == AceQualifier.AccessDenied) continue;
-            if (ace.AceQualifier != AceQualifier.AccessAllowed) throw new IOException("NATIVE_DACL_SHAPE");
-            if (ace.SecurityIdentifier.Equals(system) || ace.SecurityIdentifier.Equals(admins)) continue;
-            if (!ace.SecurityIdentifier.Equals(application)) throw new IOException("NATIVE_DACL_PRINCIPAL");
-            var readOnly = (int)(FileSystemRights.ReadAndExecute | FileSystemRights.Synchronize | FileSystemRights.ReadPermissions);
-            if (bootstrap && (ace.AccessMask & ~readOnly) != 0) throw new IOException("NATIVE_BOOTSTRAP_WRITABLE");
-        }
-    }
-
-    public static SecretLease OpenSecret(string path, SecretRole role)
-    {
-        var pinned = Pin(path, leafDirectory: false, readContents: true);
-        try
-        {
-            ValidateAcl(Security(pinned.Leaf), ApplicationSid(), role == SecretRole.SetupCapability);
-            return new(pinned, role == SecretRole.MasterKey ? 4096 : 1024);
-        }
-        catch { pinned.Dispose(); throw; }
-    }
-
-    internal static PrivateReadLease OpenBootstrapForInstaller(string path,SecurityIdentifier expectedService)
-    {var pin=Pin(path,false,true);try{ValidateAcl(Security(pin.Leaf),expectedService,true);return new(pin);}catch{pin.Dispose();throw;}}
-    internal static PrivateReadLease OpenInstallerMetadata(string path)
-    {
-        var pin=Pin(path,false,true);try
-        {
-            ValidateInstallerMetadataAcl(Security(pin.Leaf));
-            return new(pin);
-        }
-        catch{pin.Dispose();throw;}
-    }
-    internal static void ValidateInstallerMetadataAcl(RawSecurityDescriptor acl)
-    {
-            var admins=new SecurityIdentifier("S-1-5-32-544");var system=new SecurityIdentifier("S-1-5-18");
-            if(acl.Owner!=admins&&acl.Owner!=system||acl.DiscretionaryAcl is null)throw new IOException("INSTALL_METADATA_OWNER");
-            foreach(GenericAce raw in acl.DiscretionaryAcl)
-            {
-                if(raw is not CommonAce ace||ace.IsCallback)throw new IOException("INSTALL_METADATA_ACE");
-                if(ace.AceQualifier==AceQualifier.AccessDenied)continue;
-                if(ace.AceQualifier!=AceQualifier.AccessAllowed)throw new IOException("INSTALL_METADATA_ACE");
-                if(ace.SecurityIdentifier==admins||ace.SecurityIdentifier==system)continue;
-                if(!ace.SecurityIdentifier.Value.StartsWith("S-1-5-80-",StringComparison.Ordinal)||(ace.AccessMask&~0x1200a9)!=0)throw new IOException("INSTALL_METADATA_ACCESS");
-            }
-    }
-    internal static PrivateReadLease OpenInstallerDiagnostic(string path,SecurityIdentifier owner)
-    {
-        var pin=Pin(path,false,true);try{ValidateInstallerDiagnosticAcl(Security(pin.Leaf),owner);return new(pin);}catch{pin.Dispose();throw;}
-    }
-    internal static void ValidateInstallerDiagnosticAcl(RawSecurityDescriptor acl,SecurityIdentifier owner)
-    {
-        var admins=new SecurityIdentifier("S-1-5-32-544");var system=new SecurityIdentifier("S-1-5-18");
-        if((acl.Owner!=admins&&acl.Owner!=system)||acl.DiscretionaryAcl is null||(acl.ControlFlags&ControlFlags.DiscretionaryAclProtected)==0)throw new IOException("UNINSTALL_DIAGNOSTIC_CHANGED");
-        foreach(GenericAce raw in acl.DiscretionaryAcl)
-        {
-            if(raw is not CommonAce ace||ace.IsCallback||ace.AceQualifier!=AceQualifier.AccessAllowed)throw new IOException("UNINSTALL_DIAGNOSTIC_CHANGED");
-            if(ace.SecurityIdentifier==admins||ace.SecurityIdentifier==system)continue;
-            // The old full-installer writer emitted this exact read/execute
-            // owner ACE on JSON diagnostics. It grants no mutation authority.
-            var legacyRead=ace.AccessMask==0x1200a9&&ace.AceFlags==AceFlags.None;
-            if(ace.SecurityIdentifier!=owner||((ace.AccessMask&~0x120089)!=0&&!legacyRead))throw new IOException("UNINSTALL_DIAGNOSTIC_CHANGED");
-        }
-    }
-    internal static IDisposable PinSingleServiceDirectory(string path,bool immutable)
-    {var pin=Pin(path,true,false);try{ValidateAcl(Security(pin.Leaf),ApplicationSid(),immutable);return pin;}catch{pin.Dispose();throw;}}
-    internal static IDisposable PinInstallerRemovalRoot(string path,SecurityIdentifier application)
-    {var pin=Pin(path,true,false);try{ValidateAcl(Security(pin.Leaf),application,true);return pin;}catch{pin.Dispose();throw;}}
-    internal static void ValidateRemovalMember(string path,bool directory,SecurityIdentifier application,bool requireDeleteAccess=false)
-    {using var pin=Pin(path,directory,false,requireDeleteAccess);ValidateAcl(Security(pin.Leaf),application,false);}
-    internal static void DeleteRemovalMember(string path,bool directory,SecurityIdentifier application)
-    {
-        using(var pin=Pin(path,directory,false,true))
-        {ValidateAcl(Security(pin.Leaf),application,false);byte disposition=1;if(!SetFileInformationByHandle(pin.Leaf,4,ref disposition,1))throw new Win32Exception();}
-    }
-    [DllImport("kernel32.dll",SetLastError=true)]private static extern bool SetFileInformationByHandle(SafeFileHandle file,int kind,ref byte value,int bytes);
-
-    internal static PrivateReadLease OpenPrivateRead(string path)
+    public static ReadLease OpenRead(string path)
     {
         var pinned = Pin(path, false, true);
-        try { ValidateAcl(Security(pinned.Leaf), ApplicationSid(), false); return new(pinned); }
-        catch { pinned.Dispose(); throw; }
+        return new(pinned);
     }
-    internal static PrivateReadLease OpenInstalledRead(string path)
+
+    internal static void RequireNoLink(string path, bool directory) { using var pin = Pin(path, directory, false); }
+
+    internal static void DeleteNoFollow(string path, bool directory)
     {
-        var pinned=Pin(path,false,true);
-        try{ValidateAcl(Security(pinned.Leaf),ApplicationSid(),true);return new(pinned);}
-        catch{pinned.Dispose();throw;}
+        using var pin = Pin(path, directory, false, true);
+        byte disposition = 1;
+        if (!SetFileInformationByHandle(pin.Leaf, 4, ref disposition, 1)) throw new Win32Exception();
     }
-    internal static IDisposable PinPrivateDirectory(string path)
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool SetFileInformationByHandle(SafeFileHandle file, int kind, ref byte value, int bytes);
+
+    // Any user may create a folder in ProgramData, so a state root's owner is what
+    // proves Setup made it: only an administrator can give a folder that owner.
+    internal static void RequireAdministratorOwned(string directory)
     {
-        var pinned = Pin(path, true, false);
-        try { ValidateAcl(Security(pinned.Leaf), ApplicationSid(), false); return pinned; }
-        catch { pinned.Dispose(); throw; }
+        using var pin = Pin(directory, true, false);
+        var owner = new DirectoryInfo(directory).GetAccessControl(AccessControlSections.Owner).GetOwner(typeof(SecurityIdentifier));
+        if (!IsAdministrativeOwner(owner as SecurityIdentifier)) throw new IOException("INSTALL_ROOT_OWNER");
     }
-    internal sealed class PrivateReadLease(PinnedPath pinned) : IDisposable
+    internal static bool IsAdministrativeOwner(SecurityIdentifier? owner) =>
+        owner is not null && (owner.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid) || owner.IsWellKnown(WellKnownSidType.LocalSystemSid));
+
+    public sealed class ReadLease : IDisposable
     {
+        private readonly PinnedPath pinned;
+        internal ReadLease(PinnedPath pinned) { this.pinned = pinned; }
         public long Length { get { if (!Native.GetFileSizeEx(pinned.Leaf, out var length)) throw new Win32Exception(); return length; } }
         public int Read(long offset, Span<byte> bytes) => RandomAccess.Read(pinned.Leaf, bytes, offset);
         public byte[] Small(int maximum)
         {
-            var length=Length; if(length<1||length>maximum)throw new IOException("RECOVERY_FILE_BOUND");
-            var bytes=new byte[(int)length];var offset=0;
-            while(offset<bytes.Length){var count=Read(offset,bytes.AsSpan(offset));if(count==0)throw new IOException("RECOVERY_SHORT_READ");offset+=count;}
+            var length = Length; if (length < 1 || length > maximum) throw new IOException("NATIVE_FILE_BOUND");
+            var bytes = new byte[(int)length]; var offset = 0;
+            while (offset < bytes.Length) { var count = Read(offset, bytes.AsSpan(offset)); if (count == 0) throw new IOException("NATIVE_SHORT_READ"); offset += count; }
             return bytes;
         }
         internal string Sha256(long maximum)
         {
-            var length=Length;if(length<1||length>maximum)throw new IOException("RECOVERY_FILE_BOUND");
-            using var hash=System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
-            var buffer=new byte[1048576];long offset=0;
-            while(offset<length){var count=Read(offset,buffer.AsSpan(0,(int)Math.Min(buffer.Length,length-offset)));if(count==0)throw new IOException("RECOVERY_SHORT_READ");hash.AppendData(buffer.AsSpan(0,count));offset+=count;}
-            if(Length!=length)throw new IOException("RECOVERY_FILE_CHANGED");return Convert.ToHexStringLower(hash.GetHashAndReset());
+            var length = Length; if (length < 1 || length > maximum) throw new IOException("NATIVE_FILE_BOUND");
+            using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+            var buffer = new byte[1048576]; long offset = 0;
+            while (offset < length) { var count = Read(offset, buffer.AsSpan(0, (int)Math.Min(buffer.Length, length - offset))); if (count == 0) throw new IOException("NATIVE_SHORT_READ"); hash.AppendData(buffer.AsSpan(0, count)); offset += count; }
+            if (Length != length) throw new IOException("NATIVE_FILE_CHANGED"); return Convert.ToHexStringLower(hash.GetHashAndReset());
         }
-        public void Dispose()=>pinned.Dispose();
+        public void Dispose() => pinned.Dispose();
     }
 
-    public static DataLease AcquireDataLease(string directory, int? ownerProcessId = null)
-    {
-        return AcquireDataLeaseFor(directory,ApplicationSid(),ownerProcessId);
-    }
-
-    public static DataLease AcquireInstallerDataLease(string directory,SecurityIdentifier application)
-    {
-        using var identity=WindowsIdentity.GetCurrent();
-        if(!new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator))throw new UnauthorizedAccessException("ADMIN_REQUIRED");
-        if(!application.Value.StartsWith("S-1-5-80-",StringComparison.Ordinal))throw new IOException("INSTALL_SERVICE_IDENTITY");
-        return AcquireDataLeaseFor(directory,application,null);
-    }
-    private static DataLease AcquireDataLeaseFor(string directory,SecurityIdentifier application,int? ownerProcessId)
+    public static DataLease AcquireDataLease(string directory)
     {
         var pinned = Pin(directory, leafDirectory: true, readContents: false);
         SafeFileHandle? gate = null;
         try
         {
-            ValidateAcl(Security(pinned.Leaf), application, false);
-            AssertPrivateTree(directory,application);
-            var lockPath = Path.Combine(directory, "process.lock");
-            // OPEN_ALWAYS + OPEN_REPARSE_POINT: atomically create/open without following a final link.
-            gate = Native.CreateFileW(Extended(lockPath), GenericRead | 0x40000000 | ReadControl, 0, IntPtr.Zero,
-                4, 0x00200000, IntPtr.Zero);
+            // OPEN_ALWAYS + no-follow: atomically create or open without following a final link.
+            gate = Native.CreateFileW(Extended(Path.Combine(directory, "process.lock")), GenericRead | GenericWrite, 0, IntPtr.Zero, 4, FollowNothing, IntPtr.Zero);
             if (gate.IsInvalid) throw new Win32Exception();
             CheckKind(gate, false);
-            ValidateAcl(Security(gate), application, false);
-            var remote = ownerProcessId.HasValue ? new RemoteGate(gate, ownerProcessId.Value) : null;
-            return new(pinned, gate, remote);
+            return new(pinned, gate);
         }
         catch { gate?.Dispose(); pinned.Dispose(); throw; }
     }
 
-    private static void AssertPrivateTree(string root,SecurityIdentifier? application=null)
+    public sealed class DataLease : IDisposable
     {
-        var seen = 0;
-        void Walk(string directory, int depth)
+        private readonly PinnedPath pinned; private readonly SafeFileHandle gate;
+        internal DataLease(PinnedPath pinned, SafeFileHandle gate) { this.pinned = pinned; this.gate = gate; }
+        internal ulong DuplicateTo(SafeProcessHandle child)
         {
-            if (depth > 128) throw new IOException("NATIVE_TREE_DEPTH");
-            // The caller holds this directory and all of its ancestors open.
-            // Reuse that stable chain rather than reopening it for every media file.
-            foreach (var child in Directory.EnumerateFileSystemEntries(directory))
-            {
-                if (++seen > 100000) throw new IOException("NATIVE_TREE_LIMIT");
-                CanonicalName(child);
-                var isDirectory = (File.GetAttributes(child) & FileAttributes.Directory) != 0;
-                using var file = Open(child, isDirectory, false);
-                ValidateAcl(Security(file), application??ApplicationSid(), false);
-                if (isDirectory) Walk(child, depth + 1);
-            }
+            if (gate.IsClosed || child.IsInvalid || child.IsClosed) throw new IOException("NATIVE_HANDOFF_CLOSED");
+            RequireSameIdentity(child);
+            if (!Native.DuplicateHandle(Native.GetCurrentProcess(), gate.DangerousGetHandle(), child.DangerousGetHandle(), out var copy, 0, false, 2)) throw new Win32Exception();
+            return unchecked((ulong)copy.ToInt64()); // child owns this noninheritable duplicate until exit
         }
-        Walk(root, 0);
+        public void Dispose() { gate.Dispose(); pinned.Dispose(); }
+    }
+
+    private static void RequireSameIdentity(SafeProcessHandle owner)
+    {
+        if (!Native.OpenProcessToken(owner, 8, out var token)) throw new Win32Exception();
+        using (token)
+        using (var identity = new WindowsIdentity(token.DangerousGetHandle()))
+        using (var current = WindowsIdentity.GetCurrent())
+            if (current.User is null || identity.User?.Equals(current.User) != true) throw new IOException("NATIVE_LOCK_OWNER_IDENTITY");
+    }
+
+    public static void ValidateHostLease(string descriptor, string directory, int ownerPid, string nonce)
+    {
+        using var file = OpenRead(descriptor);
+        var grant = NativeJson.Read<HostLeaseGrant>(file.Small(4096));
+        if (grant.Format != 1 || grant.ProcessId != ownerPid || ownerPid < 1 || grant.Nonce != nonce || nonce.Length != 64 ||
+            !string.Equals(grant.DataDirectory, directory, StringComparison.OrdinalIgnoreCase) || grant.Handle == 0 || grant.Handle > long.MaxValue) throw new IOException("NATIVE_HANDOFF_IDENTITY");
+        using var owner = Native.OpenProcess(0x1000 | 0x40, false, ownerPid); if (owner.IsInvalid) throw new Win32Exception(); RequireSameIdentity(owner);
+        if (!Native.DuplicateHandle(owner.DangerousGetHandle(), (IntPtr)(long)grant.Handle, Native.GetCurrentProcess(), out var local, 0, false, 2)) throw new Win32Exception();
+        using var duplicate = new SafeFileHandle(local, true); CheckKind(duplicate, false);
+        using var expected = Pin(Path.Combine(directory, "process.lock"), false, false);
+        if (!Native.GetFileInformationByHandle(duplicate, out var actual) || !Native.GetFileInformationByHandle(expected.Leaf, out var other)) throw new Win32Exception();
+        if (actual.Volume != other.Volume || actual.IndexHigh != other.IndexHigh || actual.IndexLow != other.IndexLow) throw new IOException("NATIVE_HANDOFF_FILE");
+        var contender = Native.CreateFileW(Extended(Path.Combine(directory, "process.lock")), GenericRead | GenericWrite, 0, IntPtr.Zero, 3, FollowNothing, IntPtr.Zero);
+        using (contender) { if (!contender.IsInvalid) throw new IOException("NATIVE_HANDOFF_NOT_LOCKED"); if (Marshal.GetLastPInvokeError() != 32) throw new IOException("NATIVE_HANDOFF_UNOBSERVED"); }
     }
 
     public static string CanonicalLocalPath(string path)
@@ -218,7 +147,7 @@ public static class WindowsFileBoundary
         }
     }
 
-    private static PinnedPath Pin(string path, bool leafDirectory, bool readContents,bool delete=false)
+    private static PinnedPath Pin(string path, bool leafDirectory, bool readContents, bool delete = false)
     {
         CanonicalLocalPath(path);
         var result = new PinnedPath();
@@ -232,7 +161,7 @@ public static class WindowsFileBoundary
             for (var i = 0; i < parts.Length; i++)
             {
                 prefix = Path.Combine(prefix, parts[i]);
-                result.Handles.Add(Open(prefix, i < parts.Length - 1 || leafDirectory, i == parts.Length - 1 && readContents,i==parts.Length-1&&delete));
+                result.Handles.Add(Open(prefix, i < parts.Length - 1 || leafDirectory, i == parts.Length - 1 && readContents, i == parts.Length - 1 && delete));
             }
             return result;
         }
@@ -241,10 +170,10 @@ public static class WindowsFileBoundary
 
     private static string Extended(string canonical) => @"\\?\" + canonical;
 
-    private static SafeFileHandle Open(string path, bool directory, bool contents,bool delete=false)
+    private static SafeFileHandle Open(string path, bool directory, bool contents, bool delete = false)
     {
-        var handle = Native.CreateFileW(Extended(path), ReadControl | ReadAttributes | (contents ? GenericRead : 0) | (delete?0x10000u:0),
-            contents ? 1u : 3u, IntPtr.Zero, 3, 0x00200000 | 0x02000000, IntPtr.Zero);
+        var handle = Native.CreateFileW(Extended(path), ReadAttributes | (contents ? GenericRead : 0) | (delete ? Delete : 0),
+            contents ? 1u : 3u, IntPtr.Zero, 3, FollowNothing | DirectoriesToo, IntPtr.Zero);
         if (handle.IsInvalid) { var error = Marshal.GetLastPInvokeError(); handle.Dispose(); throw new Win32Exception(error); }
         try { CheckKind(handle, directory); return handle; }
         catch { handle.Dispose(); throw; }
@@ -257,135 +186,11 @@ public static class WindowsFileBoundary
             throw new IOException("NATIVE_REPARSE_KIND_OR_HARDLINK");
     }
 
-    private static RawSecurityDescriptor Security(SafeFileHandle handle)
-    {
-        var error = Native.GetSecurityInfo(handle, 1, 5, out _, out _, out _, out _, out var descriptor);
-        if (error != 0) throw new Win32Exception((int)error);
-        try
-        {
-            var length = Native.GetSecurityDescriptorLength(descriptor);
-            if (length is 0 or > 65536) throw new IOException("NATIVE_DACL_SIZE");
-            var bytes = new byte[length]; Marshal.Copy(descriptor, bytes, 0, bytes.Length);
-            return new RawSecurityDescriptor(bytes, 0);
-        }
-        finally { Native.LocalFree(descriptor); }
-    }
-
-    private static SecurityIdentifier ApplicationSid()
-    {
-        var sid = WindowsIdentity.GetCurrent().User ?? throw new IOException("NATIVE_IDENTITY");
-        if (sid.IsWellKnown(WellKnownSidType.LocalSystemSid) || sid.IsWellKnown(WellKnownSidType.LocalServiceSid) ||
-            sid.IsWellKnown(WellKnownSidType.NetworkServiceSid)) throw new IOException("NATIVE_SHARED_SERVICE_IDENTITY");
-        return sid;
-    }
-
     internal sealed class PinnedPath : IDisposable
     {
         internal readonly List<SafeFileHandle> Handles = [];
         internal SafeFileHandle Leaf => Handles[^1];
         public void Dispose() { for (var i = Handles.Count - 1; i >= 0; i--) Handles[i].Dispose(); }
-    }
-    public sealed class SecretLease : IDisposable
-    {
-        private readonly PinnedPath pinned; private readonly int maximum;
-        internal SecretLease(PinnedPath pinned, int maximum) { this.pinned = pinned; this.maximum = maximum; }
-        public byte[] Read()
-        {
-            if (!Native.GetFileSizeEx(pinned.Leaf, out var length)) throw new Win32Exception();
-            if (length < 1 || length > maximum) throw new IOException("NATIVE_SECRET_SIZE");
-            var bytes = new byte[length]; var offset = 0;
-            while (offset < bytes.Length)
-            { var count = RandomAccess.Read(pinned.Leaf, bytes.AsSpan(offset), offset); if (count == 0) throw new IOException("NATIVE_SHORT_READ"); offset += count; }
-            return bytes;
-        }
-        public void Dispose() => pinned.Dispose();
-    }
-    public sealed class DataLease : IDisposable
-    {
-        private readonly PinnedPath pinned; private readonly SafeFileHandle gate;
-        private readonly RemoteGate? remote;
-        internal DataLease(PinnedPath pinned, SafeFileHandle gate, RemoteGate? remote) { this.pinned = pinned; this.gate = gate; this.remote = remote; }
-        // Metadata-only inspection of THIS retained exclusive gate. A normal
-        // contents read would conflict with our own FILE_SHARE_NONE handle.
-        // Bind both its canonical parent and single-link file identity; never
-        // exempt another file merely because it is named process.lock.
-        internal bool TryValidateHeldGate(string path,Action<RawSecurityDescriptor> validate)
-        {
-            CanonicalLocalPath(path);
-            if(!Path.GetFileName(path).Equals("process.lock",StringComparison.OrdinalIgnoreCase))return false;
-            if(gate.IsClosed||gate.IsInvalid)throw new IOException("NATIVE_LEASE_CLOSED");
-            using var parent=Pin(Path.GetDirectoryName(path)!,true,false);
-            if(!Native.GetFileInformationByHandle(pinned.Leaf,out var heldParent)||!Native.GetFileInformationByHandle(parent.Leaf,out var candidateParent))throw new Win32Exception();
-            if(heldParent.Volume!=candidateParent.Volume||heldParent.IndexHigh!=candidateParent.IndexHigh||heldParent.IndexLow!=candidateParent.IndexLow)return false;
-            using var candidate=Pin(path,false,false);CheckKind(gate,false);
-            if(!Native.GetFileInformationByHandle(gate,out var held)||!Native.GetFileInformationByHandle(candidate.Leaf,out var actual))throw new Win32Exception();
-            if(held.Volume!=actual.Volume||held.IndexHigh!=actual.IndexHigh||held.IndexLow!=actual.IndexLow)throw new IOException("NATIVE_LEASE_FILE_BINDING");
-            validate(Security(gate));return true;
-        }
-        internal ulong DuplicateTo(SafeProcessHandle child)
-        {
-            if(gate.IsClosed||child.IsInvalid||child.IsClosed)throw new IOException("NATIVE_HANDOFF_CLOSED");
-            RequireSameIdentity(child);
-            if(!Native.DuplicateHandle(Native.GetCurrentProcess(),gate.DangerousGetHandle(),child.DangerousGetHandle(),out var copy,0,false,2))throw new Win32Exception();
-            return unchecked((ulong)copy.ToInt64()); // child owns this noninheritable duplicate until exit
-        }
-        public void Dispose() { try { remote?.Dispose(); } finally { gate.Dispose(); pinned.Dispose(); } }
-    }
-
-    private static void RequireSameIdentity(SafeProcessHandle owner)
-    {
-        if(!Native.OpenProcessToken(owner,8,out var token))throw new Win32Exception();
-        using(token)using(var identity=new WindowsIdentity(token.DangerousGetHandle()))
-            if(identity.User?.Equals(ApplicationSid())!=true)throw new IOException("NATIVE_LOCK_OWNER_IDENTITY");
-    }
-    public static void ValidateHostLease(string descriptor,string directory,int ownerPid,string nonce)
-    {
-        using var file=OpenPrivateRead(descriptor);
-        var grant=NativeJson.Read<HostLeaseGrant>(file.Small(4096));
-        if(grant.Format!=1||grant.ProcessId!=ownerPid||ownerPid<1||grant.Nonce!=nonce||nonce.Length!=64||
-            !string.Equals(grant.DataDirectory,directory,StringComparison.OrdinalIgnoreCase)||grant.Handle==0||grant.Handle>long.MaxValue)throw new IOException("NATIVE_HANDOFF_IDENTITY");
-        using var owner=Native.OpenProcess(0x1000|0x40,false,ownerPid);if(owner.IsInvalid)throw new Win32Exception();RequireSameIdentity(owner);
-        if(!Native.DuplicateHandle(owner.DangerousGetHandle(),(IntPtr)(long)grant.Handle,Native.GetCurrentProcess(),out var local,0,false,2))throw new Win32Exception();
-        using var duplicate=new SafeFileHandle(local,true);CheckKind(duplicate,false);ValidateAcl(Security(duplicate),ApplicationSid(),false);
-        using var expected=Pin(Path.Combine(directory,"process.lock"),false,false);
-        if(!Native.GetFileInformationByHandle(duplicate,out var actual)||!Native.GetFileInformationByHandle(expected.Leaf,out var other))throw new Win32Exception();
-        if(actual.Volume!=other.Volume||actual.IndexHigh!=other.IndexHigh||actual.IndexLow!=other.IndexLow)throw new IOException("NATIVE_HANDOFF_FILE");
-        var contender=Native.CreateFileW(Extended(Path.Combine(directory,"process.lock")),GenericRead|0x40000000,0,IntPtr.Zero,3,0x00200000,IntPtr.Zero);
-        using(contender){if(!contender.IsInvalid)throw new IOException("NATIVE_HANDOFF_NOT_LOCKED");if(Marshal.GetLastPInvokeError()!=32)throw new IOException("NATIVE_HANDOFF_UNOBSERVED");}
-    }
-    internal sealed class RemoteGate : IDisposable
-    {
-        private readonly SafeProcessHandle owner; private readonly IntPtr remote; private bool disposed;
-        internal RemoteGate(SafeFileHandle gate, int processId)
-        {
-            if (processId < 1 || processId == Environment.ProcessId) throw new IOException("NATIVE_LOCK_OWNER");
-            owner = Native.OpenProcess(0x00100000 | 0x1000 | 0x40, false, processId); // synchronize/query-limited/duplicate only
-            try
-            {
-                if (owner.IsInvalid) throw new Win32Exception();
-                if (!Native.OpenProcessToken(owner, 8, out var token)) throw new Win32Exception();
-                using (token)
-                using (var identity = new WindowsIdentity(token.DangerousGetHandle()))
-                    if (identity.User?.Equals(ApplicationSid()) != true) throw new IOException("NATIVE_LOCK_OWNER_IDENTITY");
-                if (!Native.DuplicateHandle(Native.GetCurrentProcess(), gate.DangerousGetHandle(), owner.DangerousGetHandle(), out remote, 0, false, 2))
-                    throw new Win32Exception();
-                // The noninheritable duplicate lives in Node, not in this helper.
-                // Helper death cannot open a second-writer window while Node is alive.
-            }
-            catch { owner.Dispose(); throw; }
-        }
-        public void Dispose()
-        {
-            if (disposed) return; disposed = true;
-            try
-            {
-                var wait = Native.WaitForSingleObject(owner, 0);
-                if (wait == 0) return; // Exited owner already closed its entire handle table.
-                if (wait != 258 || !Native.DuplicateHandle(owner.DangerousGetHandle(), remote, IntPtr.Zero, out _, 0, false, 1))
-                    throw new Win32Exception();
-            }
-            finally { owner.Dispose(); }
-        }
     }
 
     private static class Native
@@ -401,16 +206,11 @@ public static class WindowsFileBoundary
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool GetVolumeInformationW(string root, System.Text.StringBuilder? name, uint nameSize,
             out uint serial, out uint maximum, out uint flags, System.Text.StringBuilder? fileSystem, uint fileSystemSize);
-        [DllImport("advapi32.dll", SetLastError = true)]
-        internal static extern uint GetSecurityInfo(SafeFileHandle handle, uint type, uint flags, out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl, out IntPtr descriptor);
-        [DllImport("advapi32.dll")] internal static extern uint GetSecurityDescriptorLength(IntPtr descriptor);
-        [DllImport("kernel32.dll")] internal static extern IntPtr LocalFree(IntPtr pointer);
         [DllImport("kernel32.dll", SetLastError = true)] internal static extern SafeProcessHandle OpenProcess(uint rights, [MarshalAs(UnmanagedType.Bool)] bool inherit, int id);
         [DllImport("advapi32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool OpenProcessToken(SafeProcessHandle process, uint rights, out SafeAccessTokenHandle token);
         [DllImport("kernel32.dll")] internal static extern IntPtr GetCurrentProcess();
         [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool DuplicateHandle(IntPtr sourceProcess, IntPtr source, IntPtr targetProcess, out IntPtr target, uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint options);
-        [DllImport("kernel32.dll", SetLastError = true)] internal static extern uint WaitForSingleObject(SafeProcessHandle process, uint milliseconds);
     }
 }

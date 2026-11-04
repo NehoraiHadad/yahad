@@ -71,7 +71,6 @@ internal sealed class StoreFixtureModules
         var text=new StringBuilder();
         foreach(var path in paths.Order(StringComparer.Ordinal))
         {
-            SafeDirectory.NoReparseAncestors(path);
             if((File.GetAttributes(path)&FileAttributes.ReparsePoint)!=0)throw new IOException("STORE_FIXTURE_LINKED_INPUT");
             text.Append(Path.GetRelativePath(relativeTo,path)).Append('\0').Append(StoreFixture.Hash(File.ReadAllBytes(path))).Append('\n');
         }
@@ -109,7 +108,6 @@ internal sealed class StoreFixtureModules
         var arguments=new[]{Path.Combine(repo,"node_modules/typescript/lib/tsc.js"),"--target","ES2023","--lib","ES2023,DOM,DOM.Iterable","--module","ESNext","--moduleResolution","Bundler",
             "--strict","--esModuleInterop","--skipLibCheck","--types","node","--allowImportingTsExtensions","false","--noEmit","false","--noEmitOnError","--declaration","false","--sourceMap","false",
             "--rootDir",Path.Combine(repo,"src"),"--outDir",output,Path.Combine(repo,"src/store.ts"),Path.Combine(repo,"src/platform-files.ts")};
-        SafeDirectory.NoReparseAncestors(node);SafeDirectory.NoReparseAncestors(arguments[0]);
         FixtureProcesses.JobOwner seed;
         try{seed=processes.StartJob(node,arguments,repo,LaunchEnvironment.Clean(temporary));}
         catch(JobStartQuiescenceUnconfirmedException failure){throw await StoreFixture.StopPreparation(failure.OwnedProcess,failure);}

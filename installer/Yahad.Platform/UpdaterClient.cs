@@ -82,8 +82,7 @@ internal static class UpdaterClient
     // Setup bound when it ran, and never anything in the request.
     private static UpdaterOperator ReadOperator()
     {
-        using var file=WindowsFileBoundary.OpenSecret(Path.Combine(InstalledLayout.StateRoot,"Secrets","setup-capability.json"),SecretRole.SetupCapability);
-        var bytes=file.Read();
+        var bytes=NativeInstallFiles.ReadRecord(Path.Combine(InstalledLayout.StateRoot,"Secrets","setup-capability.json"),1024);
         try
         {
             var owner=JsonSerializer.Deserialize<JsonElement>(bytes).GetProperty("firstOwner");

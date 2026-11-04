@@ -11,7 +11,8 @@ internal static class SetupHostFactory
         foreach(var path in new[]{InstallLocations.RemovalStateFile,InstallLocations.StateFile})
         {
             if(!File.Exists(path))continue;
-            using var pin=WindowsFileBoundary.OpenInstallerMetadata(path);NativeSetupHost.RequireCurrentFormat(pin.Small(16777216));
+            if(path==InstallLocations.StateFile)InstallLocations.RequireStateRoot();
+            NativeSetupHost.RequireCurrentFormat(NativeInstallFiles.ReadRecord(path));
         }
         if(uninstall&&!File.Exists(InstallLocations.RemovalStateFile)&&!File.Exists(InstallLocations.StateFile))throw new IOException("INSTALL_STATE_INVALID");
         return new NativeSetupHost(package,uninstall?null:choice);

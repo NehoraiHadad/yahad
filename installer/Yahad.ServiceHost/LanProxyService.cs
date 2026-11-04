@@ -80,61 +80,33 @@ internal sealed class WindowsLanProxyAdmission : ILanProxyAdmission
     public bool SelectedAddressPresent() => receipt is not null && LanProxyPolicy.AddressPresent(receipt, LanProxyPolicy.Addresses());
     public Task<ILanProxyProcess> StartAsync(CancellationToken cancellation) => Task.Run<ILanProxyProcess>(() =>
     {
-        var pins = new List<IDisposable>();
+        cancellation.ThrowIfCancellationRequested();
+        var expected = LanProxyPaths.ServiceSid();
+        ServiceIdentityPolicy.Require(new WindowsServiceTokenReader().Read(), expected);
+        var candidate = NativeJson.Read<LanProxyReceipt>(NativeInstallFiles.ReadRecord(LanProxyPaths.Receipt, 4096)); LanProxyPolicy.Require(candidate, expected);
+        if (Convert.ToHexStringLower(SHA256.HashData(NativeInstallFiles.ReadRecord(LanProxyPaths.Config, 131072))) != candidate.ConfigSha256) throw new IOException("LAN_PROXY_CONFIG_CHANGED");
+        using (var image = WindowsFileBoundary.OpenRead(LanProxyPaths.Caddy))
+            if (image.Length < 1024 || image.Sha256(268435456) != candidate.CaddySha256) throw new IOException("LAN_PROXY_IMAGE_CHANGED");
+        if (!LanProxyPolicy.AddressPresent(candidate, LanProxyPolicy.Addresses())) throw new IOException("LAN_ADDRESS_CHANGED");
+        receipt = candidate;
+        cancellation.ThrowIfCancellationRequested();
+        var environment = LaunchEnvironment.Clean(LanProxyPaths.Temporary);
+        // Storage is explicitly fixed in the Caddyfile. These paths keep incidental
+        // OS caches/config away from either app's storage.
+        environment["HOME"] = LanProxyPaths.Data;
+        environment["XDG_DATA_HOME"] = LanProxyPaths.Data;
+        environment["XDG_CONFIG_HOME"] = LanProxyPaths.Temporary;
         try
         {
-            cancellation.ThrowIfCancellationRequested();
-            var expected = LanProxyPaths.ServiceSid();
-            ServiceIdentityPolicy.Require(new WindowsServiceTokenReader().Read(), expected);
-            pins.Add(WindowsFileBoundary.PinSingleServiceDirectory(LanProxyPaths.State, true));
-            pins.Add(WindowsFileBoundary.PinSingleServiceDirectory(LanProxyPaths.Binaries, true));
-            pins.Add(WindowsFileBoundary.PinSingleServiceDirectory(LanProxyPaths.PublicJoin, true));
-            pins.Add(WindowsFileBoundary.PinPrivateDirectory(LanProxyPaths.Data));
-            pins.Add(WindowsFileBoundary.PinPrivateDirectory(LanProxyPaths.Temporary));
-            var record = WindowsFileBoundary.OpenInstalledRead(LanProxyPaths.Receipt); pins.Add(record);
-            var candidate = NativeJson.Read<LanProxyReceipt>(record.Small(4096)); LanProxyPolicy.Require(candidate, expected);
-            var config = WindowsFileBoundary.OpenInstalledRead(LanProxyPaths.Config); pins.Add(config);
-            if (Hash(config.Small(131072)) != candidate.ConfigSha256) throw new IOException("LAN_PROXY_CONFIG_CHANGED");
-            var image = WindowsFileBoundary.OpenInstalledRead(LanProxyPaths.Caddy); pins.Add(image);
-            if (image.Length is <1024 or >268435456 || Hash(image) != candidate.CaddySha256) throw new IOException("LAN_PROXY_IMAGE_CHANGED");
-            if (!LanProxyPolicy.AddressPresent(candidate, LanProxyPolicy.Addresses())) throw new IOException("LAN_ADDRESS_CHANGED");
-            receipt = candidate;
-            cancellation.ThrowIfCancellationRequested();
-            var environment = LaunchEnvironment.Clean(LanProxyPaths.Temporary);
-            // Storage is explicitly fixed in the pinned Caddyfile. These paths
-            // keep incidental OS caches/config away from either app's storage.
-            environment["HOME"] = LanProxyPaths.Data;
-            environment["XDG_DATA_HOME"] = LanProxyPaths.Data;
-            environment["XDG_CONFIG_HOME"] = LanProxyPaths.Temporary;
-            try
-            {
-                var job = JobProcess.Start(LanProxyPaths.Caddy,
-                    ["run", "--config", LanProxyPaths.Config, "--adapter", "caddyfile"], LanProxyPaths.State, environment);
-                var process = new OwnedLanProxyProcess(job, pins); pins = [];
-                return process;
-            }
-            catch (JobStartQuiescenceUnconfirmedException failure)
-            {
-                var process = new OwnedLanProxyProcess(failure.OwnedProcess, pins); pins = [];
-                throw new LanProxyStartUnconfirmed(process, failure);
-            }
+            return new OwnedLanProxyProcess(JobProcess.Start(LanProxyPaths.Caddy,
+                ["run", "--config", LanProxyPaths.Config, "--adapter", "caddyfile"], LanProxyPaths.State, environment));
         }
-        finally { for (var i = pins.Count - 1; i >= 0; i--) pins[i].Dispose(); }
-    }, cancellation);
-    private static string Hash(byte[] bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
-    private static string Hash(WindowsFileBoundary.PrivateReadLease image)
-    {
-        using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var buffer = new byte[65536]; long offset = 0;
-        while (offset < image.Length)
+        catch (JobStartQuiescenceUnconfirmedException failure)
         {
-            var count = image.Read(offset, buffer.AsSpan(0, (int)Math.Min(buffer.Length, image.Length - offset)));
-            if (count == 0) throw new IOException("LAN_PROXY_IMAGE_SHORT_READ");
-            sha.AppendData(buffer, 0, count); offset += count;
+            throw new LanProxyStartUnconfirmed(new OwnedLanProxyProcess(failure.OwnedProcess), failure);
         }
-        return Convert.ToHexStringLower(sha.GetHashAndReset());
-    }
-    private sealed class OwnedLanProxyProcess(JobProcess job, List<IDisposable> pins) : ILanProxyProcess
+    }, cancellation);
+    private sealed class OwnedLanProxyProcess(JobProcess job) : ILanProxyProcess
     {
         private bool empty;
         public Task<int> WaitForExitAsync(CancellationToken cancellation) => job.WaitAsync(cancellation);
@@ -147,7 +119,7 @@ internal sealed class WindowsLanProxyAdmission : ILanProxyAdmission
         public void Dispose()
         {
             if (!empty) throw new IOException("LAN_PROXY_QUIESCENCE_UNCONFIRMED");
-            job.Dispose(); for (var i = pins.Count - 1; i >= 0; i--) pins[i].Dispose(); pins.Clear();
+            job.Dispose();
         }
     }
 }

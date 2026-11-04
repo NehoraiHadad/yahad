@@ -85,7 +85,7 @@ export function createPlatformFiles(target: NodeJS.Platform = process.platform,
         return Promise.resolve(async () => {});
       }
       return new Promise((accept, reject) => {
-        const child = spawn(helper, ['lock-data', directory, String(process.pid)], { windowsHide: true, env: helperEnvironment(), stdio: ['pipe', 'pipe', 'pipe'] });
+        const child = spawn(helper, ['lock-data', directory], { windowsHide: true, env: helperEnvironment(), stdio: ['pipe', 'pipe', 'pipe'] });
         let buffer = '', settled = false, acquired = false, released = false;
         const fail = () => {
           if (settled) return;

@@ -2,7 +2,6 @@ using System.IO;
 using System.Net.Http;
 using System.Net.NetworkInformation;
 using System.Security.Cryptography;
-using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Win32;
@@ -20,13 +19,10 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
     private const string RegistryKey=@"Software\Microsoft\Windows\CurrentVersion\Uninstall\Yahad.FirstInstall";
     private InstallerState? state;private NativeService? service,updater;private string? setupToken;private bool existing;
     private bool diagnosticsAllowed;private UninstallPhase operationPhase=UninstallPhase.FullPrepare;
-    private static SecurityIdentifier Application=>new(InstallLocations.ServiceSid);
-    // The state root, the binary root and every immutable member are readable
-    // by the Runtime service only; data and temporary are its only writable trees.
-    private static string Immutable=>NativeInstallFiles.Descriptor(InstallLocations.ServiceSid);
-    private static string Mutable=>NativeInstallFiles.Descriptor(InstallLocations.ServiceSid,true);
-    private static string ImmutableFile=>NativeInstallFiles.FileDescriptor(InstallLocations.ServiceSid);
-    private static string AdminFile=>NativeInstallFiles.FileDescriptor();
+    // The state root and the binary root are read-only to the Runtime service and
+    // everything below inherits that; data and temporary are its only writable trees.
+    private static string InstallAcl=>NativeInstallFiles.InstallAcl(InstallLocations.ServiceSid);
+    private static string DataAcl=>NativeInstallFiles.DataAcl(InstallLocations.ServiceSid);
     private string Dataset=>Path.Combine(InstallLocations.State,"datasets",state!.DataId);
     private string DataPath=>Path.Combine(Dataset,"data");
     private string MasterKey=>Path.Combine(Dataset,"master-key");
@@ -49,24 +45,22 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
     }
     internal static InstallerState ReadState()
     {
-        using var file=WindowsFileBoundary.OpenInstallerMetadata(InstallLocations.StateFile);var bytes=file.Small(16777216);
+        InstallLocations.RequireStateRoot();var bytes=NativeInstallFiles.ReadRecord(InstallLocations.StateFile);
         RequireCurrentFormat(bytes);var value=NativeJson.Read<InstallerState>(bytes);value.Require();return value;
     }
     private void Save(string phase)
-    {state=state! with{Phase=phase};state.Require();NativeInstallFiles.PublishProtectedFile(InstallLocations.StateFile,Json(state),AdminFile);}
+    {state=state! with{Phase=phase};state.Require();NativeInstallFiles.Publish(InstallLocations.StateFile,Json(state));}
 
     public Task PrepareAsync(SetupOwner owner,Action<SetupProgress> progress,CancellationToken cancellation)=>Task.Run(()=>
     {
         NativeInstallFiles.RequireAdministrator();requested?.Require(DateTimeOffset.UtcNow);
         if(File.Exists(InstallLocations.RemovalStateFile))throw new IOException("UNINSTALL_INCOMPLETE");
         if(File.Exists(InstallLocations.UpgradeStateFile))throw new IOException("UPGRADE_INCOMPLETE");
-        SafeDirectory.NoReparseAncestors(InstallLocations.State);SafeDirectory.NoReparseAncestors(InstallLocations.Binaries);
         var manifest=package.Manifest;var version=manifest.Version;InstallLocations.RequireVersion(version);
         if(File.Exists(InstallLocations.StateFile))
         {
             state=ReadState();if(state.OwnerSid!=owner.Sid)throw new UnauthorizedAccessException("INSTALL_OWNER_CHANGED");
             state.Consent.RequireCompatibleRetry(requested);diagnosticsAllowed=true;
-            using(WindowsFileBoundary.PinInstallerRemovalRoot(InstallLocations.State,Application)){}
             ClearResidue();
             switch(state.Phase)
             {
@@ -97,18 +91,17 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
             var installation=Guid.NewGuid().ToString("N");
             state=new(InstallerState.CurrentFormat,installation,Guid.NewGuid().ToString("N"),version,manifest.ZipSha256,manifest.PayloadDigest,manifest.SourceCommit,owner.Sid,port,"preparing",
                 owner.ImageSha256,FirstOwnerBinding.Create(installation,owner.Sid),requested,manifest.Files,InstallLocations.ServiceSid,EmbeddedKeyDigest);
-            NativeInstallFiles.NewDirectory(InstallLocations.State,Immutable);Save("preparing");diagnosticsAllowed=true;
+            NativeInstallFiles.NewDirectory(InstallLocations.State,InstallAcl);Save("preparing");diagnosticsAllowed=true;
         }
         if(new DriveInfo(Path.GetPathRoot(InstallLocations.Binaries)!).AvailableFreeSpace<checked(manifest.Files.Sum(f=>f.Size)*3+536870912L))throw new IOException("DISK_SPACE");
-        if(!Directory.Exists(InstallLocations.Binaries))NativeInstallFiles.NewDirectory(InstallLocations.Binaries,Immutable);
-        else{using(WindowsFileBoundary.PinInstallerRemovalRoot(InstallLocations.Binaries,Application)){}}
+        if(!Directory.Exists(InstallLocations.Binaries))NativeInstallFiles.NewDirectory(InstallLocations.Binaries,InstallAcl);
         // A resumed extraction holds only this package's members and their
         // uncommitted partials; the partials go, committed members stay.
         var (_,partials)=InspectBinaries(Inventory(),false,false,"INSTALL_TARGET_CHANGED");
-        foreach(var partial in partials)WindowsFileBoundary.DeleteRemovalMember(Path.Combine(InstallLocations.Binaries,partial.Replace('/',Path.DirectorySeparatorChar)),false,Application);
-        var root=InstallLocations.VersionRoot(version);NativeInstallFiles.EnsureStageDirectory(InstallLocations.Binaries,root,Immutable);
+        foreach(var partial in partials)WindowsFileBoundary.DeleteNoFollow(Path.Combine(InstallLocations.Binaries,partial.Replace('/',Path.DirectorySeparatorChar)),false);
+        var root=InstallLocations.VersionRoot(version);NativeInstallFiles.EnsureDirectoryUnder(InstallLocations.Binaries,root);
         package.Extract(root,p=>progress(new("extracting",10+p*50/100)),cancellation,new ExtractTarget(
-            directory=>NativeInstallFiles.EnsureStageDirectory(root,directory,Immutable),path=>NativeInstallFiles.CreateNewFile(path,ImmutableFile),
+            directory=>NativeInstallFiles.EnsureDirectoryUnder(root,directory),NativeInstallFiles.CreateNewFile,
             NativeInstallFiles.CommitNew,VerifyOwned));
     },cancellation);
 
@@ -116,11 +109,10 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
     private static string? EmbeddedKeyDigest=>TrustedReleaseKey.Embedded is {} key?TrustedReleaseKey.Digest(key):null;
     private InstallMember[] Inventory(){var image=InstallLocations.InstallerImage(state!.Version);return RemovalIntent.Inventory(state,File.Exists(image)?new FileInfo(image).Length:0);}
     private static readonly string EmptySha256=Convert.ToHexStringLower(SHA256.HashData([]));
-    // A present immutable member must be administrator-owned, read-only to the
-    // Runtime and byte-identical to its record.
+    // A present immutable member must be byte-identical to its record.
     private static bool VerifyOwned(string path,InstallMember record)
     {
-        using var file=WindowsFileBoundary.OpenBootstrapForInstaller(path,Application);
+        using var file=WindowsFileBoundary.OpenRead(path);
         return file.Length==record.Size&&(record.Size==0?record.Sha256==EmptySha256:file.Sha256(record.Size)==record.Sha256);
     }
     // The binary root holds exactly the recorded members (or, when not
@@ -128,7 +120,7 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
     private static (RemovalTree? Tree,string[] Partials) InspectBinaries(InstallMember[] inventory,bool complete,bool verify,string code)
     {
         if(!Directory.Exists(InstallLocations.Binaries)){if(complete)throw new IOException(code);return(null,[]);}
-        var tree=RemovalTree.Inspect(InstallLocations.Binaries,(path,directory)=>WindowsFileBoundary.ValidateRemovalMember(path,directory,Application));
+        var tree=RemovalTree.Inspect(InstallLocations.Binaries,WindowsFileBoundary.RequireNoLink);
         string Relative(string path)=>Path.GetRelativePath(InstallLocations.Binaries,path).Replace('\\','/');
         string[] partials;
         try{partials=InstallPackage.RequireExtractedInventory(inventory.Select(f=>f.Path),tree.Files.Select(Relative),tree.Directories.Select(Relative));}
@@ -144,29 +136,25 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
     }
     // Interrupted record replacements leave only owned partials beside them.
     private void ClearResidue()
-    {foreach(var directory in new[]{InstallLocations.State,Secrets,Dataset})FullInstallerResidue.Clear(directory,Application);}
-    private static void EnsureDirectory(string path,bool mutable)
-    {
-        if(!Directory.Exists(path)){NativeInstallFiles.NewDirectory(path,mutable?Mutable:Immutable);return;}
-        if(mutable)WindowsFileBoundary.ValidateRemovalMember(path,true,Application);else{using(WindowsFileBoundary.PinInstallerRemovalRoot(path,Application)){}}
-    }
+    {foreach(var directory in new[]{InstallLocations.State,Secrets,Dataset})FullInstallerResidue.Clear(directory);}
+    private static void EnsureDirectory(string path,string? acl=null){if(!Directory.Exists(path))NativeInstallFiles.NewDirectory(path,acl);}
 
     public Task PublishServiceAsync(SetupOwner owner,Action<SetupProgress> progress,CancellationToken cancellation)=>Task.Run(()=>
     {
         operationPhase=UninstallPhase.FullProvision;
         if(existing)return;
         if(state?.Phase!="preparing")throw new IOException("INSTALL_NOT_PREPARED");
-        EnsureDirectory(Path.Combine(InstallLocations.State,"datasets"),false);EnsureDirectory(Dataset,false);EnsureDirectory(DataPath,true);
-        EnsureDirectory(Path.Combine(InstallLocations.State,"temporary"),true);EnsureDirectory(Secrets,false);
-        if(!File.Exists(MasterKey))NativeInstallFiles.PublishNewProtectedFile(MasterKey,Encoding.UTF8.GetBytes(Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))),ImmutableFile);
-        if(Convert.FromBase64String(Encoding.UTF8.GetString(NativeInstallFiles.ReadOwned(MasterKey,InstallLocations.ServiceSid))).Length!=32)throw new IOException("INSTALL_KEY_INVALID");
+        EnsureDirectory(Path.Combine(InstallLocations.State,"datasets"));EnsureDirectory(Dataset);EnsureDirectory(DataPath,DataAcl);
+        EnsureDirectory(Path.Combine(InstallLocations.State,"temporary"),DataAcl);EnsureDirectory(Secrets);
+        if(!File.Exists(MasterKey))NativeInstallFiles.PublishNew(MasterKey,Encoding.UTF8.GetBytes(Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))));
+        if(Convert.FromBase64String(Encoding.UTF8.GetString(NativeInstallFiles.ReadRecord(MasterKey))).Length!=32)throw new IOException("INSTALL_KEY_INVALID");
         if(File.Exists(InstallLocations.LaunchFile))
         {
             // A kept installation keeps its launch file; it must still be this one.
-            var launch=InstalledLaunch.Parse(NativeInstallFiles.ReadOwned(InstallLocations.LaunchFile,InstallLocations.ServiceSid));
+            var launch=InstalledLaunch.Parse(NativeInstallFiles.ReadRecord(InstallLocations.LaunchFile));
             if(launch.InstallationId!=state.InstallationId||launch.DataId!=state.DataId||launch.Port!=state.Port)throw new IOException("INSTALL_STATE_INVALID");
         }
-        else NativeInstallFiles.PublishNewProtectedFile(InstallLocations.LaunchFile,InstalledLaunch.Encode(new(1,state.InstallationId,state.DataId,state.Port,"http://127.0.0.1:"+state.Port)),ImmutableFile);
+        else NativeInstallFiles.PublishNew(InstallLocations.LaunchFile,InstalledLaunch.Encode(new(1,state.InstallationId,state.DataId,state.Port,"http://127.0.0.1:"+state.Port)));
         RenewCapability();
         var image=InstallLocations.InstallerImage(state.Version);
         var setup=new InstallMember(RemovalIntent.SetupMember(state.Version),new FileInfo(Environment.ProcessPath!).Length,state.SetupSha256);
@@ -177,7 +165,7 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
         {
             var record=new InstallMember(TrustedReleaseKey.InstalledName,TrustedReleaseKey.SpkiBytes,digest);
             if(File.Exists(InstallLocations.ReleaseKeyFile)){if(!VerifyOwned(InstallLocations.ReleaseKeyFile,record))throw new IOException("INSTALL_TARGET_CHANGED");}
-            else NativeInstallFiles.PublishNewProtectedFile(InstallLocations.ReleaseKeyFile,TrustedReleaseKey.Embedded??throw new IOException("INSTALL_TARGET_CHANGED"),ImmutableFile);
+            else NativeInstallFiles.PublishNew(InstallLocations.ReleaseKeyFile,TrustedReleaseKey.Embedded??throw new IOException("INSTALL_TARGET_CHANGED"));
         }
         progress(new("installing_service",75));
         UpgradeFiles.EnsureUpdaterState(state.Consent.Automatic);
@@ -192,7 +180,7 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
         var partial=target+".partial-"+Guid.NewGuid().ToString("N");
         try
         {
-            using(var input=new FileStream(source,FileMode.Open,FileAccess.Read,FileShare.Read))using(var output=NativeInstallFiles.CreateNewFile(partial,ImmutableFile))
+            using(var input=new FileStream(source,FileMode.Open,FileAccess.Read,FileShare.Read))using(var output=NativeInstallFiles.CreateNewFile(partial))
             {
                 if(input.Length!=record.Size||Convert.ToHexStringLower(SHA256.HashData(input))!=record.Sha256)throw new IOException("INSTALL_TARGET_CHANGED");
                 input.Position=0;input.CopyTo(output);output.Flush(true);
@@ -205,7 +193,7 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
     private void RenewCapability()
     {
         setupToken=Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+','-').Replace('/','_');
-        NativeInstallFiles.PublishProtectedFile(Capability,Json(new{token=setupToken,expiresAt=DateTimeOffset.UtcNow.AddMinutes(15).ToUnixTimeMilliseconds(),firstOwner=state!.FirstOwner}),ImmutableFile);
+        NativeInstallFiles.Publish(Capability,Json(new{token=setupToken,expiresAt=DateTimeOffset.UtcNow.AddMinutes(15).ToUnixTimeMilliseconds(),firstOwner=state!.FirstOwner}));
     }
     internal static void Register(InstallerState state)
     {
@@ -249,7 +237,7 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
             await service.StopAsync(cancellation);RenewCapability();await service.StartAsync(cancellation);
             if(await SetupState()!="ready")throw new IOException("SERVER_NOT_READY");
         }
-        else if(existing&&setup=="ready")setupToken=NativeJson.Read<JsonElement>(NativeInstallFiles.ReadOwned(Capability,InstallLocations.ServiceSid)).GetProperty("token").GetString();
+        else if(existing&&setup=="ready")setupToken=NativeJson.Read<JsonElement>(NativeInstallFiles.ReadRecord(Capability)).GetProperty("token").GetString();
         else if(setup!="ready")throw new IOException("SERVER_NOT_READY");
         await updater.StartAsync(cancellation);
         var lan=await network.ObserveAsync(cancellation);FullInstallDiagnostics.DeleteOwned(state);
@@ -263,16 +251,9 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
         foreach(var partial in partials)
         {
             var suffix=Path.GetFileName(partial)[prefix.Length..];if(!Guid.TryParseExact(suffix,"N",out var id)||id.ToString("N")!=suffix)throw new IOException("UNINSTALL_INTENT_INVALID");
-            using(WindowsFileBoundary.OpenInstallerMetadata(partial)){}File.Delete(partial);
+            File.Delete(partial);
         }
-        NativeInstallFiles.PublishProtectedFile(path,Json(intent),AdminFile);
-    }
-    private static void ValidateStateMember(string path,bool directory,WindowsFileBoundary.DataLease? data)
-    {
-        // The held process.lock cannot be opened again; its identity and ACL
-        // are checked through the lease itself.
-        if(!directory&&data?.TryValidateHeldGate(path,acl=>WindowsFileBoundary.ValidateAcl(acl,Application,false))==true)return;
-        WindowsFileBoundary.ValidateRemovalMember(path,directory,Application);
+        NativeInstallFiles.Publish(path,Json(intent));
     }
     public async Task<SetupResult> UninstallAsync(SetupOwner owner,Action<SetupProgress> progress,CancellationToken cancellation,UninstallMode mode=UninstallMode.KeepData)
     {
@@ -281,8 +262,7 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
         RemovalIntent? intent=null;
         if(File.Exists(InstallLocations.RemovalStateFile))
         {
-            using(var receipt=WindowsFileBoundary.OpenInstallerMetadata(InstallLocations.RemovalStateFile))
-            {var bytes=receipt.Small(16777216);RequireCurrentFormat(bytes);intent=NativeJson.Read<RemovalIntent>(bytes);}
+            var bytes=NativeInstallFiles.ReadRecord(InstallLocations.RemovalStateFile);RequireCurrentFormat(bytes);intent=NativeJson.Read<RemovalIntent>(bytes);
             intent.Require();state=intent.State;
             if(intent.Mode!=mode)throw new IOException("UNINSTALL_MODE_CHANGED");
             if(File.Exists(InstallLocations.StateFile))intent.RequireSameInstallation(ReadState());
@@ -312,14 +292,14 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
             operationPhase=UninstallPhase.AcquireDataLease;
             // STOPPED is not proof of writer cleanup: the data lease is held
             // across every check and destructive step that follows.
-            using(var data=Directory.Exists(DataPath)?WindowsFileBoundary.AcquireInstallerDataLease(DataPath,Application):null)
+            using(var data=Directory.Exists(DataPath)?WindowsFileBoundary.AcquireDataLease(DataPath):null)
             {
                 service?.RequireFencedStoppedForRemoval();updater?.RequireFencedStoppedForRemoval();
                 if(intent is null)
                 {
                     operationPhase=UninstallPhase.InspectData;
                     var inventory=Inventory();_=InspectBinaries(inventory,state.Phase=="committed",true,"UNINSTALL_UNOWNED_FILE_PRESERVED");
-                    if(mode==UninstallMode.DeleteData&&Directory.Exists(InstallLocations.State))_=RemovalTree.Inspect(InstallLocations.State,(path,directory)=>ValidateStateMember(path,directory,data));
+                    if(mode==UninstallMode.DeleteData&&Directory.Exists(InstallLocations.State))_=RemovalTree.Inspect(InstallLocations.State,WindowsFileBoundary.RequireNoLink);
                     operationPhase=UninstallPhase.WriteRemovalReceipt;
                     state=state with{Phase=UninstallChoice.Phase(mode)};intent=new(InstallerState.CurrentFormat,state,mode,inventory,"prepared");SaveRemoval(intent);Save(state.Phase);
                 }
@@ -342,9 +322,9 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
             if(mode==UninstallMode.DeleteData&&Directory.Exists(InstallLocations.State))
             {
                 operationPhase=UninstallPhase.DeleteData;
-                var tree=RemovalTree.Inspect(InstallLocations.State,(path,directory)=>WindowsFileBoundary.ValidateRemovalMember(path,directory,Application));
-                tree.DeleteContents((path,directory)=>WindowsFileBoundary.DeleteRemovalMember(path,directory,Application),p=>progress(new("deleting_data",25+p*50/100)),cancellation);
-                operationPhase=UninstallPhase.DeleteDataRoot;WindowsFileBoundary.DeleteRemovalMember(InstallLocations.State,true,Application);
+                var tree=RemovalTree.Inspect(InstallLocations.State,WindowsFileBoundary.RequireNoLink);
+                tree.DeleteContents(WindowsFileBoundary.DeleteNoFollow,p=>progress(new("deleting_data",25+p*50/100)),cancellation);
+                operationPhase=UninstallPhase.DeleteDataRoot;WindowsFileBoundary.DeleteNoFollow(InstallLocations.State,true);
             }
             else if(mode==UninstallMode.KeepData)
             {
@@ -359,8 +339,8 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
             var(tree,_)=InspectBinaries(intent.Binaries,false,true,"UNINSTALL_UNOWNED_FILE_PRESERVED");
             if(tree is not null)
             {
-                tree.DeleteContents((path,directory)=>WindowsFileBoundary.DeleteRemovalMember(path,directory,Application),p=>progress(new("deleting_files",75+p*20/100)),cancellation);
-                WindowsFileBoundary.DeleteRemovalMember(InstallLocations.Binaries,true,Application);
+                tree.DeleteContents(WindowsFileBoundary.DeleteNoFollow,p=>progress(new("deleting_files",75+p*20/100)),cancellation);
+                WindowsFileBoundary.DeleteNoFollow(InstallLocations.Binaries,true);
             }
             intent=intent with{Stage="binaries_removed"};SaveRemoval(intent);
         }
@@ -368,7 +348,7 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
         // The protected receipt is deleted last: a failed final step still has
         // the complete owner, mode and inventory for the same bounded retry.
         operationPhase=UninstallPhase.DeleteDiagnostic;FullInstallDiagnostics.DeleteOwned(state);
-        operationPhase=UninstallPhase.DeleteReceipt;using(WindowsFileBoundary.OpenInstallerMetadata(InstallLocations.RemovalStateFile)){}File.Delete(InstallLocations.RemovalStateFile);diagnosticsAllowed=false;
+        operationPhase=UninstallPhase.DeleteReceipt;File.Delete(InstallLocations.RemovalStateFile);diagnosticsAllowed=false;
         progress(new("removed",100));
         return new(true,mode==UninstallMode.DeleteData?"REMOVED_ALL":"REMOVED",LocalUrl,DataPreserved:mode==UninstallMode.KeepData,FullProfileInstallationId:state.InstallationId);
     }

@@ -54,23 +54,19 @@ internal static class ServiceStartupFailureTests
             foreach(var status in new[]{(1u,123u),(2u,0u),(3u,123u),(4u,0u),(4u,123u)})Refuse(()=>NativeService.RequireStopped(status.Item1,status.Item2));
             return Task.CompletedTask;
         });
-        await check("retained lease validates only its exact gate metadata while excluding another writer",()=>
+        await check("a held lease leaves its gate inspectable while excluding every other reader and writer",()=>
         {
-            var temporary=Path.GetFullPath(Path.GetTempPath());var root=SafeDirectory.CreatePrivateSession(temporary);WindowsFileBoundary.DataLease? lease=null;
+            var temporary=Path.GetFullPath(Path.GetTempPath());var root=PrivateSession.Create(temporary);WindowsFileBoundary.DataLease? lease=null;
             if(!Path.GetFullPath(root).StartsWith(temporary.TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))throw new Exception("PRIVATE_TEST_SCOPE");
             try
             {
-                lease=WindowsFileBoundary.AcquireDataLease(root);var gate=Path.Combine(root,"process.lock");var observed=false;
-                Require(lease.TryValidateHeldGate(gate,acl=>{Require(acl.Owner==WindowsIdentity.GetCurrent().Owner);observed=true;}));Require(observed);
-                try{using var read=WindowsFileBoundary.OpenPrivateRead(gate);throw new Exception("EXCLUSIVE_GATE_REOPENED");}catch(Win32Exception error)when(error.NativeErrorCode==32){}
+                lease=WindowsFileBoundary.AcquireDataLease(root);var gate=Path.Combine(root,"process.lock");
+                WindowsFileBoundary.RequireNoLink(gate,false);
+                try{using var read=WindowsFileBoundary.OpenRead(gate);throw new Exception("EXCLUSIVE_GATE_REOPENED");}catch(Win32Exception error)when(error.NativeErrorCode==32){}
                 try{using var writer=WindowsFileBoundary.AcquireDataLease(root);throw new Exception("SECOND_WRITER_ADMITTED");}catch(Win32Exception error)when(error.NativeErrorCode==32){}
-                var other=Path.Combine(root,"other");Directory.CreateDirectory(other);File.WriteAllBytes(Path.Combine(other,"process.lock"),[]);
-                Require(!lease.TryValidateHeldGate(Path.Combine(other,"process.lock"),_=>throw new Exception("FOREIGN_GATE_TRUSTED")));
-                Require(!lease.TryValidateHeldGate(Path.Combine(root,"other-file"),_=>throw new Exception("ARBITRARY_FILE_TRUSTED")));
-                Refuse(()=>lease.TryValidateHeldGate(gate,_=>throw new IOException("ROLE_METADATA_REFUSED")));
-                lease.Dispose();Refuse(()=>lease.TryValidateHeldGate(gate,_=>throw new Exception("CLOSED_GATE_TRUSTED")));lease=null;
+                lease.Dispose();lease=null;
             }
-            finally{lease?.Dispose();SafeDirectory.NoReparseAncestors(root);Directory.Delete(root,true);}
+            finally{lease?.Dispose();Directory.Delete(root,true);}
             return Task.CompletedTask;
         });
         await check("failure action readback refuses a missing, repeated or altered restart, reset or extra action",()=>

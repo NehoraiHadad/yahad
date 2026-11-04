@@ -60,7 +60,6 @@ internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildCont
         cancellation.ThrowIfCancellationRequested();
         var image=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(spec.Image));
         var ffmpeg=WindowsFileBoundary.CanonicalLocalPath(Path.GetFullPath(spec.PrivateFFmpeg));
-        SafeDirectory.NoReparseAncestors(image);SafeDirectory.NoReparseAncestors(spec.WorkingDirectory);SafeDirectory.NoReparseAncestors(spec.PrivateTemporaryDirectory);
         IChildControl? channel=null;LaunchLease? handoff=null;
         try
         {
@@ -112,11 +111,10 @@ internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildCont
     }
     private sealed class LaunchLease:IDisposable
     {
-        private readonly string directory,path,nonce;private IDisposable? pin;
+        private readonly string directory,path,nonce;
         internal LaunchLease(string temporary,Dictionary<string,string> environment)
         {
             directory=Path.Combine(temporary,"launch-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
-            using var check=WindowsFileBoundary.PinPrivateDirectory(directory);
             path=Path.Combine(directory,"lease.json");nonce=Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
             environment.Add("YAHAD_NATIVE_LEASE_FILE",path);environment.Add("YAHAD_NATIVE_LEASE_NONCE",nonce);
         }
@@ -125,9 +123,8 @@ internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,IChildCont
             var remote=lease.DuplicateTo(child);
             var bytes=JsonSerializer.SerializeToUtf8Bytes(new HostLeaseGrant(1,pid,remote,data,nonce));
             using(var output=new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.None,4096,FileOptions.WriteThrough)){output.Write(bytes);output.Flush(true);}
-            pin=WindowsFileBoundary.OpenPrivateRead(path);
         }
-        public void Dispose(){pin?.Dispose();if(File.Exists(path))File.Delete(path);Directory.Delete(directory,false);}
+        public void Dispose(){if(File.Exists(path))File.Delete(path);Directory.Delete(directory,false);}
     }
     private sealed class Session(JobProcess job,IChildControl channel,LaunchLease? handoff,Exception? startFailure=null):IContainedAppSession
     {

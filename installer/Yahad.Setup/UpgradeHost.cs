@@ -1,6 +1,5 @@
 using System.IO;
 using System.Net.Http;
-using System.Security.Principal;
 using System.Text.Json;
 using Yahad.Install;
 namespace Yahad.Setup;
@@ -9,33 +8,27 @@ internal sealed record UpgradeOutcome(SetupResult Result,string? From=null,strin
 {internal int Exit=>UpgradeRules.Exit(Result.Code);}
 internal static class UpgradeFiles
 {
-    private static SecurityIdentifier Application=>new(InstallLocations.ServiceSid);
-    internal static string Immutable=>NativeInstallFiles.Descriptor(InstallLocations.ServiceSid);
-    internal static string ImmutableFile=>NativeInstallFiles.FileDescriptor(InstallLocations.ServiceSid);
-    internal static string AdminFile=>NativeInstallFiles.FileDescriptor();
     internal static string Versions=>Path.Combine(InstallLocations.Binaries,"versions");
-    // Same ownership checks as removal: nothing unexpected is deleted through here.
+    // Same link checks as removal: a link is never followed out of the tree.
     internal static void Remove(string path)
     {
         if(!Directory.Exists(path))return;
-        var tree=RemovalTree.Inspect(path,(member,directory)=>WindowsFileBoundary.ValidateRemovalMember(member,directory,Application));
-        tree.DeleteContents((member,directory)=>WindowsFileBoundary.DeleteRemovalMember(member,directory,Application),_=>{},CancellationToken.None);
-        WindowsFileBoundary.DeleteRemovalMember(tree.Root,true,Application);
+        var tree=RemovalTree.Inspect(path,WindowsFileBoundary.RequireNoLink);
+        tree.DeleteContents(WindowsFileBoundary.DeleteNoFollow,_=>{},CancellationToken.None);
+        WindowsFileBoundary.DeleteNoFollow(tree.Root,true);
     }
     // The Updater's own folder and mode record, which outlive any one release.
     internal static void EnsureUpdaterState(bool automatic)
     {
         var root=InstalledLayout.UpdaterRoot;
-        if(!Directory.Exists(root))NativeInstallFiles.NewDirectory(root,NativeInstallFiles.Descriptor());
-        else{using(WindowsFileBoundary.PinInstallerRemovalRoot(root,Application)){}}
+        if(!Directory.Exists(root))NativeInstallFiles.NewDirectory(root);
         var state=Path.Combine(root,"state.json");
-        if(!File.Exists(state))NativeInstallFiles.PublishNewProtectedFile(state,UpdaterRecord.Seed(automatic).Encode(),AdminFile);
+        if(!File.Exists(state))NativeInstallFiles.PublishNew(state,UpdaterRecord.Seed(automatic).Encode());
     }
-    internal static void Save(UpgradeState state)=>NativeInstallFiles.PublishProtectedFile(InstallLocations.UpgradeStateFile,state.Encode(),AdminFile);
+    internal static void Save(UpgradeState state)=>NativeInstallFiles.Publish(InstallLocations.UpgradeStateFile,state.Encode());
     internal static UpgradeState Load()
-    {using var file=WindowsFileBoundary.OpenInstallerMetadata(InstallLocations.UpgradeStateFile);return UpgradeState.Parse(file.Small(33554432));}
-    internal static void DeleteState()
-    {using(WindowsFileBoundary.OpenInstallerMetadata(InstallLocations.UpgradeStateFile)){}File.Delete(InstallLocations.UpgradeStateFile);}
+    {InstallLocations.RequireStateRoot();return UpgradeState.Parse(NativeInstallFiles.ReadRecord(InstallLocations.UpgradeStateFile,33554432));}
+    internal static void DeleteState()=>File.Delete(InstallLocations.UpgradeStateFile);
     internal static InstallerState ReadInstalled()
     {
         if(File.Exists(InstallLocations.RemovalStateFile)||!File.Exists(InstallLocations.StateFile))throw new IOException("NOT_INSTALLED");
@@ -112,7 +105,7 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
     private static byte[]? InstalledKey()
     {
         var path=InstallLocations.ReleaseKeyFile;if(!File.Exists(path))return null;
-        return NativeInstallFiles.ReadOwned(path,InstallLocations.ServiceSid);
+        return NativeInstallFiles.ReadRecord(path);
     }
     // The directory is not trusted: exactly one manifest, read once, and only
     // those bytes are verified and parsed.
@@ -165,7 +158,7 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
     private string LocalUrl=>"http://127.0.0.1:"+installed.Port+"/";
     private UpgradeOutcome Result(string code,bool rolledBack=false,Exception? failure=null)
         =>new(new(code is "UPGRADED" or "REPAIRED",code,LocalUrl,Failure:failure is null?null:SetupFailureDetail.From(failure)),state.From,state.To,rolledBack);
-    private static void ClearStateResidue()=>FullInstallerResidue.Clear(InstallLocations.State,new SecurityIdentifier(InstallLocations.ServiceSid));
+    private static void ClearStateResidue()=>FullInstallerResidue.Clear(InstallLocations.State);
     private void Prepare(InstallPackage package,long setupBytes)
     {
         // The space for the new release and its database copy, on both volumes.
@@ -175,9 +168,9 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
         // Anything here is left from an earlier failed attempt at this version,
         // never the running one: the release is newer than everything retained.
         UpgradeFiles.Remove(TargetPartial);UpgradeFiles.Remove(TargetRoot);
-        var partial=TargetPartial;NativeInstallFiles.EnsureStageDirectory(UpgradeFiles.Versions,partial,UpgradeFiles.Immutable);
+        var partial=TargetPartial;NativeInstallFiles.EnsureDirectoryUnder(UpgradeFiles.Versions,partial);
         package.Extract(partial,p=>progress(new("extracting",p)),CancellationToken.None,new ExtractTarget(
-            directory=>NativeInstallFiles.EnsureStageDirectory(partial,directory,UpgradeFiles.Immutable),path=>NativeInstallFiles.CreateNewFile(path,UpgradeFiles.ImmutableFile),
+            directory=>NativeInstallFiles.EnsureDirectoryUnder(partial,directory),NativeInstallFiles.CreateNewFile,
             NativeInstallFiles.CommitNew,(_,_)=>false));
         NativeSetupHost.CopyVerified(Environment.ProcessPath!,Path.Combine(partial,RemovalIntent.SetupImage),new(RemovalIntent.SetupImage,setupBytes,state.Target.SetupSha256));
         Directory.Move(partial,TargetRoot);
@@ -232,7 +225,7 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
         {
             var previous=new RetainedRelease(state.From,installed.SetupSha256,new FileInfo(InstallLocations.InstallerImage(state.From)).Length,installed.Files);
             var next=installed with{Version=state.To,PackageDigest=state.Target.PackageDigest,PayloadDigest=state.Target.PayloadDigest,SourceCommit=state.Target.SourceCommit,SetupSha256=state.Target.SetupSha256,Files=state.Target.Files,Previous=previous};
-            next.Require();NativeInstallFiles.PublishProtectedFile(InstallLocations.StateFile,JsonSerializer.SerializeToUtf8Bytes(next),UpgradeFiles.AdminFile);installed=next;
+            next.Require();NativeInstallFiles.Publish(InstallLocations.StateFile,JsonSerializer.SerializeToUtf8Bytes(next));installed=next;
         }
         else if(installed.Version!=state.To)throw new IOException("INSTALL_STATE_INVALID");
         Advance("committed");NativeSetupHost.Register(installed);RepairTask.Register(installed.Version,DateTimeOffset.Now);

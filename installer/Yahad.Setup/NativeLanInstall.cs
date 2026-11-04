@@ -27,32 +27,29 @@ internal sealed class NativeLanInstall(InstallerState application)
     private static string RootCertificate=>Path.Combine(LanProxyPaths.Data,"pki","authorities","local","root.crt");
     private static byte[] Json<T>(T value)=>JsonSerializer.SerializeToUtf8Bytes(value);
     private static string Hash(byte[] bytes)=>Convert.ToHexStringLower(SHA256.HashData(bytes));
-    private void Record(string path,byte[] bytes)
-    {
-        if(File.Exists(path))NativeInstallFiles.ReplaceOwned(path,bytes);else NativeInstallFiles.WriteNew(path,bytes);
-    }
+    private static void Record(string path,byte[] bytes)=>NativeInstallFiles.Publish(path,bytes);
     private bool PreparationMatches(LanSetupRequest request,bool requireSameSelection)
     {
         if(!File.Exists(PreparationFile))return false;
-        using var file=WindowsFileBoundary.OpenInstallerMetadata(PreparationFile);var intent=NativeJson.Read<LanPreparation>(file.Small(8192));
+        var intent=NativeJson.Read<LanPreparation>(NativeInstallFiles.ReadRecord(PreparationFile,8192));
         LanRecoveryPolicy.RequirePreparation(intent,application,requireSameSelection?request:null);return true;
     }
     private static void RemovePreparation()
-    {if(File.Exists(PreparationFile)){using(var pin=WindowsFileBoundary.OpenInstallerMetadata(PreparationFile)){}File.Delete(PreparationFile);}}
+    {if(File.Exists(PreparationFile))File.Delete(PreparationFile);}
     private LanOwnedState? Read(bool removing=false,bool preparing=false)
     {
         LanOwnedState owned;
         if(File.Exists(RemovalFile))
         {
             if(!removing)throw new IOException("LAN_UNINSTALL_INCOMPLETE");
-            using var removal=WindowsFileBoundary.OpenInstallerMetadata(RemovalFile);var intent=NativeJson.Read<LanRemovalIntent>(removal.Small(1048576));
+            var intent=NativeJson.Read<LanRemovalIntent>(NativeInstallFiles.ReadRecord(RemovalFile,1048576));
             LanRecoveryPolicy.RequireRemoval(intent,application);owned=intent.State;
         }
         else
         {
             if(removing&&!File.Exists(StateFile)&&File.Exists(PreparationFile))
             {
-                using var prep=WindowsFileBoundary.OpenInstallerMetadata(PreparationFile);var pending=NativeJson.Read<LanPreparation>(prep.Small(8192));
+                var pending=NativeJson.Read<LanPreparation>(NativeInstallFiles.ReadRecord(PreparationFile,8192));
                 LanRecoveryPolicy.RequirePreparation(pending,application);
                 if(!LanServiceRegistration.Exists()&&!Directory.Exists(LanProxyPaths.State)&&!Directory.Exists(LanProxyPaths.Binaries))return null;
                 var sid=pending.ServiceSid;
@@ -64,8 +61,9 @@ internal sealed class NativeLanInstall(InstallerState application)
             else
             {
                 if(!Directory.Exists(LanProxyPaths.State))return null;
+                WindowsFileBoundary.RequireAdministratorOwned(LanProxyPaths.State);
                 if(!File.Exists(StateFile)){if(preparing)return null;throw new IOException("LAN_OWNERSHIP_MISSING");}
-                using var file=WindowsFileBoundary.OpenInstallerMetadata(StateFile);owned=NativeJson.Read<LanOwnedState>(file.Small(1048576));
+                owned=NativeJson.Read<LanOwnedState>(NativeInstallFiles.ReadRecord(StateFile,1048576));
             }
         }
         if(owned.Format!=1||owned.InstallationId!=application.InstallationId||owned.OwnerSid!=application.OwnerSid||
@@ -80,17 +78,15 @@ internal sealed class NativeLanInstall(InstallerState application)
         [new(state.AdapterId,"selected",state.Address)],state.AdapterId,state.Address,state.AppPort,
         LanProxyPaths.Caddy,LanProxyPaths.Data,LanProxyPaths.PublicJoin,state.HttpHelp);
     private void Save(LanOwnedState state)=>Record(StateFile,Json(state));
-    // The launch file is application-read-only: written whole with its own
-    // protected descriptor, never inheriting from the state root.
-    private byte[] ReadApp(string name)=>NativeInstallFiles.ReadOwned(Path.Combine(InstallLocations.State,name),application.ServiceSid);
+    private byte[] ReadApp(string name)=>NativeInstallFiles.ReadRecord(Path.Combine(InstallLocations.State,name));
     private void WriteAppSnapshot(LanWebSnapshot snapshot)
-    {var parts=LanWebConfiguration.Parts(snapshot);for(var i=0;i<parts.Length;i++)NativeInstallFiles.PublishProtectedFile(Path.Combine(InstallLocations.State,LanWebConfiguration.Names[i]),parts[i],NativeInstallFiles.Descriptor(application.ServiceSid));}
+    {var parts=LanWebConfiguration.Parts(snapshot);for(var i=0;i<parts.Length;i++)NativeInstallFiles.Publish(Path.Combine(InstallLocations.State,LanWebConfiguration.Names[i]),parts[i]);}
     private void RecoverWebJournal()
     {
         if(!File.Exists(JournalFile))return;
-        using var file=WindowsFileBoundary.OpenInstallerMetadata(JournalFile);var journal=NativeJson.Read<LanWebJournal>(file.Small(131072));
+        var journal=NativeJson.Read<LanWebJournal>(NativeInstallFiles.ReadRecord(JournalFile,131072));
         LanWebConfiguration.RequireRecoverable(journal,application,ReadApp);WriteAppSnapshot(journal.Before);
-        file.Dispose();File.Delete(JournalFile);
+        File.Delete(JournalFile);
     }
     // The caller has stopped the Runtime service before this bounded old/new
     // recovery of the launch file.
@@ -100,19 +96,14 @@ internal sealed class NativeLanInstall(InstallerState application)
         RecoverWebJournal();var before=LanWebConfiguration.Read(ReadApp);var after=LanWebConfiguration.WithOrigin(before,application,origin);
         Record(JournalFile,Json(new LanWebJournal(1,application.InstallationId,before,after)));WriteAppSnapshot(after);
     }
-    private static void CompleteWebChange(){if(File.Exists(JournalFile)){using(var pin=WindowsFileBoundary.OpenInstallerMetadata(JournalFile)){}File.Delete(JournalFile);}}
-    private static void MakeDirectory(string path,string descriptor,string serviceSid)
-    {
-        if(!Directory.Exists(path))NativeInstallFiles.NewDirectory(path,descriptor);
-        else if(path==LanProxyPaths.Data||path==LanProxyPaths.Temporary)WindowsFileBoundary.ValidateRemovalMember(path,true,new System.Security.Principal.SecurityIdentifier(serviceSid));
-        else{using var pin=WindowsFileBoundary.PinInstallerRemovalRoot(path,new System.Security.Principal.SecurityIdentifier(serviceSid));}
-    }
+    private static void CompleteWebChange(){if(File.Exists(JournalFile))File.Delete(JournalFile);}
+    private static void MakeDirectory(string path,string? acl=null){if(!Directory.Exists(path))NativeInstallFiles.NewDirectory(path,acl);}
     private byte[] PayloadBytes(string relative,int bound=65536)
     {
         var member=application.Files.SingleOrDefault(f=>f.Path=="payload/"+relative)??throw new IOException("LAN_PAYLOAD_NOT_SUPPORTED");
         if(member.Size>bound)throw new IOException("LAN_PAYLOAD_NOT_SUPPORTED");
         var path=Path.Combine(InstallLocations.VersionRoot(application.Version),"payload",relative.Replace('/',Path.DirectorySeparatorChar));
-        SafeDirectory.NoReparseAncestors(path);using var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read);
+        using var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read);
         if(file.Length!=member.Size)throw new IOException("LAN_PAYLOAD_CHANGED");using var memory=new MemoryStream();file.CopyTo(memory);var bytes=memory.ToArray();
         if(Hash(bytes)!=member.Sha256)throw new IOException("LAN_PAYLOAD_CHANGED");return bytes;
     }
@@ -134,28 +125,28 @@ internal sealed class NativeLanInstall(InstallerState application)
     }
     private void PublishBinaries(LanOwnedState owned)
     {
-        var descriptor=NativeInstallFiles.Descriptor(owned.ServiceSid);
         foreach(var member in owned.Files)
         {
             var target=Path.Combine(LanProxyPaths.Binaries,member.Path.Replace('/',Path.DirectorySeparatorChar));
-            NativeInstallFiles.EnsureStageDirectory(LanProxyPaths.Binaries,Path.GetDirectoryName(target)!,descriptor);
+            NativeInstallFiles.EnsureDirectoryUnder(LanProxyPaths.Binaries,Path.GetDirectoryName(target)!);
             if(File.Exists(target)){VerifyBinary(target,member);continue;}
             var version=InstallLocations.VersionRoot(application.Version);
             var source=member.Path=="caddy.exe"?Path.Combine(version,"payload","runtime","caddy","caddy.exe"):Path.Combine(version,member.Path.Replace('/',Path.DirectorySeparatorChar));
-            SafeDirectory.NoReparseAncestors(source);using var input=new FileStream(source,FileMode.Open,FileAccess.Read,FileShare.Read);
+            using var input=new FileStream(source,FileMode.Open,FileAccess.Read,FileShare.Read);
             if(input.Length!=member.Size||Convert.ToHexStringLower(SHA256.HashData(input))!=member.Sha256)throw new IOException("LAN_PAYLOAD_CHANGED");
             input.Position=0;using(var output=NativeInstallFiles.CreateNewFile(target)){input.CopyTo(output);output.Flush(true);}VerifyBinary(target,member);
         }
     }
     private static void VerifyBinary(string path,LanOwnedFile member)
     {
-        SafeDirectory.NoReparseAncestors(path);using var input=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read);
+        using var input=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read);
         if(input.Length!=member.Size||Convert.ToHexStringLower(SHA256.HashData(input))!=member.Sha256)throw new IOException("LAN_BINARY_CHANGED");
     }
     private static byte[] CertificateBytes()
     {
-        SafeDirectory.NoReparseAncestors(RootCertificate);using var file=new FileStream(RootCertificate,FileMode.Open,FileAccess.Read,FileShare.Read);
-        if(file.Length is <64 or >65536)throw new IOException("LAN_CERTIFICATE_INVALID");using var output=new MemoryStream();file.CopyTo(output);return output.ToArray();
+        // The proxy writes this tree, so a link it left there is never followed.
+        using var file=WindowsFileBoundary.OpenRead(RootCertificate);
+        if(file.Length is <64 or >65536)throw new IOException("LAN_CERTIFICATE_INVALID");return file.Small(65536);
     }
     private static async Task ProbeAsync(LanOwnedState owned,LanPublicRoot root,bool requireApplication,CancellationToken cancellation)
     {
@@ -217,8 +208,9 @@ internal sealed class NativeLanInstall(InstallerState application)
         if(owned is null)Record(PreparationFile,Json(new LanPreparation(1,application.InstallationId,application.OwnerSid,application.PayloadDigest,request,sid)));
         await registration.StopAsync(cancellation);registration.RequireConfigurationStop();registration.DisableAutomaticStart();
         if(owned is not null)NativeLanFirewall.Remove(owned.Rules);
-        var immutable=NativeInstallFiles.Descriptor(sid);MakeDirectory(LanProxyPaths.State,immutable,sid);MakeDirectory(LanProxyPaths.Binaries,immutable,sid);
-        MakeDirectory(LanProxyPaths.Data,NativeInstallFiles.Descriptor(sid,true),sid);MakeDirectory(LanProxyPaths.Temporary,NativeInstallFiles.Descriptor(sid,true),sid);MakeDirectory(LanProxyPaths.PublicJoin,immutable,sid);
+        if(Directory.Exists(LanProxyPaths.State))WindowsFileBoundary.RequireAdministratorOwned(LanProxyPaths.State);
+        MakeDirectory(LanProxyPaths.State,NativeInstallFiles.InstallAcl(sid));MakeDirectory(LanProxyPaths.Binaries,NativeInstallFiles.InstallAcl(sid));
+        MakeDirectory(LanProxyPaths.Data,NativeInstallFiles.DataAcl(sid));MakeDirectory(LanProxyPaths.Temporary,NativeInstallFiles.DataAcl(sid));MakeDirectory(LanProxyPaths.PublicJoin);
         var next=new LanOwnedState(1,application.InstallationId,application.OwnerSid,sid,"preparing",request.AdapterId!,request.Address!,application.Port,request.HttpHelp,owned?.RootSha256??"",[],ExpectedBinaries());
         var plan=Plan(next);next=next with{Rules=plan.FirewallRules.ToArray()};Save(next);
         try
@@ -279,12 +271,8 @@ internal sealed class NativeLanInstall(InstallerState application)
     {
         var owned=Read(removing:true);if(owned is null){RemovePreparation();return null;}
         if(File.Exists(RemovalFile))
-        {using var pin=WindowsFileBoundary.OpenInstallerMetadata(RemovalFile);var intent=NativeJson.Read<LanRemovalIntent>(pin.Small(1048576));LanRecoveryPolicy.RequireRemoval(intent,application,mode);}
-        else
-        {
-            Record(RemovalFile,Json(new LanRemovalIntent(1,mode,owned)));
-            NativeInstallFiles.SetOwnedFile(RemovalFile,NativeInstallFiles.Descriptor(owned.ServiceSid));
-        }
+        {var intent=NativeJson.Read<LanRemovalIntent>(NativeInstallFiles.ReadRecord(RemovalFile,1048576));LanRecoveryPolicy.RequireRemoval(intent,application,mode);}
+        else Record(RemovalFile,Json(new LanRemovalIntent(1,mode,owned)));
         // A partially removed state may no longer contain owner.json or the CA.
         // The external receipt above remains until both removable roots are gone.
         if(Directory.Exists(LanProxyPaths.State)&&File.Exists(StateFile))await DisableAsync(owned,cancellation);
@@ -304,20 +292,16 @@ internal sealed class NativeLanInstall(InstallerState application)
             var expected=owned.Files.ToDictionary(f=>Path.Combine(LanProxyPaths.Binaries,f.Path.Replace('/',Path.DirectorySeparatorChar)),StringComparer.OrdinalIgnoreCase);
             var tree=RemovalTree.Inspect(LanProxyPaths.Binaries,(path,directory)=>
             {if(!directory){if(!expected.TryGetValue(path,out var member))throw new IOException("LAN_BINARY_CHANGED");VerifyBinary(path,member);}});
-            tree.DeleteContents((path,directory)=>{SafeDirectory.NoReparseAncestors(path);if(directory)Directory.Delete(path);else File.Delete(path);},_=>{},cancellation);
-            Directory.Delete(LanProxyPaths.Binaries);
+            tree.DeleteContents(WindowsFileBoundary.DeleteNoFollow,_=>{},cancellation);
+            WindowsFileBoundary.DeleteNoFollow(LanProxyPaths.Binaries,true);
         }
         if(mode==UninstallMode.DeleteData&&Directory.Exists(LanProxyPaths.State))
         {
-            var sid=new System.Security.Principal.SecurityIdentifier(owned.ServiceSid);
-            using(var pin=WindowsFileBoundary.PinInstallerRemovalRoot(LanProxyPaths.State,sid))
-            {
-                var tree=RemovalTree.Inspect(LanProxyPaths.State,(path,directory)=>WindowsFileBoundary.ValidateRemovalMember(path,directory,sid));
-                tree.DeleteContents((path,directory)=>WindowsFileBoundary.DeleteRemovalMember(path,directory,sid),_=>{},cancellation);
-            }
-            WindowsFileBoundary.DeleteRemovalMember(LanProxyPaths.State,true,sid);
+            var tree=RemovalTree.Inspect(LanProxyPaths.State,WindowsFileBoundary.RequireNoLink);
+            tree.DeleteContents(WindowsFileBoundary.DeleteNoFollow,_=>{},cancellation);
+            WindowsFileBoundary.DeleteNoFollow(LanProxyPaths.State,true);
         }
-        using(var pin=WindowsFileBoundary.OpenInstallerMetadata(RemovalFile)){}File.Delete(RemovalFile);
+        File.Delete(RemovalFile);
         RemovePreparation();
         return result;
     }

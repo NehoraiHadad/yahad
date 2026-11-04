@@ -8,8 +8,8 @@ internal static class ImportTraceProbe
 {
     internal static async Task<int> RunAsync(string node,string repo,string output,bool compilerOnly=false)
     {
-        output=SafeDirectory.CreatePrivateSession(output);
-        var root=SafeDirectory.CreatePrivateSession(Path.GetTempPath());
+        output=PrivateSession.Create(output);
+        var root=PrivateSession.Create(Path.GetTempPath());
         var trace=Path.Combine(root,"trace.jsonl");var loader=Path.Combine(root,"trace-loader.mjs");
         File.WriteAllText(trace,"");
         File.WriteAllText(loader,"""

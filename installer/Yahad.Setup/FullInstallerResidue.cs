@@ -1,5 +1,4 @@
 using System.IO;
-using System.Security.Principal;
 using Yahad.Install;
 using Yahad.Service;
 namespace Yahad.Setup;
@@ -17,13 +16,13 @@ internal static class FullInstallerResidue
         }
         return false;
     }
-    // Deletes only owned partials of the records above, each ACL-checked as an
-    // installation member. Any other ".partial-" name is left and refused.
-    internal static void Clear(string directory,SecurityIdentifier application)
+    // Deletes only owned partials of the records above. Any other ".partial-"
+    // name is left and refused.
+    internal static void Clear(string directory)
     {
         if(!Directory.Exists(directory))return;
         var found=Directory.EnumerateFiles(directory,"*.partial-*").Take(129).ToArray();if(found.Length>128)throw new IOException("INSTALL_TARGET_CHANGED");
         foreach(var path in found)
-        {if(!IsOwnedName(Path.GetFileName(path)))throw new IOException("INSTALL_TARGET_CHANGED");WindowsFileBoundary.DeleteRemovalMember(path,false,application);}
+        {if(!IsOwnedName(Path.GetFileName(path)))throw new IOException("INSTALL_TARGET_CHANGED");WindowsFileBoundary.DeleteNoFollow(path,false);}
     }
 }
