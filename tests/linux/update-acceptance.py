@@ -732,7 +732,7 @@ def as_the_timer_does(recorder, attempt):
     temporary = STATUS.with_name('status.acceptance')
     temporary.write_text(json.dumps(dict(current, checkedAt=1)))
     os.chown(temporary, info.st_uid, info.st_gid)
-    os.chmod(temporary, stat.S_IMODE(info.st_mode))
+    os.chmod(temporary, info.st_mode & 0o7777)
     temporary.replace(STATUS)
     run(['/usr/bin/systemctl', 'start', 'yachad-update.service'], check=False, timeout=1800)
     wait_until(lambda: status().get('checkedAt') != 1 and show('yachad-update.service', 'ActiveState') in ('inactive', 'failed'),
