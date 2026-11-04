@@ -55,22 +55,22 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg
-          curl -fsSL "https://nodejs.org/dist/$NODE_VERSION/node-$NODE_VERSION-linux-arm64.tar.xz" -o "$RUNNER_TEMP/node.tar.xz"
-          echo "$NODE_TARBALL_SHA256  $RUNNER_TEMP/node.tar.xz" | sha256sum --check --strict
-          sudo tar -xJf "$RUNNER_TEMP/node.tar.xz" -C /usr/local --strip-components=1 --no-same-owner
+          bash tests/linux/install-node.sh
           echo /usr/local/bin >> "$GITHUB_PATH"
+          mkdir -p "$RUNNER_TEMP/suites"
       - name: Install locked npm dependencies and build
+        id: dependencies
         run: |
           test "$(node --version)" = "$NODE_VERSION"
           npm ci --no-audit --no-fund
           npm run build
       - name: Python updater tests
         run: |
-          mkdir -p "$RUNNER_TEMP/suites"
           uname -m | grep -qx aarch64
           npm run test:updater 2>&1 | tee "$RUNNER_TEMP/suites/updater.log"
       - name: npm tests
-        if: success() || failure()
+        # A failed Python suite must not hide this one; without dependencies it proves nothing.
+        if: (success() || failure()) && steps.dependencies.outcome == 'success'
         run: npm test 2>&1 | tee "$RUNNER_TEMP/suites/npm.log"
       - name: Report results and skips
         if: always()
@@ -122,10 +122,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends ffmpeg caddy
           # The package's own service is not part of this installation.
           sudo systemctl disable --now caddy.service
-          curl -fsSL "https://nodejs.org/dist/$NODE_VERSION/node-$NODE_VERSION-linux-arm64.tar.xz" -o "$RUNNER_TEMP/node.tar.xz"
-          echo "$NODE_TARBALL_SHA256  $RUNNER_TEMP/node.tar.xz" | sha256sum --check --strict
-          sudo tar -xJf "$RUNNER_TEMP/node.tar.xz" -C /usr/local --strip-components=1 --no-same-owner
-          test "$(/usr/local/bin/node --version)" = "$NODE_VERSION"
+          bash tests/linux/install-node.sh
       - name: Package the candidate and the broken variants
         run: python3 tests/linux/update-acceptance.py package --output "$RUNNER_TEMP/candidates" --commit "$GITHUB_SHA"
       - name: Real upgrade acceptance
