@@ -83,42 +83,46 @@ and `package.ps1` prints a warning.
 Maintainer runbook. The key stays on this PC: no GitHub secret, no Authenticode
 certificate (Windows SmartScreen warns on the first install; that is accepted).
 
-1. **Once: create the key** outside any checkout (the tool refuses a directory inside one):
+1. **Once: create the key** outside any checkout (the tool refuses a directory inside one).
+   The commands below look for it at `~/yahad-release-key/key.pem` (pass `--key <path>` to use another):
 
    ```powershell
-   node scripts/windows-release-key.mjs keygen C:/Users/<you>/yahad-release-key
+   node scripts/windows-release-key.mjs keygen $HOME/yahad-release-key
    ```
 
    Back up `key.pem` in a password manager. Losing it means existing installations
    can never be upgraded again, and anyone holding it can sign their upgrades.
 2. **Once: commit the public half**, `key.spki` (91 bytes), as `installer/release-key.spki`.
-   It is public. Until it is committed, `release-windows.mjs` refuses to run.
-3. **Each release**: bump `version` in package.json, commit, push, then work from a
-   clean checkout of that commit (`package.ps1` refuses a leftover
-   `installer/artifacts/Yahad.Platform.Bundle`; a fresh clone with `npm ci` is clean):
+   It is public. Until it is committed, both commands below refuse to run.
+3. **Install on this PC from the current commit**:
 
    ```powershell
-   node scripts/release-windows.mjs C:/Users/<you>/yahad-release-key/key.pem --out C:/Users/<you>/yahad-release-1.2.3
+   npm run windows:install
    ```
 
-   It builds with `installer/package.ps1 -ReleaseKey installer/release-key.spki` (the
-   same script CI runs), signs with `windows-release-key.mjs sign`, verifies the
-   signature against the committed key, and writes `<out>/assets/` with
-   `yahad-windows-<version>.json`, `.json.sig` and `Yahad.Setup-<version>.exe`.
-   Input paths default to `.local/` (see `--node-dir`, `--dotnet`, `--npm-cache`,
-   `--vendors`, `--package-cache`, `--python`, `--pwsh`).
-   It refuses when `installer/release-key.spki` is not committed, the key file is not
-   its private half, the working tree is dirty, the key path is inside a checkout, or
-   the built package trusts a different key. It never publishes.
-4. **Publish by hand**: the command ends by printing the exact `gh release create v<version> ...`
-   line (tag `v<version>`, the three assets, `--target` the built commit). Review the
-   assets, then run it. The release must be a normal one: the Updater ignores drafts
-   and prereleases and follows GitHub's "latest".
+   Needs a clean tree. It clones HEAD into a temp folder, runs `npm ci`, builds and signs
+   there (same `installer/package.ps1` and signing tool CI uses, inputs from this checkout's
+   `.local/`), copies `Yahad.Setup-<version>.exe` to `.local/windows-install/`, deletes the
+   clone, and starts Setup, which shows Windows' single UAC prompt. It publishes nothing.
+4. **Release** (maintainer only):
 
-The lower-level steps the command wraps, for reference:
-`./installer/package.ps1 @inputs -ReleaseKey <key.spki>` writes `<output>/release/`
-with the unsigned manifest and `Yahad.Setup-<version>.exe`, and
-`node scripts/windows-release-key.mjs sign <key.pem> <manifest>` writes `<manifest>.sig`.
+   ```powershell
+   npm run release:publish            # add --dry-run to stop before pushing; --version X.Y.Z to override the patch bump
+   ```
+
+   Requires a clean checkout of `main` equal to `origin/main`, so the Raspberry Pi never receives an
+   unmerged branch. Everything happens in a throwaway clone: bump the patch version (refused unless above
+   the latest release), commit, `npm ci`, build the app, package the Linux assets with
+   `scripts/release.mjs package-https`, build and sign Windows, and check the full set of five assets.
+   It prints version, commit, key id and asset sizes, and you type the version to confirm. Only then does
+   it push the commit and tag atomically and run `gh release create ... --latest` (needs `gh auth login`);
+   afterwards run `git pull --ff-only`. Nothing is pushed or published before the confirmation.
+
+One release carries both platforms (`yachad-release.json` and `yachad-app.zip` for the Pi;
+`yahad-windows-<v>.json`, `.json.sig` and `Yahad.Setup-<v>.exe` for Windows), because both updaters read
+GitHub's single `/releases/latest`; see [GITHUB-RUNTIME-UPDATES.md](../docs/GITHUB-RUNTIME-UPDATES.md).
+Building Windows alone from a clean checkout is `node scripts/release-windows.mjs build <key.pem> --out <new-dir>`,
+which writes the three Windows files and never publishes.
 
 Installation writes the build's key to `%ProgramFiles%\Yahad.FirstInstall\release-key.spki`,
 and that file is the trust root from then on. A machine installed from a keyless

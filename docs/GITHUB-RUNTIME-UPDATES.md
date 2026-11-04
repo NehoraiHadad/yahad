@@ -246,12 +246,16 @@ keeps parent controls usable after 24 hours without claiming a new app preflight
 Windows does not use the HTTPS-trust profile above. It has its own signed channel,
 checked by `Yahad.Updater` (a service of the native installer).
 
-- **Release.** The maintainer builds and signs locally with
-  `node scripts/release-windows.mjs <key.pem> --out <dir>` and publishes by hand
-  (runbook: [installer/README.md](../installer/README.md#release-signing)). The
-  private key stays on the maintainer's PC: no GitHub secret, no Authenticode
-  certificate. A stable release `v<version>` carries `yahad-windows-<version>.json`,
-  `yahad-windows-<version>.json.sig` and `Yahad.Setup-<version>.exe`.
+- **Release.** One release carries both platforms, because the Raspberry Pi updater and the
+  Windows Updater both read GitHub's single `/releases/latest`: a release without the Pi's
+  assets stalls the Pi, and one without Windows assets hides the update from Windows. A GitHub-HTTPS
+  Pi needs `yachad-release.json` and `yachad-app.zip` (`deploy/updater-transport.py` `APP_ASSETS`,
+  `deploy/updater.py` `release_assets`); the `yachad-updater.*` pair is optional. Windows needs
+  `yahad-windows-<version>.json`, `yahad-windows-<version>.json.sig` and `Yahad.Setup-<version>.exe`.
+  The maintainer runs `npm run release:publish` (runbook:
+  [installer/README.md](../installer/README.md#release-signing)), which builds and signs both sets locally
+  and, after a typed confirmation, pushes `main` and the tag and creates the release. The
+  private key stays on the maintainer's PC: no GitHub secret, no Authenticode certificate.
 - **Discovery.** The Updater reads only GitHub's `/releases/latest` for the fixed
   repository (`NehoraiHadad/yahad`); drafts, prereleases and non-newer versions are ignored.
 - **Verification.** The ECDSA P-256 signature is checked over a fixed prefix plus the
