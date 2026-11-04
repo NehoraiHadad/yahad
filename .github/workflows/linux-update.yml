@@ -68,6 +68,11 @@ jobs:
         run: |
           uname -m | grep -qx aarch64
           npm run test:updater 2>&1 | tee "$RUNNER_TEMP/suites/updater.log"
+      - name: Python updater tests as root
+        # Ownership fixtures run only as root and the queue writers only as a normal user, so it takes both runs.
+        if: (success() || failure()) && steps.dependencies.outcome == 'success'
+        run: |
+          sudo env PATH="$PATH" HOME=/root PYTHONDONTWRITEBYTECODE=1             python3 -m unittest discover -s tests -p 'test_*.py' -v 2>&1 | tee "$RUNNER_TEMP/suites/updater-root.log"
       - name: npm tests
         # A failed Python suite must not hide this one; without dependencies it proves nothing.
         if: (success() || failure()) && steps.dependencies.outcome == 'success'
@@ -80,6 +85,11 @@ jobs:
             echo '```'
             grep -E '^(Ran [0-9]+ test|OK|FAILED)' "$RUNNER_TEMP/suites/updater.log" || echo 'No result line'
             grep -E ' \.\.\. skipped ' "$RUNNER_TEMP/suites/updater.log" || echo 'No skipped tests'
+            echo '```'
+            echo '### Python updater tests as root'
+            echo '```'
+            grep -E '^(Ran [0-9]+ test|OK|FAILED)' "$RUNNER_TEMP/suites/updater-root.log" || echo 'No result line'
+            grep -E ' \.\.\. skipped ' "$RUNNER_TEMP/suites/updater-root.log" || echo 'No skipped tests'
             echo '```'
             echo '### npm tests'
             echo '```'
