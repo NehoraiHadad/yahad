@@ -11,7 +11,7 @@
 //
 // The Windows build is installer/package.ps1 and the signature is
 // scripts/windows-release-key.mjs sign (both also used by CI); the Linux assets are
-// scripts/release.mjs package-https. Only `publish`, after the typed confirmation, pushes or publishes.
+// scripts/release.mjs package-https and scripts/release-updater.mjs package-github. Only `publish`, after the typed confirmation, pushes or publishes.
 import { createHash, createPrivateKey, createPublicKey, verify } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -22,9 +22,12 @@ import { fileURLToPath } from 'node:url';
 
 const REPOSITORY = 'NehoraiHadad/yahad'; // fixed in installer/Yahad.Updater/GitHubReleaseSource.cs and deploy/updater.py
 const COMMITTED_KEY = 'installer/release-key.spki';
-// The Pi (GitHub-HTTPS trust) needs these two and nothing else: deploy/updater-transport.py:26 and
-// deploy/updater.py:229. The yachad-updater.* pair is optional there (updater-transport.py:182-186).
+// The Pi (GitHub-HTTPS trust) needs these two to update the app: deploy/updater-transport.py:26 and
+// deploy/updater.py:229.
 const LINUX_ASSETS = ['yachad-release.json', 'yachad-app.zip'];
+// Enrolled machines take their root worker from this pair (deploy/updater-transport.py:25). Everything
+// else ignores it: direct workers only look up the assets they require (deploy/updater.py:678).
+const UPDATER_ASSETS = ['yachad-updater.json', 'yachad-updater.zip'];
 const prefix = Buffer.from('yahad-release-v1\n', 'ascii');
 const keyIdOf = (spki) => createHash('sha256').update(spki).digest('hex').slice(0, 16);
 const sha256Of = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -79,12 +82,12 @@ function signatureVerifies(manifestFile, spki) {
   return signature.length === 64 && verify('sha256', Buffer.concat([prefix, readFileSync(manifestFile)]), { key: trusted, dsaEncoding: 'ieee-p1363' }, signature);
 }
 
-// Exactly the five assets, each consistent with its own manifest. A release missing
+// Exactly the seven assets, each consistent with its own manifest. A release missing
 // any one of them would stall one platform's updater.
 export function collectReleaseAssets(directory, version, spki) {
   const windowsManifest = `yahad-windows-${version}.json`;
   const setup = `Yahad.Setup-${version}.exe`;
-  const expected = [...LINUX_ASSETS, windowsManifest, `${windowsManifest}.sig`, setup];
+  const expected = [...LINUX_ASSETS, ...UPDATER_ASSETS, windowsManifest, `${windowsManifest}.sig`, setup];
   const found = existsSync(directory) ? readdirSync(directory) : [];
   const missing = expected.filter((name) => !found.includes(name) || statSync(join(directory, name)).size === 0);
   if (missing.length) refuse(`Release asset set incomplete; missing or empty: ${missing.join(', ')}.`);
@@ -94,11 +97,32 @@ export function collectReleaseAssets(directory, version, spki) {
   const linux = JSON.parse(read('yachad-release.json').toString('utf8'));
   const zip = read('yachad-app.zip');
   if (linux.version !== version || linux.archive !== 'yachad-app.zip' || linux.bytes !== zip.length || linux.sha256 !== sha256Of(zip)) refuse('yachad-release.json does not describe yachad-app.zip at this version.');
+  const runtime = JSON.parse(read('yachad-updater.json').toString('utf8'));
+  const runtimeZip = read('yachad-updater.zip');
+  if (runtime.kind !== 'yachad-updater' || runtime.version !== runtimeVersionFor(version) || runtime.archive !== 'yachad-updater.zip' || runtime.bytes !== runtimeZip.length || runtime.sha256 !== sha256Of(runtimeZip)) refuse(`yachad-updater.json does not describe yachad-updater.zip at runtime ${runtimeVersionFor(version)}.`);
   const windows = JSON.parse(read(windowsManifest).toString('utf8'));
   const setupBytes = read(setup);
   if (windows.version !== version || windows.keyId !== keyIdOf(spki) || windows.setup.name !== setup || windows.setup.bytes !== setupBytes.length || windows.setup.sha256 !== sha256Of(setupBytes)) refuse(`${windowsManifest} does not describe ${setup} at this version and key.`);
   if (!signatureVerifies(join(directory, windowsManifest), spki)) refuse(`${windowsManifest}.sig does not verify against the committed key.`);
   return expected.map((name) => ({ name, path: join(directory, name), bytes: statSync(join(directory, name)).size }));
+}
+
+// An enrolled machine refuses a runtime at or below the one it accepted unless the bytes are identical
+// (deploy/updater-supervisor.py:456-458), and that refusal stops its app update too
+// (updater-supervisor.py:622-624, deploy/updater.py:881). The bytes cannot be repeated: the zip differs
+// between zlib builds. So the runtime version is derived from the app version, which every release must
+// raise (chooseVersion): each release's pair is above all earlier ones, whether or not deploy/updater.py
+// changed.
+export function runtimeVersionFor(appVersion) {
+  const [major, minor, patch] = parts(appVersion);
+  return `${major + 1}.${minor}.${patch}`;
+}
+
+// A machine enrolled by the bootstrap starts at its initial runtime, so a pair must also be above that.
+export function requireRuntimeAboveBootstrap(runtimeVersion, bootstrapSource) {
+  const initial = /^INITIAL_RUNTIME_VERSION = '([0-9.]+)'$/m.exec(bootstrapSource)?.[1];
+  if (!initial || !isVersion(initial)) refuse('deploy/upgrade-worker-github.py names no INITIAL_RUNTIME_VERSION.');
+  if (compareVersions(runtimeVersion, initial) <= 0) refuse(`Runtime ${runtimeVersion} is not above the bootstrap's initial runtime ${initial}; enrolled machines would refuse it and stop updating.`);
 }
 
 // ---- options -----------------------------------------------------------------------------------
@@ -298,10 +322,15 @@ async function stageRelease({ clone, root, keyFile, inputs }) {
   npm(inputs, clone, 'run', 'build');
   const linux = join(root, 'linux');
   execFileSync(process.execPath, [join(clone, 'scripts', 'release.mjs'), 'package-https', linux], { cwd: clone, stdio: 'inherit' });
+  const runtime = runtimeVersionFor(JSON.parse(readFileSync(join(clone, 'package.json'), 'utf8')).version);
+  requireRuntimeAboveBootstrap(runtime, readFileSync(join(clone, 'deploy', 'upgrade-worker-github.py'), 'utf8'));
+  const updater = join(root, 'updater');
+  execFileSync(process.execPath, [join(clone, 'scripts', 'release-updater.mjs'), 'package-github', runtime, updater], { cwd: clone, stdio: 'inherit' });
   const windows = buildSigned({ repo: clone, keyFile, out: join(root, 'windows'), inputsOf: () => inputs });
   const assets = join(root, 'assets');
   mkdirSync(assets);
   for (const name of LINUX_ASSETS) copyFileSync(join(linux, name), join(assets, name));
+  for (const name of UPDATER_ASSETS) copyFileSync(join(updater, name), join(assets, name));
   for (const name of readdirSync(windows.assets)) copyFileSync(join(windows.assets, name), join(assets, name));
   return { assets, spki: windows.spki };
 }
@@ -338,6 +367,7 @@ export async function publish({ repo, options, confirm = typed, stage = stageRel
     log(`\nRelease ${version} (latest is ${latest})`);
     log(`  commit   ${commit}  (on top of origin/main)`);
     log(`  key id   ${keyIdOf(spki)}`);
+    log(`  runtime  ${runtimeVersionFor(version)}  (root updater, for enrolled machines)`);
     for (const file of files) log(`  asset    ${file.name}  ${(file.bytes / 1048576).toFixed(2)} MiB`);
     if (options['dry-run']) { log('\n--dry-run: nothing was pushed or published; the temporary clone is removed.'); return { version, commit, files, published: false }; }
     const answer = await confirm(`\nType ${version} to push ${tag} to origin/main and publish: `);

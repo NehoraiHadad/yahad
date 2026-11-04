@@ -30,7 +30,8 @@ const dir = resolve(output);
 if (existsSync(dir)) throw new Error('Use a new empty updater output directory');
 mkdirSync(dir, { recursive: true, mode: 0o700 });
 const archive = join(dir, 'yachad-updater.zip');
-execFileSync('python3', ['-c', `
+// Windows Python installs provide `python`; `python3` may be absent or a Store alias.
+execFileSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', `
 import pathlib,stat,sys,zipfile
 entry=zipfile.ZipInfo('updater.py',date_time=(2026,10,28,0,0,0))
 entry.create_system=3

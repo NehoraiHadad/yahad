@@ -5,7 +5,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdir
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { collectReleaseAssets, install, publish, requireBuiltKey } from '../scripts/release-windows.mjs';
+import { collectReleaseAssets, install, publish, requireBuiltKey, requireRuntimeAboveBootstrap, runtimeVersionFor } from '../scripts/release-windows.mjs';
 
 const source = join(import.meta.dirname, '..', 'scripts', 'release-windows.mjs');
 const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@invalid', ...args], { cwd, stdio: 'pipe', encoding: 'utf8' });
@@ -96,10 +96,13 @@ function writeAssets(directory: string, version: string, keys: Pair, omit: strin
   const zip = Buffer.from('zip-' + version);
   const setupName = `Yahad.Setup-${version}.exe`;
   const setup = Buffer.from('setup-' + version);
+  const worker = Buffer.from('worker-' + version);
   const windows = Buffer.from(JSON.stringify({ version, keyId: keyId(keys.spki), setup: { name: setupName, bytes: setup.length, sha256: sha(setup) } }));
   const files: Record<string, Buffer> = {
     'yachad-release.json': Buffer.from(JSON.stringify({ format: 2, version, archive: 'yachad-app.zip', bytes: zip.length, sha256: sha(zip) })),
     'yachad-app.zip': zip,
+    'yachad-updater.json': Buffer.from(JSON.stringify({ format: 1, kind: 'yachad-updater', version: runtimeVersionFor(version), archive: 'yachad-updater.zip', bytes: worker.length, sha256: sha(worker) })),
+    'yachad-updater.zip': worker,
     [`yahad-windows-${version}.json`]: windows,
     [`yahad-windows-${version}.json.sig`]: sign('sha256', Buffer.concat([Buffer.from('yahad-release-v1\n'), windows]), { key: keys.private, dsaEncoding: 'ieee-p1363' }),
     [setupName]: setup
@@ -215,6 +218,7 @@ test('release:publish refuses a version not above the latest, a wrong confirmati
 
     await assert.rejects(run(w.options, async () => '0.5.4', w.stage(['yahad-windows-0.5.4.json.sig'])), /missing or empty: yahad-windows-0\.5\.4\.json\.sig/);
     await assert.rejects(run(w.options, async () => '0.5.4', w.stage(['yachad-app.zip'])), /missing or empty: yachad-app\.zip/);
+    await assert.rejects(run(w.options, async () => '0.5.4', w.stage(['yachad-updater.zip'])), /missing or empty: yachad-updater\.zip/);
 
     let asked = '';
     await assert.rejects(run(w.options, async (question) => { asked = question; return '0.5.5'; }), /Confirmation did not match/);
@@ -250,7 +254,7 @@ test('release:publish --dry-run stops before push; a confirmed run pushes the co
     const args = create[0];
     assert.equal(args[2], 'v0.5.4');
     assert.deepEqual(args.slice(3, args.indexOf('--repo')).map((path) => path.split(/[\\/]/).at(-1)).sort(),
-      ['Yahad.Setup-0.5.4.exe', 'yachad-app.zip', 'yachad-release.json', 'yahad-windows-0.5.4.json', 'yahad-windows-0.5.4.json.sig']);
+      ['Yahad.Setup-0.5.4.exe', 'yachad-app.zip', 'yachad-release.json', 'yachad-updater.json', 'yachad-updater.zip', 'yahad-windows-0.5.4.json', 'yahad-windows-0.5.4.json.sig']);
     for (const flag of ['--latest', '--verify-tag']) assert.ok(args.includes(flag));
     for (const flag of ['--draft', '--prerelease']) assert.equal(args.includes(flag), false);
     assert.equal(args[args.indexOf('--repo') + 1], 'NehoraiHadad/yahad');
@@ -264,7 +268,7 @@ test('release:publish keeps the assets and prints a working retry when gh fails 
       await assert.rejects(publish({ repo: w.repo, options: w.options, stage: w.stage(), confirm: async () => '0.5.4', log: () => {} }), (error: Error) => {
         assert.match(error.message, /v0\.5\.4 was pushed but gh release create failed/);
         const kept = join(w.repo, '.local', 'release-0.5.4');
-        assert.equal(readdirSync(kept).length, 5);
+        assert.equal(readdirSync(kept).length, 7);
         assert.ok(error.message.includes(join(kept, 'yachad-app.zip')));
         assert.equal(error.message.includes('yahad-release-'), false, 'the retry names no temporary path');
         assert.match(error.message, /--repo NehoraiHadad\/yahad --verify-tag --latest/);
@@ -279,12 +283,50 @@ test('collectReleaseAssets rejects an inconsistent or extra asset', () => {
   try {
     const keys = pair();
     writeAssets(join(root, 'ok'), '1.0.0', keys);
-    assert.equal(collectReleaseAssets(join(root, 'ok'), '1.0.0', keys.spki).length, 5);
+    assert.equal(collectReleaseAssets(join(root, 'ok'), '1.0.0', keys.spki).length, 7);
     writeAssets(join(root, 'extra'), '1.0.0', keys);
-    writeFileSync(join(root, 'extra', 'yachad-updater.zip'), 'x');
+    writeFileSync(join(root, 'extra', 'yachad-updater.sig'), 'x');
     assert.throws(() => collectReleaseAssets(join(root, 'extra'), '1.0.0', keys.spki), /Unexpected release assets/);
     writeAssets(join(root, 'foreign'), '1.0.0', keys);
     assert.throws(() => collectReleaseAssets(join(root, 'foreign'), '1.0.0', pair().spki), /does not describe/);
+    writeAssets(join(root, 'tampered'), '1.0.0', keys);
+    writeFileSync(join(root, 'tampered', 'yachad-updater.zip'), 'other bytes');
+    assert.throws(() => collectReleaseAssets(join(root, 'tampered'), '1.0.0', keys.spki), /yachad-updater\.json does not describe/);
+    // A pair at the runtime an earlier release carried would be refused as a downgrade on enrolled machines.
+    writeAssets(join(root, 'stale'), '1.0.0', keys);
+    const stale = JSON.parse(readFileSync(join(root, 'stale', 'yachad-updater.json'), 'utf8'));
+    writeFileSync(join(root, 'stale', 'yachad-updater.json'), JSON.stringify({ ...stale, version: '1.0.1' }));
+    assert.throws(() => collectReleaseAssets(join(root, 'stale'), '1.0.0', keys.spki), /at runtime 2\.0\.0/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('every release carries a runtime above the bootstrap and above every earlier release', () => {
+  const key = (version: string) => version.split('.').map(Number).reduce((total, part) => total * 100000 + part, 0);
+  const releases = ['0.6.0', '0.6.1', '0.6.99', '0.7.0', '1.0.0', '1.0.1', '2.0.0'];
+  const runtimes = releases.map(runtimeVersionFor);
+  assert.deepEqual(runtimes.slice(0, 2), ['1.6.0', '1.6.1']);
+  for (let i = 1; i < runtimes.length; i++) assert.ok(key(runtimes[i]) > key(runtimes[i - 1]), `${runtimes[i]} above ${runtimes[i - 1]}`);
+
+  const bootstrap = readFileSync(join(import.meta.dirname, '..', 'deploy', 'upgrade-worker-github.py'), 'utf8');
+  for (const runtime of runtimes) requireRuntimeAboveBootstrap(runtime, bootstrap);
+  assert.throws(() => requireRuntimeAboveBootstrap('1.0.1', bootstrap), /not above the bootstrap's initial runtime 1\.0\.1/);
+  assert.throws(() => requireRuntimeAboveBootstrap('1.0.0', bootstrap), /not above/);
+  assert.throws(() => requireRuntimeAboveBootstrap('1.6.0', 'no such line'), /names no INITIAL_RUNTIME_VERSION/);
+});
+
+test('the real updater packager produces a pair that the release check accepts', () => {
+  const root = mkdtempSync(join(tmpdir(), 'yahad-runtime-pair-'));
+  try {
+    const keys = pair();
+    const assets = join(root, 'assets');
+    writeAssets(assets, '0.6.0', keys);
+    const repository = join(import.meta.dirname, '..');
+    execFileSync(process.execPath, [join(repository, 'scripts', 'release-updater.mjs'), 'package-github', runtimeVersionFor('0.6.0'), join(root, 'pair')], { cwd: repository, stdio: 'pipe' });
+    assert.deepEqual(readdirSync(join(root, 'pair')).sort(), ['yachad-updater.json', 'yachad-updater.zip']);
+    for (const name of readdirSync(join(root, 'pair'))) copyFileSync(join(root, 'pair', name), join(assets, name));
+    const names = collectReleaseAssets(assets, '0.6.0', keys.spki).map((file) => file.name);
+    assert.ok(names.includes('yachad-updater.zip'));
+    assert.equal(JSON.parse(readFileSync(join(assets, 'yachad-updater.json'), 'utf8')).version, '1.6.0');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

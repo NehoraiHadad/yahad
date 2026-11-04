@@ -17,6 +17,7 @@ Never run this on a machine you care about: it edits /etc/hosts and the CA store
 installs the app. It refuses to start without --disposable or over an existing install.
 """
 import argparse
+import ast
 import contextlib
 import hashlib
 import json
@@ -25,6 +26,7 @@ import pathlib
 import platform
 import re
 import secrets
+import select
 import shutil
 import signal
 import sqlite3
@@ -79,6 +81,10 @@ CURRENT = pathlib.Path('/opt/yachad/current')
 RELEASES = pathlib.Path('/opt/yachad/releases')
 BACKUPS = pathlib.Path('/var/backups/yachad-updates')
 WORKER = pathlib.Path('/usr/local/lib/yachad-updater/updater.py')
+SOURCE_POLICY = pathlib.Path('/etc/yachad/updater-source.json')
+RUNTIME_JOURNAL = pathlib.Path('/var/lib/yachad-updates/updater-runtime.json')
+RUNTIME_POINTER = pathlib.Path('/var/lib/yachad-updates/runtime/current')
+TRANSPORT_STATE = pathlib.Path('/var/lib/yachad-updates/updater-transport.json')
 CADDY_ROOT = pathlib.Path('/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt')
 HEALTH = 'http://127.0.0.1:3000/health/ready'
 HOSTS_FILE = pathlib.Path('/etc/hosts')
@@ -193,6 +199,14 @@ def package_variant(work, output, version, patch):
     shutil.rmtree(source)
 
 
+def package_runtime(output, app_version, env):
+    """The root updater pair of one release, at the version release:publish gives it, by the real packager."""
+    rule = "import {runtimeVersionFor} from './scripts/release-windows.mjs';console.log(runtimeVersionFor(process.argv[1]))"
+    version = run(['node', '--input-type=module', '-e', rule, app_version], cwd=ROOT, env=env).stdout.decode().strip()
+    run(['node', 'scripts/release-updater.mjs', 'package-github', version, str(output)], cwd=ROOT, env=env)
+    return version
+
+
 def package(arguments):
     output = pathlib.Path(arguments.output).resolve()
     if output.exists():
@@ -220,10 +234,15 @@ def package(arguments):
         package_variant(work, output / 'broken-migrated', '0.5.91', READY_503)
         package_variant(work, output / 'broken-same-schema', broken_same_schema, READY_503)
     work.rmdir()
+    with recorder.step('Package the root updater pair of the candidates with scripts/release-updater.mjs package-github'):
+        runtime = package_runtime(output / 'updater-candidate', version, env)
+        broken_runtime = package_runtime(output / 'updater-broken-same-schema', broken_same_schema, env)
+        recorder.check(version_tuple(runtime) > version_tuple(bootstrap_literal('INITIAL_RUNTIME_VERSION')), 'the runtime is above the initial one of the bootstrap', runtime)
     (output / 'build.json').write_text(json.dumps(dict(
         commit=arguments.commit, version=version, databaseSchema=manifest['databaseSchema'],
         databaseMigrationsFrom=manifest['databaseMigrationsFrom'], manifestSha256=sha256(output / 'candidate/yachad-release.json'),
-        archiveBytes=manifest['bytes'], brokenSameSchemaVersion=broken_same_schema, steps=recorder.steps), indent=2))
+        archiveBytes=manifest['bytes'], brokenSameSchemaVersion=broken_same_schema, runtimeVersion=runtime,
+        brokenSameSchemaRuntimeVersion=broken_runtime, steps=recorder.steps), indent=2))
     print(f'Candidate {version} and broken variants packaged in {output}', flush=True)
 
 
@@ -255,10 +274,12 @@ class GitHub:
              '-CAcreateserial', '-extfile', str(d / 'leaf.cnf'), '-extensions', 'leaf', '-out', str(d / 'leaf.crt')])
         (d / 'ca.key').unlink()  # It only had to sign this one leaf.
 
-    def publish(self, directory, tag, release_id=None, asset_ids=None):
-        directory = pathlib.Path(directory)
+    def publish(self, directory, tag, release_id=None, asset_ids=None, updater=None):
         assets, files = [], {}
-        for name in ('yachad-app.zip', 'yachad-release.json'):
+        sources = [(pathlib.Path(directory), name) for name in ('yachad-app.zip', 'yachad-release.json')]
+        if updater:
+            sources += [(pathlib.Path(updater), name) for name in ('yachad-updater.json', 'yachad-updater.zip')]
+        for directory, name in sources:
             if asset_ids:
                 asset_id = asset_ids[name]
             else:
@@ -951,7 +972,189 @@ def scenario_pi(recorder, github, candidates, build, family, api, database):
         assert_scheduled_rollback(recorder, family, current, attempt_version=broken_same, back_to=version, schema=schema, before=database)
 
 
-SCENARIOS = {'upgrade': scenario_upgrade, 'migrated-failure': scenario_migrated_failure, 'pi': scenario_pi}
+def bootstrap_literal(name):
+    """A constant of the reviewed bootstrap, read without running it."""
+    for node in ast.parse((ROOT / 'deploy/upgrade-worker-github.py').read_bytes()).body:
+        if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == name for target in node.targets):
+            return ast.literal_eval(node.value)
+    raise AcceptanceFailure('The bootstrap no longer defines ' + name)
+
+
+def in_a_terminal(args, cwd, env, prompt=None, answer=None, timeout=300):
+    """The bootstrap insists on a terminal for its confirmation, so it gets one, answered at the exact prompt."""
+    master, slave = os.openpty()
+    process = subprocess.Popen(args, cwd=cwd, env=env, stdin=slave, stdout=slave, stderr=slave, start_new_session=True, close_fds=True)
+    os.close(slave)
+    output, answered = '', False
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            if time.monotonic() > deadline:
+                process.kill()
+                raise AcceptanceFailure('The bootstrap did not finish:\n' + output[-3000:])
+            if not select.select([master], [], [], 1)[0]:
+                continue
+            try:
+                raw = os.read(master, 65536)
+            except OSError:  # The terminal's other end closed: the process is done.
+                break
+            if not raw:
+                break
+            output += raw.decode(errors='replace')
+            if prompt and not answered and prompt in output:
+                answered = True
+                os.write(master, answer.encode() + b'\n')
+    finally:
+        os.close(master)
+    return process.wait(30), output
+
+
+def as_the_owner(source, *options, prompt=None, answer=None):
+    """`sudo python3 -I -B upgrade-worker-github.py`: root, and SUDO_UID naming the ordinary account that owns the checkout."""
+    env = dict(ENV, SUDO_UID=str(ROOT.stat().st_uid))
+    # The real timer keeps running. These refusals change nothing, and an owner just runs the command again.
+    busy = ('Updater is busy', 'Updater units are missing or running', 'Updater workers must be inactive')
+
+    def attempt():
+        code, output = in_a_terminal(['/usr/bin/python3', '-I', '-B', 'upgrade-worker-github.py', *options], source, env, prompt, answer)
+        print(output, flush=True)
+        return None if code and any(text in output for text in busy) else (code, output)
+    return wait_until(attempt, 120, 'the updater units to be quiet for the bootstrap', 5)
+
+
+def delivered_bootstrap(recorder):
+    """Packaged by the real script, and checked and unpacked the way an owner handles the delivered archive."""
+    # Not under the runner's home: root-owned and reachable, as in install_base.
+    directory = pathlib.Path(tempfile.mkdtemp(prefix='yahad-bootstrap-', dir='/var/tmp'))
+    run(['/usr/bin/python3', '-I', '-B', str(ROOT / 'scripts/package-github-upgrade.py'), str(directory / 'artifact')], cwd=ROOT)
+    digest, name = (directory / 'artifact/SHA256SUMS').read_text(encoding='ascii').split()
+    recorder.check(sha256(directory / 'artifact' / name) == digest, 'the delivered archive matches its checksum', name)
+    with zipfile.ZipFile(directory / 'artifact' / name) as archive:
+        archive.extractall(directory / 'extracted')
+    return directory / 'extracted'
+
+
+def assert_runtime(recorder, version, *, previous, package=None):
+    journal = json.loads(RUNTIME_JOURNAL.read_bytes())
+    recorder.check(journal['phase'] == 'stable' and journal['candidate'] is None, 'the runtime journal is stable', journal)
+    recorder.check(journal['active']['version'] == version and journal['maxAcceptedVersion'] == version, f'the active runtime is {version}', journal)
+    recorder.check((journal['previous'] or {}).get('version') == previous, f'the previous runtime is {previous}', journal)
+    recorder.check(os.readlink(RUNTIME_POINTER) == 'versions/v' + version, 'the runtime pointer follows the journal', os.readlink(RUNTIME_POINTER))
+    worker = RUNTIME_POINTER / 'updater.py'
+    recorder.check(worker.read_bytes() == (ROOT / 'deploy/updater.py').read_bytes(), 'the active worker is the updater of this checkout')
+    if package:
+        recorder.check(journal['active']['manifestSha256'] == sha256(package / 'yachad-updater.json') and
+                       journal['active']['sha256'] == sha256(package / 'yachad-updater.zip'), 'the active runtime is the published pair', journal)
+
+
+def transport_state():
+    with contextlib.suppress(FileNotFoundError):
+        return json.loads(TRANSPORT_STATE.read_bytes())
+    return {}
+
+
+def on_the_real_timer(recorder, attempt, reached, timeout):
+    """Nothing is started or aged here. The status file must not be touched either: the supervisor fails closed
+    if it changes during a probe (deploy/updater-supervisor.py:430). The timer fires every 5 minutes on an enrolled machine."""
+    seen = None
+    deadline = time.monotonic() + timeout
+    while True:
+        current = status()
+        if current.get('phase') != seen:
+            seen = current.get('phase')
+            recorder.phase(seen, attempt)
+        state = show('yachad-update.service', 'ActiveState')
+        if state == 'inactive':
+            if reached(current):
+                return current
+            if current.get('phase') in ('failed', 'rolled_back', 'recovery_required', 'incompatible') or transport_state().get('result') == 'failed':
+                raise AcceptanceFailure(f'The scheduled run stopped: {json.dumps(current)} {json.dumps(transport_state())}')
+        elif state == 'failed':
+            log = run(['journalctl', '-u', 'yachad-update.service', '-n', '40', '-o', 'cat', '--no-pager']).stdout.decode(errors='replace')
+            raise AcceptanceFailure(f'yachad-update.service failed: {json.dumps(current)} {json.dumps(transport_state())}\n{log}')
+        if time.monotonic() > deadline:
+            raise AcceptanceFailure(f'Timed out after {timeout}s on the timer: {json.dumps(current)} {json.dumps(transport_state())}')
+        time.sleep(1)
+
+
+def scenario_pi_enrolled(recorder, github, candidates, build, family, api, database):
+    version = build['version']
+    schema = build['databaseSchema']
+    broken_same = build['brokenSameSchemaVersion']
+    runtime = build['runtimeVersion']
+    broken_runtime = build['brokenSameSchemaRuntimeVersion']
+    initial = bootstrap_literal('INITIAL_RUNTIME_VERSION')
+    launcher = hashlib.sha256(bootstrap_literal('LAUNCHER')).hexdigest()
+    settings = CONFIG.read_bytes()
+
+    with recorder.step('Pi state, the owner enrolls with the real one-time bootstrap'):
+        source = delivered_bootstrap(recorder)
+        code, output = as_the_owner(source, '--check-only')
+        recorder.check(code == 0 and 'CHECK_OK' in output, 'the check-only run finds the Pi eligible', output[-2000:])
+        recorder.check(sha256(WORKER) == PI_UPDATER_SHA256 and not SOURCE_POLICY.exists(), 'the check-only run changed nothing')
+        code, output = as_the_owner(source, prompt='Type ENABLE GITHUB UPDATER to authorize', answer='ENABLE GITHUB UPDATER')
+        recorder.check(code == 0 and 'GITHUB_UPDATER_ENROLLED' in output, 'the bootstrap enrolls after the exact confirmation', output[-2000:])
+        recorder.check(sha256(WORKER) == launcher, 'the launcher replaced the 0.5.0 root updater')
+        for name in ('updater-supervisor.py', 'updater-transport.py'):
+            recorder.check(WORKER.with_name(name).read_bytes() == (ROOT / 'deploy' / name).read_bytes(), f'{name} is installed')
+        policy = json.loads(SOURCE_POLICY.read_bytes())
+        recorder.check(policy['format'] == 2 and policy['trust'] == 'github-https' and policy['enabled'] is True, 'the source policy is the enabled GitHub-HTTPS profile', policy)
+        assert_runtime(recorder, initial, previous=None)
+        recorder.check(CONFIG.read_bytes() == settings and json.loads(settings)['mode'] == 'auto', 'the app configuration is byte-identical and still in auto mode')
+        for unit in ('yachad-update-request.path', 'yachad-update.timer'):
+            recorder.check(show(unit, 'ActiveState') == 'active', f'{unit} was restored')
+        assert_running(recorder, BASE_VERSION, BASE_SCHEMA)
+        assert_rows_kept(recorder, database, read_database())
+
+    with recorder.step('Pi state, the first scheduled run under the supervisor keeps the app and issues a target'):
+        current = on_the_real_timer(recorder, 'enrolled', lambda value: (value.get('installTarget') or {}).get('version') == BASE_VERSION, 420)
+        recorder.check(current['phase'] in ('healthy', 'idle') and current['currentVersion'] == BASE_VERSION, f'the app is still {BASE_VERSION}', current)
+        recorder.check(transport_state().get('result') == 'unavailable', 'an app-only release keeps the initial runtime', transport_state())
+        assert_runtime(recorder, initial, previous=None)
+        assert_running(recorder, BASE_VERSION, BASE_SCHEMA)
+        assert_rows_kept(recorder, database, read_database())
+        api = family.verify(recorder)
+        assert_update_panel(recorder, api, currentVersion=BASE_VERSION, mode='auto', modeControlAllowed=True, error=None)
+        code, output = as_the_owner(source, '--check-only')
+        recorder.check(code == 0 and 'ALREADY_CURRENT' in output, 'rerunning the bootstrap reports the completed enrollment', output[-2000:])
+
+    with recorder.step(f'Enrolled, {version} with runtime {runtime} arrives on the timer'):
+        let_start_limit_window_pass()
+        backups = len(list(BACKUPS.glob('yachad-*.backup')))
+        github.publish(candidates / 'candidate', 'v' + version, updater=candidates / 'updater-candidate')
+        begun = time.monotonic()
+        # At most one timer interval and its jitter, then at most the service's 30 minutes.
+        current = on_the_real_timer(recorder, 'upgrade', lambda value: value.get('currentVersion') == version and value.get('phase') in ('healthy', 'idle'), 2220)
+        recorder.upgrade_seconds = round(time.monotonic() - begun, 1)
+        assert_runtime(recorder, runtime, previous=initial, package=candidates / 'updater-candidate')
+        recorder.check(sha256(WORKER) == launcher, 'the launcher itself is not replaced by a release')
+        recorder.check(transport_state().get('version') == runtime and transport_state().get('result') in ('updated', 'unchanged'), 'the transport reports the new runtime', transport_state())
+        assert_running(recorder, version, schema)
+        recorder.check(len(list(BACKUPS.glob('yachad-*.backup'))) == backups + 1, 'a backup was taken before the downtime')
+        recorder.check(sha256(CURRENT / '.release-manifest.json') == build['manifestSha256'], 'the installed release carries the exact packaged manifest')
+        recorder.check((RELEASES / ('v' + BASE_VERSION)).is_dir(), 'the previous release is kept')
+        after = read_database()
+        recorder.check(after['schema'] == schema, f'the database migrated to schema {schema}', after['schema'])
+        assert_rows_kept(recorder, database, after)
+        api = family.verify(recorder)
+        view = assert_update_panel(recorder, api, currentVersion=version, mode='auto', modeControlAllowed=True, error=None)
+        target = view.get('installTarget') or {}
+        recorder.check(target.get('version') == version and re.fullmatch('[0-9a-f]{64}', target.get('fingerprint', '')), 'the panel now offers a bound install target', view)
+
+    with recorder.step(f'Enrolled in notify mode, the install button takes a broken release: rollback to {version} under the new runtime'):
+        set_mode(recorder, api, 'notify')
+        database = read_database()
+        let_start_limit_window_pass()
+        github.publish(candidates / 'broken-same-schema', 'v' + broken_same, updater=candidates / 'updater-broken-same-schema')
+        target = discover(recorder, api, broken_same, 'same-schema')
+        request, current = update_action(recorder, api, dict(action='install', target=target), 'same-schema')
+        assert_rollback(recorder, family, request, current, attempt_version=broken_same, back_to=version, schema=schema, before=database)
+        # A committed worker stays: the failure was the app's (docs/GITHUB-RUNTIME-UPDATES.md, "Failure and verification contract").
+        assert_runtime(recorder, broken_runtime, previous=runtime, package=candidates / 'updater-broken-same-schema')
+        recorder.check((RELEASES / ('v' + BASE_VERSION)).is_dir(), 'the failed attempt pruned nothing')
+
+
+SCENARIOS = {'upgrade': scenario_upgrade, 'migrated-failure': scenario_migrated_failure, 'pi': scenario_pi, 'pi-enrolled': scenario_pi_enrolled}
 
 
 def prepare_host(recorder):
@@ -980,10 +1183,10 @@ def collect_diagnostics(output):
         log = run(['journalctl', '-u', unit, '-o', 'short-iso', '--no-pager'], check=False, timeout=60).stdout
         (diagnostics / (unit + '.log')).write_bytes(log)
         (diagnostics / (unit + '.status')).write_bytes(run(['/usr/bin/systemctl', 'status', '--no-pager', '--full', unit], check=False, timeout=60).stdout)
-    for path in (STATUS, CONFIG):  # Neither holds a secret; the operator ids are throwaway.
+    for path in (STATUS, CONFIG, SOURCE_POLICY, RUNTIME_JOURNAL, TRANSPORT_STATE):  # None holds a secret; the operator ids are throwaway.
         if path.exists():
             shutil.copyfile(path, diagnostics / path.name)
-    listing = run(['ls', '-la', '/opt/yachad', '/opt/yachad/releases', str(BACKUPS), '/var/lib/yachad-updates'], check=False).stdout
+    listing = run(['ls', '-la', '/opt/yachad', '/opt/yachad/releases', str(BACKUPS), '/var/lib/yachad-updates', '/var/lib/yachad-updates/runtime/versions'], check=False).stdout
     (diagnostics / 'layout.txt').write_bytes(listing)
 
 
@@ -1009,7 +1212,7 @@ def execute(arguments):
             summary['host'] = dict(machine=platform.machine(), kernel=platform.release(), python=platform.python_version(),
                                    node=run(['node', '--version']).stdout.decode().strip(),
                                    caddy=run(['caddy', 'version']).stdout.decode().strip())
-        first = PI_INSTALLED if arguments.scenario == 'pi' else BASE
+        first = PI_INSTALLED if arguments.scenario in ('pi', 'pi-enrolled') else BASE
         with recorder.step('Download the published assets'):
             for release in {id(item): item for item in (first, BASE)}.values():
                 download_release(work, release)

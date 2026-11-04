@@ -118,17 +118,34 @@ or retry a different target automatically.
 
 ## Release publication and update order
 
-Produce a no-key worker bundle locally:
+`npm run release:publish` puts a no-key worker bundle in every release, packaged by:
 
 ```sh
-node scripts/release-updater.mjs package-github 1.1.0 /PRIVATE_NEW_RUNTIME_OUTPUT
+node scripts/release-updater.mjs package-github RUNTIME_VERSION /PRIVATE_NEW_RUNTIME_OUTPUT
 ```
 
 It produces `yachad-updater.json` and `yachad-updater.zip`, not an empty/fake
 signature. Signed publication retains the separate `package VERSION OUT KEY`
-command. Publish matching app and updater assets in a normal stable semantic app
-Release only after reviewing and testing the exact candidate. Packaging itself
-never publishes or activates anything.
+command. Packaging itself never publishes or activates anything.
+
+The runtime version is separate from the app version and is derived from it:
+`major+1.minor.patch`, so app 0.6.1 carries runtime 1.6.1. It says nothing about what
+changed. An enrolled machine refuses a runtime at or below the one it already accepted
+unless the manifest bytes are identical, reports that as `incompatible`, and so also
+stops its app update. The archive bytes differ between zlib builds, so republishing an
+old runtime version cannot be relied on to match. Deriving it puts each release above
+all earlier ones and above the bootstrap's initial 1.0.1 (the publish refuses otherwise),
+so an unchanged `deploy/updater.py` simply reactivates under a new version. The supervisor
+keeps every activated runtime directory, about 80 KB per release.
+
+Carrying the pair every time also keeps idle checks small: the metadata-only path below
+needs a runtime manifest to compare, and without one a healthy machine downloads the
+app archive on each check.
+
+Machines that are not enrolled ignore the pair. Direct workers, including the 0.5.0
+worker, only look up the assets they require and refuse none; the Windows Updater selects
+its own by exact name. A signature-pinned enrollment finds no `.sig` for this pair, so its
+runtime check reports `invalid_release` and its app update continues as before.
 
 Discovery uses GitHub’s `/releases/latest` selection, not a scan for the highest
 semantic version. Versions still must advance. The target fingerprint binds all
@@ -250,7 +267,8 @@ checked by `Yahad.Updater` (a service of the native installer).
   Windows Updater both read GitHub's single `/releases/latest`: a release without the Pi's
   assets stalls the Pi, and one without Windows assets hides the update from Windows. A GitHub-HTTPS
   Pi needs `yachad-release.json` and `yachad-app.zip` (`deploy/updater-transport.py` `APP_ASSETS`,
-  `deploy/updater.py` `release_assets`); the `yachad-updater.*` pair is optional. Windows needs
+  `deploy/updater.py` `release_assets`); an enrolled Pi also takes its worker from the `yachad-updater.*`
+  pair, which every release carries (see "Release publication and update order"). Windows needs
   `yahad-windows-<version>.json`, `yahad-windows-<version>.json.sig` and `Yahad.Setup-<version>.exe`.
   The maintainer runs `npm run release:publish` (runbook:
   [installer/README.md](../installer/README.md#release-signing)), which builds and signs both sets locally

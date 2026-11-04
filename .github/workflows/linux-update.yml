@@ -110,7 +110,9 @@ jobs:
         # terminal by design (recovery_required), so it needs its own machine.
         # pi: the machine as it really is, app 0.5.3 under the root updater of 0.5.0 in auto
         # mode, so releases arrive on the timer and the install button has no target.
-        scenario: [upgrade, migrated-failure, pi]
+        # pi-enrolled: the same machine after the owner's one-time GitHub updater bootstrap, so a
+        # release's updater pair advances the root worker, and the install button works again.
+        scenario: [upgrade, migrated-failure, pi, pi-enrolled]
     steps:
       - name: Check out exact source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6

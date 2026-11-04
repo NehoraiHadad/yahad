@@ -113,12 +113,14 @@ certificate (Windows SmartScreen warns on the first install; that is accepted).
    Requires a clean checkout of `main` equal to `origin/main`, so the Raspberry Pi never receives an
    unmerged branch. Everything happens in a throwaway clone: bump the patch version (refused unless above
    the latest release), commit, `npm ci`, build the app, package the Linux assets with
-   `scripts/release.mjs package-https`, build and sign Windows, and check the full set of five assets.
+   `scripts/release.mjs package-https`, package the root updater with
+   `scripts/release-updater.mjs package-github`, build and sign Windows, and check the full set of seven assets.
    It prints version, commit, key id and asset sizes, and you type the version to confirm. Only then does
    it push the commit and tag atomically and run `gh release create ... --latest` (needs `gh auth login`);
    afterwards run `git pull --ff-only`. Nothing is pushed or published before the confirmation.
 
-One release carries both platforms (`yachad-release.json` and `yachad-app.zip` for the Pi;
+One release carries both platforms (`yachad-release.json`, `yachad-app.zip`, `yachad-updater.json` and
+`yachad-updater.zip` for the Pi;
 `yahad-windows-<v>.json`, `.json.sig` and `Yahad.Setup-<v>.exe` for Windows), because both updaters read
 GitHub's single `/releases/latest`; see [GITHUB-RUNTIME-UPDATES.md](../docs/GITHUB-RUNTIME-UPDATES.md).
 Building Windows alone from a clean checkout is `node scripts/release-windows.mjs build <key.pem> --out <new-dir>`,
