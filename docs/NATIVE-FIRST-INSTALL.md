@@ -77,8 +77,12 @@ The existing consent is the parent-only `POST /api/parent/connect`, protected by
 - New owned binary root `C:\Program Files\Yahad.FirstInstall` and state root
   `C:\ProgramData\Yahad.FirstInstall`. Files receive administrator ownership at
   creation, with System/Administrators full control, service read/execute for
-  immutable files and modify only for data/temporary. Registered owner receives
-  binary execution and service query access, not protected data writes.
+  immutable files and modify only for data/temporary. Users read and execute the
+  binary root only, because Apps & Features starts the uninstall image from an
+  unelevated shell, which must read its manifest to ask for elevation; an upgrade
+  applies this to older installations. The state root gives Users nothing.
+  Registered owner receives binary execution and service query access, not
+  protected data writes.
 - Initial installation ID/data ID, 32-byte master key and short-lived first-parent
   capability are generated locally only during the approved install. Existing
   state is authenticated/preserved and never silently replaced.

@@ -55,6 +55,21 @@ internal static class InstallAclTests
             }
             Directory.Delete(parent,true);return Task.CompletedTask;
         });
+        await check("an installed tree's new root ACL reaches everything below it and stays protected",()=>
+        {
+            var parent=PrivateSession.Create(Path.GetTempPath());var root=Path.Combine(parent,"root");var user=WindowsIdentity.GetCurrent().User!.Value;
+            var earlier=$"O:{user}D:P(A;OICI;FA;;;{user})(A;OICI;FA;;;SY)";
+            NativeInstallFiles.NewDirectory(root,earlier);
+            var folder=Path.Combine(root,"versions");NativeInstallFiles.NewDirectory(folder);
+            var image=Path.Combine(folder,"image.exe");NativeInstallFiles.Publish(image,"image"u8.ToArray());
+            bool NamesUsers(FileSystemSecurity security)=>security.GetAccessRules(true,true,typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>().Any(r=>r.IdentityReference.Value=="S-1-5-32-545"&&r.FileSystemRights.HasFlag(FileSystemRights.ReadAndExecute));
+            Require(!NamesUsers(new FileInfo(image).GetAccessControl()));
+            NativeInstallFiles.SetTreeAcl(root,earlier+"(A;OICI;0x1200a9;;;BU)");
+            Require(new DirectoryInfo(root).GetAccessControl().AreAccessRulesProtected&&new DirectoryInfo(root).GetAccessControl().GetOwner(typeof(SecurityIdentifier))!.Value==user);
+            foreach(var security in new FileSystemSecurity[]{new DirectoryInfo(root).GetAccessControl(),new DirectoryInfo(folder).GetAccessControl(),new FileInfo(image).GetAccessControl()})Require(NamesUsers(security));
+            foreach(var security in new FileSystemSecurity[]{new DirectoryInfo(folder).GetAccessControl(),new FileInfo(image).GetAccessControl()})Require(security.GetAccessRules(true,false,typeof(SecurityIdentifier)).Count==0);
+            Directory.Delete(parent,true);return Task.CompletedTask;
+        });
         await check("what the service creates in its data it can modify and delete but not re-permission",()=>
         {
             var parent=PrivateSession.Create(Path.GetTempPath());var root=Path.Combine(parent,"data");var user=WindowsIdentity.GetCurrent().User!.Value;

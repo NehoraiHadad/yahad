@@ -25,7 +25,9 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
     private static string DataAcl=>NativeInstallFiles.DataAcl(InstallLocations.ServiceSid);
     // Service SIDs follow from the name, so the proxy's entry exists from install. It
     // is on the binary root only: the state root holds the master key and the secrets.
-    internal static string BinaryAcl=>NativeInstallFiles.InstallAcl(InstallLocations.ServiceSid,InstallLocations.ServiceSidFor(LanProxyPaths.ServiceName));
+    // So is Users: Apps & Features starts the uninstall image from an unelevated shell,
+    // which must read the image's manifest before it can ask for elevation at all.
+    internal static string BinaryAcl=>NativeInstallFiles.InstallAcl(InstallLocations.ServiceSid,InstallLocations.ServiceSidFor(LanProxyPaths.ServiceName),"BU");
     private string Dataset=>Path.Combine(InstallLocations.State,"datasets",state!.DataId);
     private string DataPath=>Path.Combine(Dataset,"data");
     private string MasterKey=>Path.Combine(Dataset,"master-key");

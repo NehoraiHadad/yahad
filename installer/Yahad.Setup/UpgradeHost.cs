@@ -261,7 +261,7 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
             NativeInstallFiles.Publish(InstallLocations.StateFile,JsonSerializer.SerializeToUtf8Bytes(next));installed=next;
         }
         else if(installed.Version!=state.To)throw new IOException("INSTALL_STATE_INVALID");
-        Advance("committed");NativeSetupHost.Register(installed);RepairTask.Register(installed.Version,DateTimeOffset.Now);
+        Advance("committed");NativeInstallFiles.SetTreeAcl(InstallLocations.Binaries,NativeSetupHost.BinaryAcl);NativeSetupHost.Register(installed);RepairTask.Register(installed.Version,DateTimeOffset.Now);
         foreach(var directory in Directory.EnumerateDirectories(UpgradeFiles.Versions))
         {var name=Path.GetFileName(directory);if(name!=state.To&&name!=state.From)UpgradeFiles.Remove(directory);}
         if(Directory.Exists(BackupRoot))foreach(var directory in Directory.EnumerateDirectories(BackupRoot))

@@ -176,9 +176,18 @@ internal static class FullInstallerIntegrationTests
         await check("LAN proxy's account reads the binary tree only: the state root does not name it",()=>
         {
             var proxy=InstallLocations.ServiceSidFor(LanProxyPaths.ServiceName);
-            Assert(NativeSetupHost.BinaryAcl==NativeInstallFiles.InstallAcl(InstallLocations.ServiceSid)+$"(A;OICI;0x1200a9;;;{proxy})");
+            Assert(NativeSetupHost.BinaryAcl.Contains($"(A;OICI;0x1200a9;;;{proxy})",StringComparison.Ordinal));
             Assert(!NativeInstallFiles.InstallAcl(InstallLocations.ServiceSid).Contains(proxy,StringComparison.Ordinal));
             Assert(!NativeInstallFiles.DataAcl(InstallLocations.ServiceSid).Contains(proxy,StringComparison.Ordinal));
+            return Task.CompletedTask;
+        });
+        await check("the image Apps & Features starts is readable by an unelevated user, and the state root stays closed",()=>
+        {
+            Assert(SetupOperation.Within(InstallLocations.InstallerImage("1.2.3"),InstallLocations.Binaries));
+            Assert(NativeSetupHost.BinaryAcl.EndsWith("(A;OICI;0x1200a9;;;BU)",StringComparison.Ordinal));
+            Assert(NativeSetupHost.BinaryAcl==NativeInstallFiles.InstallAcl(InstallLocations.ServiceSid,InstallLocations.ServiceSidFor(LanProxyPaths.ServiceName),"BU"));
+            Assert(!NativeInstallFiles.InstallAcl(InstallLocations.ServiceSid).Contains(";BU)",StringComparison.Ordinal));
+            Assert(!NativeInstallFiles.DataAcl(InstallLocations.ServiceSid).Contains(";BU)",StringComparison.Ordinal));
             return Task.CompletedTask;
         });
         await check("installer partial cleanup recognizes only exact generated record names with canonical nonces",()=>
