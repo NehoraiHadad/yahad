@@ -62,6 +62,23 @@ internal static class LanDeploymentTests
             Assert(noHelp.HelpOrigin is null && noHelp.FirewallRules.Count == 1 && !noHelp.Caddyfile.Contains("http://", StringComparison.Ordinal));
             return Task.CompletedTask;
         });
+        await check("LAN HTTPS serves the help page and certificate, read-only, with or without the HTTP page", () =>
+        {
+            foreach (var helpOverHttp in new[] { true, false })
+            {
+                var config = Plan(helpOverHttp).Caddyfile; var end = config.IndexOf("http://", StringComparison.Ordinal);
+                var secure = end < 0 ? config : config[..end];
+                Assert(secure.Contains("@helpPage {\n        method GET HEAD\n        path " + LanDeployment.HelpPath + "\n", StringComparison.Ordinal));
+                Assert(secure.Contains("@certificate {\n        method GET HEAD\n        path /certificate.crt\n", StringComparison.Ordinal));
+                // route keeps this order: the owner's paths first, the application last.
+                var owner = secure.IndexOf("respond @ownerOnly 404", StringComparison.Ordinal);
+                var page = secure.IndexOf("handle @helpPage", StringComparison.Ordinal); var certificate = secure.IndexOf("handle @certificate", StringComparison.Ordinal);
+                var application = secure.IndexOf("reverse_proxy", StringComparison.Ordinal);
+                Assert(secure.Contains("route {\n        respond @ownerOnly 404", StringComparison.Ordinal) && owner < page && page < certificate && certificate < application);
+                Assert(secure[page..application].Contains("form-action 'none'", StringComparison.Ordinal) && secure[certificate..application].Contains("application/pkix-cert", StringComparison.Ordinal));
+            }
+            return Task.CompletedTask;
+        });
         await check("LAN firewall is application-bound TCP Private LocalSubnet and rejects same-name drift", () =>
         {
             var plan = Plan(); Assert(plan.FirewallRules.Count == 2);

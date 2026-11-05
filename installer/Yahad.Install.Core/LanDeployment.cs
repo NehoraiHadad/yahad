@@ -36,6 +36,7 @@ public static class LanDeployment
 {
     public const int HttpsPort = 443;
     public const int HttpHelpPort = 80;
+    public const string HelpPath = "/home-network";
 
     public static LanDeploymentPlan Create(string installationId, IReadOnlyList<LanChoice> choices,
         string selectedAdapterId, string selectedAddress, int appPort, string caddyExecutable,
@@ -57,19 +58,25 @@ public static class LanDeployment
         // There is deliberately no UDP/HTTP3 listener or implicit port-80 redirect.
         config.Append("    servers {\n        protocols h1 h2\n    }\n}\n");
         config.Append(origin).Append(" {\n    bind ").Append(selectedAddress).Append("\n    tls internal\n");
-        config.Append("    @ownerOnly path /health /health/* /api/setup /api/setup/*\n    respond @ownerOnly 404\n");
-        config.Append("    reverse_proxy 127.0.0.1:").Append(appPort).Append(" {\n        flush_interval -1\n    }\n}\n");
+        config.Append("    @ownerOnly path /health /health/* /api/setup /api/setup/*\n");
+        // Not tied to the HTTP page: a browser that goes straight to HTTPS needs these
+        // as well. Public files on the port that is already open, with no new firewall rule.
+        config.Append("    @helpPage {\n        method GET HEAD\n        path ").Append(HelpPath).Append("\n    }\n");
+        config.Append("    @certificate {\n        method GET HEAD\n        path /certificate.crt\n    }\n");
+        config.Append("    route {\n        respond @ownerOnly 404\n");
+        AppendHelpPage(config, "@helpPage", publicJoinDirectory, PublicHeaders("            "));
+        AppendCertificate(config, "@certificate", publicJoinDirectory, PublicHeaders("            "));
+        config.Append("        reverse_proxy 127.0.0.1:").Append(appPort).Append(" {\n            flush_interval -1\n        }\n    }\n}\n");
         if (enableHttpHelp)
         {
             config.Append("http://").Append(selectedAddress).Append(" {\n    bind ").Append(selectedAddress).Append('\n');
             config.Append("    @unsupportedMethod not method GET HEAD\n    @help path / /index.html\n");
-            config.Append("    header {\n        Cache-Control \"no-store\"\n        X-Content-Type-Options \"nosniff\"\n        Referrer-Policy \"no-referrer\"\n");
-            config.Append("        Content-Security-Policy \"default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'none'; frame-ancestors 'none'; base-uri 'none'\"\n    }\n");
+            config.Append(PublicHeaders("    "));
             // route preserves execution order; without it Caddy sorts `handle`
             // before `respond`, which would make the method guard unreachable.
             config.Append("    route {\n        respond @unsupportedMethod 405\n");
-            config.Append("        handle @help {\n            root * ").Append(Quote(publicJoinDirectory)).Append("\n            rewrite * /index.html\n            file_server\n        }\n");
-            config.Append("        handle /certificate.crt {\n            root * ").Append(Quote(publicJoinDirectory)).Append("\n            header Content-Type \"application/pkix-cert\"\n            header Content-Disposition \"attachment; filename=yahad-home-root.crt\"\n            rewrite * /certificate.crt\n            file_server\n        }\n");
+            AppendHelpPage(config, "@help", publicJoinDirectory, "");
+            AppendCertificate(config, "/certificate.crt", publicJoinDirectory, "");
             config.Append("        handle {\n            respond 404\n        }\n    }\n}\n");
         }
         return new(installationId, selectedAdapterId, selectedAddress, appPort, origin,
@@ -83,6 +90,14 @@ public static class LanDeployment
         if (NetworkPlan.LanOrigin(current, plan.AdapterId, plan.Address) != plan.Origin)
             throw new InvalidDataException("NETWORK_SELECTION_CHANGED");
     }
+
+    private static string PublicHeaders(string indent) =>
+        indent + "header {\n" + indent + "    Cache-Control \"no-store\"\n" + indent + "    X-Content-Type-Options \"nosniff\"\n" + indent + "    Referrer-Policy \"no-referrer\"\n" +
+        indent + "    Content-Security-Policy \"default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'none'; frame-ancestors 'none'; base-uri 'none'\"\n" + indent + "}\n";
+    private static void AppendHelpPage(StringBuilder config, string matcher, string directory, string headers) =>
+        config.Append("        handle ").Append(matcher).Append(" {\n").Append(headers).Append("            root * ").Append(Quote(directory)).Append("\n            rewrite * /index.html\n            file_server\n        }\n");
+    private static void AppendCertificate(StringBuilder config, string matcher, string directory, string headers) =>
+        config.Append("        handle ").Append(matcher).Append(" {\n").Append(headers).Append("            root * ").Append(Quote(directory)).Append("\n            header Content-Type \"application/pkix-cert\"\n            header Content-Disposition \"attachment; filename=yahad-home-root.crt\"\n            rewrite * /certificate.crt\n            file_server\n        }\n");
 
     private static string Quote(string path) => "\"" + path.Replace('\\', '/') + "\"";
 }

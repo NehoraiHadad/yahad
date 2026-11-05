@@ -105,6 +105,12 @@ internal sealed class NativeLanInstall(InstallerState application)
             marker.GetProperty("publicHelpTemplate").GetString()!="deploy/lan-help.html")throw new IOException("LAN_PAYLOAD_NOT_SUPPORTED");
         return new UTF8Encoding(false,true).GetString(PayloadBytes("app/deploy/lan-help.html"));
     }
+    private static byte[] HelpPage(string template,LanDeploymentPlan plan,string rootSha256)
+    {
+        if(!template.Contains("__LAN_HTTPS_ORIGIN__",StringComparison.Ordinal)||!template.Contains("__ROOT_SHA256__",StringComparison.Ordinal))throw new IOException("LAN_PAYLOAD_NOT_SUPPORTED");
+        return Encoding.UTF8.GetBytes(template.Replace("__LAN_HTTPS_ORIGIN__",WebUtility.HtmlEncode(plan.Origin),StringComparison.Ordinal)
+            .Replace("__ROOT_SHA256__",WebUtility.HtmlEncode(rootSha256),StringComparison.Ordinal));
+    }
     private static byte[] CertificateBytes()
     {
         // The proxy writes this tree, so a link it left there is never followed.
@@ -177,17 +183,14 @@ internal sealed class NativeLanInstall(InstallerState application)
                 (next.RootSha256!=""||File.Exists(Path.Combine(LanProxyPaths.PublicJoin,"certificate.crt"))))throw new IOException("LAN_CA_STORAGE_DAMAGED");
             Record(LanProxyPaths.Config,Encoding.UTF8.GetBytes(plan.Caddyfile));
             Record(LanProxyPaths.Receipt,Json(new LanProxyReceipt(next.AdapterId,next.Address)));
-            // Only public help is on HTTP; no token, login, family or app route.
+            // The HTTP site has only public help; no token, login, family or app route.
             Record(Path.Combine(LanProxyPaths.PublicJoin,"index.html"),Encoding.UTF8.GetBytes("<!doctype html><meta charset=utf-8><p>הכנת החיבור עדיין לא הושלמה. חזרו למסך המחשב המארח.</p>"));
             NativeLanFirewall.RequireNoDrift(plan.FirewallRules);progress(new("preparing_home_certificate",82));
             await StartProxyAsync(proxy,cancellation);
             var root=await WaitForCertificateAsync(next,cancellation);await StopProxyAsync(proxy,cancellation);RequireConfirmedStop(proxy);
             // Export a newly encoded public DER, never original PEM/file bytes.
             Record(Path.Combine(LanProxyPaths.PublicJoin,"certificate.crt"),root.Der);
-            if(!template.Contains("__LAN_HTTPS_ORIGIN__",StringComparison.Ordinal)||!template.Contains("__ROOT_SHA256__",StringComparison.Ordinal))throw new IOException("LAN_PAYLOAD_NOT_SUPPORTED");
-            var page=template.Replace("__LAN_HTTPS_ORIGIN__",WebUtility.HtmlEncode(plan.Origin),StringComparison.Ordinal)
-                .Replace("__ROOT_SHA256__",WebUtility.HtmlEncode(root.Sha256Fingerprint),StringComparison.Ordinal);
-            Record(Path.Combine(LanProxyPaths.PublicJoin,"index.html"),Encoding.UTF8.GetBytes(page));
+            Record(Path.Combine(LanProxyPaths.PublicJoin,"index.html"),HelpPage(template,plan,root.Sha256Fingerprint));
             next=next with{RootSha256=root.Sha256Fingerprint};Save(next);
             ChangeOrigin(plan.Origin);
             LanDeployment.RequireSelectedAdapter(plan,LanSetupRequest.Choices());NativeNetworkProfile.RequirePrivateProfile(next.AdapterId);
@@ -221,6 +224,16 @@ internal sealed class NativeLanInstall(InstallerState application)
     // An upgrade moves the proxy with the release: stopped, then its image and its
     // firewall rule, and started again only if it should be running.
     internal static Task StopForUpgradeAsync(NativeService proxy)=>StopProxyAsync(proxy,CancellationToken.None);
+    // What the proxy serves comes with the release, not with the one that enabled the
+    // network. The proxy is stopped. Nothing in it names a version, so after a rollback
+    // the older release serves the same files.
+    internal void RefreshServedFiles()
+    {
+        var owned=Read(removing:true,preparing:true);if(owned is not {Phase:"enabled",RootSha256:not ""})return;
+        var plan=Plan(owned);
+        Record(Path.Combine(LanProxyPaths.PublicJoin,"index.html"),HelpPage(RequirePayload(),plan,owned.RootSha256));
+        Record(LanProxyPaths.Config,Encoding.UTF8.GetBytes(plan.Caddyfile));
+    }
     internal void Move(NativeService proxy,string? otherVersion){proxy.SwitchImage(application.Version);MoveFirewall(otherVersion);}
     internal void MoveFirewall(string? otherVersion)
     {

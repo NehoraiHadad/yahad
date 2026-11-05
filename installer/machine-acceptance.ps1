@@ -298,6 +298,32 @@ function PlaceLanProxy([string]$Version) {
     if ($LASTEXITCODE -ne 0) { throw "sc.exe privs ended $LASTEXITCODE" }
     Start-Service -Name $lanService
 }
+# What enable publishes once Caddy has made its authority.
+function PublishLanRoot {
+    $root = [Security.Cryptography.X509Certificates.X509Certificate2]::new((Join-Path $lanRoot 'data\pki\authorities\local\root.crt'))
+    $script:lanRootDer = $root.RawData
+    $script:lanRootSha256 = ($root.GetCertHashString([Security.Cryptography.HashAlgorithmName]::SHA256) -replace '(..)(?=.)', '$1:')
+    [IO.File]::WriteAllBytes((Join-Path $lanRoot 'join-public\certificate.crt'), $lanRootDer)
+    $owner = Get-Content -LiteralPath (Join-Path $lanRoot 'owner.json') -Raw | ConvertFrom-Json
+    $owner.RootSha256 = $lanRootSha256
+    [IO.File]::WriteAllText((Join-Path $lanRoot 'owner.json'), (Json $owner), [Text.UTF8Encoding]::new($false))
+}
+# A device that opens HTTPS directly reaches the help page and the certificate, and the
+# application, the owner's paths and the public files' methods stay what they were.
+function RequireLanHelpOverHttps {
+    function LanGet([string]$Path, [string]$Method = 'GET') { Invoke-WebRequest -Uri "https://$lanAddress$Path" -Method $Method -SkipCertificateCheck -SkipHttpErrorCheck -UseBasicParsing -TimeoutSec 15 }
+    $page = LanGet '/home-network'
+    if ($page.StatusCode -ne 200 -or "$($page.Headers['Content-Type'])" -notmatch '^text/html') { throw "The help page answered $($page.StatusCode) $($page.Headers['Content-Type'])" }
+    if (!$page.Content.Contains($lanRootSha256) -or !$page.Content.Contains("https://$lanAddress") -or $page.Content.Contains('__LAN_HTTPS_ORIGIN__')) { throw 'The help page is not this release''s page for this installation' }
+    if ("$($page.Headers['Content-Security-Policy'])" -notmatch "default-src 'none'") { throw 'The help page lost its content policy' }
+    $certificate = LanGet '/certificate.crt'
+    if ($certificate.StatusCode -ne 200 -or "$($certificate.Headers['Content-Type'])" -ne 'application/pkix-cert') { throw "The certificate answered $($certificate.StatusCode) $($certificate.Headers['Content-Type'])" }
+    if ([Convert]::ToBase64String($certificate.Content) -ne [Convert]::ToBase64String($lanRootDer)) { throw 'The certificate served is not the installation''s root' }
+    $application = LanGet '/'
+    if ($application.StatusCode -ne 200 -or "$($application.Headers['Content-Security-Policy'])" -match "default-src 'none'") { throw 'The proxy no longer serves the application' }
+    if ((LanGet '/health').StatusCode -ne 404) { throw 'The owner''s health path is reachable from the network' }
+    if ("$((LanGet '/home-network' 'POST').Headers['Content-Security-Policy'])" -match "default-src 'none'") { throw 'The help page accepted a POST' }
+}
 function PauseLanProxy {
     Stop-Service -Name $lanService
     & sc.exe config $lanService start= demand | Out-Null
@@ -663,6 +689,7 @@ try {
     Phase 'lan-proxy' {
         PlaceLanProxy $version
         RequireLanProxyAt $version $true
+        PublishLanRoot
     }
     Phase 'upgrade' {
         # The Updater's own install path from the parent's click on. The release is
@@ -717,6 +744,7 @@ try {
         if ($retained -ne $upgradeRelease.setup.sha256) { throw 'The retained Setup is not the signed one' }
         RequireAccessBoundaries $upgradeRelease.version
         RequireLanProxyAt $upgradeRelease.version $true
+        RequireLanHelpOverHttps
     }
     Phase 'refuse-replay' {
         $null = RunSetupExpecting $baseSetup @('--quiet-upgrade', $baseDirectory) (Join-Path $out 'refuse-downgrade-result.json') 'RELEASE_NOT_NEWER' 2

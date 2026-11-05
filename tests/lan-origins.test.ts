@@ -24,6 +24,8 @@ test('LAN payload advertises its origin contract and ships public help without a
   assert.doesNotMatch(help, /<script\b|<form\b|<input\b|<iframe\b|\/api\/|#setup=/i);
   assert.deepEqual([...help.matchAll(/href="([^"]+)"/g)].map((entry) => entry[1]),
     ['__LAN_HTTPS_ORIGIN__/', '/certificate.crt']);
+  // The same page is served over HTTP and HTTPS.
+  assert.doesNotMatch(help, /נשלחים ב.HTTP/);
 });
 
 test('additional entry points are bounded exact HTTPS or loopback origins; cookie downgrade is rejected', () => {
