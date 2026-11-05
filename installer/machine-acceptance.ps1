@@ -505,6 +505,13 @@ function RequireAccessBoundaries([string]$Version) {
         try { $granted = EffectiveRights $path $userToken } catch [Management.Automation.ItemNotFoundException] { continue }
         if ($granted -ne 0) { throw ('Users hold rights 0x{0:x} on {1}' -f $granted, $path) }
     }
+    # Apps & Features starts the retained Setup unelevated, and the shell reads its
+    # manifest before it can ask for elevation; this has to hold or removal never opens.
+    foreach ($path in @($installDirectories + (RetainedSetup $Version))) {
+        $granted = EffectiveRights $path $userToken
+        if ($granted -band $anyChange) { throw ('Users hold change rights 0x{0:x} on {1}' -f $granted, $path) }
+        if (($granted -band 0x21) -ne 0x21) { throw ('Users hold only 0x{0:x} on {1}, so Apps & Features cannot start removal' -f $granted, $path) }
+    }
 
     # The proxy's account reads the binary tree to run from it, and nothing of the state.
     foreach ($path in @($installDirectories + (RetainedSetup $Version) + (LanCaddy $Version))) {
@@ -702,6 +709,10 @@ try {
         Copy-Item -Path (Join-Path $upgradeDirectory '*') -Destination $stage
         # The folder exists only while it holds a release, so it is checked now.
         RequireAccessBoundaries $version
+        # An installation from before Users could read the binaries: the upgrade below
+        # has to bring it to the current ACL, which the check after it requires.
+        & icacls.exe $programFiles /remove:g '*S-1-5-32-545' /Q | Out-Null
+        if ($LASTEXITCODE -ne 0 -or ((EffectiveRights $programFiles @('S-1-5-21-1-2-3-1001', 'S-1-5-32-545')) -ne 0)) { throw 'Could not recreate the older binary ACL' }
         Restart-Service -Name $updater
         $status = UpdatesStatus
         $manifest = Join-Path $upgradeDirectory "yahad-windows-$($upgradeRelease.version).json"

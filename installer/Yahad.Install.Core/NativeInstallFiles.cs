@@ -14,9 +14,10 @@ internal static class NativeInstallFiles
     {using var user=WindowsIdentity.GetCurrent();if(!new WindowsPrincipal(user).IsInRole(WindowsBuiltInRole.Administrator))throw new UnauthorizedAccessException("ADMIN_REQUIRED");}
     // Administrators write and the service only reads: binaries and the records
     // elevated code later trusts, so the service can never shape what they consume.
-    // The binary tree alone also names the home-network proxy, which runs from it.
-    internal static string InstallAcl(params string[] serviceSids)=>Acl("0x1200a9",serviceSids);
-    // The service's own data, which it may modify. Users have no access to either.
+    // The binary tree alone also names the home-network proxy, which runs from it,
+    // and Users, whose unelevated shell starts the uninstall image.
+    internal static string InstallAcl(params string[] readers)=>Acl("0x1200a9",readers);
+    // The service's own data, which it may modify. Users have no access to it or to the state root.
     // The service owns what it creates there, and an owner may rewrite the ACL unless an
     // OWNER RIGHTS entry says otherwise, so one states what an owner gets here.
     internal static string DataAcl(string serviceSid)=>Acl("0x1301bf",serviceSid)+"(A;OICI;0x1301bf;;;OW)";
@@ -27,6 +28,13 @@ internal static class NativeInstallFiles
         var bytes=acl is null?null:Bytes(acl);var pin=bytes is null?default:GCHandle.Alloc(bytes,GCHandleType.Pinned);
         var attributes=new Attributes{Length=Marshal.SizeOf<Attributes>(),Descriptor=bytes is null?IntPtr.Zero:pin.AddrOfPinnedObject()};
         try{if(!CreateDirectoryW(Extended(path),ref attributes))throw new Win32Exception();}finally{if(bytes is not null)pin.Free();}
+    }
+    // Brings an installation made under an older ACL to the current one: Windows
+    // carries the root's new entries down to everything that inherits them.
+    internal static void SetTreeAcl(string root,string acl)
+    {
+        var security=new DirectorySecurity();security.SetSecurityDescriptorSddlForm(acl,AccessControlSections.Access);
+        new DirectoryInfo(root).SetAccessControl(security);
     }
     internal static byte[] ReadRecord(string path,int maximum=16777216)
     {using var file=WindowsFileBoundary.OpenRead(path);return file.Small(maximum);}

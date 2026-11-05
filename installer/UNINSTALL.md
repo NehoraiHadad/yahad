@@ -7,6 +7,12 @@ action footer support the minimum 760×620 window; radio buttons, input and acti
 have keyboard order and accessible labels. A normal installer opened over an
 existing installation offers an uninstall-options link without requiring a command.
 
+Windows Settings starts the registered `Yahad.Setup.exe --uninstall` from an
+unelevated shell, so the binary tree grants Users read and execute; without that
+Windows refuses with "cannot access the specified device, path, or file" before any
+UAC prompt. An installation made under the older ACL gains this entry on its next
+upgrade; until then, start the same command from an elevated terminal.
+
 Both choices stop and remove only `Yahad.Acceptance`, remove verified owned binary
 files under `C:\Program Files\Yahad.FirstInstall`, remove the exact Yahad uninstall
 registration, and remove the original owner's matching Start Menu URL when present.
