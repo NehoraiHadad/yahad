@@ -28,7 +28,7 @@
       <ComboBox x:Name="LanAddress" DisplayMemberPath="Label" SelectionChanged="LanAddressChanged" MinHeight="36" Margin="0,9,0,9" AutomationProperties.Name="החיבור של המחשב לרשת הביתית"/>
       <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
        <CheckBox x:Name="LanHttpHelp" IsChecked="True" Checked="LanChanged" Unchecked="LanChanged" VerticalAlignment="Top" AutomationProperties.LabeledBy="{Binding ElementName=LanHelpLabel}"/>
-       <TextBlock x:Name="LanHelpLabel" Grid.Column="1" Text="להוסיף דף עזרה להגדרת הטלפון (מומלץ)" TextWrapping="Wrap" Margin="8,0,0,0"/>
+       <TextBlock x:Name="LanHelpLabel" Grid.Column="1" Text="להוסיף כתובת HTTP לדף העזרה, שנפתחת בלי אזהרת דפדפן (מומלץ)" TextWrapping="Wrap" Margin="8,0,0,0"/>
       </Grid>
       <TextBlock Text="המחשב צריך להישאר דלוק כדי שיחד תעבוד בטלפון. בפעם הראשונה נדרשת הגדרה קצרה בכל טלפון או טאבלט; ההוראות יופיעו בסיום." FontSize="12" TextWrapping="Wrap" Foreground="#5C716B" Margin="0,9,0,10"/>
       <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>

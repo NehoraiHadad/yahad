@@ -55,7 +55,7 @@ public partial class MainWindow
         LanResultPanel.Visibility=Visibility.Visible;LanRootFingerprint.Text=lan.RootSha256;
         SaveLanCertificate.Visibility=lan.CertificateDerBase64 is null?Visibility.Collapsed:Visibility.Visible;
         LanResultText.Text="כתובת יחד בבית: "+lan.Origin+"\n"+
-            (lan.HelpOrigin is null?"דף HTTP אינו מופעל. ניתן להעביר את התעודה הציבורית מהמחשב באמצעות ערוץ עצמאי.":"דף ההצטרפות: "+lan.HelpOrigin)+"\n"+
+            "דף ההצטרפות: "+(lan.HelpOrigin??lan.Origin+LanDeployment.HelpPath)+"\n"+
             "חיבור HTTPS מהמחשב נבדק. כניסה ממכשיר נוסף עדיין לא נבדקה.";
     }
     private void SaveLanCertificate_Click(object sender,RoutedEventArgs e)

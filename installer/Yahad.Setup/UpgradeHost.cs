@@ -170,6 +170,7 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
             await updater.StopAsync(CancellationToken.None);await StopProxyAsync();await service.StopAsync(CancellationToken.None);Advance("stopped");
             if(state.SchemaChanged)DatabaseBackup.Create(DataPath,Backup);
             Advance("backed_up");
+            if(Proxy() is not null)new NativeLanInstall(installed with{Version=state.To,Files=state.Target.Files}).RefreshServedFiles();
             service.SwitchImage(state.To);updater.SwitchImage(state.To);MoveProxy(state.To,state.From);Advance("switched");
             state=state with{HealthDeadlineUnix=UpgradeFiles.HealthDeadline()};
             await service.StartAsync(CancellationToken.None);Advance("started");

@@ -2470,6 +2470,7 @@ a {
 .family-form-actions .primary { flex:1; }
 .setup-success,.setup-link-notice { padding:14px; border-radius:12px; background:#e9f3ec; color:#244d3c; line-height:1.7; }
 .setup-link-notice { position:absolute; top:12px; inset-inline:12px; z-index:2; }
+.home-network-help { display:block; margin-top:14px; text-align:center; color:#176a54; line-height:1.6; }
 
 button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible { outline:3px solid #167b68; outline-offset:3px; }
 @media(max-width:600px) { .family-form.modal { padding:18px; max-height:calc(100dvh - 20px); } .family-form-actions { bottom:-18px; } .parent-nav > div:last-child { flex-wrap:wrap; } }

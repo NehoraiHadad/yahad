@@ -271,6 +271,9 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
   const [setupDone, setSetupDone] = useState(false);
   const [setupState, setSetupState] = useState('');
   useEffect(() => { void fetch('/api/setup/status').then(r => r.json()).then(x => setSetupState(x.state)).catch(() => {}); }, []);
+  // Only the home-network proxy answers here with a certificate; anywhere else this is the app's page.
+  const [homeNetworkHelp, setHomeNetworkHelp] = useState(false);
+  useEffect(() => { void fetch('/certificate.crt', { method: 'HEAD' }).then(r => setHomeNetworkHelp(r.headers.get('content-type') === 'application/pkix-cert')).catch(() => {}); }, []);
   const [name, setName] = useState(''),
     [password, setPassword] = useState(''),
     [show, setShow] = useState(false),
@@ -372,6 +375,7 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
         <div className="login-note">
           <LockKeyhole size={15} /> כניסה אישית · מכשיר משותף? זכרו לנעול ביציאה
         </div>
+        {homeNetworkHelp && <a className="home-network-help" href="/home-network">הדפדפן הציג אזהרת אבטחה? כך מגדירים את המכשיר, פעם אחת</a>}
       </form>
     </main>
   );
