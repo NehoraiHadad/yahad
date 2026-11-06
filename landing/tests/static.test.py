@@ -43,7 +43,9 @@ how_css=(ROOT/'dist/how.css').read_text()
 for stylesheet in [css,how_css]:
  for asset in re.findall(r'url\([\'"]?([^\)\'"]+)',stylesheet):
   assert (ROOT/'dist'/asset).is_file(),asset
-assert 'how' in d.classes and {'how.js','how.css'}.issubset(d.assets)
+assets={asset.split('?',1)[0] for asset in d.assets}
+assert 'how' in d.classes and {'how.js','how.css'}.issubset(assets)
+assert 'class="how-scroll-track" aria-hidden="true"' in s
 for part in ['dev-phone','dev-tablet','scr-chat','kid-reply','wa-reply']:
  assert part in d.allclasses,f'Missing static illustration element: {part}'
 assert 'demo.js' not in d.assets

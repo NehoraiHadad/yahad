@@ -29,19 +29,28 @@
 .how-cap p { color: var(--mut); font-size: 16px; margin-top: 8px; max-width: 36ch; }
 .how-progress { display: none; }
 
-.how[data-scroll] {
-  --step-distance: clamp(124px, 27svh, 224px);
-}
-.how[data-scroll]::after {
-  content: "";
+/* The small viewport leaves room for mobile browser controls. Let the artwork
+   shrink in its grid row, with a minimum height set by the readable text. */
+.how-scroll-track { display: none; }
+.how[data-scroll] .how-scroll-track {
   display: block;
-  block-size: calc(var(--step-count) * var(--step-distance));
+  block-size: calc(var(--step-count) * clamp(100px, 24vh, 210px));
+  block-size: calc(var(--step-count) * clamp(100px, 24svh, 210px));
 }
 .how[data-scroll] .how-stage {
   position: sticky;
-  top: 0;
-  min-block-size: 100svh;
-  padding-block: 20px;
+  inset-block-start: 0;
+  block-size: min(100vh, 760px);
+  block-size: min(100svh, 760px);
+  min-block-size: min-content;
+  grid-template-rows: auto minmax(0, 1fr);
+  padding-block: clamp(10px, 2.5vh, 20px);
+}
+.how[data-scroll] .how-scene {
+  block-size: auto;
+  min-block-size: 0;
+  max-block-size: 505px;
+  align-self: stretch;
 }
 .how[data-scroll] .how-progress {
   display: flex;
@@ -155,24 +164,33 @@
 .how-packet {
   display: none;
   position: absolute;
-  right: var(--travel, 50%);
+  inset: 0;
+  transform: translateX(var(--travel, -50%));
+}
+.how-packet svg {
+  position: absolute;
   top: 50%;
+  right: 0;
   transform: translate(50%, -50%);
   width: 26px;
   height: 26px;
-  place-items: center;
+  padding: 5px;
   border-radius: 50%;
   background: var(--g);
   color: white;
 }
-.how-packet svg { width: 15px; height: 15px; }
 .how[data-step="5"] .how-packet-photo,
 .how[data-step="6"] .how-packet-lock,
 .how[data-step="7"] .how-packet-reply { display: grid; }
-.how-packet-lock { background: #8a4a22; }
+.how-packet-lock svg { background: #8a4a22; }
+@media (prefers-reduced-motion: reduce) {
+  .how-packet { transform: translateX(-50%); }
+}
 
 @media (max-width: 760px) {
   .how-stage { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .how[data-scroll] .how-stage { grid-template-rows: auto auto minmax(0, 1fr); }
+  .how[data-scroll] .how-scene { max-block-size: 370px; }
   .how-scene { height: 240px; height: clamp(222px, 43svh, 330px); }
   .how-cam { grid-template-columns: minmax(0, 3fr) 36px minmax(0, 5fr); }
   .how .dev-phone { --scale: .22; }
@@ -189,6 +207,22 @@
       --scale: min(.62, calc((100cqw - 10px) / 560px), calc((100cqh - 14px) / 392px));
     }
   }
+}
+
+@media (max-height: 520px) {
+  .how[data-scroll] .how-stage { row-gap: 8px; }
+  .how-header h2 { font-size: 1.5rem; }
+  .how[data-scroll] .how-progress { margin-bottom: 4px; }
+}
+@media (max-height: 520px) and (min-width: 600px) and (max-width: 760px) {
+  .how[data-scroll] .how-stage {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+}
+@media (max-height: 310px) and (max-width: 599px) {
+  .how[data-scroll] .how-scene { display: none; }
+  .how[data-scroll] .how-stage { grid-template-rows: auto 1fr; }
 }
 
 /* Device artwork */
