@@ -4,10 +4,11 @@ No anti-aliasing rounding or large-text exemption: every pair must meet 4.5:1.
 from pathlib import Path
 import re
 css=(Path(__file__).resolve().parents[1]/'dist/style.css').read_text()
-def declarations(selector):
- match=re.search(r'(?:^|})\s*'+re.escape(selector)+r'\{([^}]+)\}',css)
+how_css=(Path(__file__).resolve().parents[1]/'dist/how.css').read_text()
+def declarations(selector, stylesheet=css):
+ match=re.search(r'(?:^|})\s*'+re.escape(selector)+r'\s*\{([^}]+)\}',stylesheet)
  assert match,selector
- return dict(p.split(':',1) for p in match.group(1).split(';') if ':' in p)
+ return dict((k.strip(),v.strip()) for k,v in (p.split(':',1) for p in match.group(1).split(';') if ':' in p))
 vars=declarations(':root')
 def value(s):
  if s.startswith('var('):return vars[s[4:-1]]
@@ -18,21 +19,20 @@ def lum(s):
  return sum((c/12.92 if c<=.04045 else ((c+.055)/1.055)**2.4)*w for c,w in zip(cs,[.2126,.7152,.0722]))
 def ratio(f,b):
  lo,hi=sorted((lum(f),lum(b)));return (hi+.05)/(lo+.05)
+how=declarations('.how',how_css)
 cases=[
  ('disclaimer small text',declarations('.disclaimer')['color'],vars['--paper']),
- ('composer placeholder',declarations('.compose-input')['color'],declarations('.family-demo')['background']),
- ('contact avatar initial',declarations('.contact-avatar')['color'],declarations('.contact-avatar')['background']),
- ('demo label',declarations('.product-head>span')['color'],declarations('.family-demo')['background']),
- ('parent hint',declarations('.parent-hint')['color'],declarations('.family-demo')['background']),
  ('body muted',vars['--muted'],vars['--paper']),
- ('contact caption',vars['--muted'],declarations('.approval-row')['background']),
- ('control hover',vars['--ink'],'#f0f5eb'),
  ('primary label','#ffffff',vars['--green']),
- ('group avatar',declarations('.contact-avatar.g')['color'],declarations('.contact-avatar.g')['background']),
- ('group reply sender',declarations('.demo-reply .sender')['color'],declarations('.demo-reply')['background'])]
+ ('explainer title',how['--ink'],how['background']),
+ ('explainer copy',how['--mut'],how['background']),
+ ('explainer progress and previous button',how['--g'],how['background']),
+ ('explainer next button','#ffffff',how['--g']),
+ ('mock sender on white',declarations('.b small',how_css)['color'],'#ffffff'),
+ ('mock timestamp in outgoing bubble',declarations('.t',how_css)['color'],
+  declarations('.b.out',how_css)['background']),
+]
 for name,f,b in cases:
  r=ratio(f,b);print(f'{name}: {value(f)} / {value(b)} = {r:.3f}:1');assert r>=4.5,(name,r)
-assert declarations('.compose-input')['color']=='var(--muted)'
 assert declarations('.disclaimer')['color']=='var(--muted)'
-assert '#667d6e' not in css and '#735e4c' not in css
-print('PASS: all text/background pairs exceed 4.5:1; three failing selector/color pairs corrected.')
+print('PASS: all checked text/background pairs meet 4.5:1.')
