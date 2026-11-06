@@ -11,7 +11,12 @@ const viewports = [
   { width: 1440, height: 900 },
 ];
 
-async function scrollToChapter(page, chapter, distance = 24) {
+const beats = ['connect', 'approve', 'blocked', 'signin', 'photo', 'type', 'reply'];
+
+async function scrollToBeat(page, beat, progress = 0.5) {
+  const index = beats.indexOf(beat);
+  const chapter = index === 0 ? 1 : index <= 3 ? 2 : 3;
+  const distance = index === 0 ? progress * 110 : (index - (chapter === 2 ? 1 : 4) + progress) / 3 * 196;
   await page.evaluate(({ chapter, distance }) => {
     const demo = document.querySelector('.how-demo');
     const story = document.querySelector('.how-story');
@@ -25,7 +30,7 @@ async function scrollToChapter(page, chapter, distance = 24) {
   }, { chapter, distance });
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await page.waitForFunction(
-    expected => document.querySelector('.how').dataset.chapter === String(expected), chapter, { timeout: 2000 },
+    expected => document.querySelector('.how').dataset.beat === expected, beat, { timeout: 2000 },
   );
 }
 
@@ -39,7 +44,14 @@ function measure(page) {
     return {
       viewportHeight: innerHeight,
       demo: rect('.how-demo'), phone: rect('.dev-phone'), tablet: rect('.dev-tablet'), bridge: rect('.how-bridge'),
-      packet: packet?.querySelector('svg').getBoundingClientRect().toJSON(),
+      packet: packet?.querySelector('svg, .packet-mark').getBoundingClientRect().toJSON(),
+      scene: rect('.how-scene'), phoneOpacity: Number(getComputedStyle(section.querySelector('.dev-phone')).opacity),
+      tabletOpacity: Number(getComputedStyle(section.querySelector('.dev-tablet')).opacity),
+      linked: section.hasAttribute('data-linked'), lock: section.hasAttribute('data-lock'),
+      badge: getComputedStyle(section.querySelector('.message-badge')).display !== 'none',
+      switches: section.querySelectorAll('[data-approval].on').length,
+      pins: section.querySelectorAll('.pin .filled').length,
+      typed: section.querySelector('.typed').textContent,
       captionCount: captions.filter(el => getComputedStyle(el).opacity === '1').length,
       activeCount: captions.filter(el => el.getAttribute('aria-current') === 'step').length,
       sticky: getComputedStyle(section.querySelector('.how-demo')).position === 'sticky',
@@ -60,7 +72,7 @@ async function swipeUp(page) {
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
   }
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-  await page.waitForFunction(() => Number(document.querySelector('.how').dataset.chapter) > 1, null, { timeout: 2500 });
+  await page.waitForFunction(() => document.querySelector('.how').dataset.beat !== 'connect', null, { timeout: 2500 });
 }
 
 async function withPage(options, test) {
@@ -83,38 +95,55 @@ async function main() {
       page.on('pageerror', error => errors.push(error.message));
       await page.goto(url.href);
       await page.evaluate(() => document.fonts.ready);
-      for (const chapter of [1, 2, 3]) {
-        await scrollToChapter(page, chapter);
+      for (const [beat, progress] of beats.flatMap(beat => [0.12, 0.5, 0.92].map(progress => [beat, progress]))) {
+        await scrollToBeat(page, beat, progress);
         const view = await measure(page);
         assert.ok(view.sticky && !view.overflow, label);
         assert.equal(view.activeCount, 1, label);
         assert.equal(view.captionCount, 3, label);
-        assert.ok(view.tablet.right <= view.bridge.left + 1 && view.phone.left >= view.bridge.right - 1, label);
+        for (const [device, opacity] of [[view.tablet, view.tabletOpacity], [view.phone, view.phoneOpacity]]) {
+          if (opacity > 0.05) {
+            assert.ok(device.left >= view.scene.left - 1 && device.right <= view.scene.right + 1, `${label} ${beat} horizontal crop`);
+            assert.ok(device.top >= view.scene.top - 1 && device.bottom <= view.scene.bottom + 1, `${label} ${beat} vertical crop`);
+          }
+        }
+        if (view.tabletOpacity > 0.05 && view.phoneOpacity > 0.05) assert.ok(view.tablet.right <= view.phone.left, label);
         if (view.packet) assert.ok(view.packet.left >= view.bridge.left - 1 && view.packet.right <= view.bridge.right + 1, label);
       }
 
-      await scrollToChapter(page, 3, 10);
-      const early = await measure(page);
-      await scrollToChapter(page, 3, 30);
-      const photoInTransit = await measure(page);
-      assert.equal(early.photoVisible, false, label);
-      if (reducedMotion) assert.equal(early.packet.left, photoInTransit.packet.left, label);
-      else assert.ok(photoInTransit.packet.left < early.packet.left, label);
-
-      await scrollToChapter(page, 3, 58);
+      await scrollToBeat(page, 'connect', 0.18);
+      assert.equal((await measure(page)).linked, false, label);
+      await scrollToBeat(page, 'approve', 0.45);
+      assert.equal((await measure(page)).switches, 2, label);
+      await scrollToBeat(page, 'blocked', 0.52);
+      const stopped = await measure(page);
+      assert.equal(stopped.lock, true, label);
+      await scrollToBeat(page, 'blocked', 0.94);
+      const bounced = await measure(page);
+      if (!reducedMotion) assert.ok(bounced.packet.left > stopped.packet.left, label);
+      await scrollToBeat(page, 'signin', 0.76);
+      assert.equal((await measure(page)).pins, 4, label);
+      await scrollToBeat(page, 'photo', 0.36);
+      const earlyPhoto = await measure(page);
+      await scrollToBeat(page, 'photo', 0.56);
+      const latePhoto = await measure(page);
+      if (reducedMotion) assert.equal(earlyPhoto.packet.left, latePhoto.packet.left, label);
+      else assert.ok(latePhoto.packet.left < earlyPhoto.packet.left, label);
+      await scrollToBeat(page, 'photo', 0.76);
+      assert.equal((await measure(page)).badge, true, label);
+      await scrollToBeat(page, 'type', 0.60);
+      assert.ok((await measure(page)).typed.startsWith('וואו'), label);
+      await scrollToBeat(page, 'reply', 0.55);
       const replyInTransit = await measure(page);
-      assert.equal(replyInTransit.photoVisible, true, label);
       assert.equal(replyInTransit.childReplyVisible, true, label);
       assert.equal(replyInTransit.replyVisible, false, label);
-      await scrollToChapter(page, 3, 95);
-      const delivered = await measure(page);
-      assert.equal(delivered.replyVisible, true, label);
-      assert.ok(delivered.phone.top >= -1 && delivered.phone.bottom <= delivered.viewportHeight + 1, label);
-      await scrollToChapter(page, 1);
+      await scrollToBeat(page, 'reply', 0.88);
+      assert.equal((await measure(page)).replyVisible, true, label);
+      await scrollToBeat(page, 'connect', 0.25);
       if (height === 520) {
         await swipeUp(page);
         await page.setViewportSize({ width, height: 480 });
-        await scrollToChapter(page, 2);
+        await scrollToBeat(page, 'blocked');
         assert.equal((await measure(page)).activeCount, 1, 'resize keeps the story active');
       }
       const faq = page.locator('#faq');
@@ -122,7 +151,7 @@ async function main() {
       assert.ok(await faq.evaluate(el => el.getBoundingClientRect().top < innerHeight), label);
       assert.deepEqual(errors, [], label);
     });
-    console.log(`PASS: ${label}, three chapters, transfers, reverse scrolling and exit`);
+    console.log(`PASS: ${label}, seven beats, camera bounds, transfers, reverse scrolling and exit`);
   }
 
   for (const javaScriptEnabled of [false, true]) {

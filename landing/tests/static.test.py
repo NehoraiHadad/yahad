@@ -51,7 +51,7 @@ for part in ['dev-phone','dev-tablet','scr-chat','kid-reply','wa-reply']:
 assert 'demo.js' not in d.assets
 assert 'href="#how-it-works"' in s and 'class="primary" href="#download"' in s
 explainer=s.split('id="how-it-works"',1)[1].split('</section>',1)[0]
-chapters=re.findall(r'<li class="how-chapter"[^>]+>\s*<p[^>]+>.*?</p>\s*<h3>(.*?)</h3>\s*<p>(.*?)</p>',explainer)
+chapters=re.findall(r'<li class="how-chapter">\s*<p[^>]+>.*?</p>\s*<h3>(.*?)</h3>\s*<p>(.*?)</p>',explainer)
 assert len(chapters)==3 and all(title and copy for title,copy in chapters)
 assert 'QR' in chapters[0][1] and 'בטאבלט' in chapters[0][1]
 assert 'שיחות שלא אושרו' in chapters[1][1] and 'הפרטי' in chapters[1][1]
