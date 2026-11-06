@@ -18,9 +18,6 @@ class Document(HTMLParser):
   if a.get('id')=='how-it-works':self.classes=a['class'].split()
   classes=a.get('class','').split()
   self.allclasses.extend(classes)
-  for part, slot in [('dev-phone','how-phone-slot'),('dev-tablet','how-tablet-slot'),('how-packet','how-bridge')]:
-   if part in classes:
-    assert any(slot in parents for _,parents in self.stack),f'{part} must stay inside {slot}'
   if tag not in self.void:self.stack.append((tag,classes))
  def handle_endtag(self,tag):
   assert self.stack and self.stack[-1][0]==tag,f'Mismatched {tag} at {self.getpos()}'
@@ -44,24 +41,19 @@ for stylesheet in [css,how_css]:
  for asset in re.findall(r'url\([\'"]?([^\)\'"]+)',stylesheet):
   assert (ROOT/'dist'/asset).is_file(),asset
 assets={asset.split('?',1)[0] for asset in d.assets}
-assert 'how' in d.classes and {'how.js','how.css'}.issubset(assets)
-assert 'how-scroll-track' not in d.allclasses
-for part in ['dev-phone','dev-tablet','scr-chat','kid-reply','wa-reply']:
- assert part in d.allclasses,f'Missing static illustration element: {part}'
+# Scroll-driven explainer: 7 pinned steps, phone + tablet in CSS 3D.
+assert 'how' in d.classes,'How-it-works section missing'
+assert {'how.js','how.css'}.issubset(assets)
 assert 'demo.js' not in d.assets
+for part in ['dev-phone','dev-tablet','scr-chat','kid-reply','wa-reply']:assert part in d.allclasses,f'no-JS end state part missing: {part}'
+visible=re.sub(r'<!--.*?-->','',s,flags=re.S)
+assert 'המחשה' not in visible,'No illustration disclaimer wording on the visible page'
+caps=re.findall(r'<li class="how-cap" data-cap="(\d)">',visible);assert caps==['0','1','2','3','4','5','6'],caps
+assert visible.index('מחברים פעם אחת')<visible.index('סבתא שולחת תמונה לקבוצה בוואטסאפ')<visible.index('יחד מעביר אותה לטאבלט של נועה')<visible.index('שיחה פרטית לא עוברת')<visible.index('אתם בוחרים אילו קבוצות')<visible.index('לנועה יש כניסה אישית משלה')<visible.index('היא עונה, וסבתא מקבלת בוואטסאפ')
+explainer=visible.split('id="how-it-works"',1)[1].split('</section>',1)[0]
+assert 'class="primary download-action"' not in explainer,'No download call to action inside the explainer'
 assert 'href="#how-it-works"' in s and 'class="primary" href="#download"' in s
-explainer=s.split('id="how-it-works"',1)[1].split('</section>',1)[0]
-chapters=re.findall(r'<li class="how-chapter">\s*<p[^>]+>.*?</p>\s*<h3>(.*?)</h3>\s*<p>(.*?)</p>',explainer)
-assert len(chapters)==3 and all(title and copy for title,copy in chapters)
-assert 'QR' in chapters[0][1] and 'בטאבלט' in chapters[0][1]
-assert 'שיחות שלא אושרו' in chapters[1][1] and 'הפרטי' in chapters[1][1]
-assert 'עם השם של נועה' in chapters[2][1]
-assert '<button' not in explainer, 'The story advances by scrolling'
-for part in ['how-phone-slot','how-tablet-slot','how-bridge','how-scene-label']:
- assert part in d.allclasses,f'Missing scroll scene element: {part}'
-assert '.how[data-scroll] .how-demo' in how_css and 'position: sticky' in how_css
-assert 'grid-area: 1 / 1' in how_css and 'grid-area: 1 / 3' in how_css
-assert 'class="how-demo" aria-hidden="true" hidden' in explainer
+assert '.how-live' in how_css,'motion styles only apply once how.js opts in (reduced motion / no-JS keep the still)'
 assert 'prefers-reduced-motion:reduce' in css
 assert 'מכסת זמן יומית לכל ילד' in s
 assert '0.5.3' not in s and 'room.png' not in css and 'sun.png' not in s
@@ -113,5 +105,5 @@ assert validate_download(s.replace(' disabled','',1)),'pending enabled button ac
 assert validate_download(activate(s,'linux','https://example.com/installer.exe')),'non-repo download URL accepted'
 assert validate_download(re.sub(r'data-state="pending"','data-state="ready"',s,count=1)),'ready without link accepted'
 assert validate_download(s.replace('data-state="ready"','data-state="pending"',1)),'pending with link accepted'
-print('PASS: Hebrew RTL, all anchors/assets/CSS URLs, static explainer and scroll structure, reduced-motion CSS, caption order, per-platform pending downloads + ready-state fixtures, quota wording, explicit illustration dimensions and <250 kB budget')
+print('PASS: Hebrew RTL, all anchors/assets/CSS URLs, 7-step scroll explainer and caption order, reduced-motion CSS, caption order, per-platform pending downloads + ready-state fixtures, quota wording, explicit illustration dimensions and <250 kB budget')
 print('NOTE: static checks do not establish responsive rendering, contrast, browser focus or live motion behavior.')

@@ -32,10 +32,8 @@ python3 -X utf8 tests/static.test.py
 python3 -X utf8 tests/contrast.test.py
 ```
 
-For browser checks, serve the page as above, use a test environment with
-Playwright and Chromium installed, and run `node tests/how.browser.cjs`.
-The check covers short portrait screens, landscape, touch, reduced motion,
-desktop, and the static fallback.
+The scroll explainer has no browser test yet. To check motion by hand, serve the page as above
+and scroll through on a phone-sized and a desktop viewport, plus once with reduced motion on.
 
 The GitHub Pages workflow publishes only `landing/dist/` after changes reach
 `main`. Application releases use a separate workflow.
