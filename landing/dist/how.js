@@ -1,187 +1,64 @@
-(() => {
-  'use strict';
-
-  const section = document.getElementById('how-it-works');
-  if (!section || !window.CSS?.supports('position', 'sticky')) return;
-
-  const find = selector => section.querySelector(selector);
-  const story = find('.how-story');
-  const demo = find('.how-demo');
-  const scene = find('.how-scene');
-  const label = find('.how-scene-label');
-  const typed = find('.typed');
-  const chapters = [...section.querySelectorAll('.how-chapter')];
-  const dots = [...section.querySelectorAll('.how-dots i')];
-  const switches = [...section.querySelectorAll('[data-approval]')];
-  const pins = [...section.querySelectorAll('.pin i')];
-  const devices = [
-    { slot: find('.how-phone-slot'), element: find('.dev-phone'), width: 280, height: 580, turn: -10 },
-    { slot: find('.how-tablet-slot'), element: find('.dev-tablet'), width: 560, height: 392, turn: 9 },
-  ];
-  if (!story || !demo || !scene || !label || !typed || !chapters.length || devices.some(device => !device.slot || !device.element)) return;
-
-  section.dataset.scroll = '';
-  if (getComputedStyle(demo).position !== 'sticky') {
-    delete section.dataset.scroll;
-    return;
-  }
-
-  // The seven scenes are paced by the three written chapters, without a scroll spacer.
-  const beats = [
-    { name: 'connect', label: 'חיבור החשבון', focus: -1 },
-    { name: 'approve', label: 'בוחרים שיחות', focus: -1 },
-    { name: 'blocked', label: 'שיחה שלא אושרה', focus: 0 },
-    { name: 'signin', label: 'נועה נכנסת', focus: 1 },
-    { name: 'photo', label: 'התמונה מגיעה לנועה', focus: 0 },
-    { name: 'type', label: 'נועה מקלידה תשובה', focus: 1 },
-    { name: 'reply', label: 'התשובה מגיעה לסבתא', focus: 0 },
-  ];
-  const reply = Array.from('וואו! איזה יפים 😍');
-  const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
-  const clamp = value => Math.max(0, Math.min(1, value));
-  const ease = value => value * value * (3 - 2 * value);
-  const between = (value, start, end) => clamp((value - start) / (end - start));
-  const mix = (from, to, progress) => from + (to - from) * progress;
-  let queued = false;
-  let activeChapter = -1;
-  let activeBeat = -1;
-  let lastProgress = -1;
-  let size = '';
-
-  function drawCamera(focus, time) {
-    const width = scene.clientWidth;
-    const height = scene.clientHeight;
-    const strength = Math.abs(focus);
-    // Clear the second screen before the close-up moves toward center.
-    const zoom = ease(between(strength, 0.30, 1));
-    devices.forEach((device, index) => {
-      const foreground = index === (focus < 0 ? 0 : 1);
-      const closeUp = foreground ? zoom : 0;
-      const slotWidth = device.slot.offsetWidth;
-      const wideScale = Math.min((slotWidth - 12) / device.width, (height - 36) / device.height, 0.73);
-      const nearScale = Math.min((width - 38) / device.width, (height - 19) / device.height, 0.84);
-      const offset = width / 2 - (device.slot.offsetLeft + slotWidth / 2);
-      const bob = Math.sin(time * Math.PI * 2 + index * Math.PI) * 3;
-      const yaw = mix(device.turn + Math.sin(time * Math.PI * 2) * 5, index === 0 ? 7 : -6, closeUp);
-      const scale = Math.max(0.05, mix(wideScale, nearScale, closeUp));
-      device.element.style.transform = `translate(-50%, -50%) translate3d(${(offset * closeUp).toFixed(1)}px, ${bob.toFixed(1)}px, 0) scale(${scale.toFixed(3)}) rotateX(${(4 + 3 * closeUp).toFixed(1)}deg) rotateY(${yaw.toFixed(1)}deg)`;
-      device.element.style.opacity = foreground ? '1' : String(1 - ease(between(strength, 0, 0.30)));
-    });
-    scene.style.setProperty('--bridge-opacity', String(1 - ease(between(strength, 0.16, 0.38))));
-    scene.style.setProperty('--sheen', `${50 + 29 * Math.sin(time * Math.PI * 2)}%`);
-  }
-
-  function draw(beat, progress) {
-    const reduced = motion.matches;
-    const linked = beat !== 0 || progress >= 0.46;
-    const photoArrived = beat > 4 || (beat === 4 && progress >= 0.68);
-    const sent = beat === 6 && progress >= 0.20;
-    const delivered = beat === 6 && progress >= 0.80;
-    section.toggleAttribute('data-linked', linked);
-    section.toggleAttribute('data-photo', photoArrived);
-    section.toggleAttribute('data-sent', sent);
-    section.toggleAttribute('data-reply', delivered);
-    switches.forEach((control, index) => control.classList.toggle('on', beat > 1 || (beat === 1 && progress >= 0.2 + index * 0.22)));
-    pins.forEach((dot, index) => dot.classList.toggle('filled', beat === 3 && progress >= 0.18 + index * 0.15));
-    section.toggleAttribute('data-press', beat === 3 && progress >= 0.80 && progress <= 0.95);
-    section.toggleAttribute('data-send-press', beat === 6 && progress >= 0.13 && progress <= 0.24);
-    const typedCount = beat === 5 ? Math.round(reply.length * between(progress, 0.12, 0.82)) : beat === 6 && !sent ? reply.length : 0;
-    const input = reply.slice(0, typedCount).join('');
-    if (typed.textContent !== input) typed.textContent = input;
-
-    let packet = '';
-    let distance = 0.5;
-    let flash = 0;
-    if (beat === 0) {
-      flash = Math.sin(Math.PI * between(progress, 0.54, 1));
-    } else if (beat === 2) {
-      packet = 'private';
-      distance = 0.48 * (ease(between(progress, 0.20, 0.44)) - ease(between(progress, 0.62, 1)));
-      flash = Math.sin(Math.PI * progress);
-    } else if (beat === 4 || beat === 6) {
-      packet = beat === 4 ? 'photo' : 'reply';
-      const path = ease(between(progress, 0.20, beat === 4 ? 0.68 : 0.80));
-      distance = beat === 4 ? path : 1 - path;
-      flash = Math.sin(Math.PI * path);
-    }
-    section.dataset.transfer = packet;
-    section.toggleAttribute('data-lock', beat === 2 && progress >= 0.36 && progress <= 0.86);
-    scene.style.setProperty('--travel', `${-100 * distance}%`);
-    scene.style.setProperty('--signal', String(flash));
-
-    if (reduced) {
-      devices.forEach(({ element }) => {
-        element.style.removeProperty('transform');
-        element.style.removeProperty('opacity');
-      });
-      return;
-    }
-    const from = beats[beat - 1]?.focus ?? 0;
-    const to = beats[beat + 1]?.focus ?? 0;
-    // Wide beats stay wide during the actual packet transfer.
-    const target = beats[beat].focus;
-    const focus = progress < 0.20
-      ? mix((from + target) / 2, target, ease(progress / 0.20))
-      : mix(target, (target + to) / 2, ease(between(progress, 0.84, 1)));
-    // Open the shot briefly so the connection lights up between both screens.
-    const linkReveal = beat === 0 ? ease(between(progress, 0.55, 0.80)) * (1 - ease(between(progress, 0.88, 1))) : 0;
-    drawCamera(focus * (1 - linkReveal), (beat + progress) / beats.length);
-  }
-
-  function render() {
-    queued = false;
-    const viewport = document.documentElement.clientHeight;
-    const panel = demo.getBoundingClientRect();
-    const stacked = demo.offsetWidth === story.offsetWidth;
-    const stickyTop = Number.parseFloat(getComputedStyle(demo).top) || 0;
-    const readingLine = stacked
-      ? Math.min(viewport - 26, Math.max(0, panel.bottom) + 48)
-      : Math.min(viewport * 0.58, stickyTop + panel.height * 0.78);
-    const inset = stacked ? 0 : 24;
-
-    let chapter = 0;
-    let bounds = chapters[0].getBoundingClientRect();
-    for (let i = 1; i < chapters.length; i++) {
-      const next = chapters[i].getBoundingClientRect();
-      if (next.top + inset > readingLine) break;
-      chapter = i;
-      bounds = next;
-    }
-    if (chapter !== activeChapter) {
-      chapters[activeChapter]?.removeAttribute('aria-current');
-      chapters[chapter].setAttribute('aria-current', 'step');
-      activeChapter = chapter;
-    }
-
-    const length = Math.min(bounds.height, chapter === 0 ? 110 : 196);
-    const advance = clamp((readingLine - bounds.top - inset) / length);
-    const local = chapter === 0 ? 0 : Math.min(2, Math.floor(advance * 3));
-    const index = chapter === 0 ? 0 : (chapter - 1) * 3 + local + 1;
-    const progress = chapter === 0 ? advance : advance * 3 - local;
-    const currentSize = `${scene.clientWidth}:${scene.clientHeight}:${motion.matches}`;
-    if (index === activeBeat && progress === lastProgress && size === currentSize) return;
-    if (index !== activeBeat) {
-      dots[activeBeat]?.classList.remove('on');
-      dots[index]?.classList.add('on');
-      section.dataset.beat = beats[index].name;
-      label.textContent = beats[index].label;
-      activeBeat = index;
-    }
-    lastProgress = progress;
-    size = currentSize;
-    draw(index, progress);
-  }
-
-  function scheduleRender() {
-    if (queued) return;
-    queued = true;
-    window.requestAnimationFrame(render);
-  }
-
-  render();
-  window.addEventListener('scroll', scheduleRender, { passive: true });
-  window.addEventListener('resize', scheduleRender);
-  if (motion.addEventListener) motion.addEventListener('change', scheduleRender);
-  else motion.addListener(scheduleRender);
-  document.fonts?.ready.then(scheduleRender);
+/* יחד · how it works v3: scroll drives a camera around a phone and a tablet. Vanilla JS, no libraries. */
+(()=>{'use strict';
+const sec=document.getElementById('how-it-works');if(!sec)return;
+const RM=matchMedia('(prefers-reduced-motion: reduce)');
+const go=document.getElementById('watch-demo');
+if(go)go.addEventListener('click',e=>{e.preventDefault();sec.scrollIntoView({behavior:RM.matches?'auto':'smooth'})});
+if(RM.matches)return; // calm still (CSS) for reduced motion; same as no-JS
+sec.classList.add('how-live');
+const q=s=>sec.querySelector(s),qa=s=>[...sec.querySelectorAll(s)];
+const scene=q('.how-scene'),cam=q('.how-cam'),phone=q('.dev-phone'),tab=q('.dev-tablet'),beam=q('.beam'),stop=q('.stop');
+const caps=qa('.how-cap'),dots=qa('.how-dots i');
+const pk={photo:q('.pkt-photo'),dani:q('.pkt-dani'),reply:q('.pkt-reply')};
+const S={wa:q('.scr-wa'),par:q('.scr-parent'),list:q('.scr-list'),sign:q('.scr-signin'),chat:q('.scr-chat')};
+const waPic=q('.wa-pic'),waReply=q('.wa-reply'),gran=q('.kid-row.gran'),pins=qa('.pin i'),btn=q('.signin-btn'),typed=q('.typed'),kidReply=q('.kid-reply'),sws=qa('.sw[data-at]');
+const REPLY=Array.from('וואו! איזה יפים 😍');
+const cl=(x,a=0,b=1)=>x<a?a:x>b?b:x,rp=(p,a,b)=>cl((p-a)/(b-a)),ez=t=>t*t*(3-2*t),lr=(a,b,t)=>a+(b-a)*t;
+// world layouts: device centres [x,y,rotateY]; camera targets [cx,cy,w,h]; stop = where the lock sits on the line (0 phone .. 1 tablet)
+const LAY={wide:{ph:[390,0,-14],tb:[-190,0,12],PH:[390,0,360,640],TB:[-190,0,620,460],OV:[100,0,1060,700],stop:.38},
+ tall:{ph:[110,-275,-10],tb:[-50,375,10],PH:[110,-275,330,640],TB:[-50,375,590,440],OV:[-30,45,585,1130],stop:.57}};
+// camera keyframes: [progress, target, rotateY, rotateX]
+const KEYS=[[0,'PH',16,5],[.11,'PH',6,3],[.21,'OV',-9,8],[.40,'OV',6,6],[.47,'PH',-12,4],[.6,'PH',-4,3],[.67,'TB',10,6],[.8,'TB',3,4],[.87,'OV',-7,7],[.95,'PH',-8,4],[1,'PH',-3,3]];
+let W=1,H=1,L=LAY.wide,top0=0,span=1,last=-1,raf=0,typedNow=null;
+function measure(){const r=scene.getBoundingClientRect();W=r.width;H=r.height;L=W/H<1.05?LAY.tall:LAY.wide;
+ top0=sec.getBoundingClientRect().top+scrollY;span=Math.max(1,sec.offsetHeight-innerHeight);
+ const A=L.ph,B=L.tb,dx=B[0]-A[0],dy=B[1]-A[1];
+ BL=Math.hypot(dx,dy);beam.style.width=BL+'px';beam.style.transform=`translate3d(${A[0]}px,${A[1]}px,-40px) rotate(${Math.atan2(dy,dx)}rad)`;
+ last=-1;frame();}
+function camAt(p){let i=0;while(i<KEYS.length-2&&p>KEYS[i+1][0])i++;const a=KEYS[i],b=KEYS[i+1],t=ez(rp(p,a[0],b[0])),ra=L[a[1]],rb=L[b[1]];
+ return [lr(ra[0],rb[0],t),lr(ra[1],rb[1],t),lr(ra[2],rb[2],t),lr(ra[3],rb[3],t),lr(a[2],b[2],t),lr(a[3],b[3],t)];}
+function put(el,x,y,z,extra,o){el.style.transform=`translate3d(${x.toFixed(1)}px,${y.toFixed(1)}px,${z}px) translate(-50%,-50%)${extra||''}`;if(o!=null)el.style.opacity=o.toFixed(3);}
+const BND=[0,.10,.22,.36,.58,.70,.84,1],MAP=[0,0,.19,.305,.43,.62,.79,1];let BL=1;
+function remap(P){let i=0;while(i<BND.length-2&&P>BND[i+1])i++;return lr(MAP[i],MAP[i+1],rp(P,BND[i],BND[i+1]));}
+function frame(){raf=0;span=Math.max(1,sec.offsetHeight-innerHeight);const P=cl(-sec.getBoundingClientRect().top/span);if(Math.abs(P-last)<1e-5)return;last=P;const p=remap(P);
+ const c0=camAt(p),cv=camAt(.3),wv=1-rp(P,.10,.15),c=c0.map((x,j)=>lr(x,cv[j],wv)),s=Math.min(W*.9/c[2],H*.9/c[3]);
+ cam.style.transform=`translate3d(${W/2}px,${H/2}px,0) scale(${s.toFixed(4)}) rotateX(${c[5].toFixed(2)}deg) rotateY(${c[4].toFixed(2)}deg) translate3d(${(-c[0]).toFixed(1)}px,${(-c[1]).toFixed(1)}px,0)`;
+ const bob=Math.sin(p*Math.PI*4)*6,A=L.ph,B=L.tb,at=t=>[lr(A[0],B[0],t),lr(A[1],B[1],t)];
+ put(phone,A[0],A[1]+bob,0,` rotateY(${A[2]}deg) rotateX(2deg)`);put(tab,B[0],B[1]-bob,0,` rotateY(${B[2]}deg) rotateX(4deg)`);
+ sec.style.setProperty('--sheen',(50+c[4]*3).toFixed(1)+'%');
+ // 1. grandma's photo crosses phone -> tablet
+ let t=ez(rp(p,.22,.30)),k=at(t);put(pk.photo,k[0],k[1],90,` scale(${lr(.8,1,rp(p,.21,.24)).toFixed(3)})`,rp(p,.21,.225)*(1-rp(p,.30,.315)));
+ // 2. a private chat tries, stops at the lock, falls back
+ t=ez(rp(p,.31,.34))*(L.stop-.13)-ez(rp(p,.38,.41))*.12;k=at(t);
+ put(pk.dani,k[0],k[1],90,` translateX(${p>.34&&p<.365?(Math.sin((p-.34)*260)*5).toFixed(1):0}px)`,rp(p,.305,.315)*(1-rp(p,.39,.41)));
+ k=at(L.stop);put(stop,k[0],k[1],110,` scale(${lr(.6,1,ez(rp(p,.335,.35))).toFixed(3)})`,rp(p,.335,.348)*(1-rp(p,.39,.41)));
+ // 5. Noa's reply crosses tablet -> phone
+ t=ez(rp(p,.88,.94));k=at(1-t);put(pk.reply,k[0],k[1],90,'',rp(p,.875,.885)*(1-rp(p,.94,.955)));
+ const conn=rp(P,.02,.07)*(1-rp(P,.13,.18)),on=Math.max(conn,rp(p,.19,.22)*(1-rp(p,.44,.47)),rp(p,.85,.88)*(1-rp(p,.96,.99)));
+ const g=ez(rp(P,.02,.09));beam.style.width=(BL*g).toFixed(1)+'px';beam.style.opacity=(g*(.16+.84*on)).toFixed(3);beam.style.setProperty('--flow',((p>.7?1:-1)*p*2600).toFixed(0)+'px');beam.classList.toggle('blocked',p>.335&&p<.40);
+ // screens
+ const w=cl(1-rp(p,.44,.47)+rp(p,.80,.83));S.wa.style.opacity=w;S.par.style.opacity=1-w;
+ S.list.style.opacity=1-rp(p,.62,.645);S.sign.style.opacity=rp(p,.62,.645)*(1-rp(p,.77,.79));S.chat.style.opacity=rp(p,.77,.79);
+ const pi=ez(rp(p,.03,.08));waPic.style.opacity=pi;waPic.style.transform=`scale(${lr(.9,1,pi).toFixed(3)})`;
+ waReply.style.opacity=rp(p,.935,.95);gran.classList.toggle('new',p>.30);
+ sws.forEach(x=>x.classList.toggle('on',p>=+x.dataset.at));
+ const n=Math.floor(rp(p,.67,.72)*4.999);pins.forEach((d,i)=>d.classList.toggle('f',i<n));
+ btn.classList.toggle('press',p>.735&&p<.765);
+ const txt=p>.866?'':REPLY.slice(0,Math.round(rp(p,.81,.86)*REPLY.length)).join('');if(txt!==typedNow){typed.textContent=txt;typedNow=txt;}
+ kidReply.style.opacity=rp(p,.866,.878);
+ // captions
+ let bi=0;while(bi<BND.length-2&&P>BND[bi+1])bi++;const f=bi+rp(P,BND[bi],BND[bi+1]),NC=caps.length-1;caps.forEach((el,i)=>{let d=f-(i+.5);if(i===0&&d<0)d=0;if(i===NC&&d>0)d=0;const o=cl((.5-Math.abs(d))/.14);el.style.opacity=o.toFixed(3);el.style.transform=`translateY(${(-d*26).toFixed(1)}px)`;});
+ const ci=Math.min(NC,Math.floor(f));dots.forEach((d,i)=>d.classList.toggle('on',i===ci));}
+addEventListener('scroll',()=>{if(!raf)raf=requestAnimationFrame(frame)},{passive:true});
+addEventListener('resize',measure);if(document.fonts)document.fonts.ready.then(measure);measure();
 })();

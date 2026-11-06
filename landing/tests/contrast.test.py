@@ -6,7 +6,7 @@ import re
 css=(Path(__file__).resolve().parents[1]/'dist/style.css').read_text()
 how_css=(Path(__file__).resolve().parents[1]/'dist/how.css').read_text()
 def declarations(selector, stylesheet=css):
- match=re.search(r'(?:^|})\s*'+re.escape(selector)+r'\s*\{([^}]+)\}',stylesheet)
+ match=re.search(r'(?:^|}|\*/)\s*'+re.escape(selector)+r'\s*\{([^}]+)\}',stylesheet)
  assert match,selector
  return dict((k.strip(),v.strip()) for k,v in (p.split(':',1) for p in match.group(1).split(';') if ':' in p))
 vars=declarations(':root')
@@ -24,14 +24,12 @@ cases=[
  ('disclaimer small text',declarations('.disclaimer')['color'],vars['--paper']),
  ('body muted',vars['--muted'],vars['--paper']),
  ('primary label','#ffffff',vars['--green']),
- ('explainer title',how['--ink'],how['background']),
- ('explainer copy',how['--mut'],how['background']),
- ('explainer chapter label',how['--g'],how['background']),
- ('active chapter copy',how['--mut'],declarations('.how-chapter[aria-current="step"]',how_css)['background']),
- ('demo header label',how['--g'],declarations('.how-demo-head',how_css)['background']),
- ('mock sender on white',declarations('.b small',how_css)['color'],'#ffffff'),
- ('mock timestamp in outgoing bubble',declarations('.t',how_css)['color'],
-  declarations('.b.out',how_css)['background']),
+ # scroll explainer: tokens on white and on the darkest edge of its radial background
+ ('explainer title',how['--ink'],'#ffffff'),
+ ('explainer copy',how['--mut'],'#ffffff'),
+ ('explainer eyebrow',how['--g'],'#ffffff'),
+ ('explainer copy on edge',how['--mut'],'#e2e8e6'),
+ ('explainer eyebrow on edge',how['--g'],'#e2e8e6'),
 ]
 for name,f,b in cases:
  r=ratio(f,b);print(f'{name}: {value(f)} / {value(b)} = {r:.3f}:1');assert r>=4.5,(name,r)
