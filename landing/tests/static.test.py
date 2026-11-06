@@ -45,22 +45,23 @@ for stylesheet in [css,how_css]:
   assert (ROOT/'dist'/asset).is_file(),asset
 assets={asset.split('?',1)[0] for asset in d.assets}
 assert 'how' in d.classes and {'how.js','how.css'}.issubset(assets)
-assert 'class="how-scroll-track" aria-hidden="true"' in s
+assert 'how-scroll-track' not in d.allclasses
 for part in ['dev-phone','dev-tablet','scr-chat','kid-reply','wa-reply']:
  assert part in d.allclasses,f'Missing static illustration element: {part}'
 assert 'demo.js' not in d.assets
 assert 'href="#how-it-works"' in s and 'class="primary" href="#download"' in s
 explainer=s.split('id="how-it-works"',1)[1].split('</section>',1)[0]
-captions=re.findall(r'<li class="how-cap"><h3>(.*?)</h3><p>(.*?)</p></li>',explainer)
-assert len(captions)==7 and all(title and copy for title,copy in captions)
-assert 'בוחרים אילו שיחות' in captions[1][0] and 'נכנסת מהטאבלט' in captions[2][0]
-assert 'שיחה שלא אושרה' in captions[5][0] and 'פרטית' in captions[5][1]
+chapters=re.findall(r'<li class="how-chapter"[^>]+>\s*<p[^>]+>.*?</p>\s*<h3>(.*?)</h3>\s*<p>(.*?)</p>',explainer)
+assert len(chapters)==3 and all(title and copy for title,copy in chapters)
+assert 'QR' in chapters[0][1] and 'בטאבלט' in chapters[0][1]
+assert 'שיחות שלא אושרו' in chapters[1][1] and 'הפרטי' in chapters[1][1]
+assert 'עם השם של נועה' in chapters[2][1]
 assert '<button' not in explainer, 'The story advances by scrolling'
-for part in ['how-phone-slot','how-tablet-slot','how-bridge','how-counter']:
+for part in ['how-phone-slot','how-tablet-slot','how-bridge','how-scene-label']:
  assert part in d.allclasses,f'Missing scroll scene element: {part}'
-assert '.how[data-scroll] .how-stage' in how_css and 'position: sticky' in how_css
+assert '.how[data-scroll] .how-demo' in how_css and 'position: sticky' in how_css
 assert 'grid-area: 1 / 1' in how_css and 'grid-area: 1 / 3' in how_css
-assert 'class="how-scene" aria-hidden="true"' in explainer
+assert 'class="how-demo" aria-hidden="true" hidden' in explainer
 assert 'prefers-reduced-motion:reduce' in css
 assert 'מכסת זמן יומית לכל ילד' in s
 assert '0.5.3' not in s and 'room.png' not in css and 'sun.png' not in s

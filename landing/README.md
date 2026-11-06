@@ -13,11 +13,11 @@ python3 -m http.server 4173 --directory dist
 ```
 
 Open `http://localhost:4173`. The demonstration uses synthetic content. It does
-not connect to WhatsApp or send messages. With JavaScript disabled, the seven
-steps and a still of the conversation are available. With JavaScript, normal
-page scrolling drives the device scenes and message transfers in both directions.
-With reduced motion enabled, scrolling still changes steps and the transfer
-icons stay centered. The scene adjusts to the space available on short screens.
+not connect to WhatsApp or send messages. Three short chapters remain in the
+page's normal reading flow. Only the illustration stays in view while scrolling
+changes its scene. With reduced motion, the scenes still change and the message
+icons stay centered. Without JavaScript, the chapters and a finished conversation
+are available as static content.
 
 ## Checks
 

@@ -4,46 +4,69 @@
   const section = document.getElementById('how-it-works');
   if (!section || !window.CSS?.supports('position', 'sticky')) return;
 
-  const track = section.querySelector('.how-scroll-track');
-  const counter = section.querySelector('.how-counter');
-  const captions = [...section.querySelectorAll('.how-cap')];
-  if (!track || !counter || !captions.length) return;
+  const story = section.querySelector('.how-story');
+  const demo = section.querySelector('.how-demo');
+  const label = section.querySelector('.how-scene-label');
+  const chapters = [...section.querySelectorAll('.how-chapter')];
+  if (!story || !demo || !label || !chapters.length) return;
 
-  section.style.setProperty('--step-count', captions.length);
   section.dataset.scroll = '';
-  if (!track.offsetHeight) {
+  if (getComputedStyle(demo).position !== 'sticky') {
     delete section.dataset.scroll;
     return;
   }
 
   let queued = false;
   let active = -1;
-  let lastPosition = -1;
+  let travel = '';
 
   function render() {
     queued = false;
-    const distance = track.offsetHeight;
-    if (!distance) return;
+    const viewport = document.documentElement.clientHeight;
+    const panel = demo.getBoundingClientRect();
+    const stacked = demo.offsetWidth === story.offsetWidth;
+    const stickyTop = Number.parseFloat(getComputedStyle(demo).top) || 0;
 
-    const scroll = Math.max(0, -section.getBoundingClientRect().top - section.clientTop);
-    const position = Math.min(captions.length, scroll / distance * captions.length);
-    if (position === lastPosition) return;
-    lastPosition = position;
+    // In the stacked layout, follow the first lines visible below the visual.
+    // On desktop the reading line sits within the panel so the reply is visible before it leaves.
+    const readingLine = stacked
+      ? Math.min(viewport - 26, Math.max(0, panel.bottom) + 48)
+      : Math.min(viewport * 0.58, stickyTop + panel.height * 0.78);
+    const chapterInset = stacked ? 0 : 24;
 
-    const step = Math.min(captions.length - 1, Math.floor(position));
-    if (step !== active) {
-      captions[active]?.classList.remove('is-current');
-      captions[step].classList.add('is-current');
-      section.dataset.step = String(step + 1);
-      counter.textContent = `שלב ${step + 1} מתוך ${captions.length}`;
-      active = step;
+    let chapter = 0;
+    let bounds = chapters[0].getBoundingClientRect();
+    for (let i = 1; i < chapters.length; i++) {
+      const next = chapters[i].getBoundingClientRect();
+      if (next.top + chapterInset > readingLine) break;
+      chapter = i;
+      bounds = next;
     }
 
-    // Map the outgoing photo and incoming reply to opposite directions.
-    const progress = position - step;
-    const travel = step === 4 ? progress : step === 6 ? 1 - progress : 0.5;
-    section.toggleAttribute('data-arrived', (step === 4 || step === 6) && progress >= 0.75);
-    section.style.setProperty('--travel', `${travel * -100}%`);
+    if (chapter !== active) {
+      chapters[active]?.removeAttribute('aria-current');
+      chapters[chapter].setAttribute('aria-current', 'step');
+      label.textContent = chapters[chapter].dataset.sceneLabel;
+      section.dataset.chapter = String(chapter + 1);
+      active = chapter;
+    }
+
+    const travelLength = Math.min(bounds.height, 110);
+    const progress = Math.max(0, Math.min(1, (readingLine - bounds.top - chapterInset) / travelLength));
+    const conversation = chapter === chapters.length - 1;
+    const photoArrived = conversation && progress >= 0.39;
+    const replyArrived = conversation && progress >= 0.77;
+    const transfer = !conversation || replyArrived ? '' : progress < 0.39 ? 'photo' : 'reply';
+    section.toggleAttribute('data-photo', photoArrived);
+    section.toggleAttribute('data-reply', replyArrived);
+    if (section.dataset.transfer !== transfer) section.dataset.transfer = transfer;
+
+    const distance = transfer === 'photo' ? progress / 0.39 : transfer === 'reply' ? (0.77 - progress) / 0.38 : 0.5;
+    const position = `${Math.round(-1000 * distance) / 10}%`;
+    if (position !== travel) {
+      section.style.setProperty('--travel', position);
+      travel = position;
+    }
   }
 
   function scheduleRender() {
