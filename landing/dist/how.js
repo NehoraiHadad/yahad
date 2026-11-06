@@ -2,41 +2,69 @@
   'use strict';
 
   const section = document.getElementById('how-it-works');
-  if (!section) return;
+  if (!section || !window.CSS?.supports('position', 'sticky')) return;
 
+  const stage = section.querySelector('.how-stage');
+  const counter = section.querySelector('.how-counter');
   const captions = [...section.querySelectorAll('.how-cap')];
-  const progress = section.querySelector('.how-progress');
-  const controls = section.querySelector('.how-controls');
-  const previous = section.querySelector('.how-prev');
-  const next = section.querySelector('.how-next');
-  const status = section.querySelector('[role="status"]');
-  if (!captions.length || !progress || !controls || !previous || !next || !status) return;
+  if (!stage || !counter || !captions.length) return;
 
-  let step = 0;
-  const lastStep = captions.length - 1;
+  const motion = window.matchMedia('(prefers-reduced-motion: no-preference) and (min-height: 540px)');
+  section.style.setProperty('--step-count', captions.length);
 
-  function showStep(index, announce = true) {
-    step = index;
-    section.dataset.step = step + 1;
-    captions.forEach((caption, i) => {
-      caption.setAttribute('aria-hidden', String(i !== step));
-    });
-    const position = `שלב ${step + 1} מתוך ${captions.length}`;
-    progress.textContent = position;
-    previous.setAttribute('aria-disabled', String(step === 0));
-    next.textContent = step === lastStep ? 'מההתחלה' : 'הבא';
-    if (announce) {
-      const caption = captions[step];
-      status.textContent = `${position}. ${caption.querySelector('h3').textContent}. ${caption.querySelector('p').textContent}`;
+  let frame = 0;
+  let active = -1;
+  let distance = 0;
+
+  function render() {
+    frame = 0;
+    if (!distance) return;
+
+    const scroll = Math.max(0, -section.getBoundingClientRect().top);
+    const position = Math.min(captions.length, scroll / distance * captions.length);
+    const step = Math.min(captions.length - 1, Math.floor(position));
+
+    if (step !== active) {
+      captions[active]?.classList.remove('is-current');
+      captions[step].classList.add('is-current');
+      section.dataset.step = String(step + 1);
+      counter.textContent = `שלב ${step + 1} מתוך ${captions.length}`;
+      active = step;
     }
+
+    // The transfer reverses with the page. A blocked chat stays in the middle.
+    const progress = position - step;
+    const travel = step === 4 ? progress : step === 6 ? 1 - progress : 0.5;
+    section.toggleAttribute('data-arrived', (step === 4 || step === 6) && progress >= 0.75);
+    section.style.setProperty('--travel', `${travel * 100}%`);
   }
 
-  previous.addEventListener('click', () => {
-    if (step > 0) showStep(step - 1);
-  });
-  next.addEventListener('click', () => showStep(step === lastStep ? 0 : step + 1));
+  function configure() {
+    if (motion.matches) {
+      section.dataset.scroll = '';
+      const stageHeight = stage.offsetHeight;
+      if (stageHeight <= window.innerHeight) {
+        distance = section.clientHeight - stageHeight;
+        if (distance > 0) {
+          if (!frame) render();
+          return;
+        }
+      }
+    }
 
-  showStep(0, false);
-  progress.hidden = false;
-  controls.hidden = false;
+    distance = 0;
+    delete section.dataset.scroll;
+    delete section.dataset.step;
+    section.removeAttribute('data-arrived');
+    captions[active]?.classList.remove('is-current');
+    active = -1;
+  }
+
+  window.addEventListener('scroll', () => {
+    if (distance && !frame) frame = window.requestAnimationFrame(render);
+  }, { passive: true });
+  window.addEventListener('resize', configure);
+  motion.addEventListener('change', configure);
+  document.fonts?.ready.then(configure);
+  configure();
 })();

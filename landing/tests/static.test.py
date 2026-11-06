@@ -3,7 +3,8 @@ from html.parser import HTMLParser
 import re
 ROOT=Path(__file__).resolve().parents[1]
 class Document(HTMLParser):
- def __init__(self):super().__init__();self.ids=set();self.anchors=[];self.assets=[];self.images=[];self.html={};self.classes=[];self.allclasses=[]
+ void={'area','base','br','col','embed','hr','img','input','link','meta','param','source','track','wbr'}
+ def __init__(self):super().__init__();self.ids=set();self.anchors=[];self.assets=[];self.images=[];self.html={};self.classes=[];self.allclasses=[];self.stack=[]
  def handle_starttag(self,tag,attrs):
   a=dict(attrs)
   if tag=='html':self.html=a
@@ -15,8 +16,17 @@ class Document(HTMLParser):
   if tag in ['img','script'] and a.get('src'):self.assets.append(a['src'])
   if tag=='link' and a.get('href'):self.assets.append(a['href'])
   if a.get('id')=='how-it-works':self.classes=a['class'].split()
-  if 'class' in a:self.allclasses.extend(a['class'].split())
+  classes=a.get('class','').split()
+  self.allclasses.extend(classes)
+  for part, slot in [('dev-phone','how-phone-slot'),('dev-tablet','how-tablet-slot'),('how-packet','how-bridge')]:
+   if part in classes:
+    assert any(slot in parents for _,parents in self.stack),f'{part} must stay inside {slot}'
+  if tag not in self.void:self.stack.append((tag,classes))
+ def handle_endtag(self,tag):
+  assert self.stack and self.stack[-1][0]==tag,f'Mismatched {tag} at {self.getpos()}'
+  self.stack.pop()
 s=(ROOT/'dist/index.html').read_text();d=Document();d.feed(s)
+assert not d.stack,'Unclosed HTML element'
 assert d.html['lang']=='he' and d.html['dir']=='rtl'
 # Download links, when wired, may point only at real release assets of this repo.
 RELEASE_URL=re.compile(r'^https://github\.com/NehoraiHadad/yahad/releases/(download/[^/]+|latest/download)/[^/]+$')
@@ -43,9 +53,13 @@ captions=re.findall(r'<li class="how-cap"><h3>(.*?)</h3><p>(.*?)</p></li>',expla
 assert len(captions)==7 and all(title and copy for title,copy in captions)
 assert 'בוחרים אילו שיחות' in captions[1][0] and 'נכנסת מהטאבלט' in captions[2][0]
 assert 'שיחה שלא אושרה' in captions[5][0] and 'פרטית' in captions[5][1]
-assert 'class="how-controls" role="group" aria-label="ניווט בין שלבי ההדגמה" hidden' in explainer
+assert '<button' not in explainer, 'The story advances by scrolling'
+for part in ['how-phone-slot','how-tablet-slot','how-bridge','how-counter']:
+ assert part in d.allclasses,f'Missing scroll scene element: {part}'
+assert '.how[data-scroll] .how-stage' in how_css and 'position: sticky' in how_css
+assert 'grid-area: 1 / 1' in how_css and 'grid-area: 1 / 3' in how_css
 assert 'class="how-scene" aria-hidden="true"' in explainer
-assert 'prefers-reduced-motion:reduce' in css and 'prefers-reduced-motion: no-preference' in how_css
+assert 'prefers-reduced-motion:reduce' in css
 assert 'מכסת זמן יומית לכל ילד' in s
 assert '0.5.3' not in s and 'room.png' not in css and 'sun.png' not in s
 art=[a for a in d.images if 'family-moment' in a['src']][0]
@@ -96,5 +110,5 @@ assert validate_download(s.replace(' disabled','',1)),'pending enabled button ac
 assert validate_download(activate(s,'linux','https://example.com/installer.exe')),'non-repo download URL accepted'
 assert validate_download(re.sub(r'data-state="pending"','data-state="ready"',s,count=1)),'ready without link accepted'
 assert validate_download(s.replace('data-state="ready"','data-state="pending"',1)),'pending with link accepted'
-print('PASS: Hebrew RTL, all anchors/assets/CSS URLs, static explainer and its controls, reduced-motion CSS, caption order, per-platform pending downloads + ready-state fixtures, quota wording, explicit illustration dimensions and <250 kB budget')
+print('PASS: Hebrew RTL, all anchors/assets/CSS URLs, static explainer and scroll structure, reduced-motion CSS, caption order, per-platform pending downloads + ready-state fixtures, quota wording, explicit illustration dimensions and <250 kB budget')
 print('NOTE: static checks do not establish responsive rendering, contrast, browser focus or live motion behavior.')
