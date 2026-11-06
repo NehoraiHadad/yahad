@@ -62,9 +62,9 @@ jobs:
       - name: Check JavaScript syntax and landing behavior
         working-directory: landing
         run: |
-          node --check dist/demo.js
+          node --check dist/how.js
           node --check dist/reveal.js
-          node tests/demo.test.cjs
+          node tests/how.test.cjs
           node tests/reveal.test.cjs
           python3 -X utf8 tests/static.test.py
           python3 -X utf8 tests/contrast.test.py

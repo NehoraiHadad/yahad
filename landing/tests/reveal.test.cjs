@@ -19,5 +19,5 @@ h.media.matches=false;h.media.change();assert(!h.root.classes.has('js-reveal'),'
 h=setup({focus:true});assert(h.nodes[1].classes.has('is-visible'),'already focused content remains visible');
 h=setup({hash:'#faq'});assert(h.nodes[1].classes.has('is-visible'),'fragment target reveals before scroll');
 h=setup({hash:'#%invalid'});assert(h.root.classes.has('js-reveal'),'bad fragment does not crash setup');
-const css=fs.readFileSync('dist/style.css','utf8');assert(css.includes('.reveal:focus-within'));assert(css.includes('.reveal:target'));assert(css.includes('.primary:hover img{transform:none}'));
+const css=fs.readFileSync('dist/style.css','utf8');assert(css.includes('.reveal:focus-within'));assert(css.includes('.reveal:target'));assert(css.includes('.hero-demo-link:hover img{transform:none}'));
 console.log('PASS: optional IO/reduced-motion baseline, constructor/observe fail-open, viewport reveal, keyboard/current focus, fragment target, malformed fragment, preference-change fail-open, CSS focus/reduced-motion guards');

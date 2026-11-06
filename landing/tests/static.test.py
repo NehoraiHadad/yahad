@@ -3,16 +3,19 @@ from html.parser import HTMLParser
 import re
 ROOT=Path(__file__).resolve().parents[1]
 class Document(HTMLParser):
- def __init__(self):super().__init__();self.ids=set();self.anchors=[];self.assets=[];self.images=[];self.html={};self.classes=[]
+ def __init__(self):super().__init__();self.ids=set();self.anchors=[];self.assets=[];self.images=[];self.html={};self.classes=[];self.allclasses=[]
  def handle_starttag(self,tag,attrs):
   a=dict(attrs)
   if tag=='html':self.html=a
-  if 'id' in a:self.ids.add(a['id'])
+  if 'id' in a:
+   assert a['id'] not in self.ids,f'Duplicate ID: {a["id"]}'
+   self.ids.add(a['id'])
   if tag=='a':self.anchors.append(a)
   if tag=='img':self.images.append(a)
   if tag in ['img','script'] and a.get('src'):self.assets.append(a['src'])
   if tag=='link' and a.get('href'):self.assets.append(a['href'])
-  if a.get('id')=='family-demo':self.classes=a['class'].split()
+  if a.get('id')=='how-it-works':self.classes=a['class'].split()
+  if 'class' in a:self.allclasses.extend(a['class'].split())
 s=(ROOT/'dist/index.html').read_text();d=Document();d.feed(s)
 assert d.html['lang']=='he' and d.html['dir']=='rtl'
 # Download links, when wired, may point only at real release assets of this repo.
@@ -26,12 +29,25 @@ for a in d.anchors:
  assert href[1:] in d.ids,f'Missing anchor {href}'
 for a in d.assets:assert (ROOT/'dist'/a.split('?')[0]).is_file(),f'Missing asset {a}'
 css=(ROOT/'dist/style.css').read_text()
-for asset in re.findall(r'url\([\'"]?([^\)\'\"]+)',css):assert (ROOT/'dist'/asset).is_file(),asset
-for state in ['s-check','s-arrive','s-msg1','s-reply','s-compose']:assert state in d.classes,'Static/no-JS complete state missing'
-assert 'prefers-reduced-motion:reduce' in css
+how_css=(ROOT/'dist/how.css').read_text()
+for stylesheet in [css,how_css]:
+ for asset in re.findall(r'url\([\'"]?([^\)\'"]+)',stylesheet):
+  assert (ROOT/'dist'/asset).is_file(),asset
+assert 'how' in d.classes and {'how.js','how.css'}.issubset(d.assets)
+for part in ['dev-phone','dev-tablet','scr-chat','kid-reply','wa-reply']:
+ assert part in d.allclasses,f'Missing static illustration element: {part}'
+assert 'demo.js' not in d.assets
+assert 'href="#how-it-works"' in s and 'class="primary" href="#download"' in s
+explainer=s.split('id="how-it-works"',1)[1].split('</section>',1)[0]
+captions=re.findall(r'<li class="how-cap"><h3>(.*?)</h3><p>(.*?)</p></li>',explainer)
+assert len(captions)==7 and all(title and copy for title,copy in captions)
+assert 'בוחרים אילו שיחות' in captions[1][0] and 'נכנסת מהטאבלט' in captions[2][0]
+assert 'שיחה שלא אושרה' in captions[5][0] and 'פרטית' in captions[5][1]
+assert 'class="how-controls" role="group" aria-label="ניווט בין שלבי ההדגמה" hidden' in explainer
+assert 'class="how-scene" aria-hidden="true"' in explainer
+assert 'prefers-reduced-motion:reduce' in css and 'prefers-reduced-motion: no-preference' in how_css
 assert 'מכסת זמן יומית לכל ילד' in s
 assert '0.5.3' not in s and 'room.png' not in css and 'sun.png' not in s
-assert s.index('parent-context')<s.index('child-context')
 art=[a for a in d.images if 'family-moment' in a['src']][0]
 assert art['width']=='1536' and art['height']=='1024'
 assert (ROOT/'dist/assets/family-moment.webp').stat().st_size<250000
@@ -80,5 +96,5 @@ assert validate_download(s.replace(' disabled','',1)),'pending enabled button ac
 assert validate_download(activate(s,'linux','https://example.com/installer.exe')),'non-repo download URL accepted'
 assert validate_download(re.sub(r'data-state="pending"','data-state="ready"',s,count=1)),'ready without link accepted'
 assert validate_download(s.replace('data-state="ready"','data-state="pending"',1)),'pending with link accepted'
-print('PASS: Hebrew RTL, all anchors/assets/CSS URLs, no-JS complete demo, reduced-motion CSS, parent-before-child DOM, per-platform pending downloads + ready-state fixtures, quota wording, explicit illustration dimensions and <250 kB budget')
+print('PASS: Hebrew RTL, all anchors/assets/CSS URLs, static explainer and its controls, reduced-motion CSS, caption order, per-platform pending downloads + ready-state fixtures, quota wording, explicit illustration dimensions and <250 kB budget')
 print('NOTE: static checks do not establish responsive rendering, contrast, browser focus or live motion behavior.')
