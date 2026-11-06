@@ -14,8 +14,9 @@ python3 -m http.server 4173 --directory dist
 
 Open `http://localhost:4173`. The demonstration uses synthetic content. It does
 not connect to WhatsApp or send messages. With JavaScript disabled, the seven
-steps and a still of the conversation are available. With reduced motion
-enabled, the step buttons still work and the devices change without animation.
+steps and a still of the conversation are available. With JavaScript, normal
+page scrolling drives the device scenes and message transfers in both directions.
+Reduced-motion settings and short viewports show the static version.
 
 ## Checks
 

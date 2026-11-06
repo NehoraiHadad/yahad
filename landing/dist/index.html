@@ -11,7 +11,7 @@
     <h2 id="how-title">איך זה עובד?</h2>
   </header>
   <div class="how-copy">
-    <p class="how-progress" hidden></p>
+    <p class="how-progress" aria-hidden="true"><span class="how-counter"></span><span class="how-scroll-hint">גללו בין השלבים ↓</span></p>
     <ol class="how-caps">
       <li class="how-cap"><h3>מחברים את הוואטסאפ של ההורה</h3><p>אחרי ההתקנה, פותחים את יחד במחשב וסורקים את קוד ה־<bdi>QR</bdi> עם הטלפון של ההורה.</p></li>
       <li class="how-cap"><h3>בוחרים אילו שיחות נועה תראה</h3><p>מאשרים לנועה שיחות או קבוצות, למשל את קבוצת המשפחה. אפשר לשנות את הבחירה בכל עת.</p></li>
@@ -21,17 +21,15 @@
       <li class="how-cap"><h3>שיחה שלא אושרה נשארת מחוץ למסך</h3><p>נועה רואה רק את מה שההורה אישר לה. למשל, השיחה הפרטית עם דני לא מופיעה אצלה.</p></li>
       <li class="how-cap"><h3>נועה עונה, וסבתא מקבלת בוואטסאפ</h3><p>התשובה מגיעה לקבוצת המשפחה מחשבון ההורה, עם השם של נועה.</p></li>
     </ol>
-    <div class="how-controls" role="group" aria-label="ניווט בין שלבי ההדגמה" hidden>
-      <button type="button" class="how-prev">הקודם</button>
-      <button type="button" class="how-next">הבא</button>
-    </div>
-    <p class="sr-only" role="status"></p>
   </div>
-  <div class="how-scene" aria-hidden="true"><div class="how-cam">
-<div class="pkt pkt-photo"><span class="pic"></span>סבתא · תמונה</div>
-<div class="pkt pkt-dani"><span class="av" style="background:#92611e">ד</span>דני · פרטית</div>
-<div class="stop"><span class="stop-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span><b>השיחה לא אושרה</b></div>
-<div class="pkt pkt-reply"><span class="kid-av">🌼</span>וואו! איזה יפים 😍</div>
+  <div class="how-scene" aria-hidden="true">
+    <div class="how-cam">
+      <div class="how-bridge"><div class="how-track">
+        <span class="how-packet how-packet-photo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></span>
+        <span class="how-packet how-packet-lock"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+        <span class="how-packet how-packet-reply"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/><path d="M8 12h8"/></svg></span>
+      </div></div>
+      <div class="how-device-slot how-phone-slot">
 <div class="dev dev-phone"><i class="cam-dot"></i><div class="dev-screen">
 <div class="scr scr-wa wa"><div class="sbar"><span>9:41</span><span class="sb-ic"><i></i><i></i><i></i><i></i><em></em></span></div>
 <div class="wa-head"><span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span><span class="wa-av">👵🏼</span><span><b class="wa-name">המשפחה</b><small class="wa-sub">קבוצה</small></span></div>
@@ -52,7 +50,10 @@
 <div class="row"><span class="av" style="background:#874196">ח</span><span class="nm">החברות של נועה<small>קבוצה</small></span><span class="sw on"></span></div>
 <div class="row"><span class="av" style="background:#556b65">ע</span><span class="nm">עבודה<small>קבוצה</small></span><span class="sw"></span></div>
 <div class="row"><span class="av" style="background:#92611e">ד</span><span class="nm">דני<small>שיחה פרטית</small></span><span class="tag-lock"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>לא אושרה</span></div>
-</div></div></div><div class="dev dev-tablet"><i class="cam-dot"></i><div class="dev-screen">
+</div></div></div>
+      </div>
+      <div class="how-device-slot how-tablet-slot">
+<div class="dev dev-tablet"><i class="cam-dot"></i><div class="dev-screen">
 <div class="scr scr-list kid"><div class="kid-top"><div class="brand"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/><path d="M15.8 9.2a2.5 2.5 0 0 0-3.5 0l-.3.4-.35-.3a2.42 2.42 0 1 0-3.2 3.6l3.6 3.5 3.6-3.5c1.2-1.2 1.1-2.7.2-3.7"/></svg> יחד<span>השיחות שלנו</span></div><div class="kid-me"><span class="kid-av">🌼</span>נועה</div></div><div class="kid-list">
 <div class="kid-row gran"><span class="av" style="background:#a84837">מ</span><span class="nm">המשפחה<small class="pv"><span class="pv-old">קבוצה</span><span class="pv-new">סבתא: 📷 תמונה</span></small></span><span class="badge">1</span></div>
 <div class="kid-row"><span class="av" style="background:#365cb0">כ</span><span class="nm">הכיתה של נועה<small class="pv">קבוצה</small></span></div>
@@ -60,7 +61,12 @@
 <div class="scr scr-signin kid signin"><div class="brand"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/><path d="M15.8 9.2a2.5 2.5 0 0 0-3.5 0l-.3.4-.35-.3a2.42 2.42 0 1 0-3.2 3.6l3.6 3.5 3.6-3.5c1.2-1.2 1.1-2.7.2-3.7"/></svg> יחד</div><h4>נכנסים לשיחות</h4><div class="who"><span class="kid-av">🌼</span>נועה</div><div class="pin"><i></i><i></i><i></i><i></i></div><div class="signin-btn">בואו ניכנס <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg></div><div class="note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>חשבון אישי לנועה</div></div>
 <div class="scr scr-chat kid"><div class="kid-chat-head"><span class="av" style="background:#a84837">מ</span>המשפחה</div><div class="kid-msgs"><div class="kb in"><small>סבתא</small><div class="pic"></div>תראו מה פרח לי בגינה 🌷</div><div class="kb out kid-reply">וואו! איזה יפים 😍</div></div>
 <div class="kid-input"><div class="kid-field">הודעה</div><span class="kid-send"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="transform:scaleX(-1)"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg></span></div></div>
-</div></div></div></div></div></section>
+</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+</section>
 
 <section class="boundaries shell" id="parents" aria-labelledby="parents-title"><div><h2 id="parents-title">גם לזמן יש מקום.</h2><p>מכסת זמן יומית לכל ילד, ואפשרות להוסיף זמן לפי הצורך.</p></div></section>
 <div class="disclaimer shell"><span>מוצר עצמאי. אינו קשור ל־<bdi>WhatsApp</bdi> או ל־<bdi>Meta</bdi>.</span><span>יחד · קשר בקצב שלכם</span></div>
