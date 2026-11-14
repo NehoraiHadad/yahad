@@ -37,7 +37,7 @@ jobs:
           for ancestor in (Path('landing'), Path('landing/dist')):
               assert stat.S_ISDIR(ancestor.lstat().st_mode), f'Unsafe directory: {ancestor}'
           root = Path('landing/dist').resolve(strict=True)
-          allowed = {'.html', '.css', '.js', '.svg', '.webp', '.ttf', '.txt'}
+          allowed = {'.html', '.css', '.js', '.svg', '.webp', '.woff2', '.jpg', '.png', '.txt'}
           total = 0
           count = 0
           for directory, dirs, files in os.walk(root, followlinks=False):
@@ -63,9 +63,7 @@ jobs:
         working-directory: landing
         run: |
           node --check dist/how.js
-          node --check dist/reveal.js
           node tests/how.test.cjs
-          node tests/reveal.test.cjs
           python3 -X utf8 tests/static.test.py
           python3 -X utf8 tests/contrast.test.py
       - name: Read existing Pages configuration

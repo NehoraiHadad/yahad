@@ -1,3 +1,9 @@
+Bundled font files:
+  hebrew.woff2  subset of Noto Sans Hebrew (variable, wght 400-900), github.com/google/fonts ofl/notosanshebrew
+  latin.woff2   subset of Noto Sans (variable, wght 400-900), github.com/google/fonts ofl/notosans
+Both: Copyright 2022 The Noto Project Authors, SIL Open Font License 1.1 (text below).
+Regenerate with landing/tools/build-assets.py.
+
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: Noto
 Upstream-Contact: https://github.com/googlei18n/noto-fonts/issues
