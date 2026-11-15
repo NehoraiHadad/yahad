@@ -3,7 +3,8 @@ import json
 from pathlib import Path
 import unittest
 from unittest.mock import patch
-from installer.windows.application_version import package_release_version, source_release_version, require_source_release_version, require_native_build_identity
+from installer.windows.application_version import (Infrastructure, package_release_version, package_infrastructure_contract, source_release_version,
+    require_source_release_version, source_infrastructure_identity, infrastructure_identity_from_props, require_native_build_identity)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -31,16 +32,59 @@ class ApplicationVersionTests(unittest.TestCase):
             with self.subTest(lock=lock), patch.object(Path, 'read_bytes', side_effect=[package,json.dumps(lock).encode()]), self.assertRaises(ValueError): source_release_version(ROOT)
 
 
-class NativeBuildIdentityTests(unittest.TestCase):
-    def test_mixed_native_core_host_or_helper_release_and_source_is_refused(self):
-        source='a'*40
-        for artifact in ('Yahad.ServiceHost','Yahad.Platform','Yahad.Updater'):
-            description=dict(artifact=artifact,applicationVersion='0.6.0',sourceCommit=source,version='1.0.0+'+source)
-            self.assertEqual(require_native_build_identity(description,artifact,'0.6.0',source),description)
-            for field,value in (('applicationVersion','0.5.3'),('sourceCommit','b'*40),('version','1.0.0+'+'b'*40),('artifact','foreign')):
-                mixed=dict(description);mixed[field]=value
-                with self.subTest(artifact=artifact,field=field),self.assertRaises(ValueError):require_native_build_identity(mixed,artifact,'0.6.0',source)
+PROPS = ('<Project>\n  <PropertyGroup>\n    <YahadInfrastructureVersion>{version}</YahadInfrastructureVersion>\n'
+         '    <YahadInfrastructureContractMin>{low}</YahadInfrastructureContractMin>\n'
+         '    <YahadInfrastructureContractMax>{high}</YahadInfrastructureContractMax>\n'
+         '    <Version>$(YahadInfrastructureVersion)</Version>\n  </PropertyGroup>\n</Project>\n')
 
+
+def props(version='1.0.0', low='1', high='1'): return PROPS.format(version=version, low=low, high=high).encode()
+
+
+class InfrastructureIdentityTests(unittest.TestCase):
+    def test_current_props_and_package_contract_agree(self):
+        identity = source_infrastructure_identity(ROOT)
+        self.assertIsInstance(identity, Infrastructure)
+        self.assertLessEqual(identity.contract_min, identity.contract_max)
+        contract = json.loads((ROOT/'package.json').read_bytes())['yahadInfrastructureContract']
+        self.assertEqual(package_infrastructure_contract((ROOT/'package.json').read_bytes(), identity), contract)
+
+    def test_props_identity_is_literal_canonical_and_defined_once(self):
+        self.assertEqual(infrastructure_identity_from_props(props('2.10.0', '3', '1024')), Infrastructure('2.10.0', 3, 1024))
+        bad = [props(version) for version in ('01.0.0', '1.0', '1.0.0-beta', '$(Other)', ' 1.0.0', '')]
+        bad += [props(low=low) for low in ('0', '01', '+1', '1025', '١')] + [props(low='2', high='1'), props(high='1025')]
+        bad += [b'\xef\xbb\xbf'+props(), props().replace(b'<Project>', b'<Other>').replace(b'</Project>', b'</Other>'),
+                props().replace(b'</PropertyGroup>', b'<YahadInfrastructureVersion>1.0.0</YahadInfrastructureVersion></PropertyGroup>'),
+                props().replace(b'<YahadInfrastructureContractMax>1</YahadInfrastructureContractMax>', b''),
+                props().replace(b'<YahadInfrastructureContractMin>', b'<YahadInfrastructureContractMin Condition="x">'), b' '*65537]
+        for data in bad:
+            with self.subTest(data=data[:200]), self.assertRaises(ValueError): infrastructure_identity_from_props(data)
+
+    def test_app_contract_is_an_exact_integer_in_the_infrastructure_range(self):
+        infrastructure = Infrastructure('1.0.0', 2, 3)
+        for value in (2, 3): self.assertEqual(package_infrastructure_contract(json.dumps(dict(version='0.6.0', yahadInfrastructureContract=value)), infrastructure), value)
+        for value in (1, 4, 0, True, '2', 2.0, None, [2]):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'infrastructure contract'):
+                package_infrastructure_contract(json.dumps(dict(version='0.6.0', yahadInfrastructureContract=value)), infrastructure)
+        with self.assertRaisesRegex(ValueError, 'infrastructure contract'): package_infrastructure_contract('{"version":"0.6.0"}', infrastructure)
+
+
+class NativeBuildIdentityTests(unittest.TestCase):
+    def test_native_images_carry_the_infrastructure_identity_and_never_the_app_version(self):
+        source = 'a'*40; infrastructure = Infrastructure('1.2.3', 1, 2)
+        for artifact in ('Yahad.ServiceHost', 'Yahad.Platform', 'Yahad.Updater', 'Yahad.Setup'):
+            description = dict(artifact=artifact, infrastructureVersion='1.2.3', contractMin=1, contractMax=2, sourceCommit=source, version='1.2.3+'+source)
+            self.assertEqual(require_native_build_identity(description, artifact, infrastructure, source), description)
+            for field, value in (('infrastructureVersion', '1.2.4'), ('sourceCommit', 'b'*40), ('version', '1.2.3+'+'b'*40), ('version', '1.2.4+'+source),
+                                 ('version', source), ('artifact', 'foreign'), ('contractMin', 2), ('contractMax', 3), ('contractMin', True),
+                                 ('contractMax', '2'), ('applicationVersion', '0.6.0')):
+                mixed = dict(description); mixed[field] = value
+                with self.subTest(artifact=artifact, field=field, value=value), self.assertRaises(ValueError):
+                    require_native_build_identity(mixed, artifact, infrastructure, source)
+            for field in ('infrastructureVersion', 'contractMin', 'contractMax', 'sourceCommit', 'version'):
+                missing = {k: v for k, v in description.items() if k != field}
+                with self.subTest(artifact=artifact, missing=field), self.assertRaises(ValueError):
+                    require_native_build_identity(missing, artifact, infrastructure, source)
 
 
 if __name__ == '__main__': unittest.main()

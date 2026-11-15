@@ -50,6 +50,10 @@ try {
     & $pythonExe -c 'import sys; from pathlib import Path; from installer.windows import dependencies as d; p=Path(sys.argv[1]); d.validate_staged({x.relative_to(p).as_posix():x for x in p.rglob("*") if x.is_file()}); print("Verified vendor inputs")' $vendorRoot
     if ($LASTEXITCODE -ne 0) { throw 'Pinned vendor validation failed' }
     $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+    # The infrastructure track's identity, read by the same strict reader the
+    # packager checks every native image against.
+    $infrastructureVersion = (& $pythonExe -c 'import sys; from installer.windows.application_version import source_infrastructure_identity as s; print(s(sys.argv[1]).version)' $repo)
+    if ($LASTEXITCODE -ne 0 -or $infrastructureVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'Infrastructure identity unreadable' }
     if ($Output -and ![IO.Path]::IsPathFullyQualified($Output)) { throw 'Output must be a fully qualified path' }
     $output = if ($Output) { $Output } else { Join-Path $repo ('.local/packages/' + $commit.Substring(0,12)) }
     $releaseKeyId = $null
@@ -94,10 +98,15 @@ try {
     New-Item -ItemType Directory -Path $app | Out-Null
     $appZip = Join-Path $app "yahad-app-native-$version.zip"
     RunStep 'app-payload' $pythonExe @('-m','installer.windows.first_install_package','payload','--repo',$repo,'--core',"$app/core",'--vendors',"$app/vendors",'--full',"$app/full",'--node',$nodeRoot,'--dotnet',$dotnetRoot,'--npm-cache',$npmRoot,'--verified-vendor-source',$vendorRoot,'--archive',$appZip)
+    # The payload-free engine (plan 4.4): the same Setup without SetupPayloadDirectory,
+    # installed as infra\<version>\setup\ for repair, uninstall and ARP.
+    $singleFile = @('-p:PublishSingleFile=true','-p:IncludeNativeLibrariesForSelfExtract=true')
+    $engine = Join-Path $output 'engine'
+    RunStep 'engine-publish' $dotnetExe (@('publish','installer/Yahad.Setup/Yahad.Setup.csproj') + $common + $singleFile + @('-o',$engine))
     $system = Join-Path $output 'system'
-    RunStep 'system-package' $pythonExe @('-m','installer.windows.setup_package','--repo',$repo,'--payload-zip',$appZip,'--runtime-host',"$output/Yahad.ServiceHost",'--updater',"$output/Yahad.Updater",'--platform',"$output/Yahad.Platform",'--output',$system)
+    RunStep 'system-package' $pythonExe @('-m','installer.windows.setup_package','--repo',$repo,'--payload-zip',$appZip,'--runtime-host',"$output/Yahad.ServiceHost",'--updater',"$output/Yahad.Updater",'--platform',"$output/Yahad.Platform",'--engine',(Join-Path $engine 'Yahad.Setup.exe'),'--output',$system)
     $setup = Join-Path $output 'setup'
-    RunStep 'setup-publish' $dotnetExe (@('publish','installer/Yahad.Setup/Yahad.Setup.csproj') + $common + @('-p:PublishSingleFile=true','-p:IncludeNativeLibrariesForSelfExtract=true',"-p:SetupPayloadDirectory=$system",'-o',$setup))
+    RunStep 'setup-publish' $dotnetExe (@('publish','installer/Yahad.Setup/Yahad.Setup.csproj') + $common + $singleFile + @("-p:SetupPayloadDirectory=$system",'-o',$setup))
     Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination (Join-Path $setup 'LICENSE')
     # Audit mode only: no install/uninstall/UAC or service operations. Setup's
     # manifest requires administrator rights; RunAsInvoker starts this read-only
@@ -122,7 +131,11 @@ try {
     } finally { $audit.Dispose() }
     $verified = $observed | ConvertFrom-Json
     $manifest = Get-Content -LiteralPath (Join-Path $system 'install-manifest.json') -Raw | ConvertFrom-Json
-    if ($verified.sourceCommit -ne $commit -or $verified.setupSourceCommit -ne $commit -or $verified.coreSourceCommit -ne $commit -or $verified.embeddedZip -ne $manifest.ZipSha256 -or $verified.files -ne $manifest.Files.Count -or $verified.systemOperationsInvoked -ne $false) { throw 'Embedded source/package identity mismatch' }
+    # Phase 2 builds both tracks from this one commit.
+    if ($verified.infrastructureVersion -ne $infrastructureVersion -or $verified.appVersion -ne $version -or
+        $manifest.Infrastructure.Version -ne $infrastructureVersion -or $manifest.App.Version -ne $version) { throw 'Embedded release identity mismatch' }
+    if ($verified.infrastructureSourceCommit -ne $commit -or $verified.appSourceCommit -ne $commit -or $verified.setupSourceCommit -ne $commit -or $verified.coreSourceCommit -ne $commit) { throw 'Embedded source identity mismatch' }
+    if ($verified.embeddedZip -ne $manifest.ZipSha256 -or $verified.files -ne $manifest.Files.Count -or $verified.systemOperationsInvoked -ne $false) { throw 'Embedded package identity mismatch' }
     if ($verified.windowingLoaded -ne $false) { throw 'An unattended Setup mode loaded WPF' }
     if ($verified.releaseKeyId -ne $releaseKeyId) { throw 'Embedded release key mismatch' }
     if ($releaseKeyId) {
@@ -144,7 +157,7 @@ try {
         Write-Warning 'Built without -ReleaseKey: this Setup installs but refuses every upgrade.'
     }
     RequireFrozenSource
-    [ordered]@{sourceCommit=$commit;sourceTree=(& git rev-parse 'HEAD^{tree}').Trim();version=$version;setupSha256=(Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerInvariant();verification=$verified;installed=$false;published=$false} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'package-build.json') -Encoding utf8
+    [ordered]@{sourceCommit=$commit;sourceTree=(& git rev-parse 'HEAD^{tree}').Trim();version=$version;infrastructureVersion=$infrastructureVersion;setupSha256=(Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerInvariant();verification=$verified;installed=$false;published=$false} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'package-build.json') -Encoding utf8
     Write-Output "PACKAGE_BUILT $executable"
 } finally {
     foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process') }

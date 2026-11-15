@@ -2,8 +2,9 @@
 # throwaway commits made in worktrees inside the job; the patches below never exist
 # in the committed tree, and the product has no switch that imitates them:
 #   n/       HEAD as committed.
-#   n1/      version +1, schema +1 with a real migration.
-#   broken/  version +2, schema +2 with a real migration; /health/ready answers 503.
+#   n1/      version +1, infrastructure version +1, schema +1 with a real migration.
+#   broken/  version +2, infrastructure version +2, schema +2 with a real migration;
+#            /health/ready answers 503.
 #   refused/ releases that must be refused: foreign key, no signature, tampered.
 # -Key is a directory with key.pem and key.spki made for this job by
 # scripts/windows-release-key.mjs. It is never uploaded; only key.spki reaches a build.
@@ -80,6 +81,12 @@ try {
         try {
             $current = (Get-Content package.json -Raw | ConvertFrom-Json).version
             Run $node @($npm, 'version', (BumpVersion $current), '--no-git-tag-version', '--ignore-scripts')
+            # A different commit is a different infrastructure build: it takes the
+            # Setup track, never the app-only one, so its identity moves too.
+            $props = Join-Path $tree 'installer/Directory.Build.props'
+            $infrastructure = [regex]::Matches([IO.File]::ReadAllText($props), '<YahadInfrastructureVersion>([^<]*)</YahadInfrastructureVersion>')
+            if ($infrastructure.Count -ne 1) { throw "Expected one YahadInfrastructureVersion in $props" }
+            ReplaceOnce $props $infrastructure[0].Value "<YahadInfrastructureVersion>$(BumpVersion $infrastructure[0].Groups[1].Value)</YahadInfrastructureVersion>"
             $result = & $Patch $tree
             Run git @('-c', 'user.name=ci', '-c', 'user.email=ci@invalid', 'commit', '-q', '-am', "CI fixture: $Name")
             Run $node @($npm, 'ci', '--offline', '--cache', $inputs.NpmCache, '--no-audit', '--no-fund')
