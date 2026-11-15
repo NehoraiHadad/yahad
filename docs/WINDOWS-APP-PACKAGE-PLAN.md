@@ -2,8 +2,12 @@
 
 Status: **design plan, not implemented.** This document changes no code, release
 format or installed machine. Line references are to `origin/main` at `2e12ea0`.
-Revision 2 addresses an independent review (33 findings). Section 14 maps each
-finding to where this revision handles it.
+Revision 2 addresses an independent review (33 findings); the appendix maps each
+finding to where it's handled. Revision 3 re-examines the mechanism itself
+(section 2a), moves `Yahad.Platform` to the infrastructure track, and makes the
+bridge conditional on there being any 0.6.x Windows installs (section 11). A
+second independent review of revision 3 found six more defects, all accepted
+(end of the appendix).
 
 ## 1. Problem
 
@@ -18,8 +22,12 @@ Updater, Node 24, FFmpeg, Caddy and the app
 So a few-line app fix (for example PR #26, message receipts) costs:
 
 - a rebuild of every .NET project and the Setup (`installer/package.ps1:86-102`);
-- a download of the whole Setup on every family computer (capped at 512 MiB,
-  `installer/Yahad.Install.Core/ReleaseManifest.cs:16`);
+- a download of the whole Setup on every family computer: **294 MB** for
+  `Yahad.Setup-0.6.4.exe` (release `v0.6.4`), under a 512 MiB cap
+  (`installer/Yahad.Install.Core/ReleaseManifest.cs:16`). The app's own share
+  is small: the server bundle `main.mjs` is 10.3 MB and `dist/` is under 1 MB
+  (CI run 42003566492, `app-payload.log` and `web.log`). The pinned FFmpeg alone
+  is 151 MiB and Caddy is 51 MiB (`installer/windows/dependency-pins.json`);
 - an extraction of every component into a new `versions\<v>\` tree
   (`installer/Yahad.Setup/UpgradeHost.cs:190-205`);
 - a switch of all three service images: Runtime, Updater and LAN proxy
@@ -43,6 +51,69 @@ the single `updater.py` member at `scripts/release-updater.mjs:35-45`;
   prefix, same backup, health gate, rollback and repair task. The recovery model
   is extended to (infrastructure, app) pairs, not replaced.
 
+## 2a. Is the mechanism itself right?
+
+This section re-asks the question from scratch, including whether .NET is the
+right base at all.
+
+**What has to be native.** These requirements come from running a service on a
+family PC with no one logged in, and no language choice removes them:
+- the Runtime as a Windows service under a restricted virtual account;
+- an Updater running as SYSTEM;
+- ACLs on the install and data roots;
+- a kernel data lease handed to the Node process (`ServiceProcess.cs:89-99`);
+- a pipe client that verifies the server's PID against the SCM
+  (`UpdaterClient.cs:97-102`).
+
+Node can't be an SCM service without a host, and it has no API for
+`DuplicateHandle` or for checking a named-pipe server's identity. So there is
+always a small native layer. The question is only which one.
+
+**Alternatives already evaluated.** On 2026-11-03,
+`docs/installer-architecture-review.md` §2 checked them against their docs:
+- Velopack: per-user install, no services;
+- WiX/MSI: install-time rollback only, a second toolchain, and `NT SERVICE\`
+  accounts not documented;
+- Inno Setup: no updater, no upgrade rollback;
+- WinSW/NSSM: unmaintained, and virtual accounts not documented.
+
+That review then cut the C# from about 20,700 lines to about 5,000, each step
+gated by machine acceptance (same file, "Status"). A rewrite in Go or Rust would
+redo proven SCM, ACL, job and pipe code and add no property this plan needs.
+**Verdict:** keep C#/.NET for the native layer.
+
+**What was actually wrong.** Two defects, both in the design rather than the
+language:
+
+1. **One version number for everything** (section 4). This is what turns a
+   10 MB app fix into a 294 MB Setup. The plan's main change fixes it.
+2. **`Yahad.Platform` is on the wrong track.** Its five commands are the native
+   half of the infrastructure contract (`installer/Yahad.Platform/Program.cs`):
+   - `--describe`;
+   - `windows-updates`, the Updater pipe client;
+   - `read-secret`, a no-follow file read;
+   - `adopt-host-lease`, validating the host's lease handoff;
+   - `lock-data`.
+
+   It compiles `Yahad.Install.Core`, which the host, Updater and Setup share. It
+   changes exactly when that contract changes. Yet it ships in the app tree
+   (`src/platform-files.ts:47`, `src/windows-update-transport.ts:31`) and brings
+   a private .NET runtime with it (`installer/windows/bundle.py:19-24,80-89`).
+   That is the only native code in the app tree, the only reason the app tree
+   needs a .NET runtime, and the only code the two tracks share.
+
+   **Revision 3 moves Platform to infrastructure.** The app track then ships
+   **no native code at all**: only JavaScript, HTML and data that the
+   infrastructure's own Node runs. The package's size is then set by the app
+   itself, about 11 MB before compression. A new native capability needs a new
+   contract, and so a Setup, which is correct for privileged-boundary code.
+
+**Not changed by this plan, noted for the infrastructure track.** These shrink
+the rare Setup download and don't affect the app track:
+- the host, Updater and Platform each carry their own self-contained .NET
+  runtime (open question 6);
+- FFmpeg ships the full LGPL shared build.
+
 ## 3. What can only change through Setup
 
 | Component | Owner today (evidence) | Track |
@@ -54,15 +125,10 @@ the single `updater.py` member at `scripts/release-updater.mjs:35-45`;
 | SYSTEM Repair task | `RepairTask.cs:22-48` | Infrastructure |
 | Trust key `release-key.spki` | Written at first install (`NativeSetupHost.cs:149-155`), pinned against the embedded key (`ReleaseManifest.cs:82-86`) | Manual only |
 | Service host, Updater, Setup engine (.NET, self-contained) | They are the upgrade machinery | Infrastructure |
+| `Yahad.Platform` (the app's native helper) | The native half of the contract; compiles `Install.Core` (section 2a) | Infrastructure (moved) |
 | Node 24, FFmpeg, Caddy | Node and FFmpeg resolved by the host (`Yahad.ServiceHost/InstalledLaunch.cs:54,69`); Caddy by `LanProxyPaths.Caddy` (`LanProxyService.cs:19,82`) | Infrastructure |
-| `app\package.json`, `server\main.mjs`, `dist\`, `fixtures\`, `deploy\`, `native\` | Run as the restricted Runtime account; no privileged operation (`installer/windows/bundle.py:18-24`) | **App** |
+| `app\package.json`, `server\main.mjs`, `dist\`, `fixtures\`, `deploy\` | JavaScript, HTML and data run by the infrastructure's Node as the restricted Runtime account; no privileged operation and no native code (`installer/windows/bundle.py:18-19`) | **App** |
 | Database schema migrations | Run inside the app at startup (`src/store.ts:60,76-85`, `src/db.ts:8-18`) | **App** |
-
-`app\native\` today is `Yahad.Platform.exe` **plus a private self-contained
-.NET runtime** (`coreclr.dll`, `hostfxr.dll`, `System.Private.CoreLib.dll`, ...;
-`bundle.py:19-24,80-89`). Where that runtime lives is open question 6. Until it
-is decided, the app package carries it, so its size must be measured before
-claiming a "small" package.
 
 **Can anything never arrive later?** Only the trust root. Everything else in the
 infrastructure track is still delivered automatically by the Updater. Two cases
@@ -93,13 +159,20 @@ identities.
   release-key.spki
   active.json                             the active pair (4.3)
   infra\<infra-version>\
-    host\  updater\  runtime\{node,ffmpeg,caddy}\
+    host\  updater\  platform\  runtime\{node,ffmpeg,caddy}\  legal\
     setup\Yahad.Setup.exe                 payload-free Setup engine (4.4)
     infra-tree.json                       member record of this tree
   apps\<app-version>\
     app-tree.json                         member record, shipped in the archive (5.3)
-    app\{package.json, server\main.mjs, dist\, fixtures\, deploy\, native\}
+    app\{package.json, server\main.mjs, dist\, fixtures\, deploy\, legal\}
 ```
+
+`legal\` is split by owner. Today one `legal/` covers the whole Setup
+(`installer/windows/bundle.py:22-26`). The infra tree keeps `runtime-lock.json`,
+the Node, .NET, FFmpeg and Caddy licenses and an infra SBOM. The app tree carries
+what the server build writes, `server-bundle.json` and
+`ThirdPartyNotices-server.txt` (`scripts/build-server.mjs:103-111`), plus an app
+SBOM. A new app then never sits beside stale notices for its own dependencies.
 
 `active.json` lives in the binary root, not the state root. It describes
 binaries, it is removed with them at uninstall, and the Runtime, the LAN proxy
@@ -121,7 +194,8 @@ by hand by an administrator is inside it, as it is today.
 
 - **Infrastructure version:** its own version (open question 1), compiled into
   the host, Updater and engine from `installer/Directory.Build.props` in place of
-  `package.json`. It carries an integer **infrastructure contract** `N` (section 6).
+  `package.json`. It carries the supported **infrastructure contract** range
+  `contractMin..contractMax` (section 6).
 - **App version:** stays `package.json`. `/health/ready` reports it by reading
   `package.json` from its working directory (`src/server.ts:794`). So the host
   keeps cwd = the active `apps\<v>\app`, as today (`InstalledLaunch.cs:69`), and
@@ -130,8 +204,8 @@ by hand by an administrator is inside it, as it is today.
 
   ```json
   { "format": 1,
-    "infrastructure": { "version": "1.0.0", "contract": 1, "treeSha256": "<hex>" },
-    "app": { "version": "0.7.1", "treeSha256": "<hex>" } }
+    "infrastructure": { "version": "1.0.0", "contractMin": 1, "contractMax": 1, "treeSha256": "<hex>" },
+    "app": { "version": "0.7.1", "requiresContract": 1, "treeSha256": "<hex>" } }
   ```
 
   It is written atomically: a temporary file in the same directory, then
@@ -139,14 +213,24 @@ by hand by an administrator is inside it, as it is today.
   Its readers:
   - **Service host** (Runtime and LAN modes): refuses to start unless
     `infrastructure.version` equals its own compiled version and
-    `infrastructure.contract` equals its own. It then resolves Node and FFmpeg
-    from its `infra\` tree, Caddy likewise (`LanProxyService.cs:19,82`), and the
-    app from `apps\<app.version>\`.
+    the contract range equals its own, and that `app.requiresContract` is in
+    that range. It then resolves Node, FFmpeg and
+    Platform from its `infra\` tree, Caddy likewise (`LanProxyService.cs:19,82`),
+    and the app from `apps\<app.version>\`. It passes the Platform path to Node
+    as `YAHAD_PLATFORM_HELPER`. That replaces the app-relative
+    `../native/Yahad.Platform.exe` (`src/platform-files.ts:47`,
+    `src/windows-update-transport.ts:31`). Today the app reads no
+    environment variable here: it builds that default path and only checks that
+    it is an absolute `.exe` (`platform-files.ts:58`). The new app reads only
+    `YAHAD_PLATFORM_HELPER`, with no fallback, and refuses a missing or invalid
+    value. Every direct launcher passes it too (the migration list in section 10).
   - **Updater:** its own infra version is compiled in. It reads the current app
     version from the pointer at every decision (section 9.2).
-  - **Platform:** verifies the Updater against
-    `InstalledLayout.UpdaterCommand(infrastructure.version)` from the pointer,
-    and keeps every PID, state and account check (`UpdaterClient.cs:97-102`).
+  - **Platform:** it is infrastructure now, so its compiled infra version is
+    the Updater's. `RequireServer` keeps comparing against its own compiled
+    version, and every PID, state, account and image check stays
+    (`UpdaterClient.cs:97-105`). It only has to switch from
+    `ApplicationRelease.Version` to the compiled infrastructure version.
 
 ### 4.4 The installed Setup engine
 
@@ -162,9 +246,15 @@ So the installed engine is a separate artifact:
 
 That engine serves `--apply-app`, `--repair`, `--uninstall` and the Apps &
 Features entry (`NativeSetupHost.cs:186`). None of these modes may require an
-embedded payload. Only install, `--verify-package` and `--quiet-upgrade` call
-`InstallPackage.Embedded()` today (`SetupEntry.cs:28`, `SetupOperation.cs:45`,
-`UpgradeHost.cs:120`). Implementation must confirm this before relying on it.
+embedded payload. **Today uninstall does require one.** `SetupOperation.ExecuteAsync`
+opens `InstallPackage.Embedded()` before it branches on the operation
+(`SetupOperation.cs:45`), and a missing resource fails with
+`PACKAGE_NOT_EMBEDDED` (`InstallPackage.cs:44`). So this is a required code
+change, not a check. The uninstall and repair paths are built without
+`InstallPackage`, and only the operations that consume the package open it
+(install, `--verify-package`, `--quiet-upgrade`; `SetupEntry.cs:28`,
+`UpgradeHost.cs:120`). Tests run both uninstall modes, quiet and from Apps &
+Features, on the payload-free engine.
 
 How the per-release distributable Setup is built from it is open question 7.
 
@@ -173,7 +263,7 @@ How the per-release distributable Setup is built from it is open question 7.
 `InstallerState` binds one `Version`, its digests, files and `Previous` to a
 single release (`InstallState.cs:12-31`). Format 7 replaces that with pairs:
 
-- `Infrastructure`: version, contract, source commit, engine SHA-256, the
+- `Infrastructure`: version, contract range, source commit, engine SHA-256, the
   `infra-tree.json` digest and its members;
 - `App`: version, source commit, `treeSha256`, members, and the **database
   schema the committed app runs**;
@@ -186,11 +276,14 @@ compatible. Keeping only "the previous app" would not guarantee that it fits the
 infrastructure being returned to.
 
 The recorded schema is the admission source (section 7, step 1). It equals the
-stored `schema_version` for any committed app. A commit is gated on health
-reporting that schema, and the app refuses to start when the stored schema
+stored `schema_version` for any committed app. A commit, a first install's
+included (8.3), is written only after health reports that app version and that
+schema, and the app refuses to start when the stored schema
 differs after migration (`src/store.ts:84-85`; `src/db.ts:14-18`).
 
-Format-6 records (0.6.x) are read only by the bridge and by repair (section 11).
+Format-6 records (0.6.x) are read only by the bridge and its repair (§11.1).
+Without a bridge, they are read only as a kept `uninstalled` record at reinstall
+(§11.0).
 
 ## 5. Release format
 
@@ -198,8 +291,9 @@ Format-6 records (0.6.x) are read only by the bridge and by repair (section 11).
 
 The 0.6.x parser rejects unknown fields (`ReleaseManifest.cs:19`, `NativeJson.cs:9`).
 So adding infrastructure fields to `yahad-windows-<v>.json` would make every
-0.6.x machine fail with `RELEASE_MANIFEST_INVALID` and never bridge. Each release
-therefore carries two signed manifests:
+0.6.x machine fail with `RELEASE_MANIFEST_INVALID` and never bridge. So while a
+bridge is needed (section 11), each release carries two signed manifests.
+Without a bridge (§11.0), it carries only the format-2 one:
 
 - **`yahad-windows-<v>.json(.sig)` (legacy, format 1).** Byte-for-byte today's
   format (`ReleaseManifest.cs:13`), naming `Yahad.Setup-<v>.exe`. Only pre-bridge
@@ -211,7 +305,7 @@ therefore carries two signed manifests:
   ```json
   { "format": 2, "product": "yahad-windows-release", "version": "0.7.1",
     "sourceCommit": "<40 hex>", "keyId": "<16 hex>", "createdUnix": 0,
-    "infrastructure": { "version": "1.0.0", "contract": 1, "sourceCommit": "<40 hex>",
+    "infrastructure": { "version": "1.0.0", "contractMin": 1, "contractMax": 1, "sourceCommit": "<40 hex>",
       "treeSha256": "<hex>", "setup": { "name": "Yahad.Setup-0.7.1.exe", "sha256": "<hex>", "bytes": 0 } },
     "app": { "archive": { "name": "yahad-windows-app-0.7.1.zip", "sha256": "<hex>", "bytes": 0 },
       "treeSha256": "<hex>", "requiresContract": 1,
@@ -248,11 +342,19 @@ and requires runtimes and services (`:37,99`):
   (`bundle.py:27`). The archive bytes and SHA-256 must match the manifest before
   the zip is opened.
 - **Required members:** `app/package.json`, `app/server/main.mjs`,
-  `app/dist/index.html`, `app/native/Yahad.Platform.exe` with its runtime closure
-  (`bundle.py:19-24`), `app/deploy/lan-capabilities.json` and
-  `app/deploy/lan-help.html` (`NativeLanInstall.cs:102-106`).
-- **Forbidden:** `app/src/`, `app/node_modules/`, `app/package-lock.json`
-  (`installer/windows/setup_package.py:160-162`).
+  `app/dist/index.html`, `app/deploy/lan-capabilities.json` and
+  `app/deploy/lan-help.html` (`NativeLanInstall.cs:102-106`), plus
+  `app/legal/server-bundle.json` and `app/legal/ThirdPartyNotices-server.txt`
+  (section 10).
+- **Forbidden:**
+  - `app/src/`, `app/node_modules/`, `app/package-lock.json`
+    (`installer/windows/setup_package.py:160-162`);
+  - `app/native/`;
+  - any member that is a PE image (the `MZ` header), whatever its name;
+  - any member named `*.node`, `*.exe`, `*.dll`, `*.ps1`, `*.cmd` or `*.bat`.
+
+  The server is one self-contained ESM file with no `node_modules`
+  (`bundle.py:16-17`), so nothing legitimate is lost.
 - **Per-member check:** every member is size- and SHA-256-checked while it is
   extracted (as `InstallPackage.cs:69-71`).
 - **Exact match:** the archive's member set must equal `app-tree.json`'s list
@@ -269,8 +371,8 @@ re-serialises it: it extracts the bytes and requires
 - `files` are sorted by ordinal path and unique case-insensitively. Each path is
   relative to `apps\<v>\`, uses `/`, and starts with `app/`. Sizes are
   non-negative integers, and digests are lowercase hex.
-- `infra-tree.json` has the same format, over `host/`, `updater/`, `runtime/`
-  and `setup/`.
+- `infra-tree.json` has the same format, over `host/`, `updater/`, `platform/`,
+  `runtime/`, `legal/` and `setup/`.
 
 **What the host verifies at start.** The pointer's `treeSha256` must match the
 tree-record bytes, every recorded member must exist with its recorded size, and
@@ -281,21 +383,31 @@ hashes either. This guarantee is stated as exactly that and no more.
 
 ## 6. Contract between the tracks
 
-`requiresContract` (app) ≤ installed contract `N` (infrastructure) is the only
-compatibility rule. `N` covers everything an app relies on from infrastructure:
+Each infrastructure release declares the contracts it supports as a contiguous
+range, `contractMin..contractMax`; the pointer and the record carry both. An app
+declares one `requiresContract`, and it is admitted only when
+`contractMin ≤ requiresContract ≤ contractMax`. A bare `requiresContract ≤ N`
+would be wrong, because the contracts in the code are exact, not cumulative:
+`HostLeaseGrant` is accepted only at format 1 (`WindowsFileBoundary.cs:113`), and
+Platform replies are checked against an exact schema (`src/platform-files.ts:41`).
+So an infrastructure that drops an old behaviour raises `contractMin`, and an
+older app is refused rather than started into a broken contract. A contract
+covers everything an app relies on from infrastructure:
 
-- process launch: the environment variables and the working directory
-  (`InstalledLaunch.cs:63-69`), Node major, FFmpeg and Caddy behaviour;
+- process launch: the environment variables, including `YAHAD_PLATFORM_HELPER`,
+  and the working directory (`InstalledLaunch.cs:63-69`), Node major, FFmpeg and
+  Caddy behaviour;
+- the Platform command set and reply schema (`installer/Yahad.Platform/Program.cs`):
+  `windows-updates`, `read-secret`, `adopt-host-lease`, `lock-data`;
 - the data-lease handoff: `YAHAD_NATIVE_LEASE_FILE/NONCE` and the
   `HostLeaseGrant` format (`ServiceProcess.cs:89-99`; `src/platform-files.ts:76-82`);
 - the native control channel: ready and stop frames (`src/native-control.ts:3-5`);
 - the Updater pipe protocol and its status names (`UpdaterProtocol.cs:6-9`);
-- the `active.json` format and the health response shape (`src/server.ts:791-795`);
-- the private .NET runtime location, if open question 6 moves it to infrastructure.
+- the `active.json` format and the health response shape (`src/server.ts:791-795`).
 
-Raising `N` is deliberate: infrastructure stops providing something an older
-app needs, or an app starts needing something new. CI proves it in both
-directions (section 12).
+Adding a contract raises `contractMax`. Dropping one raises `contractMin`. Both
+are deliberate. CI runs every supported old app on new infrastructure, and the
+new app on every supported infrastructure (section 12).
 
 ## 7. App apply sequence (`--apply-app`)
 
@@ -307,11 +419,12 @@ the elevated state machine, backup, health gate, rollback and repair state
 
 `AppUpgradeHost` persists every phase to `upgrade-state.json` (format 2,
 `kind: "app"`, from-pair and to-pair). The repair task points at the same
-engine, so it can resume or undo every phase.
+engine, `infra\<active>\setup`. An app apply never deletes an `infra\` tree, so
+that engine can resume or undo every phase.
 
 | # | Phase | Action | On failure |
 | --- | --- | --- | --- |
-| 1 | `admitting` | Require admin, the install lock, record phase `committed`, and no upgrade state (`UpgradeHost.cs:112-115`). Verify the signature over raw bytes, then the strict parse. Read the **exact** file `yahad-windows-release-<v>.json`, never a glob (`UpgradeHost.cs:141`). Check the archive size and hash. Require app version > active, `requiresContract ≤ N`, and that `infrastructure.version` equals the installed one (otherwise this is a Setup-track release). Require that the **recorded schema** (4.5) is the target or is in `databaseMigrationsFrom`. This needs no running Runtime, so an app that fixes a startup failure is still admitted. Check free disk for the tree and a database copy. | Refuse. Nothing has changed. |
+| 1 | `admitting` | Require admin, the install lock, record phase `committed`, and no upgrade state (`UpgradeHost.cs:112-115`). Verify the signature over raw bytes, then the strict parse. Read the **exact** file `yahad-windows-release-<v>.json`, never a glob (`UpgradeHost.cs:141`). Check the archive size and hash. Require app version > active, `requiresContract` in the installed contract range (section 6), and that `infrastructure.version` equals the installed one (otherwise this is a Setup-track release). Require that the **recorded schema** (4.5) is the target or is in `databaseMigrationsFrom`. This needs no running Runtime, so an app that fixes a startup failure is still admitted. Check free disk for the tree and a database copy. | Refuse. Nothing has changed. |
 | 2 | `preparing` | Extract to `apps\<v>.partial` with `AppPackage` and no-replace commits. Check `app-tree.json` against `treeSha256`. Rename to `apps\<v>`. | Discard: remove the partial and the target. |
 | 3 | `fencing` | Clear Runtime failure actions (`ClearFailureActions`, as `UpgradeHost.cs:169`), so the SCM cannot restart the old app behind the engine. | Discard: restore failure actions. |
 | 4 | `stopping` | Stop the LAN proxy if present (`StopForUpgradeAsync`, as `:170`), then the Runtime. The Updater keeps running: it holds no app file, and the engine is detached. | Discard: start the Runtime and the proxy, then restore failure actions. |
@@ -369,6 +482,15 @@ from `(infraA, appX)` to `(infraB, appY)`, where `appY` is embedded in the Setup
 
 The phases, fencing, lease rule and exit rule are those of section 7.
 
+**Repair never runs from a tree it may delete.** Today `RepairHost` refuses
+to undo from inside the target tree (`RepairHost.cs:28`), and rollback deletes
+every member of it (`UpgradeHost.cs:250`). That rule stays: until commit, the
+repair task stays on the from-pair's engine `infra\A\setup`, and only the
+commit re-registers it to `infra\B\setup`. Both engines know format 7. Any
+engine whose next action deletes its own tree first relaunches from a private
+copy. The precedent is uninstall, which copies itself into a SYSTEM- and
+Administrators-only directory and restarts from there (`SetupOperation.cs:81-88`).
+
 ### 8.2 A full Setup whose infrastructure is already installed
 
 An administrator may run a newer Setup over a machine whose infrastructure is
@@ -395,14 +517,24 @@ New order:
 1. **Prepare:** extract `infra\<i>` and `apps\<a>`, each with the existing
    owned-members-plus-partials resume rule (`NativeSetupHost.cs:93-98`) over both
    inventories. Then write `active.json`, idempotently.
-2. **Publish:** create the services with images under `infra\<i>`, then register
-   the repair task and the Apps & Features entry, both on the installed engine.
-   Save `committed`.
-3. **Start:** LAN, then start.
+2. **Provision:** create the services with images under `infra\<i>`, then
+   register the repair task and the Apps & Features entry, both on the installed
+   engine. Save `provisioned`, not `committed`.
+3. **Start:** LAN, then start. The health gate checks `ok`, the app version and
+   the schema. Today it checks only `ok` (`NativeSetupHost.cs:205`), and
+   `committed` is saved before the first start (`NativeSetupHost.cs:162`).
+4. **Commit:** save `committed` with the reported schema.
 
-A crash at any step resumes from the `preparing` record. Every step checks before
-it writes. A reinstall over kept data accepts the kept record, whether format 6
-or 7, and rewrites the binary-side pointer.
+A crash in steps 1-3 resumes from the `preparing` or `provisioned` record. Every
+step checks before it writes.
+
+**Reinstall over kept data.** The kept record is accepted, whether format 6 or
+7, and the binary-side pointer is rewritten. A format-6 record carries no schema
+(`InstallState.cs:12`), and the app migrates the database during its own start
+(`src/store.ts:60`). So before the first start, the engine reads the stored
+`schema_version` from the database and refuses it outside the embedded app's
+`databaseMigrationsFrom`. It also takes the backup that section 7 takes before a
+schema change. It never infers the schema from the app it just extracted.
 
 ### 8.4 Uninstall
 
@@ -428,9 +560,9 @@ Windows assets (`UpdaterEngine.cs:135-138`). After the signature and parse:
    track**. Its Setup carries the new app too, so infrastructure fixes such as a
    Node security update are never skipped.
 2. Otherwise, if the app is newer, `infrastructure.version` equals the installed
-   one, and `requiresContract ≤ N`, take the **app track**.
-3. Otherwise, if the app needs a contract the release's own infrastructure
-   doesn't raise, report `APP_NEEDS_INFRASTRUCTURE`. That is a defect in the
+   one, and `requiresContract` is in its contract range, take the **app track**.
+3. Otherwise, if the app needs a contract outside the release's own
+   infrastructure range, report `APP_NEEDS_INFRASTRUCTURE`. That is a defect in the
    release, never a silent "up to date".
 
 ### 9.2 Live identity
@@ -484,14 +616,15 @@ change.
 every asset a platform might need (`docs/GITHUB-RUNTIME-UPDATES.md:284-288`):
 
 - the four Linux assets, unchanged;
-- legacy `yahad-windows-<v>.json(.sig)`;
+- legacy `yahad-windows-<v>.json(.sig)`, only while a bridge is needed (section 11);
 - `yahad-windows-release-<v>.json(.sig)`;
 - `yahad-windows-app-<v>.zip`;
 - `Yahad.Setup-<v>.exe` and `Yahad.Setup.exe` (the landing page link).
 
 `collectReleaseAssets` today accepts exactly eight names (`scripts/release-windows.mjs:89-97`).
-It moves to this set of eleven and checks:
-- both signatures against the committed key;
+It moves to this exact set (nine names, or eleven with the legacy pair) and
+checks:
+- every signature against the committed key;
 - that both manifests name the same version and the same Setup bytes;
 - that the app zip matches its size and hash, and that the `app-tree.json` inside
   it matches `treeSha256`;
@@ -507,25 +640,25 @@ local run with the maintainer's key. No CI or GitHub secret is involved.
 release's app version and commit (`installer/windows/application_version.py:46-51`;
 `setup_package.py:293-295`), and the Setup audit requires one source identity
 (`installer/package.ps1:127`). A cached infrastructure build would fail both. So:
-- **Infrastructure artifacts** (host, Updater, engine, runtimes) report
-  `infrastructureVersion` and `infraSourceCommit`, and are checked against the
-  cached infra record: version, commit and per-member hashes.
-- **App artifacts** (bundle, Platform) report the app version and the release
-  commit, checked as today.
+- **Infrastructure artifacts** (host, Updater, Platform, engine, runtimes)
+  report `infrastructureVersion` and `infraSourceCommit`, and are checked
+  against the cached infra record: version, commit and per-member hashes.
+- **App artifacts** (the server bundle, `dist/`, fixtures, `deploy/`) carry the
+  app version and the release commit, checked as today. No native validation
+  remains on the app side.
 - **The audit** checks each half against its own identity, and checks the
   embedded infra tree against the cache by bytes.
 
 **Building infrastructure once.** The infrastructure build runs at an infra
 version's first release, from that commit. It is cached by
-`infra-tree.json` digest. Later releases reuse it and build only the app,
-Platform and the distributable Setup (open question 7).
+`infra-tree.json` digest. Later releases reuse it and build only the app
+and the distributable Setup (open question 7).
 
-**Version bump rule, per component.** "Anything under `installer/`" is wrong in
-both directions. `Yahad.Platform` (app, `package.ps1:91-94`) lives there, and
-infra inputs live outside it. The release command computes an
-**infrastructure input digest** over:
-- `installer/Yahad.ServiceHost`, `Yahad.Updater`, `Yahad.Setup` and
-  `Yahad.Install.Core`, excluding tests;
+**Version bump rule, per component.** "Anything under `installer/`" is not the
+right test, because infra inputs also live outside it. The release command
+computes an **infrastructure input digest** over:
+- `installer/Yahad.ServiceHost`, `Yahad.Updater`, `Yahad.Platform`,
+  `Yahad.Setup` and `Yahad.Install.Core`, excluding tests;
 - `installer/Directory.Build.props`, `NuGet.Config` and the infra build scripts
   (`package.ps1` infra steps, `installer/windows/*`);
 - the pinned .NET runtime version (`package.ps1:88`) and the Node, FFmpeg and
@@ -533,18 +666,64 @@ infra inputs live outside it. The release command computes an
 - the release key.
 
 If the digest differs from the last infra version's recorded digest, an
-infrastructure bump is required, and the reverse also refuses. `Install.Core` is
-shared, so a change there always bumps infrastructure, while Platform is
-rebuilt with the app as usual. Raising contract `N` is a separate, reviewed
-decision, proven by the CI compatibility runs.
+infrastructure bump is required, and the reverse also refuses. With Platform in
+infrastructure, no source is shared between the tracks, so every input belongs
+to exactly one digest. The app's inputs are what `bundle.py` packs. Changing
+the contract range is a separate, reviewed decision, proven by the CI
+compatibility runs.
 
 The app version keeps `chooseVersion` (`release-windows.mjs:303-310`).
 
-## 11. Moving existing installs (bridge)
+**Platform-path migration.** Every place that puts the helper under the app or
+launches the app without the host has to change in the same step, with no
+fallback path left behind:
+- the dev build copying the helper into `native`: `installer/build.ps1:37`;
+- the fixture builder's `--describe` check, its copy to `app/native` and its
+  runtime-lock entry: `installer/windows/prepare_core_fixture.py:46,54,95`;
+- the bundle validator's helper requirements and paths:
+  `installer/windows/bundle.py:20,80-91,133`, the package requirement in
+  `InstallPackage.cs:37` and the audit in `setup_package.py:293`;
+- harnesses that start the app directly and must pass an absolute
+  `YAHAD_PLATFORM_HELPER`: `Yahad.FirstInstall.Tests/PackagedNativeStartupProbe.cs:37`,
+  `tests/windows-package-runtime.test.mjs:46`, `StoreFixture.cs:65,134`,
+  `native-launch-http.test.mjs:46`, `platform-native.test.ts:15`;
+- test package inventories that pin the old path:
+  `FullInstallerIntegrationTests.cs:213` and the test `Program.cs:272`.
+
+**Legal files per track.** `build-server.mjs` writes the app's
+`server-bundle.json` and `ThirdPartyNotices-server.txt`, which are used to check
+sources and dependencies (`setup_package.py:174`). They move to `app/legal/`,
+are listed in `app-tree.json` and are checked against the app's identity. The
+infra licenses and `runtime-lock.json` stay in `infra\<v>\legal\`, and each
+track gets its own SBOM.
+
+## 11. Moving existing installs
 
 Machines on 0.6.x understand only the legacy manifest and the `versions\` layout.
+Whether any exist decides between two paths (open question 9).
 
-### 11.1 Bridge release
+The Windows installer is a development candidate. It has not been accepted on a
+family computer, and Runtime startup on the ASUS test machine was still being
+diagnosed (`README.md` "Windows installer status", `docs/VALIDATION.md`). Signed
+Windows assets have been published since `v0.6.1`, so a 0.6.x install can exist
+only where someone ran one of those Setups.
+
+### 11.0 No 0.6.x family installs: no bridge (recommended if true)
+
+- The first release with the new layout publishes **no** legacy
+  `yahad-windows-<v>.json`. A 0.6.x test machine then sees "no Windows release"
+  (`UpdaterEngine.cs:135-138`) and is never upgraded into a layout its engine
+  cannot repair.
+- The new Setup refuses to run over a `versions\` install, with a code that says
+  "uninstall with keep-data first". A keep-data uninstall followed by a new
+  install keeps the data. The install accepts the kept format-6 `uninstalled`
+  record for its data id, port and consent (section 8.3).
+- §11.1-11.3, the legacy manifest, the format-1 upgrade state and every
+  `versions\` code path are then **not built**. The legacy manifest's signing
+  path in the release tooling is not built either. This is the smaller and more
+  correct result: no migration code to retire later.
+
+### 11.1 With 0.6.x family installs: bridge release
 
 The bridge is a normal full release, taken through the legacy manifest by the
 existing Updater. Its Setup converts `versions\<old>` into `infra\<i>`,
@@ -560,12 +739,14 @@ the new trees behind, or commit and register a repair image that does not exist
 
 1. **Prepared:** extract and verify `infra\<i>`, including the payload-free
    engine, and `apps\<a>`.
-2. **Hand over:** re-register the repair task to the new engine **before** the
-   first destructive step (fencing). Persist `repairOwner: "bridge"` in the
+2. **Hand over:** re-register the repair task to the new engine
+   `infra\<i>\setup` **before** the first destructive step (fencing). Persist `repairOwner: "bridge"` in the
    format-2 state. The new engine reads format-6 records, the `versions\` layout
    and a format-1 upgrade state, so it can repair from any phase.
-3. **Discard or rollback** ends by re-registering the task to
-   `versions\<old>\Yahad.Setup.exe` and only then deleting the new trees. The
+3. **Discard or rollback** runs inside the tree it is about to delete, so it
+   first relaunches from a private copy (the 8.1 rule;
+   `SetupOperation.cs:81-88`). The copy re-registers the task to
+   `versions\<old>\Yahad.Setup.exe`, and only then deletes the new trees. The
    machine is then exactly a 0.6.x install again.
 4. **Commit** writes format 7, keeps `versions\<old>` as the format-7 `Previous`
    pair, which has a legacy layout, and removes it at the next commit.
@@ -605,18 +786,34 @@ first. This is open question 5.
   - the atomic pointer;
   - host refusal on a mismatch of infra version, contract, tree record or
     member set;
-  - Platform `RequireServer` against the pointer's infra version.
+  - Platform `RequireServer` against the compiled infra version, and the app
+    refusing a missing `YAHAD_PLATFORM_HELPER`;
+    - the `AppPackage` refusal of PE images and native-module members;
+  - every direct launcher in the section 10 migration list passing
+    `YAHAD_PLATFORM_HELPER`, and nothing under `app/native/` in any inventory.
+- **Payload-free engine:** quiet uninstall and Apps & Features uninstall, in both
+  data modes, plus `--repair` and `--apply-app`, all on the installed engine with
+  no embedded package.
+- **First install and reinstall:** a kill at each of prepare, provision, start
+  and commit. Expect no `committed` record before health reports the app version
+  and schema. A reinstall over a kept format-6 record with an older stored schema
+  migrates after a backup, and one outside `databaseMigrationsFrom` is refused
+  before the first start.
 - **State machine:** inject a kill at each persisted phase of `AppUpgradeHost`,
   of the pair-aware `UpgradeHost`, and of the bridge, then run repair.
   - Expect "committed" or "the exact from-pair", never mixed. Failure actions
     are restored and no lease is left held.
   - Cover schema-changing and non-schema apps, and a failure in stop and in
     backup with the pointer never moved.
-  - For the bridge, cover every phase on both sides of the repair handover.
+    - For the bridge, cover every phase on both sides of the repair handover, and
+    run the **real repair task** after the kill, including a rollback that
+    deletes the engine's own tree (private-copy relaunch, 8.1).
 - **CI upgrade sets** (`installer/ci-build-upgrade-set.ps1`, `ci-test-suites.ps1`):
-  - 0.6.x → bridge, including an interrupted bridge repaired by the handed-over
-    task;
-  - bridge → app-only;
+  - without a bridge (§11.0): 0.6.x refused, then keep-data uninstall and a new
+    install keeping the data;
+  - with a bridge (§11.1): 0.6.x → bridge, including an interrupted bridge
+    repaired by the handed-over task;
+  - first new-layout release → app-only;
   - app-only unhealthy → rollback;
   - app → Setup-track infra upgrade → rollback to the earlier pair;
   - an app needing a newer contract → `APP_NEEDS_INFRASTRUCTURE`;
@@ -626,9 +823,11 @@ first. This is open question 5.
   - with LAN: firewall rules and Caddyfile are unchanged after an app update,
     and the help page matches the active app after a commit and after a
     rollback.
-- **Contract compatibility:** the new app on the oldest infrastructure with an
-  equal contract, covering lease adoption, native control, the Updater pipe and
-  health.
+- **Contract compatibility:** every supported app on every supported
+  infrastructure, in both directions (old app on new infrastructure, new app on
+  the oldest infrastructure whose range contains its contract), covering lease
+  adoption, native control, Platform commands, the Updater pipe and health. An app
+  whose contract is below `contractMin` is refused, not started.
 - **Release tooling:** `collectReleaseAssets` and `sign` refusal cases, a cached
   infra provenance audit, and the infra input digest bump rule.
 - **Linux:** no behaviour change. `npm run test:updater` stays green with the
@@ -648,13 +847,15 @@ first. This is open question 5.
   than guessing.
 - **One data set, three engines:** `UpgradeHost`, `AppUpgradeHost` and repair
   share the install lock and one `upgrade-state.json`, so they never overlap.
-- **Bridge:** the one release that moves layout, images, firewall and repair
-  ownership together. It needs the full interrupted-bridge coverage and a
-  machine run before it's published.
-- **The bridge assumes a working Windows updater,** which is not yet proven on a
-  family machine.
-- **App package size,** while the private .NET runtime stays in `native\`
-  (open question 6).
+- **Bridge (only with §11.1):** the one release that moves layout, images,
+  firewall and repair ownership together. It needs the full interrupted-bridge
+  coverage and a machine run before it's published.
+- **The Windows updater is not yet proven on a family machine.** Every track
+  depends on it. Machine acceptance comes before the app track's first use.
+- **Moving Platform changes the app-to-helper path.** A new app on an
+  infrastructure without `YAHAD_PLATFORM_HELPER` must refuse to start. It must
+  not fall back to an app-relative path. The new layout's first infrastructure
+  version sets contract range 1..1 with this variable.
 
 ## 14. Open questions for the maintainer
 
@@ -668,16 +869,19 @@ first. This is open question 5.
 4. **Auto window:** should app-only updates still wait for 03:00-04:59
    (`UpdaterEngine.cs:46-47`)?
 5. **Retiring 0.6.x:** when to refuse legacy layouts on every entry (11.3)?
-6. **Where the Platform's private .NET runtime lives** (`bundle.py:19-24,80-89`):
-   - (a) keep it in the app package: simplest, but every app package carries the
-     runtime;
-   - (b) move Platform to infrastructure: then every Platform change needs a
-     Setup;
-   - (c) Platform becomes framework-dependent on a .NET runtime under
-     `infra\<i>\runtime\dotnet`, and the .NET major joins contract `N`.
+6. **Shrinking the infrastructure download (follow-up, not needed for the app
+   track).** Platform moved to infrastructure (section 2a), so no .NET runtime
+   is left in the app package. Today the host, Updater and Platform each ship a
+   self-contained runtime, and FFmpeg is the full 151 MiB shared build.
+   - (a) leave it as it is;
+   - (b) publish the host, Updater and Platform with NativeAOT: no runtime copies,
+     but it needs source-generated JSON (Platform serialises anonymous types
+     today, `Program.cs:7`), AOT and trim warnings as errors, and the MSVC
+     linker in CI;
+   - (c) also replace FFmpeg with a build limited to the codecs the app uses.
 
-   *Recommendation:* measure (a) first. Choose (c) if the runtime dominates the
-   package.
+   *Recommendation:* (b) and (c) as their own infrastructure-track changes, each
+   proven by an AOT or codec test in CI. None of them blocks this plan.
 7. **How the per-release distributable Setup is built:**
    - (a) publish `Yahad.Setup` from a worktree at the **infra source commit**,
      embedding the cached infra and the new app;
@@ -694,6 +898,11 @@ first. This is open question 5.
 
    *Recommendation:* (a) in this plan, with (b) as its own change for both
    tracks.
+9. **Are there 0.6.x Windows installs on family computers?** Only the
+   maintainer knows. If there are none, follow §11.0: no bridge, no legacy
+   manifest, and the test machines reinstall with keep-data. If there are any,
+   §11.1 applies. *Recommendation:* §11.0 if there are none, which the README
+   and validation status suggest.
 
 ## Appendix: review disposition
 
@@ -710,7 +919,7 @@ accepted. Two were narrowed:
 | 1 Bridge repair | §11.1 |
 | 2 Installer record | §4.5 |
 | 3 Updater `current` | §9.2 |
-| 4 Platform `RequireServer` | §4.3 |
+| 4 Platform `RequireServer` | §2a, §4.3 (Platform moved to infrastructure) |
 | 5 App precedence | §9.1 |
 | 6 Signed infra metadata | §5.1 |
 | 7 Infra upgrade after app updates | §8.1, §4.5 |
@@ -729,9 +938,28 @@ accepted. Two were narrowed:
 | 20 App validator | §5.2 |
 | 21 Infra-cache provenance | §10 |
 | 22 Setup identity in `infra\` | §4.4, §8.2, Q7 |
-| 23 Private .NET runtime | §3, Q6 |
+| 23 Private .NET runtime | §2a: Platform moved to infrastructure, no runtime in the app package; Q6 for infra size |
 | 24 Bump rule | §10 |
 | 25 Lease and control contracts | §6, §12 |
 | 26 Signing and asset collection | §10 |
 | 27 Staging and target identity | §9.3, §7 step 1 |
 | 28 Fallback, codes, retirement | §9.4, §11.3 |
+
+### Revision 3 review
+
+A second independent review checked revision 3 against the source. All six
+findings were verified at the cited lines and accepted:
+
+| Finding | Evidence | Handled in |
+|---|---|---|
+| P1: the payload-free engine can't uninstall, because the package is opened before the operation branch | `SetupOperation.cs:45`, `InstallPackage.cs:44` | §4.4, §12 |
+| P1 (bridge only): repair would run from the tree its rollback deletes | `RepairHost.cs:28`, `UpgradeHost.cs:250` | §8.1, §11.1, §12 |
+| P2: first install saves `committed` before health, which checks only `ok`; a kept format-6 record has no schema | `NativeSetupHost.cs:162,205`, `InstallState.cs:12`, `store.ts:60` | §4.5, §8.3, §12 |
+| P2: `requiresContract ≤ N` is wrong for exact, non-cumulative contracts | `WindowsFileBoundary.cs:113`, `platform-files.ts:41` | §4.3, §5.1, §6, §7, §9.1, §12 |
+| P2: the Platform-path move missed build, fixture, validator and harness sites, and "as today" misdescribed the default path | `platform-files.ts:47,58`, `build.ps1:37`, `prepare_core_fixture.py:46`, `bundle.py:20` | §4.3, §10, §12 |
+| P2: the app's legal and bundle metadata had no owner | `build-server.mjs:103-111`, `bundle.py:23` | §4.1, §5.2, §5.3, §10 |
+
+The review agreed with the main verdict: the split is right and C#/.NET stays.
+Platform belongs to infrastructure. The §5.2 ban blocks nothing the app needs,
+because SQLite comes from `node:sqlite` (`store.ts:4`) and `sharp` stays outside
+the bundle (`build-server.mjs:24`).
