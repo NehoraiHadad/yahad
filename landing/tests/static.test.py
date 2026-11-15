@@ -45,48 +45,30 @@ for a in d.assets:
  if a==SITE:continue  # rel=canonical
  assert (ROOT/'dist'/a.split('?')[0]).is_file(),f'Missing asset {a}'
 css=(ROOT/'dist/style.css').read_text()
-how_css=(ROOT/'dist/how.css').read_text()
-for stylesheet in [css,how_css]:
+film_css=(ROOT/'dist/film.css').read_text(encoding='utf-8')
+for stylesheet in [css,film_css]:
  for asset in re.findall(r'url\([\'"]?([^\)\'"]+)',stylesheet):
   assert (ROOT/'dist'/asset).is_file(),asset
 assets={asset.split('?',1)[0] for asset in d.assets}
-# Scroll-driven explainer: 7 pinned steps, phone + tablet in CSS 3D.
+# How it works: four beats (the content) beside a short film (decoration).
 assert 'how' in d.classes,'How-it-works section missing'
-assert {'how.js','how.css'}.issubset(assets)
-assert 'demo.js' not in d.assets
-for part in ['how-stage','how-cam','dev-phone','dev-tablet','scr-chat','kid-reply','wa-reply']:assert part in d.allclasses,f'explainer part missing: {part}'
+assert {'film-scene.js','film.js','film.css'}.issubset(assets)
+assert not {'how.js','how.css','demo.js'}&assets,'old explainer files must be gone'
+assert d.assets.index(next(a for a in d.assets if a.startswith('film-scene.js')))<d.assets.index(next(a for a in d.assets if a.startswith('film.js'))),'scene loads before the player'
 visible=re.sub(r'<!--.*?-->','',s,flags=re.S)
 assert 'המחשה' not in visible,'No illustration disclaimer wording on the visible page'
 section=visible.split('id="how-it-works"',1)[1].split('</section>',1)[0]
-# The steps are the content (real headings, readable without JS); the stage is decoration.
-steps=re.findall(r'<li class="how-step" data-step="(\d)"><h3>(.*?)</h3><p>.+?</p></li>',section)
-assert [n for n,_ in steps]==[str(i) for i in range(1,8)],steps
-assert [re.sub(r'<[^>]+>','',h) for _,h in steps]==['מחברים את WhatsApp פעם אחת','בוחרים מה נועה רואה','לנועה יש כניסה משלה','סבתא שולחת תמונה לקבוצה','והתמונה מגיעה לנועה','מה שלא אישרתם, לא עובר','נועה עונה, וסבתא מקבלת בוואטסאפ'],'story order: connect, choose, sign in, then the message flow'
-assert '<div class="how-stage" aria-hidden="true">' in section,'stage must be hidden from assistive tech'
-# On narrow screens the stage is position:sticky in block flow, so it must come before the steps.
-assert section.index('class="how-stage"')<section.index('class="how-steps"'),'stage must precede the steps'
-how_js=(ROOT/'dist/how.js').read_text(encoding='utf-8')
-target=re.search(r'const TARGET = \{([^}]*)\}',how_js).group(1)
-assert sorted(re.findall(r'(\d+):',target))==[n for n,_ in steps],'how.js TARGET must name every step'
-# how.js aims the camera at world rectangles; they must match the device boxes in how.css.
-def rule(sel):
- # Exact selector at the start of a rule (top level: preceded by start, newline or '}').
- m=re.search(r'(?:^|[}\n])'+re.escape(sel)+r'\{([^}]*)\}',how_css);assert m,sel
- return dict(re.findall(r'([\w-]+):(-?\d+)(?:px)?(?=;|$)',m.group(1)))
-size={k:dict(zip(('width','height'),re.search(r'\.dev-'+k+r'\{width:(\d+)px;height:(\d+)px',how_css).groups())) for k in ('phone','tablet')}
-assert "dataset.world" in how_js,'how.js must choose the world (data-world) that how.css positions from'
-for layout,prefix in (('wide',''),('tall','.how[data-world="tall"] ')):
- world=re.search(layout+r': \{([^}]*)\}',how_js).group(1)
- rects={k:[int(x) for x in v.split(',')] for k,v in re.findall(r'(\w+): \[([^\]]+)\]',world)}
- cam=rule(prefix+'.how-cam')
- assert rects['OV']==[0,0,int(cam['width']),int(cam['height'])],(layout,'OV',rects['OV'],cam)
- for key,dev in (('PH','phone'),('TB','tablet')):
-  pos=rule(prefix+'.dev-'+dev)
-  assert rects[key]==[int(pos['left']),int(pos['top']),int(size[dev]['width']),int(size[dev]['height'])],(layout,key,rects[key],pos)
-explainer=visible.split('id="how-it-works"',1)[1].split('</section>',1)[0]
-assert 'class="primary download-action"' not in explainer,'No download call to action inside the explainer'
+beats=re.findall(r'<li class="beat" data-at="[\d.]+" data-still="[\d.]+"><h3>(.*?)</h3><p>.+?</p></li>',section)
+assert [re.sub(r'<[^>]+>','',h) for h in beats]==['נועה רוצה לכתוב לסבתא','אתם בוחרים מה היא רואה','לנועה יש כניסה משלה','סבתא נשארת ב־WhatsApp'],'story: the wish, the choice, her own sign-in, grandma stays on WhatsApp'
+assert '<div class="film-frame" aria-hidden="true">' in section,'the film is decoration, hidden from assistive tech'
+assert '<div class="film" hidden>' in section,'without JS the film area stays out'
+assert section.index('class="film"')<section.index('class="beats"')
+# The explainer explains the idea only; the setup (computer, QR) lives in its own section.
+for word in ['QR','המחשב','מחשב']:assert word not in re.sub(r'<[^>]+>','',section),f'setup detail in the explainer: {word}'
+assert 'class="primary download-action"' not in section,'No download call to action inside the explainer'
 assert 'href="#how-it-works"' in s and 'class="primary" href="#download"' in s
-assert '.how-live' in how_css,'motion styles only apply once how.js opts in (reduced motion / no-JS keep the still)'
+assert '.film-live' in film_css,'the film layout applies only once film.js runs'
+assert re.search(r'\.film-live \.beat:not\(\.is-active\) h3,\.film-live \.beat:not\(\.is-active\)::before\{color:var\(--muted\)\}',film_css),'inactive beats use --muted'
 assert 'prefers-reduced-motion:reduce' in css
 assert 'מכסה יומית נפרדת לכל ילד' in s
 # Approval, not chat type, decides what reaches a child: private chats can be approved.
@@ -109,6 +91,9 @@ text=re.sub(r'<[^>]+>',' ',re.sub(r'<(script|style)(?=[ >]).*?</(?:script|style)
 import html as _html
 text=_html.unescape(text)
 EMOJI=lambda c:ord(c)>=0x1F000 or 0x2600<=ord(c)<=0x27BF or ord(c) in (0xFE0F,0x200D)
+for js in ['film-scene.js','film.js']:
+ src=(ROOT/'dist'/js).read_text(encoding='utf-8')
+ text+=' '.join(re.findall(r"'([^'\\\n]*)'",src))  # the film's text and the player's labels
 missing=sorted({c for c in text if not c.isspace() and not EMOJI(c) and not any(lo<=ord(c)<=hi for lo,hi in ranges)})
 assert not missing,f'characters outside the bundled fonts: {[hex(ord(c)) for c in missing]}'
 # One-time entrance animations were removed on purpose: content never depends on motion to appear.
@@ -171,5 +156,5 @@ assert validate_download(s.replace(' disabled','',1)),'pending enabled button ac
 assert validate_download(activate(s,'linux','https://example.com/installer.exe')),'non-repo download URL accepted'
 assert validate_download(re.sub(r'data-state="pending"','data-state="ready"',s,count=1)),'ready without link accepted'
 assert validate_download(s.replace('data-state="ready"','data-state="pending"',1)),'pending with link accepted'
-print('PASS: Hebrew RTL, anchors/assets/CSS URLs, 7-step explainer order, stage/world coordinates in sync, approval-based wording, share preview tags, font coverage of all visible text, per-platform downloads + ready-state fixtures, illustration size budget')
+print('PASS: Hebrew RTL, anchors/assets/CSS URLs, 4-beat explainer beside the film, approval-based wording, share preview tags, font coverage of all visible text, per-platform downloads + ready-state fixtures, illustration size budget')
 print('NOTE: static checks do not establish responsive rendering, contrast, browser focus or live motion behavior.')

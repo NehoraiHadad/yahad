@@ -21,7 +21,8 @@ connects to WhatsApp and never sends messages.
 | --- | --- |
 | `dist/index.html` | All content: opening, how it works, control, screen time, home setup, install steps, risk notice, FAQ, download |
 | `dist/style.css` | Tokens (`:root`), fonts and every section except the explainer |
-| `dist/how.css`, `dist/how.js` | The "how it works" explainer |
+| `dist/film-scene.js` | The "how it works" film: `YahadFilm.render(t)` returns frame `t` as SVG |
+| `dist/film.js`, `dist/film.css` | Plays the film beside the four beats |
 | `dist/404.html` | Not-found page (absolute `/yahad/` paths, because Pages serves it from any depth) |
 | `dist/assets/` | Fonts, illustration, share image, icons and their licenses |
 | `tools/build-assets.py` | Regenerates the derived assets (see below) |
@@ -29,58 +30,52 @@ connects to WhatsApp and never sends messages.
 Color carries meaning across the page: `--pass` (green) is what reaches the
 child, and `--held` (amber) is what stays with the parent.
 
-## How it works (explainer)
+## How it works (film)
 
-- **The content is the seven steps.** `<ol class="how-steps">` holds real `h3` and `p`
-  text in normal reading flow. Without JavaScript, or without
-  `IntersectionObserver`, it renders as a plain numbered list and the stage is
-  hidden.
-- **The stage is decoration.** `.how-stage` (`aria-hidden`) holds the parent's
-  phone, the home computer running Yahad (`.hub`) and the child's tablet, all
-  drawn in CSS. Every message passes through the computer: the QR shows there in
-  step 1, approved messages go through it, and an unapproved one stops there
-  (step 6). The stage sits before the steps in the DOM, because on narrow screens
-  it is `position: sticky` in block flow.
-- **One number drives the stage.** `how.js` adds `.how-live` and watches a thin
-  reading line: the middle of the screen when wide, and below the sticky stage
-  when narrow. The margins are set in px from `innerHeight` and rebuilt when it
-  changes, because `rootMargin` percentages resolve against the width. The step
-  crossing that line becomes `data-step` on the section. Every screen, packet,
-  line and lock in `how.css` is a rule keyed on `[data-step]`.
-- **The camera.** The devices sit at fixed coordinates in one of two "worlds":
-  side by side (1180×680) or stacked (600×1300). `how.js` sets `data-world` to
-  whichever overview shows larger in the current stage, so a portrait stage on a
-  desktop gets the stacked world too. It then only scales and translates
-  `.how-cam` to fit the rectangle a step is about (`WORLD`, `TARGET`). The world
-  rectangles must match the device boxes in `how.css`, and
-  `tests/static.test.py` enforces this.
-- **Motion.** Entrances are CSS animations whose end state is the static rule.
-  With reduced motion the animations are turned off and the same states still
-  appear, without movement.
+- **The content is the four beats.** `<ol class="beats">` holds real `h3` and `p`
+  text: Noa wants to write to grandma, you choose what she sees, she signs in on
+  her own, grandma stays on WhatsApp. Without JavaScript or
+  `IntersectionObserver` it renders as a plain numbered list and the film is
+  hidden. Setup details (the home computer, the QR) belong in the home setup
+  section, not here; `tests/static.test.py` enforces this.
+- **The film is decoration.** `film-scene.js` draws a 23.5 s film, deterministic
+  per frame: `YahadFilm.render(t)` returns a 1080×1920 SVG string. It was made
+  for the promo video (same scenes and captions) and uses a small subset of the
+  Anatomy kit's isometric helpers. SVG ids are prefixed `film-` because the frame
+  is inlined into the page.
+- **The player.** `film.js` adds `.film-live` and shows `.film`. It plays once
+  when half the film is on screen (about 30 fps), pauses when it leaves, and the
+  button pauses, resumes or replays. Each beat's `data-at` is where it starts in
+  the film. Its heading becomes a button that jumps there (scrolling the film
+  back into view first if it is off screen), and the beat being shown gets
+  `.is-active`. Caption pills are sized from the real text width in the page
+  font (`YahadFilm.setMeasure`). With reduced motion nothing plays by itself: each beat
+  shows its `data-still` frame, and the button plays the film on request.
 
-To add or reorder a step: edit the `<li>` list, its `[data-step]` rules in
-`how.css` and `TARGET` in `how.js`, then the expected order in
-`tests/static.test.py`.
+To change a beat: edit its `<li>`, keeping `data-at` ascending and `data-still`
+inside the beat. `tests/film.test.cjs` checks this against the film's length.
 
 ## Checks
 
 From `landing/` (the Pages workflow runs the same commands):
 
 ```sh
-node --check dist/how.js
-node tests/how.test.cjs
+node --check dist/film-scene.js
+node --check dist/film.js
+node tests/film.test.cjs
 python3 -X utf8 tests/static.test.py
 python3 -X utf8 tests/contrast.test.py
 ```
 
-- `how.test.cjs`: runs `how.js` against a stubbed DOM. It checks inert
-  fallbacks, the px reading line and its rebuild on resize, `data-step` and
-  `.is-active`, the world choice, camera aim and the zoom cap.
-- `static.test.py`: markup validity, anchors and assets, step order, stage and
-  world sync, share tags, font coverage of every visible character, and the
+- `film.test.cjs`: renders every film frame (valid SVG, namespaced ids,
+  deterministic), checks the beats against the film, and runs `film.js` against
+  a stubbed DOM: autoplay at half visibility, pause and hold, replay, beat
+  jumps, 30 fps, no fast-forward after a hidden tab, reduced motion.
+- `static.test.py`: markup validity, anchors and assets, the beats, share tags,
+  font coverage of every visible character (including the film's text), and the
   download-card states.
 - `contrast.test.py`: WCAG 4.5:1 for every token pair in use, including the
-  explainer text on each of its background stops.
+  beats and the film button.
 
 None of these renders the page. Before merging, scroll through by hand at a
 phone width and a desktop width, and once with reduced motion on.
@@ -113,5 +108,6 @@ The two font files form one family, `Yahad`, split by `unicode-range`. The
 ranges in the tool and in `style.css` must match. Licenses are in
 `dist/assets/FONT-LICENSE.txt` (SIL OFL 1.1) and `dist/assets/ICON-LICENSE.txt`
 (Lucide).
+`family-moment-768.webp` is also drawn inside the film (the faces and the end card).
 `dist/assets/nehorai.svg` is the author's own logo, used for the footer credit
 (a link to `https://maklikim.co.il/l/me`, which redirects to nehoraihadad.com).
