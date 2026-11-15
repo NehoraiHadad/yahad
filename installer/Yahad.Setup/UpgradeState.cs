@@ -80,7 +80,7 @@ internal static class UpgradeRules
     internal static int NextHealthyPolls(int count,bool passed)=>passed?count+1:0;
     internal static int Exit(string code)=>code switch
     {
-        "UPGRADED" or "REPAIRED" or "NOTHING_TO_REPAIR" or RepairHost.Relaunched=>0,
+        "UPGRADED" or "REPAIRED" or "NOTHING_TO_REPAIR"=>0,
         "RELEASE_SIGNATURE_INVALID" or "RELEASE_KEY_UNTRUSTED" or "RELEASE_NOT_NEWER" or "RELEASE_SETUP_MISMATCH" or "RELEASE_MANIFEST_INVALID" or "RELEASE_UNSUPPORTED_FROM" or "UPGRADE_LOCKED" or
             "UPGRADE_INCOMPLETE" or "NOT_INSTALLED" or "INSTALL_INCOMPLETE" or "LEGACY_INSTALL_UNSUPPORTED" or "INFRA_IDENTITY_MISMATCH" or "APP_IDENTITY_MISMATCH" or "INSTALL_DOWNGRADE_REFUSED" or
             "ACTIVE_POINTER_INVALID" or "TREE_RECORD_INVALID"=>2,

@@ -16,14 +16,19 @@ internal sealed record ExtractTarget(Action<string> CreateDirectory,Func<string,
 // namespaces and nothing else: infra/ (infra-tree.json and the host, Updater,
 // Platform, runtime, legal and setup members of the compiled infrastructure) and
 // apps/ (app-tree.json and app/...). Each tree record lists exactly the members
-// of its namespace. app/native/ is refused: Platform is infrastructure.
+// of its namespace. app/native/ is refused: Platform is infrastructure. The required
+// members and the refused app paths are installer/windows/setup_package.py's
+// REQUIRED_MEMBERS and validate_payload_source: the reader refuses what the writer would.
 internal sealed class InstallPackage:IDisposable
 {
     internal const int Format=2;
     internal const string InfraPrefix="infra/",AppPrefix="apps/",ManifestResource="Yahad.Install.Manifest",PayloadResource="Yahad.Install.Payload";
     internal static readonly string[] Required=["infra/host/Yahad.ServiceHost.exe","infra/host/Yahad.ServiceHost.runtimeconfig.json","infra/updater/Yahad.Updater.exe","infra/updater/Yahad.Updater.runtimeconfig.json",
         "infra/platform/Yahad.Platform.exe","infra/platform/Yahad.Platform.runtimeconfig.json","infra/runtime/node/node.exe","infra/runtime/caddy/caddy.exe","infra/"+Setup.InfrastructureRecord.EngineMember,
-        "apps/app/package.json","apps/app/server/main.mjs","apps/app/dist/index.html","apps/app/deploy/lan-capabilities.json","apps/app/deploy/lan-help.html"];
+        "apps/app/package.json","apps/app/server/main.mjs","apps/app/dist/index.html","apps/app/deploy/lan-capabilities.json","apps/app/deploy/lan-help.html",
+        "apps/app/legal/server-bundle.json","apps/app/legal/ThirdPartyNotices-server.txt","apps/app/legal/build-inputs.json"];
+    // The payload runs the bundle only: no source tree, lockfile or node_modules ships.
+    private static readonly string[] RefusedAppDirectories=["app/src/","app/node_modules/"];private const string RefusedAppFile="app/package-lock.json";
     private readonly Stream stream;private readonly ZipArchive archive;
     internal InstallPackageManifest Manifest{get;}
     internal InstallPackage(Stream zip,byte[] manifest)
@@ -45,11 +50,13 @@ internal sealed class InstallPackage:IDisposable
         Digest(Manifest.ZipSha256);Digest(infra.TreeSha256);Digest(app.TreeSha256);
         if(!zip.CanSeek||zip.Length>2147483648||Convert.ToHexStringLower(SHA256.HashData(zip))!=Manifest.ZipSha256)throw new IOException("PACKAGE_HASH");zip.Position=0;
         archive=new(zip,ZipArchiveMode.Read,true);
-        var expected=new HashSet<string>(StringComparer.OrdinalIgnoreCase);long total=0;
+        // One archive entry per manifest path, matched exactly and ordinally, as Extract
+        // reads it; names that differ only in case are one Windows path and refused.
+        var expected=new HashSet<string>(StringComparer.Ordinal);var folded=new HashSet<string>(StringComparer.OrdinalIgnoreCase);long total=0;
         foreach(var record in Manifest.Files)
         {
             if(record is null)throw new IOException("PACKAGE_FORMAT");
-            Name(record.Path);Digest(record.Sha256);if(!expected.Add(record.Path)||record.Size is <0 or >TreeRecord.MaximumMemberBytes||(total+=record.Size)>2147483648)throw new IOException("PACKAGE_BOUND");
+            Name(record.Path);Digest(record.Sha256);if(!folded.Add(record.Path)||!expected.Add(record.Path)||record.Size is <0 or >TreeRecord.MaximumMemberBytes||(total+=record.Size)>2147483648)throw new IOException("PACKAGE_BOUND");
         }
         if(archive.Entries.Count!=expected.Count)throw new IOException("PACKAGE_MEMBERS");
         foreach(var entry in archive.Entries)
@@ -62,13 +69,11 @@ internal sealed class InstallPackage:IDisposable
         RequireTree(TreeKind.App,app.Version,app.SourceCommit,app.TreeSha256);
     }
     internal static bool IsEmbedded=>Assembly.GetExecutingAssembly().GetManifestResourceInfo(PayloadResource) is not null;
-    // What the window names: the app this image installs, read from the manifest alone
-    // (the archive is verified only when it is installed), or, for the payload-free
-    // engine, the infrastructure it is.
+    // The app this image installs, read from the manifest alone (the archive is verified
+    // only when it is installed).
     internal static string DisplayVersion()
     {
-        using var metadata=Assembly.GetExecutingAssembly().GetManifestResourceStream(ManifestResource);
-        if(metadata is null)return InfrastructureRelease.Version;
+        using var metadata=Assembly.GetExecutingAssembly().GetManifestResourceStream(ManifestResource)??throw new IOException("PACKAGE_NOT_EMBEDDED");
         if(metadata.Length>16777216)throw new IOException("PACKAGE_METADATA_BOUND");using var buffer=new MemoryStream();metadata.CopyTo(buffer);
         var version=NativeJson.Read<InstallPackageManifest>(buffer.ToArray()).App?.Version;
         return version is not null&&ReleaseManifest.IsVersion(version)?version:throw new IOException("PACKAGE_FORMAT");
@@ -166,7 +171,10 @@ internal sealed class InstallPackage:IDisposable
         foreach(var kind in new[]{TreeKind.Infrastructure,TreeKind.App})
         {
             var prefix=Prefix(kind);if(!name.StartsWith(prefix,StringComparison.Ordinal))continue;
-            var member=name[prefix.Length..];if(member==TreeRecord.RecordName(kind)||TreeRecord.InTree(kind,member))return;
+            var member=name[prefix.Length..];if(member==TreeRecord.RecordName(kind))return;
+            if(kind==TreeKind.App&&(RefusedAppDirectories.Any(d=>member.StartsWith(d,StringComparison.OrdinalIgnoreCase))||string.Equals(member,RefusedAppFile,StringComparison.OrdinalIgnoreCase)))
+                throw new IOException("PACKAGE_PATH");
+            if(TreeRecord.InTree(kind,member))return;
         }
         throw new IOException("PACKAGE_PATH");
     }

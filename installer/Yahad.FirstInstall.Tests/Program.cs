@@ -268,7 +268,7 @@ await Check("native RTL window renders at desktop and minimum size without showi
   foreach(var size in new[]{new Size(980,730),new Size(760,620)})foreach(var full in new[]{false,true})
   {
    var window=new MainWindow(true);var keep=(System.Windows.Controls.RadioButton)window.FindName("KeepOption");var remove=(System.Windows.Controls.RadioButton)window.FindName("DeleteOption");var input=(System.Windows.Controls.TextBox)window.FindName("ConfirmationInput");var primary=(System.Windows.Controls.Button)window.FindName("Primary");
-   Assert(((System.Windows.Controls.TextBlock)window.FindName("VersionBadge")).Text==InstallPackage.DisplayVersion()+" · Windows");
+   Assert(((System.Windows.Controls.TextBlock)window.FindName("VersionBadge")).Text==(SetupOperation.DisplayVersion() is {} version?version+" · ":"")+"Windows");
    Assert(keep.IsChecked==true&&primary.IsEnabled);if(full){remove.IsChecked=true;Assert(!primary.IsEnabled);input.Text="מחיקה";Assert(primary.IsEnabled);input.Text="";Assert(!primary.IsEnabled);}
    var root=(FrameworkElement)window.Content;root.Width=size.Width;root.Height=size.Height;root.Measure(size);root.Arrange(new Rect(size));root.UpdateLayout();var bitmap=new RenderTargetBitmap((int)size.Width,(int)size.Height,96,96,PixelFormats.Pbgra32);bitmap.Render(root);var png=new PngBitmapEncoder();png.Frames.Add(BitmapFrame.Create(bitmap));using var file=File.Create(Path.Combine(output,"uninstall-"+(full?"delete":"keep")+"-"+size.Width+".png"));png.Save(file);Assert(root.FlowDirection==FlowDirection.RightToLeft);
    if(full)

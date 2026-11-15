@@ -8,12 +8,13 @@ internal sealed record UpgradeOutcome(SetupResult Result,InstalledPair? From=nul
 {internal int Exit=>UpgradeRules.Exit(Result.Code);}
 internal static class UpgradeFiles
 {
-    // Same link checks as removal: a link is never followed out of the tree.
+    // Same link checks as removal: a link is never followed out of the tree, and the
+    // image of an engine waiting on its private copy is moved out, not deleted.
     internal static void Remove(string path)
     {
         if(!Directory.Exists(path))return;
         var tree=RemovalTree.Inspect(path,WindowsFileBoundary.RequireNoLink);
-        tree.DeleteContents(WindowsFileBoundary.DeleteNoFollow,_=>{},CancellationToken.None);
+        tree.DeleteContents(PrivateCopy.DeleteMember,_=>{},CancellationToken.None);
         WindowsFileBoundary.DeleteNoFollow(tree.Root,true);
     }
     // The Updater's own folder and mode record, which outlive any one release.

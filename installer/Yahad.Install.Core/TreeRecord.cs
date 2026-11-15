@@ -37,6 +37,8 @@ internal sealed record TreeRecord(int Format,string Version,string SourceCommit,
     internal static bool IsDigest(string? value)=>value is not null&&Regex.IsMatch(value,"\\A[a-f0-9]{64}\\z",RegexOptions.CultureInvariant);
     internal static bool IsCommit(string? value)=>value is not null&&Regex.IsMatch(value,"\\A[a-f0-9]{40}\\z",RegexOptions.CultureInvariant);
     // UTF-8 without BOM, strict JSON, sorted by ordinal path and unique ignoring case.
+    // As setup_package.py's _closed_names: no member is also a directory of another,
+    // and one directory is spelled one way, both ignoring case.
     internal static TreeRecord Parse(byte[] bytes,TreeKind kind)
     {
         if(bytes.Length is <1 or >MaximumBytes||bytes is [0xEF,0xBB,0xBF,..])throw new IOException("TREE_RECORD_INVALID");
@@ -51,6 +53,11 @@ internal sealed record TreeRecord(int Format,string Version,string SourceCommit,
                 member.Size is <0 or >MaximumMemberBytes||(total+=member.Size)>MaximumTotalBytes||!IsDigest(member.Sha256))throw new IOException("TREE_RECORD_INVALID");
             previous=member.Path;
         }
+        var directories=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+        foreach(var member in value.Files)
+            for(var slash=member.Path.IndexOf('/');slash>0;slash=member.Path.IndexOf('/',slash+1))
+            {var directory=member.Path[..slash];if(!directories.TryAdd(directory,directory)&&directories[directory]!=directory)throw new IOException("TREE_RECORD_INVALID");}
+        if(value.Files.Any(f=>directories.ContainsKey(f.Path)))throw new IOException("TREE_RECORD_INVALID");
         return value;
     }
     // What the host checks before every start (5.3): the record's bytes are the ones

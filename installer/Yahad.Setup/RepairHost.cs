@@ -8,7 +8,9 @@ namespace Yahad.Setup;
 internal static class RepairHost
 {
     internal static readonly TimeSpan LockWait=TimeSpan.FromSeconds(60);
-    internal const string Relaunched="REPAIR_RELAUNCHED";
+    // Not an outcome: the caller hands the repair to a private copy (PrivateCopy), whose
+    // result and exit code are the repair's.
+    internal const string HandOff="REPAIR_HAND_OFF";
     internal static async Task<UpgradeOutcome> RunAsync(Action<SetupProgress> progress)
     {
         try
@@ -39,11 +41,11 @@ internal static class RepairHost
     private static async Task<UpgradeOutcome> ResumeAsync(InstallerState installed,UpgradeState state,Action<SetupProgress> progress)
     {
         var url="http://127.0.0.1:"+installed.Port+"/";
-        UpgradeOutcome Done(string code,bool rolledBack=false,Exception? failure=null)=>new(new(code is "REPAIRED" or Relaunched,code,url,Failure:failure is null?null:SetupFailureDetail.From(failure)),state.From,state.To,rolledBack);
+        UpgradeOutcome Done(string code,bool rolledBack=false,Exception? failure=null)=>new(new(code=="REPAIRED",code,url,Failure:failure is null?null:SetupFailureDetail.From(failure)),state.From,state.To,rolledBack);
         var action=UpgradeRules.ForRepair(state.Phase,state.Attempts);
         // An engine never deletes the tree it runs from: it hands the repair to a private
         // copy of itself (8.1), which takes the lock once this process has let it go.
-        if(RunningTree() is {} own&&Deletes(state,action,own))return Done(Relaunched);
+        if(RunningTree() is {} own&&Deletes(state,action,own))return Done(HandOff);
         if(action==RepairAction.GiveUp)
         {
             // Stop retrying until an administrator acts; the record stays for them.
@@ -69,8 +71,6 @@ internal static class RepairHost
         // The pointer and both trees it names are what every binary starts from.
         var pointer=active.Pointer().Encode();
         var stale=!File.Exists(InstalledLayout.ActivePointerFile)||!NativeInstallFiles.ReadRecord(InstalledLayout.ActivePointerFile,ActivePointer.MaximumBytes).SequenceEqual(pointer);
-        if(stale)
-        {UpgradeFiles.WritePointer(active);repaired=true;}
         TreeRecord.VerifyInstalled(InstalledLayout.InfraRoot(infrastructure),TreeKind.Infrastructure,infrastructure,active.Infrastructure.TreeSha256);
         TreeRecord.VerifyInstalled(InstalledLayout.AppRoot(active.App.Version),TreeKind.App,active.App.Version,active.App.TreeSha256);
         // Each on its own: an Updater that cannot start says nothing about the Runtime.
@@ -82,6 +82,8 @@ internal static class RepairHost
                 // A process started from another image, or from a pointer naming another pair,
                 // is not the installed pair.
                 if((repointed||stale)&&!service.IsStopped())await service.StopAsync(CancellationToken.None);
+                // The pointer is written only while the Runtime is stopped (UpgradeFiles.WritePointer).
+                if(stale&&spec==ServiceSpec.Runtime){service.ConfirmStopped();UpgradeFiles.WritePointer(active);repaired=true;}
                 if(!service.StartupConfigured()){service.EnableStartup();repaired=true;}
                 if(!service.IsRunning()){progress(new("starting_server",50));await service.StartAsync(CancellationToken.None);repaired=true;}
                 return service;

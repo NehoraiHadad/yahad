@@ -28,8 +28,13 @@ internal static class VersionIdentityTests
         {
             Assert(typeof(InfrastructureRelease).Assembly.GetManifestResourceNames().All(n=>!n.EndsWith("package.json",StringComparison.OrdinalIgnoreCase)));
             Assert(typeof(InfrastructureRelease).Assembly.GetType("Yahad.Install.ApplicationRelease") is null);
-            // The payload-free engine (no embedded package) names the infrastructure it is.
-            Assert(InstallPackage.IsEmbedded||InstallPackage.DisplayVersion()==InfrastructureRelease.Version);
+            // The payload-free engine (no embedded package) names no app of its own: the window
+            // shows the installed app the record names instead.
+            if(!InstallPackage.IsEmbedded)
+            {
+                try{_=InstallPackage.DisplayVersion();throw new InvalidOperationException("an engine named a version");}
+                catch(IOException error)when(error.Message=="PACKAGE_NOT_EMBEDDED"){}
+            }
             return Task.CompletedTask;
         });
         await check("a package of this infrastructure is admitted and neither track can be relabeled",()=>

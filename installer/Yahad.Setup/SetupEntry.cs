@@ -16,7 +16,9 @@ internal static class SetupEntry
         {
             if(args is ["--describe"]){Describe();return 0;}
             if(args is ["--verify-package"]){VerifyPackage();return 0;}
-            if(QuietSetup.Parse(args) is {} quiet)return QuietSetup.RunAsync(quiet).GetAwaiter().GetResult();
+            if(QuietSetup.Parse(args) is {} quiet)return QuietSetup.RunAsync(quiet,args).GetAwaiter().GetResult();
+            // The removal window started from the installation runs from a private copy.
+            if(args is ["--uninstall"]&&PrivateCopy.RemovalDeletes(Environment.ProcessPath??throw new IOException("SETUP_IMAGE")))return PrivateCopy.Run(args);
         }
         catch(Exception error)when(error is IOException or UnauthorizedAccessException or JsonException){return 1;}
         return Window();

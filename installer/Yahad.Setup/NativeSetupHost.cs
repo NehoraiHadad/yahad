@@ -35,7 +35,7 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
     private string Dataset=>Path.Combine(InstallLocations.State,"datasets",state!.DataId);
     private string DataPath=>Path.Combine(Dataset,"data");
     private string MasterKey=>Path.Combine(Dataset,"master-key");
-    // A kept database the new app migrates is copied here before the first start.
+    // A kept database the new app migrates is copied here before the first start (InstallBackup).
     private string MigrationBackup=>Path.Combine(Dataset,"install-backup");
     private static string Secrets=>Path.Combine(InstallLocations.State,"Secrets");
     private static string Capability=>Path.Combine(Secrets,"setup-capability.json");
@@ -202,14 +202,15 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
         await service!.StopAsync(cancellation);network.RecoverWebJournal();await network.ConfigureAsync(request,progress,cancellation);
     }
     // A kept database the new app migrates (8.3): copied whole before the first start,
-    // and put back before any later start of this same install, so a start that failed
-    // halfway through a migration never leaves the next attempt a half-migrated database.
+    // and put back before any later start of this same attempt, so a start that failed
+    // halfway through a migration never leaves the next start a half-migrated database.
+    // A copy bound to anything but this attempt is replaced, never restored.
     private async Task PrepareDataAsync(CancellationToken cancellation)
     {
         if(state!.Active.App.DatabaseSchema==Package.Manifest.App.DatabaseSchema)return;
         await service!.StopAsync(cancellation);service.ConfirmStopped();
-        if(File.Exists(Path.Combine(MigrationBackup,"manifest.json")))DatabaseBackup.Restore(DataPath,MigrationBackup);
-        else DatabaseBackup.Create(DataPath,MigrationBackup);
+        if(InstallBackup.BoundTo(MigrationBackup,state))DatabaseBackup.Restore(DataPath,MigrationBackup);
+        else InstallBackup.Create(DataPath,MigrationBackup,state);
     }
     public async Task<SetupResult> StartAndObserveAsync(Action<SetupProgress> progress,CancellationToken cancellation)
     {
@@ -254,8 +255,7 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
     public Task CommitAsync(Action<SetupProgress> progress,CancellationToken cancellation)=>Task.Run(()=>
     {
         var schema=reportedSchema??throw new IOException("SERVER_NOT_READY");
-        if(committed)return;
-        state=state! with{Active=state.Active with{App=state.Active.App with{DatabaseSchema=schema}}};Save("committed");
+        if(!committed){state=state! with{Active=state.Active with{App=state.Active.App with{DatabaseSchema=schema}}};Save("committed");}
         UpgradeFiles.Remove(MigrationBackup);
     },cancellation);
 
@@ -333,13 +333,17 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
             {
                 operationPhase=UninstallPhase.DeleteData;
                 var tree=RemovalTree.Inspect(InstallLocations.State,WindowsFileBoundary.RequireNoLink);
-                tree.DeleteContents(WindowsFileBoundary.DeleteNoFollow,p=>progress(new("deleting_data",25+p*50/100)),cancellation);
+                tree.DeleteContents(PrivateCopy.DeleteMember,p=>progress(new("deleting_data",25+p*50/100)),cancellation);
                 operationPhase=UninstallPhase.DeleteDataRoot;WindowsFileBoundary.DeleteNoFollow(InstallLocations.State,true);
             }
             else if(mode==UninstallMode.KeepData)
             {
-                // The mode stays with the data; a downloaded release does not.
-                operationPhase=UninstallPhase.SavePreservedState;UpgradeFiles.Remove(Path.Combine(InstalledLayout.UpdaterRoot,"staging"));Save("uninstalled");
+                // The mode stays with the data; a downloaded release does not. An uncommitted
+                // reinstall may have begun a migration while its record still names the kept
+                // schema: the data goes back to that attempt's copy, then no copy is kept.
+                operationPhase=UninstallPhase.SavePreservedState;UpgradeFiles.Remove(Path.Combine(InstalledLayout.UpdaterRoot,"staging"));
+                if(InstallBackup.BoundTo(MigrationBackup,state))DatabaseBackup.Restore(DataPath,MigrationBackup);
+                UpgradeFiles.Remove(MigrationBackup);Save("uninstalled");
             }
             intent=intent with{Stage="data_removed"};SaveRemoval(intent);
         }
@@ -349,7 +353,7 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
             var(tree,_)=InspectBinaries(intent.Binaries,false,true,"UNINSTALL_UNOWNED_FILE_PRESERVED");
             if(tree is not null)
             {
-                tree.DeleteContents(WindowsFileBoundary.DeleteNoFollow,p=>progress(new("deleting_files",75+p*20/100)),cancellation);
+                tree.DeleteContents(PrivateCopy.DeleteMember,p=>progress(new("deleting_files",75+p*20/100)),cancellation);
                 WindowsFileBoundary.DeleteNoFollow(InstallLocations.Binaries,true);
             }
             intent=intent with{Stage="binaries_removed"};SaveRemoval(intent);

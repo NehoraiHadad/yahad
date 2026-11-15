@@ -210,12 +210,49 @@ internal static class UpgradeTests
             {
                 ("UPGRADED",0),("REPAIRED",0),("NOTHING_TO_REPAIR",0),("RELEASE_SIGNATURE_INVALID",2),("RELEASE_KEY_UNTRUSTED",2),("RELEASE_NOT_NEWER",2),("RELEASE_SETUP_MISMATCH",2),("RELEASE_MANIFEST_INVALID",2),("RELEASE_UNSUPPORTED_FROM",2),
                 ("UPGRADE_LOCKED",2),("UPGRADE_INCOMPLETE",2),("NOT_INSTALLED",2),("INSTALL_INCOMPLETE",2),("LEGACY_INSTALL_UNSUPPORTED",2),("INFRA_IDENTITY_MISMATCH",2),("APP_IDENTITY_MISMATCH",2),
-                ("INSTALL_DOWNGRADE_REFUSED",2),("ACTIVE_POINTER_INVALID",2),("TREE_RECORD_INVALID",2),(RepairHost.Relaunched,0),("REPAIR_RUNNING_FROM_TARGET",1),("ROLLBACK_FAILED",3),("UPGRADE_COMMIT_INCOMPLETE",3),("REPAIR_UNHEALTHY",3),("ROLLED_BACK_UNHEALTHY",4),("UPGRADE_PREPARE_FAILED",4),("ADMIN_REQUIRED",1),("UNEXPECTED",1)
+                ("INSTALL_DOWNGRADE_REFUSED",2),("ACTIVE_POINTER_INVALID",2),("TREE_RECORD_INVALID",2),(RepairHost.HandOff,1),("REPAIR_RELAUNCHED",1),("REPAIR_RUNNING_FROM_TARGET",1),("ROLLBACK_FAILED",3),("UPGRADE_COMMIT_INCOMPLETE",3),("REPAIR_UNHEALTHY",3),("ROLLED_BACK_UNHEALTHY",4),("UPGRADE_PREPARE_FAILED",4),("ADMIN_REQUIRED",1),("UNEXPECTED",1)
             })Assert(UpgradeRules.Exit(code)==exit,code);
             // Every refusal reaches the result as itself, not as a generic failure.
-            foreach(var code in new[]{"RELEASE_SIGNATURE_INVALID","RELEASE_KEY_UNTRUSTED","RELEASE_NOT_NEWER","RELEASE_SETUP_MISMATCH","RELEASE_MANIFEST_INVALID","RELEASE_UNSUPPORTED_FROM","UPGRADE_LOCKED","UPGRADE_INCOMPLETE","UPGRADE_BACKUP_INVALID","NOT_INSTALLED","INSTALL_INCOMPLETE",RepairHost.Relaunched,
+            foreach(var code in new[]{"RELEASE_SIGNATURE_INVALID","RELEASE_KEY_UNTRUSTED","RELEASE_NOT_NEWER","RELEASE_SETUP_MISMATCH","RELEASE_MANIFEST_INVALID","RELEASE_UNSUPPORTED_FROM","UPGRADE_LOCKED","UPGRADE_INCOMPLETE","UPGRADE_BACKUP_INVALID","NOT_INSTALLED","INSTALL_INCOMPLETE",
                 "LEGACY_INSTALL_UNSUPPORTED","INFRA_IDENTITY_MISMATCH","APP_IDENTITY_MISMATCH","ACTIVE_POINTER_INVALID","TREE_RECORD_INVALID"})
                 Assert(SetupOperation.Code(new IOException(code))==code,code);
+            return Task.CompletedTask;
+        });
+        await check("a private copy runs outside every tree it may delete, in a fresh protected directory under the system temp",()=>
+        {
+            var parent=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),"Temp");Assert(PrivateCopy.Parent==parent,"parent");
+            var copy=Path.Combine(parent,"yahad-setup-"+Guid.NewGuid().ToString("N"));Assert(PrivateCopy.IsPrivateDirectory(copy,parent),"fresh");
+            foreach(var other in new[]{Path.Combine(parent,"yahad-setup-"+Guid.NewGuid().ToString("D")),Path.Combine(parent,"yahad-setup-"+new string('A',32)),Path.Combine(parent,"other-"+Guid.NewGuid().ToString("N")),
+                Path.Combine(Path.GetTempPath(),"yahad-setup-"+Guid.NewGuid().ToString("N")),Path.Combine(copy,"yahad-setup-"+Guid.NewGuid().ToString("N"))})Assert(!PrivateCopy.IsPrivateDirectory(other,parent),other);
+            // Removal deletes the binary root and the state root; the copy is in neither.
+            Assert(PrivateCopy.RemovalDeletes(InstalledLayout.EngineImage("1.2.3"))&&PrivateCopy.RemovalDeletes(Path.Combine(InstallLocations.State,"x.exe")),"installed engine");
+            Assert(!PrivateCopy.RemovalDeletes(Path.Combine(copy,InstalledLayout.EngineName))&&!PrivateCopy.RemovalDeletes(Path.Combine(Path.GetTempPath(),"Setup.exe")),"copy");
+            // Only the waiting engine's own image is moved out instead of deleted.
+            var origin=InstalledLayout.EngineImage("1.2.3");
+            Assert(PrivateCopy.IsOrigin(origin,origin)&&PrivateCopy.IsOrigin(origin.ToUpperInvariant(),origin),"origin");
+            Assert(!PrivateCopy.IsOrigin(InstalledLayout.EngineImage("1.2.4"),origin)&&!PrivateCopy.IsOrigin(origin,null),"other engine");
+            return Task.CompletedTask;
+        });
+        await check("a reinstall restores only the migration copy bound to its own attempt",()=>
+        {
+            var state=PairFixture.State("preparing",PairFixture.Pair("1.0.0","1.0.1",schema:6));var binding=InstallBackup.Encode(state);
+            Assert(InstallBackup.Matches(binding,state),"own attempt");Assert(InstallBackup.Matches(binding,state with{Phase="removing_keep_data"}),"the same attempt mid-removal");
+            Assert(!InstallBackup.Matches(binding,state with{InstallationId=Guid.NewGuid().ToString("N")}),"another installation");
+            Assert(!InstallBackup.Matches(binding,state with{DataId=Guid.NewGuid().ToString("N")}),"another dataset");
+            Assert(!InstallBackup.Matches(binding,state with{Active=state.Active with{App=state.Active.App with{DatabaseSchema=7}}}),"committed at the new schema");
+            Assert(!InstallBackup.Matches(binding,state with{Active=PairFixture.Pair("1.0.0","1.0.1",schema:6,appSalt:"other")}),"another app build");
+            Assert(!InstallBackup.Matches(binding,state with{Active=PairFixture.Pair("1.0.0","1.0.2",schema:6)}),"another target");
+            foreach(var bad in new[]{"{}","[]","not json","{\"InstallationId\":null}"})Assert(!InstallBackup.Matches(System.Text.Encoding.UTF8.GetBytes(bad),state),bad);
+            var root=PrivateSession.Create(Path.GetTempPath());
+            try
+            {
+                var backup=Path.Combine(root,"install-backup");Directory.CreateDirectory(backup);
+                File.WriteAllBytes(Path.Combine(backup,"attempt.json"),binding);Assert(!InstallBackup.BoundTo(backup,state),"no whole copy without its manifest");
+                File.WriteAllBytes(Path.Combine(backup,"manifest.json"),"[]"u8.ToArray());Assert(InstallBackup.BoundTo(backup,state),"whole and bound");
+                File.Delete(Path.Combine(backup,"attempt.json"));Assert(!InstallBackup.BoundTo(backup,state),"an unbound copy is never restored");
+                Assert(!InstallBackup.BoundTo(Path.Combine(root,"absent"),state),"absent");
+            }
+            finally{Directory.Delete(root,true);}
             return Task.CompletedTask;
         });
         await check("removal inventory holds active.json, the key and every tree of both pairs once, and nothing else",()=>

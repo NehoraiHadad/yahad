@@ -26,17 +26,29 @@ internal static class QuietSetup
     private static string Full(string path)=>Path.IsPathFullyQualified(path)?path:throw new IOException("SETUP_ARGUMENTS");
     internal static UpdateSetupChoice? Consent(Request request,bool existing,DateTimeOffset now)
         =>request.Uninstall||existing?null:new(2,true,request.AutomaticUpdates==true,now.ToUnixTimeSeconds());
-    internal static async Task<int> RunAsync(Request request)
+    internal static async Task<int> RunAsync(Request request,string[] arguments)
     {
         SetupResult result;var clock=System.Diagnostics.Stopwatch.StartNew();var phases=new List<object>();string? current=null;
         // Phase entry times only, so an operator or CI can see where time goes.
         void Progress(SetupProgress p){lock(phases){if(p.Phase==current)return;current=p.Phase;phases.Add(new{p.Phase,Seconds=Math.Round(clock.Elapsed.TotalSeconds,1)});}}
+        // The private copy runs the same command and writes the result itself; this
+        // process writes one only when the copy never started.
+        int HandOff()
+        {
+            try{return PrivateCopy.Run(arguments);}
+            catch(Exception error)
+            {
+                var failed=new SetupResult(false,SetupOperation.Code(error),DataPreserved:request.Mode==UninstallMode.KeepData,Failure:SetupFailureDetail.From(error));
+                File.WriteAllBytes(request.ResultPath,JsonSerializer.SerializeToUtf8Bytes(new{failed.Ok,failed.Code,failed.Url,failed.DataPreserved,failed.Failure,Phases=phases,Seconds=Math.Round(clock.Elapsed.TotalSeconds,1)}));
+                return 1;
+            }
+        }
+        if(request.Uninstall&&PrivateCopy.RemovalDeletes(Environment.ProcessPath??throw new IOException("SETUP_IMAGE")))return HandOff();
         if(request.Repair||request.UpgradeDirectory is not null)
         {
             var outcome=request.Repair?await RepairHost.RunAsync(Progress):await UpgradeHost.RunAsync(request.UpgradeDirectory!,Progress);
             var done=outcome.Result;
-            // The private copy runs the same repair and writes this result itself.
-            if(done.Code==RepairHost.Relaunched){SetupOperation.StartPrivateCopy("--repair","--result",request.ResultPath);return outcome.Exit;}
+            if(done.Code==RepairHost.HandOff)return HandOff();
             File.WriteAllBytes(request.ResultPath,JsonSerializer.SerializeToUtf8Bytes(new{done.Ok,done.Code,done.Url,done.DataPreserved,done.Failure,FromVersion=outcome.From?.App.Version,ToVersion=outcome.To?.App.Version,
                 FromInfrastructureVersion=outcome.From?.Infrastructure.Version,ToInfrastructureVersion=outcome.To?.Infrastructure.Version,outcome.RolledBack,Phases=phases,Seconds=Math.Round(clock.Elapsed.TotalSeconds,1)}));
             return outcome.Exit;

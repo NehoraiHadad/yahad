@@ -182,6 +182,23 @@ internal static class FullInstallerIntegrationTests
             Refused("PACKAGE_HASH",()=>PairFixture.Package(change:m=>m with{ZipSha256=new string('0',64)}));
             Refused("PACKAGE_MEMBERS",()=>PairFixture.Package(duplicate:true));
             Refused("PACKAGE_BOUND",()=>PairFixture.Package(change:m=>m with{Files=[..m.Files,m.Files[0]]}));
+            // The writer's required members (setup_package.py REQUIRED_MEMBERS), the app's own legal records included.
+            foreach(var legal in new[]{"server-bundle.json","ThirdPartyNotices-server.txt","build-inputs.json"})Assert(InstallPackage.Required.Contains("apps/app/legal/"+legal));
+            // The bundle ships, never the source, the lockfile or node_modules, in any case.
+            foreach(var extra in new[]{"apps/app/src/main.ts","apps/app/node_modules/x/index.js","apps/app/package-lock.json","apps/app/SRC/main.ts","apps/app/Node_Modules/x.js","apps/app/Package-Lock.json"})
+                Refused("PACKAGE_PATH",()=>PairFixture.Package(extra:extra));
+            // One archive entry per manifest path, exactly: a case-only difference is no match,
+            // and two manifest paths that are one Windows path are refused.
+            Refused("PACKAGE_MEMBER_TYPE",()=>PairFixture.Package(change:m=>m with{Files=m.Files.Select(f=>f.Path=="infra/legal/fixture.json"?f with{Path="infra/legal/FIXTURE.json"}:f).ToArray()}));
+            Refused("PACKAGE_BOUND",()=>PairFixture.Package(change:m=>m with{Files=[..m.Files,m.Files.Single(f=>f.Path=="infra/legal/fixture.json") with{Path="infra/legal/FIXTURE.json"}]}));
+            return Task.CompletedTask;
+        });
+        await check("a tree record refuses a member that is also a directory, and one directory spelled two ways",()=>
+        {
+            byte[] Record(params string[] names)=>PairFixture.Build(TreeKind.App,"1.0.0",PairFixture.AppCommit,names).Record;
+            _=TreeRecord.Parse(Record("app/a/b","app/a/c","app/b"),TreeKind.App);
+            foreach(var names in new[]{new[]{"app/a","app/a/b"},["app/A","app/a/b"],["app/x/A","app/x/a/b"],["app/A/x","app/a/y"],["app/d/E/x","app/d/e/y"]})
+                DenyCode("TREE_RECORD_INVALID",()=>TreeRecord.Parse(Record(names),TreeKind.App));
             return Task.CompletedTask;
         });
         await check("an interrupted extraction resumes only over this package's members and their owned partials",()=>
@@ -252,7 +269,7 @@ internal static class FullInstallerIntegrationTests
         {
             foreach(var code in new[]{"INSTALL_UPGRADE_REQUIRED","INSTALL_DOWNGRADE_REFUSED","INSTALL_TARGET_CHANGED","LEGACY_INSTALL_UNSUPPORTED","PACKAGE_TREE_MISMATCH","PACKAGE_CONTRACT","PACKAGE_MISSING","PACKAGE_MEMBERS","PACKAGE_PATH",
                 "INFRA_IDENTITY_MISMATCH","APP_IDENTITY_MISMATCH","ACTIVE_POINTER_INVALID","TREE_RECORD_INVALID","RELEASE_UNSUPPORTED_FROM"})Assert(SetupOperation.Code(new IOException(code))==code);
-            foreach(var gone in new[]{"UPDATE_LEGACY_PROFILE_REQUIRES_REMOVAL","PACKAGE_PAYLOAD_ANCHOR","REPAIR_RUNNING_FROM_TARGET"})Assert(SetupOperation.Code(new IOException(gone))=="INSTALL_FAILED");
+            foreach(var gone in new[]{"UPDATE_LEGACY_PROFILE_REQUIRES_REMOVAL","PACKAGE_PAYLOAD_ANCHOR","REPAIR_RUNNING_FROM_TARGET","REPAIR_RELAUNCHED",RepairHost.HandOff})Assert(SetupOperation.Code(new IOException(gone))=="INSTALL_FAILED");
             Assert(SetupOperation.OperationTimeout("install")==TimeSpan.FromMinutes(48)&&SetupOperation.OperationTimeout("uninstall")==TimeSpan.FromMinutes(96));
             return Task.CompletedTask;
         });
