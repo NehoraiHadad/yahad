@@ -26,12 +26,12 @@
 | עריכה | text+edit; protocol MESSAGE_EDIT | נרמול ומדיניות בעלות/זמן; UI/API mock |
 | מחיקה | delete+key; messages.delete/protocol REVOKE | נרמול, tombstone ומחיקת מדיה; mock |
 | הקלדה | sendPresenceUpdate / presence.update | handler, איפוס והגבלת קבוצה; mock |
-| מסירה/קריאה | messages.update status, readMessages | מיפוי statuses ורמת API; mock UI, לא קבלות חיות |
+| מסירה/קריאה | ack של השרת (`CB:ack,class:message`), messages.update status בשיחה פרטית, message-receipt.update בקבוצה, readMessages | ✓ אחד אחרי ack של השרת; בקבוצה ✓✓ רק כשכל המשתתפים קיבלו, וכחול רק כשכולם קראו; mock UI, לא קבלות חיות |
 | היסטוריה | messaging-history.set + fetchMessageHistory | סינון ועימוד; לא שחזור חי של חוסר ברשת |
 
 מקורות: [Message actions](https://baileys.wiki/messaging/message-actions), [Media](https://baileys.wiki/messaging/media-messages), [History sync](https://baileys.wiki/advanced/history-sync), [Events](https://baileys.wiki/concepts/events), [Socket config](https://baileys.wiki/concepts/socket-config).
 
-Capabilities הן יכולות הקוד/הספרייה, ולא אישור שהחשבון הפרטי עבר בדיקת קצה לקצה. ה־UI בונה פעולות לפי המתאם הפעיל, והשרת דוחה פעולה שהמתאם אינו תומך בה. שיחות קול/וידאו, סקרים, סטטוסים ותוכן חד־פעמי אינם מוצגים כפעולות עובדות. receipt של ״נקרא״ מוצג רק מהמתאם, ואינו מוצג כהוכחה שכל חברי הקבוצה קראו.
+Capabilities הן יכולות הקוד/הספרייה, ולא אישור שהחשבון הפרטי עבר בדיקת קצה לקצה. ה־UI בונה פעולות לפי המתאם הפעיל, והשרת דוחה פעולה שהמתאם אינו תומך בה. שיחות קול/וידאו, סקרים, סטטוסים ותוכן חד־פעמי אינם מוצגים כפעולות עובדות. receipt של ״נקרא״ מוצג רק מהמתאם. בקבוצה הוא מחושב מקבלות לכל משתתף (נשמרות מוצפנות עם ההודעה ואינן נחשפות ב־API); המשתתפים נקבעים לפי חברי הקבוצה בזמן הקבלה הראשונה, כך שמי שהצטרף אחר כך אינו מעכב את הסימון.
 
 ## חיבור רציף והיסטוריה
 

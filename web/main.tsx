@@ -1192,10 +1192,10 @@ function Message({
     ? `/api/groups/${encodeURIComponent(group)}/media/${encodeURIComponent(m.mediaId)}`
     : null;
   const statusTitle: Record<string, string> = {
-    sent: 'השרת של WhatsApp אישר שליחה',
-    pending: 'ממתינה לאישור',
-    delivered: 'החיבור דיווח על מסירה',
-    read: 'החיבור דיווח על קריאה — לא בהכרח כל חברי השיחה',
+    sent: 'השרת של WhatsApp קיבל את ההודעה',
+    pending: 'ממתינה לאישור השרת',
+    delivered: 'נמסרה — בקבוצה: לכל המשתתפים',
+    read: 'נקראה — בקבוצה: על ידי כל המשתתפים',
     failed: 'ההודעה לא הוגשה לשליחה — אפשר לנסות שוב',
     unknown: 'מצב מסירה אינו ידוע',
   };

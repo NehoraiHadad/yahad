@@ -131,7 +131,7 @@ function adapterFixture(budget={active:0}){
   const allowed=new Set([g]),received:Incoming[]=[],notices:HistoryNotice[]=[],listeners=new Map<string,Function[]>();let epoch='first',configuration:any;
   const auth=new Map<string,string>();
   const h:ConnectorHooks={allowed:x=>allowed.has(x),retentionToken:()=>epoch,history:n=>notices.push(n),incoming:async m=>{if(!m.guard||m.guard())received.push(m);},state(){},update(){},typing(){},authGet:k=>auth.get(k),authSet(k,v){if(v===null)auth.delete(k);else auth.set(k,v);},authBatch(v){for(const[k,x]of Object.entries(v))h.authSet(k,x);},getMessage(){return undefined;},maxMedia:1048576};
-  const sock:any={ev:{on(name:string,fn:Function){listeners.set(name,[...(listeners.get(name)||[]),fn]);}},end(){},logout:async()=>{},fetchMessageHistory:async()=> 'provider-request'};
+  const sock:any={ev:{on(name:string,fn:Function){listeners.set(name,[...(listeners.get(name)||[]),fn]);}},ws:{on(){}},end(){},logout:async()=>{},fetchMessageHistory:async()=> 'provider-request'};
   const connector=new BaileysConnector(h,((c:any)=>{configuration=c;return sock;})as any,budget);
   const emit=(name:string,event:any)=>{for(const fn of listeners.get(name)||[])fn(event);};
   return{connector,h,allowed,received,notices,emit,sock,configuration:()=>configuration,regrant:()=>{epoch='second';allowed.add(g);}};

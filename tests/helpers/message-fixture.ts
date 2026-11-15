@@ -12,9 +12,12 @@ export const raw=(id:string,message:any,extra:any={}):WAMessage=>({key:{id,remot
 export async function fixture(options:{child?:boolean}={}){
  const dir=mkdtempSync(join(tmpdir(),'yahad-message-fix-'));
  const config:Config={dataDir:dir,masterKey:randomBytes(32),connector:'mock',realAllowed:false,host:'127.0.0.1',port:3000,origin:'http://localhost:3000',secureCookie:false,maxMedia:1048576,maxStorage:67108864,childIdleMs:900000,sessionMs:3600000,diagnosticsEnabled:false};
- const ev=new EventEmitter(),sent:any[]=[];
- const socket:any={ev,groupFetchAllParticipating:async()=>({[group]:{id:group,subject:'Synthetic group'},[other]:{id:other,subject:'Synthetic other'}}),
- sendMessage:async(g:string,content:any,options:any={})=>{const id=options.messageId||randomUUID();sent.push({g,content,options});return raw(id,{conversation:content.text||''},{key:{id,remoteJid:g,fromMe:true},status:2});},
+ const ev=new EventEmitter(),ws=new EventEmitter(),sent:any[]=[],metadataCalls:string[]=[];
+ // Mirrors real Baileys: sendMessage resolves with PENDING; the server ack arrives on ws.
+ const socket:any={ev,ws,user:{id:'999:3@s.whatsapp.net',lid:'999:3@lid'},
+ groupMetadata:async(g:string)=>{metadataCalls.push(g);return{id:g,subject:'Synthetic group',participants:[{id:'999@lid',phoneNumber:'999@s.whatsapp.net'},{id:'100@lid',phoneNumber:'100@s.whatsapp.net'},{id:'200@lid',phoneNumber:'200@s.whatsapp.net'}]};},
+ groupFetchAllParticipating:async()=>({[group]:{id:group,subject:'Synthetic group'},[other]:{id:other,subject:'Synthetic other'}}),
+ sendMessage:async(g:string,content:any,options:any={})=>{const id=options.messageId||randomUUID();sent.push({g,content,options});return raw(id,{conversation:content.text||''},{key:{id,remoteJid:g,fromMe:true},status:1});},
  presenceSubscribe:async()=>{},end:()=>{},updateMediaMessage:async()=>{throw new Error('Network forbidden in test');}};
  let connector!:BaileysConnector;
  const {app,store,service}=await createApp(config,{boot:false,factory:h=>connector=new BaileysConnector(h,()=>socket)});
@@ -26,6 +29,7 @@ export async function fixture(options:{child?:boolean}={}){
  const request=(path:string,method:any='GET',payload?:any)=>app.inject({url:'/api/groups/'+encodeURIComponent(group)+path,method,payload,headers:{origin:config.origin,cookie:'sid='+s.sid,'x-csrf-token':s.csrf}});
  const ingest=async(m:WAMessage)=>{const normalized=normalizeIncoming(m);if(normalized)await service.ingest(a.familyId,normalized);};
  const emit=async(name:string,data:any)=>{ev.emit(name,data);await new Promise<void>(r=>setImmediate(r));await connector.ingestion?.settled();};
- return{a,app,store,service,connector,ev,sent,request,ingest,emit,get:(id:string)=>store.getMessage(a.familyId,group,id),
+ const ack=async(id:string,attrs:Record<string,string>={})=>{ws.emit('CB:ack,class:message',{tag:'ack',attrs:{class:'message',id,from:group,...attrs}});await new Promise<void>(r=>setImmediate(r));};
+ return{a,app,store,service,connector,ev,ws,ack,metadataCalls,sent,request,ingest,emit,get:(id:string)=>store.getMessage(a.familyId,group,id),
  async close(){await app.close();rmSync(dir,{recursive:true,force:true});}};
 }

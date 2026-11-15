@@ -129,6 +129,7 @@ test('real adapter lifecycle with injected socket: QR, restart reconnect, logout
           listeners.set(event, [...(listeners.get(event) || []), fn]);
         },
       },
+      ws: { on() {} },
       emit: (event: string, value: any) => {
         for (const fn of listeners.get(event) || []) fn(value);
       },
@@ -171,7 +172,7 @@ test('provider unlink reports request transmission only, closes socket, ignores 
     const c = new BaileysConnector(h, (() => {
       created++;
       const listeners = new Map<string, Function[]>();
-      socket = { ev: { on(name: string, fn: Function) { listeners.set(name, [...(listeners.get(name) || []), fn]); } },
+      socket = { ev: { on(name: string, fn: Function) { listeners.set(name, [...(listeners.get(name) || []), fn]); } }, ws: { on() {} },
         emit(name: string, data: unknown) { for (const fn of listeners.get(name) || []) fn(data); },
         end() { ended++; }, logout: async () => { loggedOut++; if (fails) throw new Error('synthetic offline'); } };
       return socket;
@@ -187,7 +188,7 @@ test('provider unlink reports request transmission only, closes socket, ignores 
 
 test('provider unlink timeout still stops locally and reports remote revocation unconfirmed', async t => {
   const { h } = hooks(); let ended = false;
-  const c = new BaileysConnector(h, (() => ({ ev: { on() {} }, logout: () => new Promise(() => {}), end() { ended = true; } })) as any);
+  const c = new BaileysConnector(h, (() => ({ ev: { on() {} }, ws: { on() {} }, logout: () => new Promise(() => {}), end() { ended = true; } })) as any);
   await c.start();
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const pending = c.stop(true);
