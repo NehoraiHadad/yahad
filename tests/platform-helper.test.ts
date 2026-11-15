@@ -22,7 +22,7 @@ const refused: [string, NodeJS.ProcessEnv][] = [
 ];
 
 test('the Platform helper is read only from YAHAD_PLATFORM_HELPER and admits an absolute .exe path', () => {
-  const image = 'C:\\Program Files\\Yahad.FirstInstall\\versions\\0.7.0\\platform\\Yahad.Platform.exe';
+  const image = 'C:\\Program Files\\Yahad.FirstInstall\\infra\\1.0.0\\platform\\Yahad.Platform.exe';
   assert.equal(platformHelper({ YAHAD_PLATFORM_HELPER: image }), image);
   assert.equal(platformHelper({ YAHAD_PLATFORM_HELPER: 'D:\\Y\\YAHAD.PLATFORM.EXE' }), 'D:\\Y\\YAHAD.PLATFORM.EXE');
 });

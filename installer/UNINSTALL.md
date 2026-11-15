@@ -8,13 +8,18 @@ have keyboard order and accessible labels. A normal installer opened over an
 existing installation offers an uninstall-options link without requiring a command.
 
 Windows Settings starts the registered `Yahad.Setup.exe --uninstall` from an
-unelevated shell, so the binary tree grants Users read and execute; without that
-Windows refuses with "cannot access the specified device, path, or file" before any
-UAC prompt. An installation made under the older ACL gains this entry on its next
-upgrade; until then, start the same command from an elevated terminal.
+unelevated shell. That is the payload-free Setup engine of the active infrastructure,
+`C:\Program Files\Yahad.FirstInstall\infra\<infrastructure-version>\setup\Yahad.Setup.exe`:
+it carries no install package, and neither uninstall nor `--repair` ever opens one.
+The binary tree grants Users read and execute; without that Windows refuses with
+"cannot access the specified device, path, or file" before any UAC prompt.
+An installation made under the older ACL gains this entry on its next upgrade;
+until then, start the same command from an elevated terminal.
 
 Both choices stop and remove only `Yahad.Acceptance`, remove verified owned binary
-files under `C:\Program Files\Yahad.FirstInstall`, remove the exact Yahad uninstall
+files under `C:\Program Files\Yahad.FirstInstall` (the key, `active.json`, and every
+member of the active and previous `infra\<version>` and `apps\<version>` trees, the
+engine included), remove the exact Yahad uninstall
 registration, and remove the original owner's matching Start Menu URL when present.
 Foreign/modified files and ambiguous ownership stop removal instead of widening it.
 

@@ -53,7 +53,7 @@ $lanRoot = Join-Path $env:ProgramData $lanService
 $lanAddress = $null
 $lanRuleName = $null
 # Layout the installer no longer creates; each must stay absent.
-$removedProgramFilesEntries = @('payloads', 'bootstrap', 'system-slots', '.authority', 'intake')
+$removedProgramFilesEntries = @('payloads', 'bootstrap', 'system-slots', '.authority', 'intake', 'versions')
 $removedProgramDataEntries = @('update-authority.json', 'activation.json', 'epoch.json', 'web.json', 'bootstrap.json')
 $account = $null
 $origin = $null
@@ -74,6 +74,17 @@ function ReleaseOf([string]$Directory) {
 $baseRelease = ReleaseOf $baseDirectory
 $upgradeRelease = ReleaseOf $upgradeDirectory
 $brokenRelease = ReleaseOf $brokenDirectory
+# The infrastructure version a release dir was built with: package.ps1 writes it to
+# package-build.json beside the release dir (<set>\<name>\release, <set>\<name>\package-build.json).
+function InfrastructureOf([string]$ReleaseDirectory) {
+    $build = Join-Path (Split-Path -Parent $ReleaseDirectory) 'package-build.json'
+    if (!(Test-Path -LiteralPath $build)) { throw "No package-build.json beside $ReleaseDirectory" }
+    $value = (Get-Content -LiteralPath $build -Raw | ConvertFrom-Json).infrastructureVersion
+    if ($value -isnot [string] -or $value -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') { throw "package-build.json beside $ReleaseDirectory has no valid infrastructureVersion" }
+    return $value
+}
+$baseInfra = InfrastructureOf $baseDirectory
+$upgradeInfra = InfrastructureOf $upgradeDirectory
 $upgradeSetup = Join-Path $upgradeDirectory $upgradeRelease.setup.name
 $brokenSetup = Join-Path $brokenDirectory $brokenRelease.setup.name
 $baseSetup = Join-Path $baseDirectory $baseRelease.setup.name
@@ -84,7 +95,14 @@ $taskPath = '\Yahad\'
 $taskName = 'Repair'
 $parentSession = $null
 $liveCheck = $null
-function RetainedSetup([string]$Version) { Join-Path $programFiles "versions\$Version\Yahad.Setup.exe" }
+function InfraRoot([string]$Infra) { Join-Path $programFiles "infra\$Infra" }
+function AppRoot([string]$Version) { Join-Path $programFiles "apps\$Version" }
+# The payload-free engine of an infrastructure: the Repair task, Apps & Features and
+# every uninstall run it.
+function EngineOf([string]$Infra) { Join-Path (InfraRoot $Infra) 'setup\Yahad.Setup.exe' }
+function HostImage([string]$Infra) { Join-Path (InfraRoot $Infra) 'host\Yahad.ServiceHost.exe' }
+function UpdaterCommand([string]$Infra) { '"' + (Join-Path (InfraRoot $Infra) 'updater\Yahad.Updater.exe') + '" --service' }
+$activePointer = Join-Path $programFiles 'active.json'
 
 function Phase([string]$Name, [scriptblock]$Body) {
     $timer = [Diagnostics.Stopwatch]::StartNew()
@@ -129,11 +147,11 @@ function SignIn {
     $script:parentSession = $session
 }
 function RepairTaskOf { Get-ScheduledTask -TaskPath $taskPath -TaskName $taskName -ErrorAction SilentlyContinue }
-function RequireRepairTask([string]$Version) {
+function RequireRepairTask([string]$Infra) {
     $task = RepairTaskOf
     if (!$task) { throw 'The Yahad\Repair task is missing' }
     if ($task.Principal.UserId -notin 'SYSTEM', 'S-1-5-18') { throw "The Repair task runs as $($task.Principal.UserId)" }
-    if ($task.Actions.Count -ne 1 -or $task.Actions[0].Execute -ne (RetainedSetup $Version) -or $task.Actions[0].Arguments -notlike '--repair --result *') { throw "The Repair task runs $($task.Actions[0].Execute) $($task.Actions[0].Arguments)" }
+    if ($task.Actions.Count -ne 1 -or $task.Actions[0].Execute -ne (EngineOf $Infra) -or $task.Actions[0].Arguments -notlike '--repair --result *') { throw "The Repair task runs $($task.Actions[0].Execute) $($task.Actions[0].Arguments)" }
     if ($task.Triggers.Count -ne 2) { throw "The Repair task has $($task.Triggers.Count) triggers, expected boot and daily" }
 }
 function RequireNoRepairTask { if (RepairTaskOf) { throw 'The Yahad\Repair task remains' } }
@@ -149,22 +167,55 @@ function UpdatesRequest($Body) {
 }
 # What a person sees of a whole installation at one release: it answers as that
 # release, the family is theirs, the service points at it and nothing is pending.
-function RequireInstalled([string]$Version, [int]$Schema, [string[]]$Retained) {
+function RequireInstalled([string]$Version, [int]$Schema, [string]$Infra, [string]$PreviousVersion = $null, [string]$PreviousInfra = $null) {
     $health = Health
     if ($health.version -ne $Version -or $health.databaseSchema -ne $Schema) { throw "Running $($health.version)/schema $($health.databaseSchema), expected $Version/schema $Schema" }
     if ((SetupState) -ne 'complete') { throw 'Family is missing' }
     SignIn
     RequireServiceConfiguration
-    if ((ImagePathOf) -notlike "*\versions\$Version\host\*") { throw "ImagePath is $(ImagePathOf), expected version $Version" }
-    if ((ImagePathOf $updater) -ne ('"' + (Join-Path $programFiles "versions\$Version\updater\Yahad.Updater.exe") + '" --service')) { throw "Updater ImagePath is $(ImagePathOf $updater), expected version $Version" }
+    if ((ImagePathOf) -ne ('"' + (HostImage $Infra) + '" --service')) { throw "ImagePath is $(ImagePathOf), expected infrastructure $Infra" }
+    if ((ImagePathOf $updater) -ne (UpdaterCommand $Infra)) { throw "Updater ImagePath is $(ImagePathOf $updater), expected infrastructure $Infra" }
     if ((Get-Service -Name $updater).Status -ne 'Running') { throw "$updater is not running at $Version" }
     if ((UpdatesStatus).currentVersion -ne $Version) { throw "The Updater reports the wrong version, expected $Version" }
-    RequireRepairTask $Version
+    RequireRepairTask $Infra
     if (Test-Path -LiteralPath $upgradeState) { throw 'An upgrade record remains' }
-    $present = @(Get-ChildItem -LiteralPath (Join-Path $programFiles 'versions') -Directory | ForEach-Object Name | Sort-Object)
-    if (($present -join ',') -ne (($Retained | Sort-Object) -join ',')) { throw "Version directories are $($present -join ','), expected $($Retained -join ',')" }
-    $display = (Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Yahad.FirstInstall').DisplayVersion
-    if ($display -ne $Version) { throw "Apps and Features shows $display, expected $Version" }
+    RequireActivePair $Version $Infra
+    RequireRecordedPairs $Version $Infra $PreviousVersion $PreviousInfra
+    # Exactly the active pair and the previous committed pair; two pairs may share an infrastructure directory.
+    $expectedInfras = @(@($Infra, $PreviousInfra) | Where-Object { $_ } | Sort-Object -Unique)
+    $expectedApps = @(@($Version, $PreviousVersion) | Where-Object { $_ } | Sort-Object -Unique)
+    $presentInfras = @(Get-ChildItem -LiteralPath (Join-Path $programFiles 'infra') -Directory | ForEach-Object Name | Sort-Object)
+    if (($presentInfras -join ',') -ne ($expectedInfras -join ',')) { throw "Infrastructure directories are $($presentInfras -join ','), expected $($expectedInfras -join ',')" }
+    $presentApps = @(Get-ChildItem -LiteralPath (Join-Path $programFiles 'apps') -Directory | ForEach-Object Name | Sort-Object)
+    if (($presentApps -join ',') -ne ($expectedApps -join ',')) { throw "App directories are $($presentApps -join ','), expected $($expectedApps -join ',')" }
+    $entry = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Yahad.FirstInstall'
+    if ($entry.DisplayVersion -ne $Version) { throw "Apps and Features shows $($entry.DisplayVersion), expected $Version" }
+    if ($entry.UninstallString -notlike "*$(EngineOf $Infra)*") { throw "Apps and Features uninstalls with $($entry.UninstallString), expected the engine of infrastructure $Infra" }
+}
+# active.json names this pair, and the tree records it names are the ones on disk; the
+# engine the Repair task and Apps & Features run is a member of the infrastructure tree.
+function RequireActivePair([string]$Version, [string]$Infra) {
+    $pointer = Get-Content -LiteralPath $activePointer -Raw | ConvertFrom-Json
+    if ($pointer.format -ne 1) { throw "active.json is format $($pointer.format), expected 1" }
+    if ($pointer.infrastructure.version -ne $Infra) { throw "active.json names infrastructure $($pointer.infrastructure.version), expected $Infra" }
+    if ($pointer.app.version -ne $Version) { throw "active.json names app $($pointer.app.version), expected $Version" }
+    if ($pointer.app.requiresContract -lt $pointer.infrastructure.contractMin -or $pointer.app.requiresContract -gt $pointer.infrastructure.contractMax) { throw 'active.json pairs an app with an infrastructure outside its contract' }
+    $infraTree = Join-Path (InfraRoot $Infra) 'infra-tree.json'
+    $appTree = Join-Path (AppRoot $Version) 'app-tree.json'
+    if ((Get-FileHash -LiteralPath $infraTree -Algorithm SHA256).Hash -ne $pointer.infrastructure.treeSha256) { throw 'infra-tree.json is not the tree active.json names' }
+    if ((Get-FileHash -LiteralPath $appTree -Algorithm SHA256).Hash -ne $pointer.app.treeSha256) { throw 'app-tree.json is not the tree active.json names' }
+    $member = @((Get-Content -LiteralPath $infraTree -Raw | ConvertFrom-Json).files | Where-Object path -eq 'setup/Yahad.Setup.exe')
+    if ($member.Count -ne 1) { throw 'infra-tree.json does not list the Setup engine exactly once' }
+    if ((Get-FileHash -LiteralPath (EngineOf $Infra) -Algorithm SHA256).Hash -ne $member[0].sha256) { throw "The engine of infrastructure $Infra is not the one its tree lists" }
+}
+# installer-state.json (format 7): Active, and Previous when a previous committed pair is retained.
+function RequireRecordedPairs([string]$Version, [string]$Infra, [string]$PreviousVersion, [string]$PreviousInfra) {
+    $record = Get-Content -LiteralPath (Join-Path $programData 'installer-state.json') -Raw | ConvertFrom-Json
+    if ($record.Format -ne 7) { throw "The installer record is format $($record.Format), expected 7" }
+    if ($record.Active.Infrastructure.Version -ne $Infra -or $record.Active.App.Version -ne $Version) { throw "The record's active pair is $($record.Active.Infrastructure.Version)/$($record.Active.App.Version), expected $Infra/$Version" }
+    if ($PreviousVersion) {
+        if ($record.Previous.Infrastructure.Version -ne $PreviousInfra -or $record.Previous.App.Version -ne $PreviousVersion) { throw "The record's previous pair is $($record.Previous.Infrastructure.Version)/$($record.Previous.App.Version), expected $PreviousInfra/$PreviousVersion" }
+    } elseif ($record.Previous) { throw 'The record keeps a previous pair, expected none' }
 }
 function YahadServices { @(Get-Service -Name 'Yahad*' -ErrorAction SilentlyContinue) }
 function RequireInstalledAndReady($Result) {
@@ -178,7 +229,7 @@ function RequireInstalledAndReady($Result) {
     if ($response.StatusCode -ne 200) { throw "health/ready returned $($response.StatusCode)" }
 }
 # Automatic start, restarted by the SCM after a failure (counter reset after a day,
-# also on non-crash exits), and launched from its own versioned folder. Read from
+# also on non-crash exits), and launched from its own infrastructure folder. Read from
 # the SCM registry keys so the check does not depend on the display language of sc.exe.
 function RequireFailureActions([string]$Name, [string]$Expected) {
     $key = Get-ItemProperty -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Services\$Name"
@@ -198,15 +249,15 @@ function RequireServiceConfiguration {
     if (!$details) { throw "$runtime is not registered with the SCM" }
     if ($details.StartMode -ne 'Auto') { throw "$runtime start mode is $($details.StartMode), expected Auto" }
     if ($details.StartName -ne "NT SERVICE\$runtime") { throw "$runtime runs as $($details.StartName), expected NT SERVICE\$runtime" }
-    $expectedImage = '^"' + [regex]::Escape($programFiles) + '\\versions\\\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\\host\\Yahad\.ServiceHost\.exe" --service$'
-    if ($details.PathName -notmatch $expectedImage) { throw "$runtime ImagePath does not match versions\<version>\host\Yahad.ServiceHost.exe --service: $($details.PathName)" }
+    $expectedImage = '^"' + [regex]::Escape($programFiles) + '\\infra\\\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\\host\\Yahad\.ServiceHost\.exe" --service$'
+    if ($details.PathName -notmatch $expectedImage) { throw "$runtime ImagePath does not match infra\<version>\host\Yahad.ServiceHost.exe --service: $($details.PathName)" }
     RequireFailureActions $runtime '1:5000,1:30000,1:120000'
     $self = Get-CimInstance -ClassName Win32_Service -Filter "Name='$updater'"
     if (!$self) { throw "$updater is not registered with the SCM" }
     if ($self.StartMode -ne 'Auto' -or !$self.DelayedAutoStart) { throw "$updater start mode is $($self.StartMode) delayed=$($self.DelayedAutoStart), expected delayed Auto" }
     if ($self.StartName -ne 'LocalSystem') { throw "$updater runs as $($self.StartName), expected LocalSystem" }
-    $expectedSelf = '^"' + [regex]::Escape($programFiles) + '\\versions\\\d+\.\d+\.\d+\\updater\\Yahad\.Updater\.exe" --service$'
-    if ($self.PathName -notmatch $expectedSelf) { throw "$updater ImagePath does not match versions\<version>\updater\Yahad.Updater.exe --service: $($self.PathName)" }
+    $expectedSelf = '^"' + [regex]::Escape($programFiles) + '\\infra\\\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\\updater\\Yahad\.Updater\.exe" --service$'
+    if ($self.PathName -notmatch $expectedSelf) { throw "$updater ImagePath does not match infra\<version>\updater\Yahad.Updater.exe --service: $($self.PathName)" }
     RequireFailureActions $updater '1:60000,1:300000,1:600000'
     foreach ($entry in $removedProgramFilesEntries) { if (Test-Path -LiteralPath (Join-Path $programFiles $entry)) { throw "$entry exists under $programFiles; the current layout has none" } }
     foreach ($entry in $removedProgramDataEntries) { if (Test-Path -LiteralPath (Join-Path $programData $entry)) { throw "$entry exists under $programData; the current layout has none" } }
@@ -223,8 +274,8 @@ function LanProxySid {
     if (!$match.Success) { throw "sc.exe gave no service SID for $lanService" }
     return $match.Value
 }
-function LanCaddy([string]$Version) { Join-Path $programFiles "versions\$Version\payload\runtime\caddy\caddy.exe" }
-function LanImage([string]$Version) { '"' + (Join-Path $programFiles "versions\$Version\host\Yahad.ServiceHost.exe") + '" --lan-service' }
+function LanCaddy([string]$Infra) { Join-Path (InfraRoot $Infra) 'runtime\caddy\caddy.exe' }
+function LanImage([string]$Infra) { '"' + (HostImage $Infra) + '" --lan-service' }
 function LanRule {
     foreach ($rule in (New-Object -ComObject HNetCfg.FwPolicy2).Rules) { if ($rule.Name -eq $lanRuleName) { return $rule } }
 }
@@ -236,7 +287,7 @@ function NewLanDirectory([string]$Path, [string]$Descriptor) {
 # What a finished home-network enable leaves: the two ACLs of NativeLanInstall, its
 # records, LanDeployment's Caddyfile and firewall rule, and the service. A machine
 # without a private address fails here, naming what it has.
-function PlaceLanProxy([string]$Version) {
+function PlaceLanProxy([string]$Infra) {
     $adapters = @([Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() | Where-Object OperationalStatus -eq 'Up')
     $choices = @(foreach ($adapter in $adapters) {
         $properties = $adapter.GetIPProperties()
@@ -276,7 +327,7 @@ function PlaceLanProxy([string]$Version) {
     $rule.Name = $lanRuleName
     $rule.Description = "Yahad home network; installation $($installation.InstallationId); TCP 443"
     $rule.Grouping = "Yahad.LAN.$($installation.InstallationId)"
-    $rule.ApplicationName = LanCaddy $Version
+    $rule.ApplicationName = LanCaddy $Infra
     $rule.Protocol = 6
     $rule.Direction = 1
     $rule.LocalPorts = '443'
@@ -290,7 +341,7 @@ function PlaceLanProxy([string]$Version) {
     $rule.Enabled = $true
     (New-Object -ComObject HNetCfg.FwPolicy2).Rules.Add($rule)
 
-    & sc.exe create $lanService binPath= (LanImage $Version) obj= "NT SERVICE\$lanService" start= delayed-auto type= own DisplayName= 'Yahad home network HTTPS' | Out-Null
+    & sc.exe create $lanService binPath= (LanImage $Infra) obj= "NT SERVICE\$lanService" start= delayed-auto type= own DisplayName= 'Yahad home network HTTPS' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "sc.exe create ended $LASTEXITCODE" }
     & sc.exe sidtype $lanService unrestricted | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "sc.exe sidtype ended $LASTEXITCODE" }
@@ -336,25 +387,25 @@ function ResumeLanProxy {
 }
 # The proxy's service, its firewall rule and, when it should run, its two processes
 # and its HTTPS answer are all at this release.
-function RequireLanProxyAt([string]$Version, [bool]$Running) {
-    if ((ImagePathOf $lanService) -ne (LanImage $Version)) { throw "The proxy's ImagePath is $(ImagePathOf $lanService), expected version $Version" }
+function RequireLanProxyAt([string]$Infra, [bool]$Running) {
+    if ((ImagePathOf $lanService) -ne (LanImage $Infra)) { throw "The proxy's ImagePath is $(ImagePathOf $lanService), expected infrastructure $Infra" }
     $rule = LanRule
     if (!$rule) { throw 'The proxy has no firewall rule' }
-    if ($rule.ApplicationName -ne (LanCaddy $Version)) { throw "The firewall rule names $($rule.ApplicationName) for $($rule.LocalAddresses), expected version $Version" }
+    if ($rule.ApplicationName -ne (LanCaddy $Infra)) { throw "The firewall rule names $($rule.ApplicationName) for $($rule.LocalAddresses), expected infrastructure $Infra" }
     $service = Get-CimInstance -ClassName Win32_Service -Filter "Name='$lanService'"
     if (!$Running) {
         if ($service.State -ne 'Stopped') { throw "The proxy is $($service.State), expected Stopped" }
         return
     }
-    if ($service.State -ne 'Running') { throw "The proxy is $($service.State) at $Version, expected Running" }
+    if ($service.State -ne 'Running') { throw "The proxy is $($service.State) at infrastructure $Infra, expected Running" }
     $image = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$($service.ProcessId)"
     $caddy = @(Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId=$($service.ProcessId) AND Name='caddy.exe'")
-    if ($image.ExecutablePath -ne (Join-Path $programFiles "versions\$Version\host\Yahad.ServiceHost.exe")) { throw "The proxy runs $($image.ExecutablePath), expected version $Version" }
-    if ($caddy.Count -ne 1 -or $caddy[0].ExecutablePath -ne (LanCaddy $Version)) { throw "Caddy runs $($caddy.ExecutablePath -join ','), expected version $Version" }
+    if ($image.ExecutablePath -ne (HostImage $Infra)) { throw "The proxy runs $($image.ExecutablePath), expected infrastructure $Infra" }
+    if ($caddy.Count -ne 1 -or $caddy[0].ExecutablePath -ne (LanCaddy $Infra)) { throw "Caddy runs $($caddy.ExecutablePath -join ','), expected infrastructure $Infra" }
     $deadline = [Diagnostics.Stopwatch]::StartNew()
     while ($true) {
         try { $null = Invoke-WebRequest -Uri "https://$lanAddress/" -SkipCertificateCheck -SkipHttpErrorCheck -UseBasicParsing -TimeoutSec 5; break }
-        catch { if ($deadline.Elapsed -ge [TimeSpan]::FromMinutes(1)) { throw "The proxy does not answer on https://$lanAddress/ at ${Version}: $($_.Exception.Message)" } }
+        catch { if ($deadline.Elapsed -ge [TimeSpan]::FromMinutes(1)) { throw "The proxy does not answer on https://$lanAddress/ at infrastructure ${Infra}: $($_.Exception.Message)" } }
         Start-Sleep -Seconds 1
     }
 }
@@ -472,7 +523,7 @@ function RunAccessProbe([string]$Sid, [string[]]$Refuse, [string[]]$Sealed, [str
 }
 # The two ACLs as Windows enforces them: the Runtime account changes nothing but the
 # data, and no ordinary user reaches anything in the machine's state folder.
-function RequireAccessBoundaries([string]$Version) {
+function RequireAccessBoundaries([string]$Infra, [string]$Version) {
     $state = Get-Content -LiteralPath (Join-Path $programData 'installer-state.json') -Raw | ConvertFrom-Json
     $data = Join-Path $programData "datasets\$($state.DataId)\data"
     $temporary = Join-Path $programData 'temporary'
@@ -481,17 +532,18 @@ function RequireAccessBoundaries([string]$Version) {
     $userToken = @('S-1-5-21-1-2-3-1001', 'S-1-5-32-545', 'S-1-5-4', 'S-1-5-11', 'S-1-2-0', 'S-1-1-0')
     $anyChange = 0x2 -bor 0x4 -bor 0x10 -bor 0x40 -bor 0x100 -bor 0x10000 -bor 0x40000 -bor 0x80000
     $modify = 0x1 -bor 0x2 -bor 0x4 -bor 0x20 -bor 0x80 -bor 0x100 -bor 0x10000
-    $release = Join-Path $programFiles "versions\$Version"
+    $engine = EngineOf $Infra
+    $installFiles = @($engine, $activePointer)
 
     $everything = @(Get-ChildItem -LiteralPath $programData -Recurse -Force -ErrorAction Stop)
     $writable = @($data, $temporary)
     $inWritable = { param($Path) foreach ($root in $writable) { if ($Path -eq $root -or $Path.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true } }; $false }
     $stateDirectories = @($programData) + @($everything | Where-Object { $_.PSIsContainer -and !(& $inWritable $_.FullName) } | ForEach-Object FullName)
     $stateFiles = @($everything | Where-Object { !$_.PSIsContainer -and !(& $inWritable $_.FullName) } | ForEach-Object FullName)
-    $installDirectories = @($programFiles, (Join-Path $programFiles 'versions'), $release, (Join-Path $release 'host'), (Join-Path $release 'updater'))
+    $installDirectories = @($programFiles, (Join-Path $programFiles 'infra'), (Join-Path $programFiles 'apps'), (InfraRoot $Infra), (Join-Path (InfraRoot $Infra) 'host'), (Join-Path (InfraRoot $Infra) 'updater'), (Join-Path (InfraRoot $Infra) 'setup'), (AppRoot $Version))
     $proxyToken = @((LanProxySid), 'S-1-5-6', 'S-1-5-80-0', 'S-1-5-32-545', 'S-1-5-11', 'S-1-1-0')
 
-    foreach ($path in @($installDirectories + (RetainedSetup $Version) + $stateDirectories + $stateFiles)) {
+    foreach ($path in @($installDirectories + $installFiles + $stateDirectories + $stateFiles)) {
         try { $granted = EffectiveRights $path $runtimeToken } catch [Management.Automation.ItemNotFoundException] { continue }
         if ($granted -band $anyChange) { throw ('The Runtime account holds change rights 0x{0:x} on {1}' -f $granted, $path) }
         if (!($granted -band 0x1)) { throw ('The Runtime account cannot read {0}' -f $path) }
@@ -505,16 +557,16 @@ function RequireAccessBoundaries([string]$Version) {
         try { $granted = EffectiveRights $path $userToken } catch [Management.Automation.ItemNotFoundException] { continue }
         if ($granted -ne 0) { throw ('Users hold rights 0x{0:x} on {1}' -f $granted, $path) }
     }
-    # Apps & Features starts the retained Setup unelevated, and the shell reads its
+    # Apps & Features starts the infrastructure's engine unelevated, and the shell reads its
     # manifest before it can ask for elevation; this has to hold or removal never opens.
-    foreach ($path in @($installDirectories + (RetainedSetup $Version))) {
+    foreach ($path in @($installDirectories + $engine)) {
         $granted = EffectiveRights $path $userToken
         if ($granted -band $anyChange) { throw ('Users hold change rights 0x{0:x} on {1}' -f $granted, $path) }
         if (($granted -band 0x21) -ne 0x21) { throw ('Users hold only 0x{0:x} on {1}, so Apps & Features cannot start removal' -f $granted, $path) }
     }
 
     # The proxy's account reads the binary tree to run from it, and nothing of the state.
-    foreach ($path in @($installDirectories + (RetainedSetup $Version) + (LanCaddy $Version))) {
+    foreach ($path in @($installDirectories + $installFiles + (LanCaddy $Infra))) {
         try { $granted = EffectiveRights $path $proxyToken } catch [Management.Automation.ItemNotFoundException] { continue }
         if ($granted -band $anyChange) { throw ('The proxy account holds change rights 0x{0:x} on {1}' -f $granted, $path) }
         if (!($granted -band 0x1)) { throw ('The proxy account cannot read {0}' -f $path) }
@@ -524,7 +576,7 @@ function RequireAccessBoundaries([string]$Version) {
         if ($granted -ne 0) { throw ('The proxy account holds rights 0x{0:x} on {1}' -f $granted, $path) }
     }
 
-    $sealedFiles = @((RetainedSetup $Version), (Join-Path $programData 'installer-state.json'), (Join-Path $programData 'installed.json'), (Join-Path $programData "datasets\$($state.DataId)\master-key"))
+    $sealedFiles = @($installFiles + (Join-Path $programData 'installer-state.json'), (Join-Path $programData 'installed.json'), (Join-Path $programData "datasets\$($state.DataId)\master-key"))
     RunAccessProbe $sid ($installDirectories + $stateDirectories) $sealedFiles $writable (Join-Path $data ('.access-probe-result-' + [Guid]::NewGuid().ToString('N')))
 }
 function RequireRemovedServices { if ((YahadServices).Count) { throw ('Services remain after removal: ' + ((YahadServices).Name -join ',')) } }
@@ -536,6 +588,7 @@ function RequireNothingLeft {
 function Collect {
     @(YahadServices | ForEach-Object { [ordered]@{ Name=$_.Name; Status=[string]$_.Status; StartType=[string]$_.StartType; ImagePath=(Get-CimInstance -ClassName Win32_Service -Filter "Name='$($_.Name)'").PathName } }) | ConvertTo-Json | Set-Content -Encoding utf8NoBOM (Join-Path $out 'services.json')
     if (Test-Path -LiteralPath $upgradeState) { Copy-Item -LiteralPath $upgradeState -Destination (Join-Path $out 'upgrade-state.json') }
+    if (Test-Path -LiteralPath $activePointer) { Copy-Item -LiteralPath $activePointer -Destination (Join-Path $out 'active.json') }
     foreach ($name in 'state.json', 'last-upgrade.json', 'repair-result.json') {
         $file = Join-Path $updaterRoot $name
         if (Test-Path -LiteralPath $file) { Copy-Item -LiteralPath $file -Destination (Join-Path $out "updater-$name") }
@@ -563,7 +616,7 @@ try {
     Phase 'ready' {
         RequireInstalledAndReady $install.Result
         RequireServiceConfiguration
-        RequireAccessBoundaries $baseRelease.version
+        RequireAccessBoundaries $baseInfra $baseRelease.version
         if ((SetupState) -ne 'ready') { throw 'Fresh install does not offer first-family setup' }
     }
     Phase 'expired-link' {
@@ -662,15 +715,15 @@ try {
             if ($LASTEXITCODE -ne 0) { throw 'Could not clear the failure flag' }
         }
         Unregister-ScheduledTask -TaskPath $taskPath -TaskName $taskName -Confirm:$false
-        $repair = RunSetupExpecting (RetainedSetup $version) @('--repair') (Join-Path $out 'repair-result.json') 'REPAIRED' 0
+        $repair = RunSetupExpecting (EngineOf $baseInfra) @('--repair') (Join-Path $out 'repair-result.json') 'REPAIRED' 0
         $script:repairSeconds = $repair.Seconds
-        RequireInstalled $version $schema @($version)
-        $null = RunSetupExpecting (RetainedSetup $version) @('--repair') (Join-Path $out 'repair-again-result.json') 'NOTHING_TO_REPAIR' 0
+        RequireInstalled $version $schema $baseInfra
+        $null = RunSetupExpecting (EngineOf $baseInfra) @('--repair') (Join-Path $out 'repair-again-result.json') 'NOTHING_TO_REPAIR' 0
     }
     Phase 'repair-task' {
         # The task itself, in the session and token it has at 3 a.m.: SYSTEM runs the
-        # retained single-file Setup, which finds nothing to do and says so.
-        RequireRepairTask $version
+        # infrastructure's payload-free engine, which finds nothing to do and says so.
+        RequireRepairTask $baseInfra
         $taskResult = Join-Path $updaterRoot 'repair-result.json'
         Remove-Item -LiteralPath $taskResult -Force -ErrorAction SilentlyContinue
         Start-ScheduledTask -TaskPath $taskPath -TaskName $taskName
@@ -688,14 +741,13 @@ try {
         foreach ($case in 'foreign', 'unsigned', 'tampered') {
             $null = RunSetupExpecting $upgradeSetup @('--quiet-upgrade', (Join-Path $refusedDirectory $case)) (Join-Path $out "refuse-$case-result.json") 'RELEASE_SIGNATURE_INVALID' 2
         }
-        $null = RunSetupExpecting (RetainedSetup $version) @('--quiet-upgrade', (Join-Path $refusedDirectory 'foreign')) (Join-Path $out 'refuse-retained-result.json') 'RELEASE_SIGNATURE_INVALID' 2
         # A valid release is installed only by its own signed Setup.
         $null = RunSetupExpecting $baseSetup @('--quiet-upgrade', $upgradeDirectory) (Join-Path $out 'refuse-mismatch-result.json') 'RELEASE_SETUP_MISMATCH' 2
-        RequireInstalled $version $schema @($version)
+        RequireInstalled $version $schema $baseInfra
     }
     Phase 'lan-proxy' {
-        PlaceLanProxy $version
-        RequireLanProxyAt $version $true
+        PlaceLanProxy $baseInfra
+        RequireLanProxyAt $baseInfra $true
         PublishLanRoot
     }
     Phase 'upgrade' {
@@ -708,7 +760,7 @@ try {
         New-Item -ItemType Directory -Force -Path $stage | Out-Null
         Copy-Item -Path (Join-Path $upgradeDirectory '*') -Destination $stage
         # The folder exists only while it holds a release, so it is checked now.
-        RequireAccessBoundaries $version
+        RequireAccessBoundaries $baseInfra $version
         # An installation from before Users could read the binaries: the upgrade below
         # has to bring it to the current ACL, which the check after it requires.
         & icacls.exe $programFiles /remove:g '*S-1-5-32-545' /Q | Out-Null
@@ -750,11 +802,10 @@ try {
             Start-Sleep -Seconds 5
         }
         if ($upgradeRelease.databaseSchema -ne $schema + 1) { throw 'The upgrade fixture does not change the schema' }
-        RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema @($version, $upgradeRelease.version)
-        $retained = (Get-FileHash -LiteralPath (RetainedSetup $upgradeRelease.version) -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($retained -ne $upgradeRelease.setup.sha256) { throw 'The retained Setup is not the signed one' }
-        RequireAccessBoundaries $upgradeRelease.version
-        RequireLanProxyAt $upgradeRelease.version $true
+        if ($upgradeInfra -eq $baseInfra) { throw 'The upgrade fixture does not change the infrastructure' }
+        RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema $upgradeInfra $version $baseInfra
+        RequireAccessBoundaries $upgradeInfra $upgradeRelease.version
+        RequireLanProxyAt $upgradeInfra $true
         RequireLanHelpOverHttps
     }
     Phase 'refuse-replay' {
@@ -771,12 +822,12 @@ try {
         $script:rollbackSeconds = [math]::Round($result.Seconds - $began[0].Seconds, 1)
     }
     Phase 'rolled-back' {
-        RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema @($version, $upgradeRelease.version)
-        RequireLanProxyAt $upgradeRelease.version $false
+        RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema $upgradeInfra $version $baseInfra
+        RequireLanProxyAt $upgradeInfra $false
     }
     Phase 'repair-resume' {
         ResumeLanProxy
-        RequireLanProxyAt $upgradeRelease.version $true
+        RequireLanProxyAt $upgradeInfra $true
         # A real kill, with no help from the product: the broken release has migrated
         # the database and is failing health when its Setup disappears.
         $killed = Start-Process -FilePath $brokenSetup -ArgumentList @('--quiet-upgrade', ('"' + $brokenDirectory + '"'), '--result', ('"' + (Join-Path $out 'killed-result.json') + '"')) -PassThru -WindowStyle Hidden
@@ -803,18 +854,18 @@ try {
         } finally { if (!$killed.HasExited) { $killed.Kill() }; $killed.WaitForExit() }
         if (!(Test-Path -LiteralPath $upgradeState)) { throw 'A killed upgrade left no record' }
         if ((Test-Path -LiteralPath (Join-Path $out 'killed-result.json'))) { throw 'The killed Setup finished before it was killed' }
-        $result = RunSetupExpecting (RetainedSetup $upgradeRelease.version) @('--repair') (Join-Path $out 'resume-result.json') 'REPAIRED' 0
+        $result = RunSetupExpecting (EngineOf $upgradeInfra) @('--repair') (Join-Path $out 'resume-result.json') 'REPAIRED' 0
         if (!$result.RolledBack) { throw 'Repair did not roll back the interrupted upgrade' }
         $script:resumeSeconds = $result.Seconds
     }
     Phase 'resumed' {
-        RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema @($version, $upgradeRelease.version)
-        RequireLanProxyAt $upgradeRelease.version $true
+        RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema $upgradeInfra $version $baseInfra
+        RequireLanProxyAt $upgradeInfra $true
     }
-    # Removal and reinstall from here belong to the upgraded release.
+    # Reinstall from here belongs to the upgraded release; removal runs its installed, payload-free engine.
     $setupPath = $upgradeSetup
     Phase 'uninstall-keep' {
-        $removed = RunSetup @('--quiet-uninstall', '--data', 'keep') (Join-Path $out 'uninstall-keep-result.json')
+        $removed = RunSetup @('--quiet-uninstall', '--data', 'keep') (Join-Path $out 'uninstall-keep-result.json') @() (EngineOf $upgradeInfra)
         if ($removed.Result.DataPreserved -ne $true) { throw 'Keep-data removal did not report preserved data' }
     }
     Phase 'kept' {
@@ -836,9 +887,9 @@ try {
         RequireServiceConfiguration
         if ($reinstall.Stdout.Trim()) { throw 'Reinstall offered a new setup link over kept data' }
         if ((SetupState) -ne 'complete') { throw 'Kept family is missing after reinstall' }
-        RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema @($upgradeRelease.version)
+        RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema $upgradeInfra
     }
-    Phase 'uninstall' { RunSetup @('--quiet-uninstall', '--data', 'delete') (Join-Path $out 'uninstall-result.json') | Out-Null }
+    Phase 'uninstall' { RunSetup @('--quiet-uninstall', '--data', 'delete') (Join-Path $out 'uninstall-result.json') @() (EngineOf $upgradeInfra) | Out-Null }
     Phase 'removed' { RequireNothingLeft }
     # What someone with an older release gets from the landing page: the downloaded Setup,
     # run by hand, moves it in place. Its setup link expired meanwhile.
@@ -865,11 +916,11 @@ try {
             -Headers @{ Origin=$origin; 'X-Setup-Token'=$match.Groups[2].Value } | Out-Null
         $script:familyId = RequireSignedInAccount $created
         $older = $null; $moved = $null; $match = $null; $body = $null
-        RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema @($baseRelease.version, $upgradeRelease.version)
+        RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema $upgradeInfra $baseRelease.version $baseInfra
         $null = RunSetupExpecting $baseSetup @('--quiet-install', '--updates', 'notify') (Join-Path $out 'refuse-older-setup-result.json') 'INSTALL_DOWNGRADE_REFUSED' 1
-        RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema @($baseRelease.version, $upgradeRelease.version)
+        RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema $upgradeInfra $baseRelease.version $baseInfra
     }
-    Phase 'uninstall-moved' { RunSetup @('--quiet-uninstall', '--data', 'delete') (Join-Path $out 'uninstall-moved-result.json') | Out-Null }
+    Phase 'uninstall-moved' { RunSetup @('--quiet-uninstall', '--data', 'delete') (Join-Path $out 'uninstall-moved-result.json') @() (EngineOf $upgradeInfra) | Out-Null }
     Phase 'removed-moved' { RequireNothingLeft }
     $state = 'Passed'
 }
