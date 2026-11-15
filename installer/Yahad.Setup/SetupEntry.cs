@@ -14,6 +14,7 @@ internal static class SetupEntry
     {
         try
         {
+            if(args is ["--describe"]){Describe();return 0;}
             if(args is ["--verify-package"]){VerifyPackage();return 0;}
             if(QuietSetup.Parse(args) is {} quiet)return QuietSetup.RunAsync(quiet).GetAwaiter().GetResult();
         }
@@ -23,10 +24,20 @@ internal static class SetupEntry
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static int Window(){var app=new App();app.InitializeComponent();return app.Run();}
     internal static bool WindowingLoaded()=>AppDomain.CurrentDomain.GetAssemblies().Any(a=>a.GetName().Name is "PresentationFramework" or "PresentationCore");
+    // The engine's own identity. It opens no package, so it answers the same for the
+    // payload-free engine in infra\<v>\setup and for the distributable Setup.
+    private static void Describe()
+    {
+        var commit=InfrastructureRelease.CompiledSourceCommit(typeof(SetupEntry).Assembly);
+        Console.WriteLine(JsonSerializer.Serialize(new{artifact="Yahad.Setup",infrastructureVersion=InfrastructureRelease.Version,contractMin=InfrastructureRelease.ContractMin,
+            contractMax=InfrastructureRelease.ContractMax,sourceCommit=commit,version=InfrastructureRelease.Version+"+"+commit,embeddedPackage=InstallPackage.IsEmbedded}));
+    }
     private static void VerifyPackage()
     {
         using var package=InstallPackage.Embedded();var m=package.Manifest;var key=TrustedReleaseKey.Embedded;
-        Console.WriteLine(JsonSerializer.Serialize(new{artifact="Yahad.Setup",version=m.Version,sourceCommit=m.SourceCommit,setupSourceCommit=ApplicationRelease.CompiledSourceCommit(typeof(SetupEntry).Assembly),coreSourceCommit=ApplicationRelease.SourceCommit,payload=m.PayloadDigest,files=m.Files.Length,embeddedZip=m.ZipSha256,service=Yahad.Service.ServiceDefinition.Name,serviceInstallerImplemented=true,
+        Console.WriteLine(JsonSerializer.Serialize(new{artifact="Yahad.Setup",infrastructureVersion=m.Infrastructure.Version,infrastructureSourceCommit=m.Infrastructure.SourceCommit,
+            appVersion=m.App.Version,appSourceCommit=m.App.SourceCommit,setupSourceCommit=InfrastructureRelease.CompiledSourceCommit(typeof(SetupEntry).Assembly),coreSourceCommit=InfrastructureRelease.SourceCommit,
+            files=m.Files.Length,embeddedZip=m.ZipSha256,service=Yahad.Service.ServiceDefinition.Name,serviceInstallerImplemented=true,
             releaseKeyId=key is null?null:TrustedReleaseKey.Id(key),upgrades=key is null?"refused: built without a release key":"signed releases of this key",windowingLoaded=WindowingLoaded(),systemOperationsInvoked=false,machineAcceptance=false}));
     }
 }

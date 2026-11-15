@@ -41,11 +41,9 @@ internal static class UpgradeTests
     private static byte[] Bytes(JsonObject value)=>Encoding.UTF8.GetBytes(value.ToJsonString());
     private static byte[] Text(string value)=>Encoding.UTF8.GetBytes(value);
     private static JsonObject With(JsonObject value,Action<JsonObject> change){var copy=value.DeepClone().AsObject();change(copy);return copy;}
-    private static UpgradeState Upgrade(string phase="started",int? fromSchema=6,int toSchema=7,bool restore=false,int attempts=0)
-    {
-        var files=FullInstallerIntegrationTests.State().Files;
-        return UpgradeState.Begin("1.0.0","1.0.1",fromSchema,toSchema,new(new string('a',64),new string('b',64),new string('c',40),new string('d',64),files),1700000000) with{Phase=phase,RestoreData=restore,Attempts=attempts};
-    }
+    // An app-track apply: the same infrastructure tree, app 1.0.0 to 1.0.1.
+    private static UpgradeState Upgrade(string phase="started",int fromSchema=6,int toSchema=7,bool restore=false,int attempts=0)
+        =>UpgradeState.Begin(PairFixture.Pair(app:"1.0.0",schema:fromSchema),PairFixture.Pair(app:"1.0.1",schema:toSchema),1700000000) with{Phase=phase,RestoreData=restore,Attempts=attempts};
     internal static async Task RunAsync(Func<string,Func<Task>,Task> check)
     {
         await check("release signature agrees with the Node signing tool",()=>
@@ -135,13 +133,45 @@ internal static class UpgradeTests
         await check("upgrade record round-trips and refuses what it never writes",()=>
         {
             var state=Upgrade();var bytes=state.Encode();var read=UpgradeState.Parse(bytes);
-            Assert(read.Id==state.Id&&read.Phase==state.Phase&&read.FromSchema==6&&read.ToSchema==7&&read.SchemaChanged&&read.Target.Files.Length==state.Target.Files.Length,"round trip");
-            Assert(UpgradeState.Parse(Upgrade(fromSchema:null).Encode()).SchemaChanged,"unknown source is a change");
+            Assert(read.Id==state.Id&&read.Phase==state.Phase&&read.Kind=="setup"&&read.FromSchema==6&&read.ToSchema==7&&read.SchemaChanged&&read.To.App.Files.Length==state.To.App.Files.Length,"round trip");
+            Assert(read.From.SameTrees(state.From)&&read.To.SameTrees(state.To)&&read.Track==UpgradeTrack.App,"pairs");
             Assert(!Upgrade(fromSchema:7).SchemaChanged,"same schema");
+            // FromSchema is the installer record's, never a live observation.
+            Assert(UpgradeState.Begin(PairFixture.Pair(schema:4),PairFixture.Pair(app:"1.0.1",schema:7),0).FromSchema==4,"record schema");
             foreach(var phase in UpgradeState.Phases)Assert(UpgradeState.Parse((state with{Phase=phase}).Encode()).Phase==phase,phase);
             var json=JsonNode.Parse(bytes)!.AsObject();
-            foreach(var bad in new[]{With(json,v=>v["Unknown"]=1),With(json,v=>v["Format"]=2),With(json,v=>v["Phase"]="other"),With(json,v=>v.Remove("Target")),With(json,v=>v["From"]="..\\x"),With(json,v=>{v["From"]="2.0.0";}),With(json,v=>v["Id"]="x"),With(json,v=>{v["RestoreData"]=true;v["FromSchema"]=7;v["SchemaChanged"]=false;}),With(json,v=>v["SchemaChanged"]=false)})
+            foreach(var bad in new[]{With(json,v=>v["Unknown"]=1),With(json,v=>v["Kind"]="updater"),With(json,v=>v["Phase"]="other"),With(json,v=>v.Remove("To")),With(json,v=>v["From"]="..\\x"),
+                With(json,v=>v["To"]=v["From"]!.DeepClone()),With(json,v=>{var from=v["From"]!.DeepClone();v["From"]=v["To"]!.DeepClone();v["To"]=from;}),With(json,v=>v["FromSchema"]=5),
+                With(json,v=>v["Id"]="x"),With(json,v=>{v["RestoreData"]=true;v["FromSchema"]=7;v["SchemaChanged"]=false;}),With(json,v=>v["SchemaChanged"]=false)})
             {var value=Bytes(bad);try{UpgradeState.Parse(value);}catch(IOException){continue;}throw new Exception("UPGRADE_STATE_ADMITTED "+bad.ToJsonString()[..60]);}
+            DenyCode("LEGACY_INSTALL_UNSUPPORTED",()=>UpgradeState.Parse(Bytes(With(json,v=>v["Format"]=1))));
+            return Task.CompletedTask;
+        });
+        await check("an upgrade moves forward on one or both tracks and never relabels a tree",()=>
+        {
+            var from=PairFixture.Pair("1.0.0","1.0.0");
+            Assert(UpgradeRules.Decide(from,PairFixture.Pair("1.0.0","1.0.1"))==UpgradeTrack.App,"app only");
+            Assert(UpgradeRules.Decide(from,PairFixture.Pair("1.0.1","1.0.0"))==UpgradeTrack.Infrastructure,"infrastructure only");
+            Assert(UpgradeRules.Decide(from,PairFixture.Pair("1.0.1","1.0.1"))==UpgradeTrack.Infrastructure,"both");
+            DenyCode("RELEASE_NOT_NEWER",()=>UpgradeRules.Decide(from,PairFixture.Pair("1.0.0","1.0.0")));
+            DenyCode("INSTALL_DOWNGRADE_REFUSED",()=>UpgradeRules.Decide(from,PairFixture.Pair("1.0.0","0.9.0")));
+            DenyCode("INSTALL_DOWNGRADE_REFUSED",()=>UpgradeRules.Decide(from,PairFixture.Pair("0.9.0","1.0.1")));
+            DenyCode("INFRA_IDENTITY_MISMATCH",()=>UpgradeRules.Decide(from,PairFixture.Pair("1.0.0","1.0.1",infraSalt:"rebuilt")));
+            DenyCode("APP_IDENTITY_MISMATCH",()=>UpgradeRules.Decide(from,PairFixture.Pair("1.0.1","1.0.0",appSalt:"rebuilt")));
+            DenyCode("APP_IDENTITY_MISMATCH",()=>UpgradeRules.Decide(from,PairFixture.Pair("1.0.0","1.0.0",appSalt:"rebuilt")));
+            Assert(UpgradeRules.IsUpgrade(from,PairFixture.Pair("1.0.0","1.0.1"))&&!UpgradeRules.IsUpgrade(from,from)&&!UpgradeRules.IsUpgrade(from,PairFixture.Pair("1.0.0","1.0.1",infraSalt:"rebuilt")),"applies");
+            // A same-pair reinstall needs both tree digests equal, not only the versions.
+            Assert(from.SameTrees(PairFixture.Pair("1.0.0","1.0.0"))&&!from.SameTrees(PairFixture.Pair("1.0.0","1.0.0",appSalt:"rebuilt"))&&!from.SameTrees(PairFixture.Pair("1.0.0","1.0.0",infraSalt:"rebuilt")),"same trees");
+            return Task.CompletedTask;
+        });
+        await check("after a commit only the active pair and the one it replaced keep their trees",()=>
+        {
+            var active=PairFixture.Pair("1.0.1","1.0.2");var previous=PairFixture.Pair("1.0.0","1.0.2");
+            Assert(UpgradeRules.Retained(TreeKind.Infrastructure,"1.0.1",active,previous)&&UpgradeRules.Retained(TreeKind.Infrastructure,"1.0.0",active,previous),"both infrastructures");
+            Assert(!UpgradeRules.Retained(TreeKind.Infrastructure,"0.9.0",active,previous)&&!UpgradeRules.Retained(TreeKind.Infrastructure,"1.0.0",active,null),"older infrastructure");
+            Assert(UpgradeRules.Retained(TreeKind.App,"1.0.2",active,previous)&&!UpgradeRules.Retained(TreeKind.App,"1.0.1",active,previous)&&!UpgradeRules.Retained(TreeKind.App,"1.0.0",active,previous),"one shared app");
+            // An app version is not an infrastructure version: the tracks never cross.
+            Assert(!UpgradeRules.Retained(TreeKind.App,"1.0.1",active,previous)&&!UpgradeRules.Retained(TreeKind.Infrastructure,"1.0.2",active,previous),"tracks are separate");
             return Task.CompletedTask;
         });
         await check("repair decisions follow the recorded phase",()=>
@@ -167,8 +197,8 @@ internal static class UpgradeTests
         });
         await check("health needs this release, its schema and consecutive answers",()=>
         {
-            Assert(UpgradeRules.HealthPasses(new(true,"1.0.1",7),"1.0.1",7),"good");Assert(UpgradeRules.HealthPasses(new(true,"1.0.1",9),"1.0.1",null),"any schema when unknown");
-            Assert(!UpgradeRules.HealthPasses(null,"1.0.1",7),"no answer");Assert(!UpgradeRules.HealthPasses(new(false,null,null),"1.0.1",null),"503");
+            Assert(UpgradeRules.HealthPasses(new(true,"1.0.1",7),"1.0.1",7),"good");Assert(!UpgradeRules.HealthPasses(new(true,"1.0.1",null),"1.0.1",7),"no schema reported");
+            Assert(!UpgradeRules.HealthPasses(null,"1.0.1",7),"no answer");Assert(!UpgradeRules.HealthPasses(new(false,null,null),"1.0.1",7),"503");
             Assert(!UpgradeRules.HealthPasses(new(true,"1.0.0",7),"1.0.1",7),"old version");Assert(!UpgradeRules.HealthPasses(new(true,"1.0.1",6),"1.0.1",7),"old schema");
             var count=0;foreach(var passed in new[]{true,true,false,true})count=UpgradeRules.NextHealthyPolls(count,passed);Assert(count==1,"a failure resets");
             Assert(UpgradeRules.RequiredHealthyPolls==3&&UpgradeRules.HealthWindowSeconds==300,"window");
@@ -179,40 +209,46 @@ internal static class UpgradeTests
             foreach(var(code,exit)in new[]
             {
                 ("UPGRADED",0),("REPAIRED",0),("NOTHING_TO_REPAIR",0),("RELEASE_SIGNATURE_INVALID",2),("RELEASE_KEY_UNTRUSTED",2),("RELEASE_NOT_NEWER",2),("RELEASE_SETUP_MISMATCH",2),("RELEASE_MANIFEST_INVALID",2),("RELEASE_UNSUPPORTED_FROM",2),
-                ("UPGRADE_LOCKED",2),("UPGRADE_INCOMPLETE",2),("NOT_INSTALLED",2),("INSTALL_INCOMPLETE",2),("REPAIR_RUNNING_FROM_TARGET",2),("ROLLBACK_FAILED",3),("UPGRADE_COMMIT_INCOMPLETE",3),("REPAIR_UNHEALTHY",3),("ROLLED_BACK_UNHEALTHY",4),("UPGRADE_PREPARE_FAILED",4),("ADMIN_REQUIRED",1),("UNEXPECTED",1)
+                ("UPGRADE_LOCKED",2),("UPGRADE_INCOMPLETE",2),("NOT_INSTALLED",2),("INSTALL_INCOMPLETE",2),("LEGACY_INSTALL_UNSUPPORTED",2),("INFRA_IDENTITY_MISMATCH",2),("APP_IDENTITY_MISMATCH",2),
+                ("INSTALL_DOWNGRADE_REFUSED",2),("ACTIVE_POINTER_INVALID",2),("TREE_RECORD_INVALID",2),(RepairHost.Relaunched,0),("REPAIR_RUNNING_FROM_TARGET",1),("ROLLBACK_FAILED",3),("UPGRADE_COMMIT_INCOMPLETE",3),("REPAIR_UNHEALTHY",3),("ROLLED_BACK_UNHEALTHY",4),("UPGRADE_PREPARE_FAILED",4),("ADMIN_REQUIRED",1),("UNEXPECTED",1)
             })Assert(UpgradeRules.Exit(code)==exit,code);
             // Every refusal reaches the result as itself, not as a generic failure.
-            foreach(var code in new[]{"RELEASE_SIGNATURE_INVALID","RELEASE_KEY_UNTRUSTED","RELEASE_NOT_NEWER","RELEASE_SETUP_MISMATCH","RELEASE_MANIFEST_INVALID","RELEASE_UNSUPPORTED_FROM","UPGRADE_LOCKED","UPGRADE_INCOMPLETE","UPGRADE_BACKUP_INVALID","NOT_INSTALLED","INSTALL_INCOMPLETE","REPAIR_RUNNING_FROM_TARGET"})
+            foreach(var code in new[]{"RELEASE_SIGNATURE_INVALID","RELEASE_KEY_UNTRUSTED","RELEASE_NOT_NEWER","RELEASE_SETUP_MISMATCH","RELEASE_MANIFEST_INVALID","RELEASE_UNSUPPORTED_FROM","UPGRADE_LOCKED","UPGRADE_INCOMPLETE","UPGRADE_BACKUP_INVALID","NOT_INSTALLED","INSTALL_INCOMPLETE",RepairHost.Relaunched,
+                "LEGACY_INSTALL_UNSUPPORTED","INFRA_IDENTITY_MISMATCH","APP_IDENTITY_MISMATCH","ACTIVE_POINTER_INVALID","TREE_RECORD_INVALID"})
                 Assert(SetupOperation.Code(new IOException(code))==code,code);
             return Task.CompletedTask;
         });
-        await check("removal inventory holds both retained releases and the key, and nothing else",()=>
+        await check("removal inventory holds active.json, the key and every tree of both pairs once, and nothing else",()=>
         {
-            var state=FullInstallerIntegrationTests.State("removing_keep_data","1.0.1");
-            var plain=RemovalIntent.Inventory(state,1234);Assert(plain.Length==state.Files.Length+1,"one release");
-            var previous=new RetainedRelease("1.0.0",new string('e',64),4321,state.Files);
+            var state=PairFixture.State("removing_keep_data",PairFixture.Pair("1.0.0","1.0.1"));var active=state.Active;
+            var plain=RemovalIntent.Inventory(state);Assert(plain.Length==1+active.Infrastructure.Files.Length+active.App.Files.Length,"one pair");
+            // An app-only apply retains the shared infrastructure tree, listed once.
+            var previous=PairFixture.Pair("1.0.0","1.0.0");
             var full=state with{ReleaseKeySha256=new string('f',64),Previous=previous};full.Require();
-            var inventory=RemovalIntent.Inventory(full,1234);
-            Assert(inventory.Length==2*state.Files.Length+3,"two releases and the key");
+            var inventory=RemovalIntent.Inventory(full);
+            Assert(inventory.Length==2+active.Infrastructure.Files.Length+active.App.Files.Length+previous.App.Files.Length,"shared infrastructure, two apps and the key");
+            Assert(inventory.Select(f=>f.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count()==inventory.Length,"unique");
             Assert(inventory.Any(f=>f.Path=="release-key.spki"&&f.Size==TrustedReleaseKey.SpkiBytes&&f.Sha256==full.ReleaseKeySha256),"key member");
-            Assert(inventory.Any(f=>f.Path=="versions/1.0.1/Yahad.Setup.exe"&&f.Size==1234),"current Setup");
-            Assert(inventory.Any(f=>f.Path=="versions/1.0.0/Yahad.Setup.exe"&&f.Size==4321&&f.Sha256==previous.SetupSha256),"retained Setup");
-            Assert(inventory.Any(f=>f.Path=="versions/1.0.0/host/Yahad.ServiceHost.exe")&&inventory.Any(f=>f.Path=="versions/1.0.1/host/Yahad.ServiceHost.exe"),"both hosts");
+            Assert(inventory.Any(f=>f.Path=="infra/1.0.0/setup/Yahad.Setup.exe"&&f.Sha256==active.Infrastructure.EngineSha256),"engine");
+            Assert(inventory.Any(f=>f.Path=="apps/1.0.0/app/server/main.mjs")&&inventory.Any(f=>f.Path=="apps/1.0.1/app/server/main.mjs"),"both apps");
+            // An infrastructure move retains two infrastructure trees.
+            var moved=PairFixture.State("removing_keep_data",PairFixture.Pair("1.0.1","1.0.1"),PairFixture.Pair("1.0.0","1.0.1"));moved.Require();
+            var movedInventory=RemovalIntent.Inventory(moved);
+            Assert(movedInventory.Length==1+2*active.Infrastructure.Files.Length+active.App.Files.Length&&movedInventory.Any(f=>f.Path=="infra/1.0.0/setup/Yahad.Setup.exe")&&movedInventory.Any(f=>f.Path=="infra/1.0.1/setup/Yahad.Setup.exe"),"two infrastructures, one app");
             var intent=new RemovalIntent(InstallerState.CurrentFormat,full,UninstallMode.KeepData,inventory,"prepared");intent.Require();
             // A retry reads the recorded state back as separate objects.
             intent.RequireSameInstallation(NativeJson.Read<InstallerState>(JsonSerializer.SerializeToUtf8Bytes(full with{Phase="committed"})));
-            DenyCode("UNINSTALL_INTENT_INVALID",()=>intent.RequireSameInstallation(full with{Previous=previous with{SetupBytes=1}}));
+            DenyCode("UNINSTALL_INTENT_INVALID",()=>intent.RequireSameInstallation(full with{Previous=PairFixture.Pair("1.0.0","1.0.0",appSalt:"rebuilt")}));
             DenyCode("UNINSTALL_INTENT_INVALID",()=>intent.RequireSameInstallation(full with{Previous=null}));
-            foreach(var path in new[]{"versions/2.0.0/host/x","other","release-key.spki2"})
+            foreach(var path in new[]{"infra/2.0.0/host/x","other","release-key.spki2","versions/1.0.1/host/Yahad.ServiceHost.exe","apps/1.0.1/app/native/x","infra/1.0.0/host/../x"})
                 DenyCode("UNINSTALL_INTENT_INVALID",()=>(intent with{Binaries=[..inventory,new(path,1,new string('d',64))]}).Require());
-            foreach(var path in new[]{"versions/1.0.1/host/../x","versions/1.0.1/other/x"})DenyCode("PACKAGE_PATH",()=>(intent with{Binaries=[..inventory,new(path,1,new string('d',64))]}).Require());
-            // Without a recorded key or previous release, neither is admissible.
+            // Without a recorded key or previous pair, neither is admissible.
             var bare=new RemovalIntent(InstallerState.CurrentFormat,state,UninstallMode.KeepData,plain,"prepared");bare.Require();
             DenyCode("UNINSTALL_INTENT_INVALID",()=>(bare with{Binaries=[..plain,new("release-key.spki",91,new string('f',64))]}).Require());
-            DenyCode("UNINSTALL_INTENT_INVALID",()=>(bare with{Binaries=[..plain,new("versions/1.0.0/Yahad.Setup.exe",1,new string('f',64))]}).Require());
-            // The previous release is older than the current one; never the reverse.
-            DenyCode("INSTALL_STATE_INVALID",()=>(full with{Previous=previous with{Version="1.0.1"}}).Require());
-            DenyCode("INSTALL_STATE_INVALID",()=>(full with{Previous=previous with{Version="2.0.0"}}).Require());
+            DenyCode("UNINSTALL_INTENT_INVALID",()=>(bare with{Binaries=[..plain,..previous.App.Files.Select(f=>f with{Path="apps/1.0.0/"+f.Path})]}).Require());
+            // The previous pair is older than the active one on both tracks; never the reverse.
+            DenyCode("INSTALL_STATE_INVALID",()=>(full with{Previous=PairFixture.Pair("1.0.0","1.0.2")}).Require());
+            DenyCode("INSTALL_STATE_INVALID",()=>(full with{Previous=PairFixture.Pair("2.0.0","1.0.0")}).Require());
             return Task.CompletedTask;
         });
         await check("Setup mutex counts an abandoned owner as acquired",()=>

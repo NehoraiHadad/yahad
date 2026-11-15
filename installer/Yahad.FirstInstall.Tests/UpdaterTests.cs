@@ -443,12 +443,12 @@ internal static class UpdaterTests
             Assert(QuietSetupAccepts(UpdateLauncher.CommandLine("s","C:\\d","C:\\r.json")),"Setup refuses the Updater's command line");
             return Task.CompletedTask;
         });
-        await check("repair task: SYSTEM runs this version's retained Setup at boot and daily, and the Task Scheduler accepts the definition",()=>
+        await check("repair task: SYSTEM runs this infrastructure's payload-free engine at boot and daily, and the Task Scheduler accepts the definition",()=>
         {
             var now=new DateTimeOffset(DateTime.Today.AddHours(20));var xml=RepairTask.Definition("1.2.3",now);XNamespace ns="http://schemas.microsoft.com/windows/2004/02/mit/task";var task=XDocument.Parse(xml).Root!;
             Assert(task.Descendants(ns+"UserId").Single().Value=="S-1-5-18"&&task.Descendants(ns+"RunLevel").Single().Value=="HighestAvailable","principal");
             Assert(task.Descendants(ns+"BootTrigger").Count()==1&&task.Descendants(ns+"CalendarTrigger").Count()==1,"triggers");
-            Assert(task.Descendants(ns+"Command").Single().Value==InstallLocations.InstallerImage("1.2.3"),"image");
+            Assert(task.Descendants(ns+"Command").Single().Value==InstalledLayout.EngineImage("1.2.3"),"image");
             Assert(task.Descendants(ns+"Arguments").Single().Value==RepairTask.Arguments&&RepairTask.Arguments.StartsWith("--repair --result \"",StringComparison.Ordinal)&&RepairTask.Arguments.Contains(InstalledLayout.UpdaterRoot,StringComparison.Ordinal),"arguments");
             // A boundary already past would fire inside the Setup that registers it.
             Assert(DateTime.Parse(task.Descendants(ns+"StartBoundary").Single().Value,System.Globalization.CultureInfo.InvariantCulture)>now.LocalDateTime,"first run is in the past");
@@ -473,7 +473,7 @@ internal static class UpdaterTests
             var (runtime,updater)=(ServiceSpec.Runtime,ServiceSpec.Updater);
             Assert(updater.Name=="Yahad.Acceptance.Updater"&&updater.Account=="LocalSystem"&&updater.Delayed&&!updater.Restricted&&updater.FailureDelays.SequenceEqual(new uint[]{60000,300000,600000}),"updater");
             Assert(runtime.Name==ServiceDefinition.Name&&runtime.Account==ServiceDefinition.Account&&!runtime.Delayed&&runtime.Restricted&&runtime.FailureDelays.SequenceEqual(new uint[]{5000,30000,120000}),"runtime");
-            Assert(updater.Command("1.2.3")==InstalledLayout.UpdaterCommand("1.2.3")&&updater.Command("1.2.3").Contains(@"\versions\1.2.3\updater\Yahad.Updater.exe"" --service",StringComparison.Ordinal),"image "+updater.Command("1.2.3"));
+            Assert(updater.Command("1.2.3")==InstalledLayout.UpdaterCommand("1.2.3")&&updater.Command("1.2.3").Contains(@"\infra\1.2.3\updater\Yahad.Updater.exe"" --service",StringComparison.Ordinal),"image "+updater.Command("1.2.3"));
             try{updater.Command("..\\x");throw new Exception("VERSION_ACCEPTED");}catch(Exception error)when(error is IOException or ArgumentException){}
             return Task.CompletedTask;
         });

@@ -18,13 +18,7 @@ internal static class FullInstallerIntegrationTests
     // A plain private target: the production target's protection needs elevation.
     internal static readonly ExtractTarget TestTarget=new(path=>Directory.CreateDirectory(path),path=>new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.None),
         (partial,path)=>File.Move(partial,path,false),(path,record)=>{using var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read);return file.Length==record.Size&&Convert.ToHexStringLower(SHA256.HashData(file))==record.Sha256;});
-    internal static InstallerState State(string phase="committed",string? version=null)
-    {
-        var installation=Guid.NewGuid().ToString("N");
-        var files=Enumerable.Range(0,10).Select(i=>new InstallMember(i==0?"host/Yahad.ServiceHost.exe":"payload/file-"+i,1,new string('d',64))).ToArray();
-        return new(InstallerState.CurrentFormat,installation,Guid.NewGuid().ToString("N"),version??ApplicationRelease.Version,new string('a',64),new string('b',64),ApplicationRelease.SourceCommit,Owner,47123,phase,new string('c',64),
-            FirstOwnerBinding.Create(installation,Owner),new UpdateSetupChoice(2,true,false,DateTimeOffset.UtcNow.ToUnixTimeSeconds()),files,InstallLocations.ServiceSid);
-    }
+    private static InstallerState State(string phase="committed")=>PairFixture.State(phase);
     internal static async Task Run(Func<string,Func<Task>,Task> check)
     {
         await check("stop is sent only when the service state accepts it and a pending state is bounded by its own progress",()=>
@@ -62,7 +56,7 @@ internal static class FullInstallerIntegrationTests
             var exact="O:BA"+NativeService.ServiceDescriptor(Owner,InstallLocations.ServiceSid);var acl=new RawSecurityDescriptor(exact);Assert(acl.DiscretionaryAcl!.Count==4);
             Assert(acl.DiscretionaryAcl.Cast<CommonAce>().Where(a=>a.SecurityIdentifier.Value is not("S-1-5-18" or "S-1-5-32-544")).All(a=>a.AccessMask==5));
             Assert(new RawSecurityDescriptor("O:BA"+NativeService.ServiceDescriptor(Owner,null)).DiscretionaryAcl!.Count==3);
-            Assert(InstallLocations.ServiceCommand("1.2.3")=="\""+Path.Combine(InstallLocations.Binaries,"versions","1.2.3","host","Yahad.ServiceHost.exe")+"\" --service");
+            Assert(InstallLocations.ServiceCommand("1.2.3")=="\""+Path.Combine(InstallLocations.Binaries,"infra","1.2.3","host","Yahad.ServiceHost.exe")+"\" --service");
             foreach(var bad in new[]{"1.2","01.2.3","1.2.3-beta","..","1.2.3\\..\\x"})Deny(()=>InstallLocations.ServiceCommand(bad));
             return Task.CompletedTask;
         });
@@ -100,79 +94,128 @@ internal static class FullInstallerIntegrationTests
             var old=new UpdateSetupChoice(2,true,true,DateTimeOffset.UtcNow.AddDays(-5).ToUnixTimeSeconds());Deny(()=>old.Require(DateTimeOffset.UtcNow));old.RequirePersisted(DateTimeOffset.UtcNow);
             (State() with{Consent=old}).Require();return Task.CompletedTask;
         });
-        await check("installer state admits only Format 6 of this one service and its own first owner",()=>
+        await check("installer state admits only Format 7 of this one service, its own first owner and a valid pair",()=>
         {
             var state=State();state.Require();foreach(var phase in InstallerState.Phases)(state with{Phase=phase}).Require();
-            var replay=JsonSerializer.Deserialize<InstallerState>(Json(state))!;Assert(Json(replay).SequenceEqual(Json(state)));
-            foreach(var bad in new[]{state with{Format=5},state with{Phase="restoring"},state with{ServiceSid="S-1-5-80-1-2-3-4-5"},state with{OwnerSid="S-1-5-18"},state with{Port=80},
-                state with{Version="1.2"},state with{InstallationId="x"},state with{SourceCommit=new string('g',40)},state with{SetupSha256="x"},state with{Files=state.Files[..9]},
-                state with{Files=[..state.Files,state.Files[0]]},state with{Files=[..state.Files[..9],new("bootstrap/authority/Yahad.Authority.exe",1,new string('d',64))]},
-                state with{FirstOwner=state.FirstOwner with{installationId=Guid.NewGuid().ToString("N")}},state with{Consent=state.Consent with{Accepted=false}}})Deny(bad.Require);
+            Assert(InstallerState.Phases.Contains("provisioned"));
+            var replay=InstallerState.Parse(state.Encode());Assert(Json(replay).SequenceEqual(Json(state)));
+            var active=state.Active;var infra=active.Infrastructure;var app=active.App;
+            InstalledPair WithInfra(Func<InfrastructureRecord,InfrastructureRecord> change)=>active with{Infrastructure=change(infra)};
+            InstalledPair WithApp(Func<AppRecord,AppRecord> change)=>active with{App=change(app)};
+            foreach(var bad in new[]{state with{Format=6},state with{Phase="restoring"},state with{ServiceSid="S-1-5-80-1-2-3-4-5"},state with{OwnerSid="S-1-5-18"},state with{Port=80},
+                state with{InstallationId="x"},state with{Active=null!},state with{ReleaseKeySha256="x"},
+                state with{FirstOwner=state.FirstOwner with{installationId=Guid.NewGuid().ToString("N")}},state with{Consent=state.Consent with{Accepted=false}},
+                state with{Active=WithInfra(i=>i with{Version="1.2"})},state with{Active=WithInfra(i=>i with{SourceCommit=new string('g',40)})},state with{Active=WithInfra(i=>i with{EngineSha256=new string('e',64)})},
+                state with{Active=WithInfra(i=>i with{TreeSha256=new string('e',64)})},state with{Active=WithInfra(i=>i with{ContractMin=2,ContractMax=1})},
+                state with{Active=WithInfra(i=>i with{Files=i.Files.Where(f=>f.Path!=InstalledLayout.InfraTreeName).ToArray()})},
+                state with{Active=WithInfra(i=>i with{Files=[..i.Files,i.Files[0] with{Path=i.Files[0].Path.ToUpperInvariant()}]})},
+                state with{Active=WithInfra(i=>i with{Files=[..i.Files,new("bootstrap/authority/Yahad.Authority.exe",1,new string('d',64))]})},
+                state with{Active=WithInfra(i=>i with{Files=[..i.Files,new("app/server/main.mjs",1,new string('d',64))]})},
+                state with{Active=WithApp(a=>a with{Files=[..a.Files,new("app/native/Yahad.Platform.exe",1,new string('d',64))]})},
+                state with{Active=WithApp(a=>a with{Files=[..a.Files,new("host/Yahad.ServiceHost.exe",1,new string('d',64))]})},
+                state with{Active=WithApp(a=>a with{RequiresContract=infra.ContractMax+1})},state with{Active=WithApp(a=>a with{DatabaseSchema=0})},
+                state with{Active=WithApp(a=>a with{TreeSha256=new string('e',64)})},state with{Active=WithApp(a=>a with{SourceCommit="abc"})},
+                // A retained pair is older on both tracks, a shared version is the very same tree, and it is never the active pair.
+                state with{Previous=active},state with{Previous=PairFixture.Pair(app:"1.0.1")},state with{Previous=PairFixture.Pair(infra:"1.0.1",app:"0.9.0")},
+                state with{Previous=PairFixture.Pair(app:"0.9.0",infraSalt:"other")},state with{Previous=PairFixture.Pair(infra:"0.9.0",appSalt:"other")}})Deny(bad.Require);
+            (state with{Previous=PairFixture.Pair(app:"0.9.0")}).Require();(state with{Previous=PairFixture.Pair(infra:"0.9.0")}).Require();
+            return Task.CompletedTask;
+        });
+        await check("a record, receipt or upgrade record of another format is a legacy layout, refused before anything reads it",()=>
+        {
+            foreach(var format in new[]{1,5,6,8})
+            {
+                var legacy=JsonSerializer.SerializeToUtf8Bytes(new{Format=format,Version="0.6.0",Files=Array.Empty<object>()});
+                DenyCode("LEGACY_INSTALL_UNSUPPORTED",()=>InstallerState.Parse(legacy));DenyCode("LEGACY_INSTALL_UNSUPPORTED",()=>RemovalIntent.Parse(legacy));
+            }
+            foreach(var format in new[]{1,3})DenyCode("LEGACY_INSTALL_UNSUPPORTED",()=>UpgradeState.Parse(JsonSerializer.SerializeToUtf8Bytes(new{Format=format,From="1.0.0",To="1.0.1"})));
+            foreach(var damaged in new[]{"","[]","{}","{\"Format\":\"7\"}","{\"Format\":7.5}","not json"})
+            {var bytes=System.Text.Encoding.UTF8.GetBytes(damaged);DenyCode("INSTALL_STATE_INVALID",()=>InstallerState.Parse(bytes));DenyCode("UNINSTALL_INTENT_INVALID",()=>RemovalIntent.Parse(bytes));}
+            var state=State();var text=System.Text.Encoding.UTF8.GetString(state.Encode());
+            DenyCode("INSTALL_STATE_INVALID",()=>InstallerState.Parse(System.Text.Encoding.UTF8.GetBytes(text[..^1]+",\"Version\":\"0.6.0\"}")));
             return Task.CompletedTask;
         });
         await check("removal intent retains owner, exact binaries and choice beyond partial root deletion",()=>
         {
-            var state=State();var inventory=RemovalIntent.Inventory(state,1234);
-            Assert(inventory.Length==state.Files.Length+1&&inventory.Count(f=>f.Path==RemovalIntent.SetupMember(state.Version)&&f.Size==1234&&f.Sha256==state.SetupSha256)==1);
-            Assert(inventory.All(f=>f.Path.StartsWith("versions/"+state.Version+"/",StringComparison.Ordinal)));
-            var intent=new RemovalIntent(6,state with{Phase="removing_all_data"},UninstallMode.DeleteData,inventory,"prepared");
-            foreach(var stage in RemovalIntent.Stages){var replay=JsonSerializer.Deserialize<RemovalIntent>(Json(intent with{Stage=stage}))!;replay.Require();replay.RequireSameInstallation(state);Assert(replay.AtLeast(stage)&&replay.AtLeast("prepared"));}
+            var state=State();var inventory=RemovalIntent.Inventory(state);var infra=state.Active.Infrastructure;var app=state.Active.App;
+            var pointer=state.Active.Pointer().Encode();
+            Assert(inventory.Length==1+infra.Files.Length+app.Files.Length&&inventory[0]==new InstallMember(InstalledLayout.ActivePointerName,pointer.Length,TreeRecord.Sha256(pointer)));
+            Assert(inventory.Count(f=>f.Path==RemovalIntent.EngineMember(infra.Version)&&f.Sha256==infra.EngineSha256)==1);
+            Assert(inventory.Skip(1).All(f=>f.Path.StartsWith("infra/"+infra.Version+"/",StringComparison.Ordinal)||f.Path.StartsWith("apps/"+app.Version+"/",StringComparison.Ordinal)));
+            Assert(inventory.Any(f=>f.Path=="infra/"+infra.Version+"/"+InstalledLayout.InfraTreeName)&&inventory.Any(f=>f.Path=="apps/"+app.Version+"/"+InstalledLayout.AppTreeName));
+            var intent=new RemovalIntent(InstallerState.CurrentFormat,state with{Phase="removing_all_data"},UninstallMode.DeleteData,inventory,"prepared");
+            foreach(var stage in RemovalIntent.Stages){var replay=RemovalIntent.Parse(Json(intent with{Stage=stage}));replay.RequireSameInstallation(state);Assert(replay.AtLeast(stage)&&replay.AtLeast("prepared"));}
             Assert(!intent.AtLeast("lan_removed"));Deny(()=>intent.AtLeast("invented"));
             (intent with{Mode=UninstallMode.KeepData,State=state with{Phase="removing_keep_data"}}).Require();
-            Deny(()=>(intent with{Mode=UninstallMode.KeepData}).Require());Deny(()=>(intent with{Stage="invented"}).Require());Deny(()=>(intent with{Format=4}).Require());
-            Deny(()=>intent.RequireSameInstallation(state with{InstallationId=Guid.NewGuid().ToString("N")}));Deny(()=>intent.RequireSameInstallation(state with{Version="0.0.1"}));
+            Deny(()=>(intent with{Mode=UninstallMode.KeepData}).Require());Deny(()=>(intent with{Stage="invented"}).Require());Deny(()=>(intent with{Format=6}).Require());
+            Deny(()=>intent.RequireSameInstallation(state with{InstallationId=Guid.NewGuid().ToString("N")}));Deny(()=>intent.RequireSameInstallation(state with{Active=PairFixture.Pair(appSalt:"other")}));
             intent.RequireSameInstallation(state with{Phase="uninstalled"});
-            foreach(var path in new[]{"../unrelated.txt","versions/9.9.9/host/Yahad.ServiceHost.exe","versions/"+state.Version+"/bootstrap/authority/a.dll","payloads/x/bundle.json"})
-            {var changed=inventory.ToArray();changed[1]=changed[1] with{Path=path};Deny(()=>(intent with{Binaries=changed}).Require());}
-            Deny(()=>(intent with{Binaries=inventory.Where(f=>f.Path!=RemovalIntent.SetupMember(state.Version)).ToArray()}).Require());
-            Deny(()=>(intent with{Binaries=[..inventory,inventory[1]]}).Require());return Task.CompletedTask;
+            foreach(var path in new[]{"../unrelated.txt","infra/9.9.9/host/Yahad.ServiceHost.exe","versions/"+app.Version+"/host/Yahad.ServiceHost.exe","apps/"+app.Version+"/app/native/a.dll","payloads/x/bundle.json"})
+            {var changed=inventory.ToArray();changed[1]=changed[1] with{Path=path};DenyCode("UNINSTALL_INTENT_INVALID",()=>(intent with{Binaries=changed}).Require());}
+            // The pointer's bytes are the active pair's exact encoding.
+            {var changed=inventory.ToArray();changed[0]=changed[0] with{Size=changed[0].Size+1};DenyCode("UNINSTALL_INTENT_INVALID",()=>(intent with{Binaries=changed}).Require());}
+            foreach(var omitted in new[]{InstalledLayout.ActivePointerName,RemovalIntent.EngineMember(infra.Version)})
+                DenyCode("UNINSTALL_INTENT_INVALID",()=>(intent with{Binaries=inventory.Where(f=>f.Path!=omitted).ToArray()}).Require());
+            DenyCode("UNINSTALL_INTENT_INVALID",()=>(intent with{Binaries=[..inventory,inventory[1]]}).Require());return Task.CompletedTask;
         });
-        await check("runtime package accepts only Format 1 host, updater, platform and payload members anchored to its bundle",()=>
+        await check("install package accepts only Format 2 of this infrastructure with exact infra/ and apps/ trees",()=>
         {
-            using(var exact=LayoutPackage())Assert(exact.Manifest.Format==1);
-            DenyCode("PACKAGE_FORMAT",()=>{using var full=LayoutPackage(format:2);});
-            DenyCode("PACKAGE_PATH",()=>{using var bootstrap=LayoutPackage(extra:"bootstrap/authority/Yahad.Authority.exe");});
-            DenyCode("PACKAGE_PATH",()=>{using var manifest=LayoutPackage(extra:"system-manifest.json");});
-            DenyCode("PACKAGE_MISSING",()=>{using var missing=LayoutPackage(omit:"host/Yahad.ServiceHost.runtimeconfig.json");});DenyCode("PACKAGE_MISSING",()=>{using var missing=LayoutPackage(omit:"updater/Yahad.Updater.exe");});
-            DenyCode("PACKAGE_MISSING",()=>{using var missing=LayoutPackage(omit:"platform/Yahad.Platform.exe");});DenyCode("PACKAGE_MISSING",()=>{using var missing=LayoutPackage(omit:"platform/Yahad.Platform.runtimeconfig.json");});
-            // Platform is infrastructure; the application tree never carries a native helper.
-            foreach(var native in new[]{"payload/app/native/Yahad.Platform.exe","payload/app/Native/coreclr.dll"})DenyCode("PACKAGE_PATH",()=>{using var app=LayoutPackage(extra:native);});
-            DenyCode("PACKAGE_PAYLOAD_ANCHOR",()=>{using var anchor=LayoutPackage(payloadDigest:new string('e',64));});
-            DenyCode("PACKAGE_SOURCE",()=>{using var source=LayoutPackage(source:new string('0',40)==ApplicationRelease.SourceCommit?new string('1',40):new string('0',40));});
+            using(var exact=PairFixture.Open(PairFixture.Package()))Assert(exact.Manifest.Format==2&&exact.Members(TreeKind.App).All(f=>f.Path==InstalledLayout.AppTreeName||f.Path.StartsWith("app/",StringComparison.Ordinal)));
+            void Refused(string code,Func<(byte[] Zip,byte[] Manifest)> fixture){var bytes=fixture();DenyCode(code,()=>{using var p=PairFixture.Open(bytes);});}
+            Refused("PACKAGE_FORMAT",()=>PairFixture.Package(change:m=>m with{Format=1}));
+            Refused("PACKAGE_FORMAT",()=>PairFixture.Package(change:m=>m with{Infrastructure=null!}));
+            Refused("PACKAGE_FORMAT",()=>PairFixture.Package(change:m=>m with{App=m.App with{Version="1.0"}}));
+            Refused("PACKAGE_FORMAT",()=>PairFixture.Package(change:m=>m with{App=m.App with{SourceCommit="abc"}}));
+            Refused("PACKAGE_FORMAT",()=>PairFixture.Package(schema:0,migrations:[]));
+            foreach(var migrations in new[]{new[]{6,5},[5,5],[7],[0,6],[8]})Refused("PACKAGE_FORMAT",()=>PairFixture.Package(migrations:migrations));
+            foreach(var extra in new[]{"infra/bootstrap/authority/Yahad.Authority.exe","system-manifest.json","payload/app/server/main.mjs","host/Yahad.ServiceHost.exe",
+                "apps/app/native/Yahad.Platform.exe","apps/app/Native/coreclr.dll","apps/host/x","infra/app/x"})Refused("PACKAGE_PATH",()=>PairFixture.Package(extra:extra));
+            foreach(var required in InstallPackage.Required)Refused("PACKAGE_MISSING",()=>PairFixture.Package(omit:required));
+            foreach(var record in new[]{"infra/"+InstalledLayout.InfraTreeName,"apps/"+InstalledLayout.AppTreeName})Refused("PACKAGE_MISSING",()=>PairFixture.Package(omit:record));
+            Refused("PACKAGE_SOURCE",()=>PairFixture.Package(change:m=>m with{Infrastructure=m.Infrastructure with{ContractMax=m.Infrastructure.ContractMax+1}}));
+            Refused("PACKAGE_CONTRACT",()=>PairFixture.Package(change:m=>m with{App=m.App with{RequiresContract=InfrastructureRelease.ContractMax+1}}));
+            // Each tree record is the archive's own member and lists exactly the other members of its namespace.
+            Refused("PACKAGE_TREE_MISMATCH",()=>PairFixture.Package(change:m=>m with{App=m.App with{TreeSha256=new string('e',64)}}));
+            Refused("PACKAGE_TREE_MISMATCH",()=>PairFixture.Package(change:m=>m with{Infrastructure=m.Infrastructure with{TreeSha256=new string('e',64)}}));
+            Refused("PACKAGE_TREE_MISMATCH",()=>PairFixture.Package(extra:"apps/app/extra.js"));Refused("PACKAGE_TREE_MISMATCH",()=>PairFixture.Package(extra:"infra/legal/other.json"));
+            Refused("PACKAGE_TREE_MISMATCH",()=>PairFixture.Package(omit:"infra/legal/fixture.json"));
+            Refused("PACKAGE_HASH",()=>PairFixture.Package(change:m=>m with{ZipSha256=new string('0',64)}));
+            Refused("PACKAGE_MEMBERS",()=>PairFixture.Package(duplicate:true));
+            Refused("PACKAGE_BOUND",()=>PairFixture.Package(change:m=>m with{Files=[..m.Files,m.Files[0]]}));
             return Task.CompletedTask;
         });
         await check("an interrupted extraction resumes only over this package's members and their owned partials",()=>
         {
-            var expected=new[]{"Yahad.Setup.exe","versions/1.2.3/host/Yahad.ServiceHost.exe","versions/1.2.3/payload/app/server/main.mjs"};var partial=".partial-"+Guid.NewGuid().ToString("N");
-            var partials=InstallPackage.RequireExtractedInventory(expected,[expected[1],expected[2]+partial,"Yahad.Setup.exe"+partial],["versions","versions/1.2.3","versions/1.2.3/host","versions/1.2.3/payload","versions/1.2.3/payload/app","versions/1.2.3/payload/app/server"]);
+            var expected=new[]{"active.json","infra/1.2.3/host/Yahad.ServiceHost.exe","apps/1.0.0/app/server/main.mjs"};var partial=".partial-"+Guid.NewGuid().ToString("N");
+            var partials=InstallPackage.RequireExtractedInventory(expected,[expected[1],expected[2]+partial,"active.json"+partial],["infra","infra/1.2.3","infra/1.2.3/host","apps","apps/1.0.0","apps/1.0.0/app","apps/1.0.0/app/server"]);
             Assert(partials.Length==2&&partials.Contains(expected[2]+partial));
-            foreach(var file in new[]{"versions/1.2.3/host/foreign.dll",expected[1]+".partial-"+Guid.NewGuid().ToString("D"),expected[1]+".partial-"+new string('A',32),"other.exe"+partial,expected[1]+".partial-"})
+            foreach(var file in new[]{"infra/1.2.3/host/foreign.dll",expected[1]+".partial-"+Guid.NewGuid().ToString("D"),expected[1]+".partial-"+new string('A',32),"other.exe"+partial,expected[1]+".partial-"})
                 DenyCode("INSTALL_TARGET_CHANGED",()=>InstallPackage.RequireExtractedInventory(expected,[file],[]));
-            foreach(var directory in new[]{"versions/1.2.4","versions/1.2.3/host/x","payloads"})DenyCode("INSTALL_TARGET_CHANGED",()=>InstallPackage.RequireExtractedInventory(expected,[],[directory]));
+            foreach(var directory in new[]{"infra/1.2.4","infra/1.2.3/host/x","versions","apps/1.0.1"})DenyCode("INSTALL_TARGET_CHANGED",()=>InstallPackage.RequireExtractedInventory(expected,[],[directory]));
             return Task.CompletedTask;
         });
         await check("extraction never rewrites a present member and leaves no partial when a member fails",()=>
         {
-            using var package=LayoutPackage();var root=PrivateSession.Create(Path.GetTempPath());var other=PrivateSession.Create(Path.GetTempPath());
+            using var package=PairFixture.Open(PairFixture.Package());var root=PrivateSession.Create(Path.GetTempPath());var other=PrivateSession.Create(Path.GetTempPath());
             string[] Extracted(string directory)=>Directory.EnumerateFiles(directory,"*",SearchOption.AllDirectories).Select(f=>Path.GetRelativePath(directory,f).Replace(Path.DirectorySeparatorChar,'/')).Where(f=>f!=".yahad-fixture").Order(StringComparer.Ordinal).ToArray();
             try
             {
-                package.Extract(root,_=>{},default,TestTarget);package.Extract(root,_=>{},default,TestTarget);
-                Assert(Extracted(root).SequenceEqual(package.Manifest.Files.Select(f=>f.Path).Order(StringComparer.Ordinal)));
-                var node=Path.Combine(root,"payload","runtime","node","node.exe");File.WriteAllBytes(node,[2]);DenyCode("INSTALL_TARGET_CHANGED",()=>package.Extract(root,_=>{},default,TestTarget));
-                Assert(File.ReadAllBytes(node).SequenceEqual(new byte[]{2}));
+                package.Extract(TreeKind.Infrastructure,root,_=>{},default,TestTarget);package.Extract(TreeKind.Infrastructure,root,_=>{},default,TestTarget);
+                Assert(Extracted(root).SequenceEqual(package.Members(TreeKind.Infrastructure).Select(f=>f.Path).Order(StringComparer.Ordinal)));
+                var node=Path.Combine(root,"runtime","node","node.exe");var bytes=File.ReadAllBytes(node);bytes[0]^=1;File.WriteAllBytes(node,bytes);
+                DenyCode("INSTALL_TARGET_CHANGED",()=>package.Extract(TreeKind.Infrastructure,root,_=>{},default,TestTarget));Assert(File.ReadAllBytes(node).SequenceEqual(bytes));
                 var failing=TestTarget with{Commit=(_,_)=>throw new IOException("COMMIT_CUT")};
-                DenyCode("COMMIT_CUT",()=>package.Extract(other,_=>{},default,failing));Assert(Extracted(other).Length==0);
+                DenyCode("COMMIT_CUT",()=>package.Extract(TreeKind.App,other,_=>{},default,failing));Assert(Extracted(other).Length==0);
             }
             finally{Directory.Delete(root,true);Directory.Delete(other,true);}
             return Task.CompletedTask;
         });
-        await check("LAN proxy runs from the installed release's folder and its image follows the version",()=>
+        await check("LAN proxy runs from the installed infrastructure's folder and its image follows that version",()=>
         {
-            var version=Path.Combine(InstallLocations.Binaries,"versions","1.2.3");
+            var version=Path.Combine(InstallLocations.Binaries,"infra","1.2.3");
             Assert(ServiceSpec.Lan.Command("1.2.3")=="\""+Path.Combine(version,"host","Yahad.ServiceHost.exe")+"\" --lan-service");
             Assert(ServiceSpec.Lan.Command("1.2.4")!=ServiceSpec.Lan.Command("1.2.3"));
-            Assert(LanProxyPaths.Caddy("1.2.3")==Path.Combine(version,"payload","runtime","caddy","caddy.exe"));
+            Assert(LanProxyPaths.Caddy("1.2.3")==Path.Combine(version,"runtime","caddy","caddy.exe"));
             // The Runtime's YAHAD_PLATFORM_HELPER: infrastructure beside the host and Updater, never under the app.
             Assert(InstalledLayout.PlatformImage("1.2.3")==Path.Combine(version,"platform","Yahad.Platform.exe")&&Path.IsPathFullyQualified(InstalledLayout.PlatformImage("1.2.3")));
             DenyCode("PAYLOAD_VERSION",()=>ServiceSpec.Lan.Command("../other"));
@@ -188,7 +231,7 @@ internal static class FullInstallerIntegrationTests
         });
         await check("the image Apps & Features starts is readable by an unelevated user, and the state root stays closed",()=>
         {
-            Assert(SetupOperation.Within(InstallLocations.InstallerImage("1.2.3"),InstallLocations.Binaries));
+            Assert(SetupOperation.Within(InstalledLayout.EngineImage("1.2.3"),InstallLocations.Binaries)&&InstalledLayout.EngineImage("1.2.3")==Path.Combine(InstallLocations.Binaries,"infra","1.2.3","setup","Yahad.Setup.exe"));
             Assert(NativeSetupHost.BinaryAcl.EndsWith("(A;OICI;0x1200a9;;;BU)",StringComparison.Ordinal));
             Assert(NativeSetupHost.BinaryAcl==NativeInstallFiles.InstallAcl(InstallLocations.ServiceSid,InstallLocations.ServiceSidFor(LanProxyPaths.ServiceName),"BU"));
             Assert(!NativeInstallFiles.InstallAcl(InstallLocations.ServiceSid).Contains(";BU)",StringComparison.Ordinal));
@@ -207,19 +250,11 @@ internal static class FullInstallerIntegrationTests
         });
         await check("installer failure codes name upgrade and changed-target refusals",()=>
         {
-            foreach(var code in new[]{"INSTALL_UPGRADE_REQUIRED","INSTALL_DOWNGRADE_REFUSED","INSTALL_TARGET_CHANGED","PACKAGE_PAYLOAD_ANCHOR"})Assert(SetupOperation.Code(new IOException(code))==code);
-            Assert(SetupOperation.Code(new IOException("UPDATE_LEGACY_PROFILE_REQUIRES_REMOVAL"))=="INSTALL_FAILED");
+            foreach(var code in new[]{"INSTALL_UPGRADE_REQUIRED","INSTALL_DOWNGRADE_REFUSED","INSTALL_TARGET_CHANGED","LEGACY_INSTALL_UNSUPPORTED","PACKAGE_TREE_MISMATCH","PACKAGE_CONTRACT","PACKAGE_MISSING","PACKAGE_MEMBERS","PACKAGE_PATH",
+                "INFRA_IDENTITY_MISMATCH","APP_IDENTITY_MISMATCH","ACTIVE_POINTER_INVALID","TREE_RECORD_INVALID","RELEASE_UNSUPPORTED_FROM"})Assert(SetupOperation.Code(new IOException(code))==code);
+            foreach(var gone in new[]{"UPDATE_LEGACY_PROFILE_REQUIRES_REMOVAL","PACKAGE_PAYLOAD_ANCHOR","REPAIR_RUNNING_FROM_TARGET"})Assert(SetupOperation.Code(new IOException(gone))=="INSTALL_FAILED");
             Assert(SetupOperation.OperationTimeout("install")==TimeSpan.FromMinutes(48)&&SetupOperation.OperationTimeout("uninstall")==TimeSpan.FromMinutes(96));
             return Task.CompletedTask;
         });
-    }
-    private static InstallPackage LayoutPackage(int format=1,string? extra=null,string? omit=null,string? payloadDigest=null,string? source=null)
-    {
-        var names=new List<string>{"host/Yahad.ServiceHost.exe","host/Yahad.ServiceHost.runtimeconfig.json","updater/Yahad.Updater.exe","updater/Yahad.Updater.runtimeconfig.json","payload/bundle.json","payload/runtime/node/node.exe","payload/runtime/caddy/caddy.exe","payload/app/server/main.mjs","payload/app/dist/index.html","platform/Yahad.Platform.exe","platform/Yahad.Platform.runtimeconfig.json","payload/legal/fixture.json"};
-        if(extra is not null)names.Add(extra);if(omit is not null){names.Remove(omit);names.Add("payload/legal/other.json");}
-        var stream=new MemoryStream();using(var zip=new ZipArchive(stream,ZipArchiveMode.Create,true))foreach(var name in names){using var entry=zip.CreateEntry(name).Open();entry.WriteByte(1);}
-        var bytes=stream.ToArray();stream.Position=0;var sha=Hash([1]);
-        try{return new(stream,Json(new InstallPackageManifest(format,ApplicationRelease.Version,source??ApplicationRelease.SourceCommit,Hash(bytes),payloadDigest??sha,1,names.Select(n=>new InstallMember(n,1,sha)).ToArray())));}
-        catch{stream.Dispose();throw;}
     }
 }

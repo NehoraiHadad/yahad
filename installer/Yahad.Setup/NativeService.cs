@@ -16,11 +16,11 @@ internal sealed record ServiceSpec(string Name,string Account,Func<string,string
 {
     internal static readonly ServiceSpec Runtime=new(ServiceDefinition.Name,ServiceDefinition.Account,InstallLocations.ServiceCommand,[5000,30000,120000],true,false,ServiceDefinition.Name,InstallLocations.ServiceSid);
     internal static readonly ServiceSpec Updater=new(ServiceDefinition.UpdaterName,ServiceDefinition.UpdaterAccount,
-        version=>{InstallLocations.RequireVersion(version);return InstalledLayout.UpdaterCommand(version);},[60000,300000,600000],false,true,ServiceDefinition.UpdaterName,InstallLocations.ServiceSid);
-    internal static readonly ServiceSpec Lan=new(LanProxyPaths.ServiceName,"NT SERVICE\\"+LanProxyPaths.ServiceName,version=>{InstallLocations.RequireVersion(version);return LanProxyPaths.Command(version);},[],true,true,"Yahad home network HTTPS",null);
+        InstalledLayout.UpdaterCommand,[60000,300000,600000],false,true,ServiceDefinition.UpdaterName,InstallLocations.ServiceSid);
+    internal static readonly ServiceSpec Lan=new(LanProxyPaths.ServiceName,"NT SERVICE\\"+LanProxyPaths.ServiceName,LanProxyPaths.Command,[],true,true,"Yahad home network HTTPS",null);
 }
 // Installer-only SCM writer. The names, accounts and images come from compiled
-// constants and the verified package version; no CLI, file or runtime peer can
+// constants and the verified infrastructure version; no CLI, file or runtime peer can
 // choose them.
 internal sealed class NativeService:IDisposable
 {
