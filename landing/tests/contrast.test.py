@@ -4,17 +4,13 @@ from pathlib import Path
 import re
 DIST=Path(__file__).resolve().parents[1]/'dist'
 css=(DIST/'style.css').read_text(encoding='utf-8')
-how_css=(DIST/'how.css').read_text(encoding='utf-8')
+film_css=(DIST/'film.css').read_text(encoding='utf-8')
 def declarations(selector,stylesheet):
  m=re.search(r'(?:^|}|\*/)\s*'+re.escape(selector)+r'\s*\{([^}]+)\}',stylesheet)
  assert m,selector
  return {k.strip():v.strip() for k,v in (p.split(':',1) for p in m.group(1).split(';') if ':' in p)}
 root=declarations(':root',css)
-how=declarations('.how',how_css)
-# Every colour stop of the explainer background; step text sits anywhere on it.
-how_bg=re.findall(r'#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{3})(?![0-9a-fA-F])',how['background'])
-assert how_bg,'explainer background stops not found'
-assert re.search(r'\.how-step:not\(\.is-active\)::before\{color:var\(--muted\)\}',how_css),'inactive step numbers must use --muted'
+assert re.search(r'\.film-live \.beat:not\(\.is-active\) h3,\.film-live \.beat:not\(\.is-active\)::before\{color:var\(--muted\)\}',film_css),'inactive beats must use --muted'
 def hexval(v,scope=root):
  v=v.strip()
  if v.startswith('var('):return hexval(scope[v[4:-1]],scope)
@@ -39,9 +35,11 @@ cases=[
  ('risk heading','var(--held-ink)','var(--held-wash)'),
  ('risk text','var(--ink)','var(--held-wash)'),
  ('quota numbers','var(--pass)','var(--surface)'),
+ ('film button label','var(--pass)','var(--surface)'),
+ ('film button hover','var(--pass-strong)','var(--surface)'),
+ ('active beat number on paper','var(--pass)','var(--paper)'),
+ ('beat heading hover on paper','var(--pass-strong)','var(--paper)'),
 ]
-for stop in how_bg:
- cases+=[(f'explainer title on {stop}','var(--ink)',stop),(f'explainer step text and inactive numbers on {stop}','var(--muted)',stop),(f'explainer active number on {stop}','var(--pass)',stop)]
 for name,f,b in cases:
  r=ratio(f,b);print(f'{name}: {hexval(f)} / {hexval(b)} = {r:.2f}:1');assert r>=4.5,(name,r)
 print('PASS: all checked text/background pairs meet 4.5:1.')

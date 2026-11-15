@@ -62,8 +62,9 @@ jobs:
       - name: Check JavaScript syntax and landing behavior
         working-directory: landing
         run: |
-          node --check dist/how.js
-          node tests/how.test.cjs
+          node --check dist/film-scene.js
+          node --check dist/film.js
+          node tests/film.test.cjs
           python3 -X utf8 tests/static.test.py
           python3 -X utf8 tests/contrast.test.py
       - name: Read existing Pages configuration
