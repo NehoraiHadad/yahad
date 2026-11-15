@@ -62,7 +62,7 @@ internal sealed record TreeRecord(int Format,string Version,string SourceCommit,
         root=Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         if(!Directory.Exists(root)||(File.GetAttributes(root)&FileAttributes.ReparsePoint)!=0)throw new IOException("ACTIVE_POINTER_INVALID");
         var recordPath=Path.Combine(root,RecordName(kind));byte[] bytes;
-        try{bytes=NativeInstallFiles.ReadRecord(recordPath,MaximumBytes);}catch(Exception error)when(error is IOException or UnauthorizedAccessException){throw new IOException("ACTIVE_POINTER_INVALID");}
+        try{bytes=NativeInstallFiles.ReadRecord(recordPath,MaximumBytes);}catch(Exception error)when(error is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception){throw new IOException("ACTIVE_POINTER_INVALID");}
         if(Sha256(bytes)!=treeSha256)throw new IOException("ACTIVE_POINTER_INVALID");
         TreeRecord record;
         try{record=Parse(bytes,kind);}catch(IOException){throw new IOException("ACTIVE_POINTER_INVALID");}

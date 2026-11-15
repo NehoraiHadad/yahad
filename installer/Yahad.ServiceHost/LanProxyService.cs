@@ -70,6 +70,7 @@ internal sealed class WindowsLanProxyAdmission : ILanProxyAdmission
     public Task<ILanProxyProcess> StartAsync(CancellationToken cancellation) => Task.Run<ILanProxyProcess>(() =>
     {
         cancellation.ThrowIfCancellationRequested();
+        ActivePointer.ReadVerified(app: false);
         var candidate = NativeJson.Read<LanProxyReceipt>(NativeInstallFiles.ReadRecord(LanProxyPaths.Receipt, 4096));
         if (!LanProxyPolicy.AddressPresent(candidate, LanProxyPolicy.Addresses())) throw new IOException("LAN_ADDRESS_CHANGED");
         receipt = candidate;
@@ -80,7 +81,7 @@ internal sealed class WindowsLanProxyAdmission : ILanProxyAdmission
         environment["HOME"] = LanProxyPaths.Data;
         environment["XDG_DATA_HOME"] = LanProxyPaths.Data;
         environment["XDG_CONFIG_HOME"] = LanProxyPaths.Temporary;
-        return new OwnedLanProxyProcess(JobProcess.Start(LanProxyPaths.Caddy(ApplicationRelease.Version),
+        return new OwnedLanProxyProcess(JobProcess.Start(LanProxyPaths.Caddy(InfrastructureRelease.Version),
             ["run", "--config", LanProxyPaths.Config, "--adapter", "caddyfile"], LanProxyPaths.State, environment));
     }, cancellation);
     private sealed class OwnedLanProxyProcess(JobProcess job) : ILanProxyProcess

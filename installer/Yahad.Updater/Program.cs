@@ -8,7 +8,7 @@ if(args is ["--describe"])
 {
     Console.WriteLine(JsonSerializer.Serialize(new{artifact="Yahad.Updater",serviceName=ServiceDefinition.UpdaterName,
         version=Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion,
-        applicationVersion=ApplicationRelease.Version,sourceCommit=ApplicationRelease.SourceCommit}));return 0;
+        infrastructureVersion=InfrastructureRelease.Version,contractMin=InfrastructureRelease.ContractMin,contractMax=InfrastructureRelease.ContractMax,sourceCommit=InfrastructureRelease.SourceCommit}));return 0;
 }
 if(args is not ["--service"]){Console.Error.WriteLine("YAHAD_SERVICE_ARGUMENTS_REFUSED");return 2;}
 try{return new UpdaterService(new NativeScmApi(),UpdaterService.WorkAsync).Run();}

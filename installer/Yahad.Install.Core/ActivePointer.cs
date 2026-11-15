@@ -34,7 +34,7 @@ internal sealed record ActivePointer(int Format,ActiveInfrastructure Infrastruct
     {
         byte[] bytes;
         try{bytes=NativeInstallFiles.ReadRecord(InstalledLayout.ActivePointerFile,MaximumBytes);}
-        catch(Exception error)when(error is IOException or UnauthorizedAccessException){throw new IOException("ACTIVE_POINTER_INVALID");}
+        catch(Exception error)when(error is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception){throw new IOException("ACTIVE_POINTER_INVALID");}
         return Parse(bytes);
     }
     // A host, Updater or Platform image runs only the pair whose infrastructure it is:

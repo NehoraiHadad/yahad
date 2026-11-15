@@ -27,16 +27,18 @@ internal sealed class UpdaterService(IScmApi scm,Func<Action,CancellationToken,T
         catch(Exception error){specific=1;_=ServiceStartupDiagnostic.TryRecord(StartupDiagnosticRole.Updater,error);}
         scm.Publish(new(ServiceState.Stopped,0,0,0,specific==0?0u:1066u,specific));
     }
-    // Refuses to run from anywhere but this release's own folder.
+    // Refuses to run from anywhere but this infrastructure's own updater folder.
     internal static async Task WorkAsync(Action ready,CancellationToken cancellation)
     {
-        var expected=WindowsFileBoundary.CanonicalLocalPath(Path.GetDirectoryName(InstalledLayout.UpdaterImage(ApplicationRelease.Version))!);
+        var expected=WindowsFileBoundary.CanonicalLocalPath(Path.GetDirectoryName(InstalledLayout.UpdaterImage(InfrastructureRelease.Version))!);
         var actual=WindowsFileBoundary.CanonicalLocalPath(Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory)));
         if(!string.Equals(actual,expected,StringComparison.OrdinalIgnoreCase))throw new IOException("UPDATER_IMAGE_LOCATION");
+        // The app version the engine compares against is read once, at service start; section 9.2 (phase 4) makes it live.
+        var pointer=ActivePointer.Read();pointer.RequireThisInfrastructure();
         var runtime=(SecurityIdentifier)new NTAccount(ServiceDefinition.Account).Translate(typeof(SecurityIdentifier));
         var key=Path.Combine(InstalledLayout.BinaryRoot,TrustedReleaseKey.InstalledName);
         using var source=new GitHubReleaseSource();
-        var engine=new UpdaterEngine(UpdaterPaths.Installed,ApplicationRelease.Version,
+        var engine=new UpdaterEngine(UpdaterPaths.Installed,pointer.App.Version,
             ()=>File.Exists(key)?NativeInstallFiles.ReadRecord(key):null,TrustedReleaseKey.Embedded,source,UpdateLauncher.Launch,()=>DateTimeOffset.UtcNow);
         engine.Start(cancellation);
         using var linked=CancellationTokenSource.CreateLinkedTokenSource(cancellation);
