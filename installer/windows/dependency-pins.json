@@ -13,11 +13,13 @@
       "archive": {
         "name": "ffmpeg-n9.0.2-37-gae19868753-win64-lgpl-shared-9.0.zip",
         "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-28-19-47/ffmpeg-n9.0.2-37-gae19868753-win64-lgpl-shared-9.0.zip",
+        "retainedUrl": "https://github.com/NehoraiHadad/yahad-vendor-inputs/releases/download/ffmpeg-btbn-autobuild-2026-10-28-19-47/ffmpeg-n9.0.2-37-gae19868753-win64-lgpl-shared-9.0.zip",
         "sha256": "96c8534b790325d1bf8b611b80716e97b501dc28680a75e5b548e74409f4b895"
       },
       "checksums": {
         "name": "checksums.sha256",
         "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-28-19-47/checksums.sha256",
+        "retainedUrl": "https://github.com/NehoraiHadad/yahad-vendor-inputs/releases/download/ffmpeg-btbn-autobuild-2026-10-28-19-47/checksums.sha256",
         "sha256": "72b4c1fe06bfb3aea6aecc1f1647d2d4c26a80760253f1931ef46f18ed09d9bc",
         "algorithm": "sha256"
       },

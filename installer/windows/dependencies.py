@@ -7,6 +7,7 @@ import re
 import shutil
 import stat
 import zipfile
+from urllib.parse import urlsplit
 
 
 class DependencyError(ValueError): pass
@@ -34,6 +35,24 @@ def component(name, spec):
         'version':source['version'], 'origin':source['origin'], 'publisher':source['publisher'],
         'sourceUrl':source['archive']['url'], 'archiveSha256':source['archive']['sha256'],
         'license':source['license']}
+
+
+# A publisher that keeps only a short window of builds (BtbN) is fetched from the
+# project's retained, byte-identical copy. `url` stays the publisher's original
+# address: it is the provenance recorded in the package, never the copy. The
+# copy proves nothing by itself; stage() still checks every pinned hash.
+RETAINED = 'https://github.com/NehoraiHadad/yahad-vendor-inputs/releases/download/'
+
+
+def fetch_url(spec, name, record):
+    entry = spec['sources'][name][record]
+    retained = entry.get('retainedUrl')
+    if retained is None: return entry['url']
+    original = urlsplit(entry['url']).path.rsplit('/', 1)[-1]
+    tag, _, leaf = retained.removeprefix(RETAINED).partition('/')
+    if not retained.startswith(RETAINED) or not re.fullmatch(r'[A-Za-z0-9._-]+', tag) or leaf != original or not original:
+        raise DependencyError('RETAINED_COPY_URL')
+    return retained
 
 
 def verify_inputs(archive, checksums, source):
@@ -154,12 +173,16 @@ if __name__ == '__main__':
     parser=argparse.ArgumentParser(description=__doc__); sub=parser.add_subparsers(dest='operation',required=True)
     staging=sub.add_parser('stage')
     for name in ('ffmpeg-archive','ffmpeg-checksums','caddy-archive','caddy-checksums','output'): staging.add_argument('--'+name,required=True,type=Path)
+    fetching=sub.add_parser('fetch-url')
+    fetching.add_argument('--source',required=True,choices=('ffmpeg','caddy')); fetching.add_argument('--record',required=True,choices=('archive','checksums'))
     augmenting=sub.add_parser('augment')
     for name in ('core','dependencies','output'): augmenting.add_argument('--'+name,required=True,type=Path)
     args=parser.parse_args()
     if args.operation=='stage':
         result=stage({'ffmpeg':args.ffmpeg_archive,'caddy':args.caddy_archive}, {'ffmpeg':args.ffmpeg_checksums,'caddy':args.caddy_checksums}, args.output)
         print(json.dumps({'kind':result['kind'],'familyInstallationReady':False}))
+    elif args.operation=='fetch-url':
+        print(fetch_url(pins(),args.source,args.record))
     else:
         result=augment(args.core,args.dependencies,args.output)
         print(json.dumps({'kind':result['kind'],'profile':result['profile'],'files':len(result['files']),'familyInstallationReady':False}))

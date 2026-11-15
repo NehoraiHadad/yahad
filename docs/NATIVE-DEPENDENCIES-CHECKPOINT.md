@@ -17,7 +17,7 @@ FFmpeg's runtime output confirms shared libraries, libopus and version-3 licensi
 
 **Distribution is still gated**: exact corresponding FFmpeg/dependency sources and complete transitive notices/licenses need completion/review; Caddy's Go module inventory is available from actual build-info, but its transitive license collection is incomplete. The generated `Caddy-NOTICES.txt` explicitly identifies itself as packaging attribution, not an upstream NOTICE or a completed third-party audit. Hash verification is not Sigstore/release-signature verification. No signing credentials, updater key enrollment, paid license or service were created.
 
-BtbN retains only a short window of daily builds. The fixed URL may disappear later; build inputs must be retained in the future authorized release pipeline. The family payload embeds the exact binaries and does not depend on that URL at runtime. No mirror, release or website was published here.
+BtbN retains only a short window of daily builds. The fixed URL may disappear later; build inputs must be retained in the future authorized release pipeline. The family payload embeds the exact binaries and does not depend on that URL at runtime. No mirror, release or website was published here. Later, after BtbN removed `autobuild-2026-10-28-19-47`, the maintainer retained the byte-identical archive and publisher checksum file at [yahad-vendor-inputs](https://github.com/NehoraiHadad/yahad-vendor-inputs/releases/tag/ffmpeg-btbn-autobuild-2026-10-28-19-47). The pins name it as `retainedUrl`, while `url` keeps the original publisher as provenance.
 
 ## Tests and local tooling
 

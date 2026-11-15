@@ -88,6 +88,25 @@ class DependencyTests(unittest.TestCase):
         self.stage(); path=self.output/'legal/dependency-proof.json'; value=json.loads(path.read_text()); value['sources']['ffmpeg']['publisher']='pretend-upstream'; path.write_text(json.dumps(value))
         with self.assertRaisesRegex(dep.DependencyError,'DEPENDENCY_PROVENANCE'): dep.validate_staged(self.files(),self.spec)
 
+    def test_fetch_url_is_the_original_unless_a_retained_copy_is_named(self):
+        self.assertEqual(dep.fetch_url(self.spec,'caddy','archive'),'https://example.invalid/caddy.zip')
+        good=dep.RETAINED+'some-tag/ffmpeg.zip'; self.spec['sources']['ffmpeg']['archive']['retainedUrl']=good
+        self.assertEqual(dep.fetch_url(self.spec,'ffmpeg','archive'),good)
+        # The copy never replaces provenance.
+        self.assertEqual(dep.component('ffmpeg',self.spec)['sourceUrl'],'https://example.invalid/ffmpeg.zip')
+        for bad in ('https://example.invalid/ffmpeg.zip', dep.RETAINED+'some-tag/other.zip', dep.RETAINED+'ffmpeg.zip',
+                    dep.RETAINED+'../x/ffmpeg.zip', dep.RETAINED+'a/b/ffmpeg.zip', 'http://github.com/NehoraiHadad/yahad-vendor-inputs/releases/download/t/ffmpeg.zip'):
+            with self.subTest(bad=bad):
+                self.spec['sources']['ffmpeg']['archive']['retainedUrl']=bad
+                with self.assertRaises(dep.DependencyError): dep.fetch_url(self.spec,'ffmpeg','archive')
+
+    def test_checked_in_pins_fetch_ffmpeg_from_its_retained_copy_and_caddy_from_its_publisher(self):
+        spec=dep.pins()
+        for record in ('archive','checksums'):
+            self.assertTrue(dep.fetch_url(spec,'ffmpeg',record).startswith(dep.RETAINED))
+            self.assertTrue(spec['sources']['ffmpeg'][record]['url'].startswith('https://github.com/BtbN/FFmpeg-Builds/releases/download/'))
+            self.assertEqual(dep.fetch_url(spec,'caddy',record),spec['sources']['caddy'][record]['url'])
+
     def test_existing_output_preserved(self):
         self.output.mkdir(); marker=self.output/'preserve'; marker.write_text('fixture')
         with self.assertRaisesRegex(dep.DependencyError,'NEW_OUTPUT_REQUIRED'): self.stage()

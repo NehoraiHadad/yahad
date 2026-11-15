@@ -41,8 +41,14 @@ Required external inputs:
 4. FFmpeg/Caddy vendor inputs staged by the existing pinned-input verifier.
 
 Exact vendor URLs, archive hashes, checksum-document hashes and selected member
-hashes are in [dependency-pins.json](windows/dependency-pins.json). Download those
-archives and checksum documents explicitly to a local build-input directory, then:
+hashes are in [dependency-pins.json](windows/dependency-pins.json). `url` is the
+publisher's original address and is what the package records as provenance. BtbN
+deletes builds after a short window, so FFmpeg also names a `retainedUrl`: a
+byte-identical copy in
+[yahad-vendor-inputs](https://github.com/NehoraiHadad/yahad-vendor-inputs/releases).
+`python -m installer.windows.dependencies fetch-url --source ffmpeg --record archive`
+prints the address to fetch. Download those archives and checksum documents
+explicitly to a local build-input directory, then:
 
 ```powershell
 python -m installer.windows.dependencies stage --ffmpeg-archive C:/build-inputs/ffmpeg.zip --ffmpeg-checksums C:/build-inputs/ffmpeg-checksums.sha256 --caddy-archive C:/build-inputs/caddy.zip --caddy-checksums C:/build-inputs/caddy-checksums.txt --output .local/vendors

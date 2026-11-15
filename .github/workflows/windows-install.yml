@@ -114,12 +114,15 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $pins = Get-Content installer/windows/dependency-pins.json -Raw | ConvertFrom-Json
           $d = '.local/downloads'
+          # The pins name where each input is fetched (a retained copy for a
+          # publisher that deletes old builds); staging re-verifies every hash.
           foreach ($name in 'ffmpeg', 'caddy') {
-            $source = $pins.sources.$name
-            Invoke-WebRequest $source.archive.url -OutFile "$d/$name-archive"
-            Invoke-WebRequest $source.checksums.url -OutFile "$d/$name-checksums"
+            foreach ($record in 'archive', 'checksums') {
+              $url = python -m installer.windows.dependencies fetch-url --source $name --record $record
+              if ($LASTEXITCODE -ne 0) { throw "Fetch address refused: $name $record" }
+              Invoke-WebRequest $url -OutFile "$d/$name-$record"
+            }
           }
           python -m installer.windows.dependencies stage --ffmpeg-archive "$d/ffmpeg-archive" --ffmpeg-checksums "$d/ffmpeg-checksums" --caddy-archive "$d/caddy-archive" --caddy-checksums "$d/caddy-checksums" --output .local/vendors
           if ($LASTEXITCODE -ne 0) { throw 'Vendor staging failed' }
