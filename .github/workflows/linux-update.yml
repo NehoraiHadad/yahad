@@ -136,6 +136,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends caddy
+          # Every scenario but fresh first installs the released v0.5.0 baseline, whose
+          # own deploy/install.py still requires ffmpeg. Yahad itself no longer uses it;
+          # the fresh scenario proves the candidate installs and runs without it.
+          if [ "${{ matrix.scenario }}" != fresh ]; then sudo apt-get install -y --no-install-recommends ffmpeg; fi
           # The package's own service is not part of this installation.
           sudo systemctl disable --now caddy.service
           bash tests/linux/install-node.sh
