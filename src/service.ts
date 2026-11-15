@@ -32,7 +32,7 @@ export class AppError extends Error {
   }
 }
 export const deny = () => new AppError(404, 'NOT_FOUND');
-export interface PublicMessage extends Omit<StoredMessage, 'raw' | 'replyId' | 'reactions' | 'reactionTimes' | 'editTime' | 'originalTimeKnown' | 'pollState' | 'sendRequestHash' | 'sendAcknowledged'> {
+export interface PublicMessage extends Omit<StoredMessage, 'raw' | 'replyId' | 'reactions' | 'reactionTimes' | 'editTime' | 'originalTimeKnown' | 'pollState' | 'sendRequestHash' | 'sendAcknowledged' | 'groupReceipts'> {
   pollResults?: ObservedPollResults;
   reply?: { id: string; text: string; sender: string; available?: boolean };
   reactions: { emoji: string; count: number; mine: boolean }[];
@@ -410,6 +410,7 @@ export class ChatService {
           ['sent', 'delivered', 'read'].indexOf(input.status || 'unknown')
           ? previous.status
           : input.status || 'unknown',
+      groupReceipts: previous?.groupReceipts,
       reactions: previous?.reactions || {},
       reactionTimes: previous?.reactionTimes,
       raw: input.kind === 'unsupported' || readOnlyKind(input.kind) ? undefined : input.raw || previous?.raw,
@@ -482,8 +483,8 @@ export class ChatService {
       m={id,groupId:g,sender:'',fromMe:false,time:Date.now(),kind:'text',text:'',status:'unknown',reactions:{}};
     }
     const allowed: Partial<StoredMessage> = {};
-    for (const k of ['text', 'edited', 'editTime', 'deleted', 'status', 'reactions', 'raw'] as const)
-      if (patch[k] !== undefined && (!m.restricted || k === 'deleted' || k === 'status'))
+    for (const k of ['text', 'edited', 'editTime', 'deleted', 'status', 'groupReceipts', 'reactions', 'raw'] as const)
+      if (patch[k] !== undefined && (!m.restricted || k === 'deleted' || k === 'status' || k === 'groupReceipts'))
         (allowed as any)[k] = patch[k];
     const ranks: Record<string, number> = {
       unknown: -1,
@@ -510,6 +511,7 @@ export class ChatService {
       m.mediaId = undefined;
       m.reactions = {};
       m.reactionTimes = undefined;
+      m.groupReceipts = undefined;
       m.replyId = undefined;
       clearPendingReactions(this.store,f,g,id);
     }
@@ -518,7 +520,7 @@ export class ChatService {
   }
   public(f: string, m: StoredMessage): PublicMessage {
     if(!m.deleted && restrictedStoredMessage(m))m=restrictedPlaceholder(m);
-    const { raw, replyId, reactions, reactionTimes, editTime, originalTimeKnown, poll, pollState, sendRequestHash, sendAcknowledged, ...safe } = m;
+    const { raw, replyId, reactions, reactionTimes, editTime, originalTimeKnown, poll, pollState, sendRequestHash, sendAcknowledged, groupReceipts, ...safe } = m;
     const display=!m.deleted && !m.restricted && m.kind==='poll'?pollDisplay(m.text,poll?.options):undefined;
     const target = replyId ? this.store.getMessage(f, m.groupId, replyId) : undefined;
     const aggregated = new Map<string, { emoji: string; count: number; mine: boolean }>();

@@ -10,6 +10,7 @@ import { editedEnvelope, historicalReactions, reactionActor, reactionTime } from
 import { normalizeSharedContent } from './shared-content.js';
 import { readOnlyKind } from '../rich-content.js';
 import { normalizePoll } from './poll-content.js';
+import { applyRecipientReceipt, groupReceiptStatus, initialRecipients, receiptLevel, recipientOf } from './group-receipts.js';
 import makeWASocket, {
   BufferJSON,
   initAuthCreds,
@@ -27,6 +28,8 @@ import makeWASocket, {
   type SignalDataTypeMap,
   type SignalDataSet,
   type GroupMetadata,
+  type BinaryNode,
+  type MessageUserReceiptUpdate,
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import { thumbnail } from '../media.js';
@@ -290,6 +293,8 @@ export class BaileysConnector implements Connector {
   attempt = 0;
   generation = 0;
   cache = new Map<string, { at: number; value: GroupMetadata }>();
+  /** Our submitted message IDs awaiting the server ack, mapped to their conversation. */
+  awaitingAck = new Map<string, string>();
   constructor(
     readonly hooks: ConnectorHooks,
     readonly socketFactory = makeWASocket,
@@ -302,6 +307,7 @@ export class BaileysConnector implements Connector {
   }
   async connect() {
     this.ingestion?.dispose();
+    this.awaitingAck.clear();
     const generation = ++this.generation;
     this.hooks.state(this.attempt ? 'reconnecting' : 'connecting');
     const auth = encryptedAuth(this.hooks);
@@ -473,6 +479,19 @@ export class BaileysConnector implements Connector {
           this.hooks.update(key.remoteJid, key.id, { status: receipt(update.status) });
       }
     });
+    // Baileys returns sent messages as PENDING and surfaces only negative server
+    // acks; a positive ack is the server accepting the message (one tick).
+    sock.ws.on('CB:ack,class:message', (node: BinaryNode) => {
+      const { id, error } = node.attrs;
+      const g = id ? this.awaitingAck.get(id) : undefined;
+      if (!valid() || !id || !g || error) return;
+      this.awaitingAck.delete(id);
+      if (this.hooks.allowed(g)) this.hooks.update(g, id, { status: 'sent' });
+    });
+    // Group delivery/read receipts arrive per participant, never as messages.update.
+    sock.ev.on('message-receipt.update', (events) => {
+      void this.groupReceipts(sock, valid, events).catch(() => {});
+    });
     sock.ev.on('messages.delete', (event) => {
       if ('keys' in event)
         for (const key of event.keys)
@@ -581,9 +600,43 @@ export class BaileysConnector implements Connector {
     let prepared: Awaited<ReturnType<typeof prepare>>;
     try { prepared = await prepare(); } catch (error) { throw new SendNotSubmittedError(error); }
     m.beforeSend?.();
-    const sent = await prepared.sock.sendMessage(m.groupId, prepared.content, { messageId: m.id, quoted: prepared.quoted });
-    if (!sent) throw new Error('No acknowledgement');
+    this.awaitingAck.set(m.id, m.groupId);
+    let sent: WAMessage | undefined;
+    try { sent = await prepared.sock.sendMessage(m.groupId, prepared.content, { messageId: m.id, quoted: prepared.quoted }); }
+    catch (error) { this.awaitingAck.delete(m.id); throw error; }
+    if (!sent) { this.awaitingAck.delete(m.id); throw new Error('No acknowledgement'); }
     return normalizeIncoming(sent)!;
+  }
+  async groupMetadata(sock: WASocket, g: string) {
+    const cached = this.cache.get(g);
+    if (cached && Date.now() - cached.at < 300_000) return cached.value;
+    const value = await sock.groupMetadata(g);
+    if (this.sock === sock) this.cache.set(g, { at: Date.now(), value });
+    return value;
+  }
+  async groupReceipts(sock: WASocket, valid: () => boolean, events: MessageUserReceiptUpdate[]) {
+    const byGroup = new Map<string, MessageUserReceiptUpdate[]>();
+    for (const e of events) {
+      const g = e.key.remoteJid;
+      if (!valid() || !g || !e.key.id || conversationKind(g) !== 'group' || !this.hooks.allowed(g)) continue;
+      if (!this.hooks.getMessage(g, e.key.id)?.fromMe) continue;
+      byGroup.set(g, [...(byGroup.get(g) || []), e]);
+    }
+    for (const [g, list] of byGroup) {
+      const meta = await this.groupMetadata(sock, g);
+      if (!valid() || this.sock !== sock || !this.hooks.allowed(g)) return;
+      const self = [sock.user?.id, sock.user?.lid];
+      // Synchronous read-merge-write per receipt: no interleaving between receipts.
+      for (const { key, receipt } of list) {
+        const m = this.hooks.getMessage(g, key.id!), level = receiptLevel(receipt);
+        const recipient = receipt.userJid ? recipientOf(meta, receipt.userJid, self) : undefined;
+        if (!m?.fromMe || m.deleted || !level || !recipient) continue;
+        const states = applyRecipientReceipt(m.groupReceipts || initialRecipients(meta, self), recipient, level);
+        if (!states) continue;
+        const status = groupReceiptStatus(states);
+        this.hooks.update(g, m.id, status ? { groupReceipts: states, status } : { groupReceipts: states });
+      }
+    }
   }
   async react(g: string, m: StoredMessage, emoji: string) {
     await this.require().sendMessage(g, { react: { text: emoji, key: this.key(m) } });
@@ -633,6 +686,7 @@ export class BaileysConnector implements Connector {
     const sock = this.sock;
     this.sock = undefined;
     this.cache.clear();
+    this.awaitingAck.clear();
     let unlinkRequested = false;
     if (sock) {
       try {

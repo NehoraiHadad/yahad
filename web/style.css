@@ -367,6 +367,8 @@ a {
   --text: #29423b;
   --muted: #7a8d83;
   --border: #e6ebe3;
+  /* Read ticks: blue distinct from --muted, >=3:1 on every outgoing bubble. */
+  --receipt-read: #1f7fb8;
   display: flex;
   height: 100dvh;
   width: 100%;
@@ -401,6 +403,7 @@ a {
   --text: #e0eae3;
   --muted: #98aea1;
   --border: #304138;
+  --receipt-read: #53bdeb;
 }
 .chat-app.dark.theme-lilac {
   --accent: #bca5e0;
@@ -837,7 +840,7 @@ a {
   color: var(--muted);
 }
 .receipt.read {
-  color: #5098ad;
+  color: var(--receipt-read);
 }
 .receipt.failed {
   color: #bd5864;
