@@ -112,7 +112,7 @@ language:
 **Not changed by this plan, noted for the infrastructure track.** These shrink
 the rare Setup download and don't affect the app track:
 - the host, Updater and Platform each carry their own self-contained .NET
-  runtime (open question 6);
+  runtime (decision 6);
 - FFmpeg ships the full LGPL shared build.
 
 ## 3. What can only change through Setup
@@ -193,7 +193,7 @@ by hand by an administrator is inside it, as it is today.
 
 ### 4.3 Versions and the active pointer
 
-- **Infrastructure version:** its own version (open question 1), compiled into
+- **Infrastructure version:** its own version (decision 1), compiled into
   the host, Updater and engine from `installer/Directory.Build.props` in place of
   `package.json`. It carries the supported **infrastructure contract** range
   `contractMin..contractMax` (section 6).
@@ -257,7 +257,7 @@ change, not a check. The uninstall and repair paths are built without
 `UpgradeHost.cs:120`). Tests run both uninstall modes, quiet and from Apps &
 Features, on the payload-free engine.
 
-How the per-release distributable Setup is built from it is open question 7.
+How the per-release distributable Setup is built from it is decision 7.
 
 ### 4.5 Installer record (`InstallerState`, format 7)
 
@@ -454,7 +454,7 @@ service image, registration or firewall rule, and never extracts runtimes. The
 proxy is stopped from step 4 to step 8, as in a full upgrade. So no LAN client
 writes during the gate, and a schema rollback cannot discard work acknowledged
 to a LAN user. The PC's own loopback browser can still reach the Runtime during
-the gate, exactly as in today's full upgrade (open question 8).
+the gate, exactly as in today's full upgrade (decision 8).
 
 ## 8. Infrastructure track (Setup) with pairs
 
@@ -642,7 +642,7 @@ release's app version and commit (`installer/windows/application_version.py:46-5
 **Building infrastructure once.** The infrastructure build runs at an infra
 version's first release, from that commit. It is cached by
 `infra-tree.json` digest. Later releases reuse it and build only the app
-and the distributable Setup (open question 7).
+and the distributable Setup (decision 7).
 
 **Version bump rule, per component.** "Anything under `installer/`" is not the
 right test, because infra inputs also live outside it. The release command
@@ -783,48 +783,45 @@ plan changes no Linux asset, and Linux needs no migration either.
   not fall back to an app-relative path. The new layout's first infrastructure
   version sets contract range 1..1 with this variable.
 
-## 14. Open questions for the maintainer
+## 14. Decisions
 
-1. **Infrastructure version scheme:** an independent semver, or the app version
-   at the last infrastructure change? *Recommendation:* independent semver. The
-   bump rule (section 10) already decides when it moves.
-2. **Updater self-update:** move the Updater to a Linux-style self-updating
-   worker later? This plan keeps it on the Setup track.
-3. **First install:** embed the app (works offline, as planned) or download the
-   latest app package at install time?
-4. **Auto window:** should app-only updates still wait for 03:00-04:59
-   (`UpdaterEngine.cs:46-47`)?
-5. *Decided:* nothing to retire, because no 0.6.x install exists (section 11).
-6. **Shrinking the infrastructure download (follow-up, not needed for the app
-   track).** Platform moved to infrastructure (section 2a), so no .NET runtime
-   is left in the app package. Today the host, Updater and Platform each ship a
-   self-contained runtime, and FFmpeg is the full 151 MiB shared build.
-   - (a) leave it as it is;
-   - (b) publish the host, Updater and Platform with NativeAOT: no runtime copies,
-     but it needs source-generated JSON (Platform serialises anonymous types
-     today, `Program.cs:7`), AOT and trim warnings as errors, and the MSVC
-     linker in CI;
-   - (c) also replace FFmpeg with a build limited to the codecs the app uses.
+The maintainer accepted every recommendation (2026-11-15):
 
-   *Recommendation:* (b) and (c) as their own infrastructure-track changes, each
-   proven by an AOT or codec test in CI. None of them blocks this plan.
-7. **How the per-release distributable Setup is built:**
-   - (a) publish `Yahad.Setup` from a worktree at the **infra source commit**,
-     embedding the cached infra and the new app;
-   - (b) a separate small bootstrap that carries the payload and runs the
-     engine.
+1. **Infrastructure version:** an independent semver, moved by the section 10
+   bump rule.
+2. **Updater self-update:** not now. The Updater stays on the Setup track.
+3. **First install:** the Setup embeds the app, so it works offline.
+4. **Auto window:** app-only updates also wait for 03:00-04:59
+   (`UpdaterEngine.cs:46-47`), because the apply restarts the Runtime. A manual
+   "update now" stays available.
+5. **Retiring 0.6.x:** nothing to retire, because no install exists (section 11).
+6. **Shrinking the infrastructure download:** NativeAOT for the host, Updater and
+   Platform, and a slim FFmpeg, each as its own infrastructure-track change with
+   an AOT or codec test in CI. Neither blocks this plan.
+7. **Per-release distributable Setup:** publish `Yahad.Setup` from a worktree at
+   the infra source commit, embedding the cached infra and the new app. No new
+   executable.
+8. **Loopback writes during the health gate:** kept as today
+   (`UpgradeHost.cs:171,176-177,242`). A read-only maintenance state is its own
+   later change, for both tracks.
+9. **Existing installs:** none, so there is no bridge (section 11).
 
-   *Recommendation:* (a). Its engine code identity stays the infra commit, and
-   no new executable is added.
-8. **Loopback writes during the health gate:** the PC's own browser can write
-   while the gate runs, and a schema rollback restores the backup. This is
-   today's full-upgrade behaviour (`UpgradeHost.cs:171,176-177,242`), not new.
-   - (a) keep it, and record it;
-   - (b) hold the Runtime in a read-only maintenance state until the gate passes.
+## 15. Implementation order
 
-   *Recommendation:* (a) in this plan, with (b) as its own change for both
-   tracks.
-9. *Decided:* no Windows install exists, so there is no bridge (section 11).
+Each phase is its own PR, built and tested locally. No release is published.
+
+1. **Platform to infrastructure:** the host passes `YAHAD_PLATFORM_HELPER`, with
+   the section 10 migration list.
+2. **Layout and record:** `infra\`, `apps\`, `active.json` and format 7, with
+   the 4.4 and 8.3 fixes: a payload-free uninstall, and commit only after health.
+3. **App package and release format:** `AppPackage`, the format-2 manifest, and
+   the section 10 tooling.
+4. **App apply and the Updater:** `--apply-app` with rollback, and track
+   selection.
+5. **Tests and CI:** section 12.
+
+A full install on a real test machine comes before the first app-only update
+(section 13).
 
 ## Appendix: review disposition
 
@@ -833,7 +830,7 @@ accepted. Two were narrowed:
 - **#12:** the health value isn't stale while the app is healthy, because
   startup refuses a mismatched stored schema (`store.ts:84`). The real defect is
   that admission depends on a running Runtime.
-- **#13:** loopback writes during the gate already exist today (open question 8).
+- **#13:** loopback writes during the gate already exist today (decision 8).
 
 | Finding | Where handled |
 | --- | --- |
