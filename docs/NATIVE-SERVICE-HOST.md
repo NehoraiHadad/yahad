@@ -2,6 +2,8 @@
 
 # Native SCM host source checkpoint
 
+> Update 2026-11-15: FFmpeg was later removed from Yahad entirely. Voice is recorded as Opus in the browser and remuxed to Ogg Opus there, previews are made in the browser, and the server only validates both. The current packages contain no `runtime/ffmpeg`; the service host no longer sets FFMPEG_PATH, and current dependencies are only Node, the .NET helper and Caddy.
+
 This slice starts from preserved `ce4f62b` in `C:\projects\yahad-native-service`, branch `feat/native-service-host`. It implements `Yahad.ServiceHost`, a real Windows own-process SCM executable. It contains no service/account installation APIs and does not turn the earlier feasibility executable into a service wrapper.
 
 ## Production entry and authorization
@@ -16,7 +18,7 @@ The installed activation resolver is deliberately unconfigured and always refuse
 
 The controller reports START_PENDING for actual startup milestones, RUNNING only after app readiness, STOP_PENDING during shutdown/cleanup and STOPPED only after confirmed quiescence (or when no app was started). It advertises stop/shutdown controls while running; a startup-stop race cancels initialization. The handler merely signals an asynchronous request and returns. Unsupported controls are refused; interrogate has no side effect. It never implements a second payload update authority.
 
-Startup authorization is bounded and late grants are disposed after cancellation. Read-only recovery/start barriers are also bounded, including an adapter that ignores cancellation. Such barriers must never execute restore/activation writes. The concrete native process launcher returns its owned Job Object synchronously, assigns the suspended process before resume, pins/checks its executable image, builds an explicit allowlisted empty-PATH environment and assigns the private FFmpeg path. Full payload authentication/dependency pinning remains the activation resolver's responsibility.
+Startup authorization is bounded and late grants are disposed after cancellation. Read-only recovery/start barriers are also bounded, including an adapter that ignores cancellation. Such barriers must never execute restore/activation writes. The concrete native process launcher returns its owned Job Object synchronously, assigns the suspended process before resume, pins/checks its executable image, builds an explicit allowlisted empty-PATH environment and no longer assigns any media-tool path. Full payload authentication/dependency pinning remains the activation resolver's responsibility.
 
 The production child-control adapter reuses the current-identity local-only pipe policy, checks the connecting PID against the retained job root and bounds readiness frames. Graceful shutdown uses that private channel; whole-job exit and termination use actual native accounting. This pipe adapter was compiled but **not opened or exercised** in this slice. An unexpected root exit fails the service without automatically restarting the old app or changing data.
 
@@ -24,7 +26,7 @@ Failed cleanup retries through the audited AppLifecycle disposal contract. Unkno
 
 ## Non-installing validation
 
-The dedicated suite passed **34/34** checks, zero failures/skips and zero compiler warnings/errors. SCM transport/status tests use a fake API. Child-control tests use an isolated file-based test adapter, not a listening endpoint. Four tests use actual private Node processes and descendants in native jobs: graceful stop, wrong peer observation, startup timeout and unexpected root exit. They verify empty PATH, dropped hostile NODE_OPTIONS, explicit FFmpeg path and actual complete process-tree exit. No real WhatsApp, family data or network listener is involved.
+The dedicated suite passed **34/34** checks, zero failures/skips and zero compiler warnings/errors. SCM transport/status tests use a fake API. Child-control tests use an isolated file-based test adapter, not a listening endpoint. Four tests use actual private Node processes and descendants in native jobs: graceful stop, wrong peer observation, startup timeout and unexpected root exit. They verify empty PATH, dropped hostile NODE_OPTIONS, and actual complete process-tree exit. No real WhatsApp, family data or network listener is involved.
 
 Other cases cover token-policy rejection, actual current-token rejection against the service SID, strict bootstrap schema, bootstrap authorization failure, unconfigured activation, registration/status ordering, rejected SCM arguments, cancellation/late-grant revocation, noncooperative recovery barriers, nonblocking stop dispatch, shutdown ordering, failed health, unknown cleanup and status-transport failure. Reading the current token is not acceptance of an actual service-account token.
 

@@ -1,6 +1,8 @@
 # Next-release native installation plan
 
-Latest private FFmpeg/Caddy and recovery checkpoint: [Private dependency and recovery checkpoint](NATIVE-DEPENDENCIES-CHECKPOINT.md).
+Latest private dependency and recovery checkpoint: [Private dependency and recovery checkpoint](NATIVE-DEPENDENCIES-CHECKPOINT.md).
+
+> Update 2026-11-15: FFmpeg was later removed from Yahad entirely. Voice is recorded as Opus in the browser and remuxed to Ogg Opus there, previews are made in the browser, and the server only validates both. The current packages contain no `runtime/ffmpeg`; this plan no longer has any media-tool dependency or license obligation, and current dependencies are only Node, the .NET helper and Caddy.
 
 Current dependency/lifecycle/access checkpoint: [Private runtime packaging and stage-one handoff](NATIVE-RUNTIME-PACKAGING.md). Earlier counts below describe their respective increments.
 
@@ -39,7 +41,7 @@ Normal uninstall removes only owned bootstrap integration after coordinating wit
 
 ## Runtime portability audit and app integration gate
 
-Keep the existing Fastify/React/SQLite app. Build the web assets and install audited production dependencies on the **build machine**, with platform/architecture-specific native modules verified. Include private Node 24 and ffmpeg/Caddy as appropriate; never run `npm install` on the family's machine. Pin archive URLs/hashes and dependency lockfiles in the build manifest. Hashes prove consistency, not independent publisher authenticity. Preserve the existing HTTPS-only update trust option and policy/pins; do not enroll updater signing keys against the owner's preference.
+Keep the existing Fastify/React/SQLite app. Build the web assets and install audited production dependencies on the **build machine**, with platform/architecture-specific native modules verified. Include private Node 24 and Caddy as appropriate; never run `npm install` on the family's machine. Pin archive URLs/hashes and dependency lockfiles in the build manifest. Hashes prove consistency, not independent publisher authenticity. Preserve the existing HTTPS-only update trust option and policy/pins; do not enroll updater signing keys against the owner's preference.
 
 Before launching the app natively, audit at least:
 
@@ -65,11 +67,11 @@ For LAN HTTPS, retain the reviewed private-CA model with an isolated proxy ident
 
 Reuse the current reviewed `deploy/install.py` and updater recovery/receipt/service architecture. Do not discard its backups, safe ownership checks or policies to achieve a prettier launcher. The easy-install successor should ship **separate signed/verified per-target bundles** plus a small graphical launcher that explains the one polkit consent, feeds a strict structured plan to the reviewed root helper, and opens the same local browser wizard. There is no Linux implementation or machine acceptance in this Windows feasibility increment.
 
-First target candidates: Debian 12/13 amd64 with systemd, Ubuntu 24.04 LTS amd64 with systemd, and Raspberry Pi OS 64-bit Bookworm arm64. Each needs a separately built/tested dependency closure, including glibc/OpenSSL/ffmpeg/Caddy and Python installer/updater runtime. A Node archive alone does not remove those dependencies. Choose bundled private dependencies or versioned distro dependencies after checking actual target ABI/licensing; do not claim an offline single-file Linux installation until that closure is tested. A `.deb`/polkit experience may still ask for a system password and needs a GUI-less Pi alternative with one documented command. Alpine/musl, non-systemd distros, Pi armhf, Windows ARM64 and macOS are outside the first boundary.
+First target candidates: Debian 12/13 amd64 with systemd, Ubuntu 24.04 LTS amd64 with systemd, and Raspberry Pi OS 64-bit Bookworm arm64. Each needs a separately built/tested dependency closure, including glibc/OpenSSL/Caddy and Python installer/updater runtime. A Node archive alone does not remove those dependencies. Choose bundled private dependencies or versioned distro dependencies after checking actual target ABI/licensing; do not claim an offline single-file Linux installation until that closure is tested. A `.deb`/polkit experience may still ask for a system password and needs a GUI-less Pi alternative with one documented command. Alpine/musl, non-systemd distros, Pi armhf, Windows ARM64 and macOS are outside the first boundary.
 
 ## Build, legal and distribution gates
 
-Include the exact Node distribution LICENSE and third-party notices, npm dependency notices/SBOM, .NET notices and the exact ffmpeg build configuration/source correspondence. FFmpeg's enabled components change LGPL/GPL obligations; reject `--enable-nonfree` redistribution and review the actual codec/build choices before shipping. Preserve Caddy/Go module notices. System CA/private keys never belong in an app archive. Shipping .NET inside the bootstrapper and Node inside versioned app payloads keeps maintenance ownership clear; both require a security servicing policy.
+Include the exact Node distribution LICENSE and third-party notices, npm dependency notices/SBOM, .NET notices and the exact Caddy build information. Preserve Caddy/Go module notices. System CA/private keys never belong in an app archive. Shipping .NET inside the bootstrapper and Node inside versioned app payloads keeps maintenance ownership clear; both require a security servicing policy.
 
 Only after packaging, signing and disposable-machine acceptance should a static download page be added. It should offer explicit Windows x64/Linux amd64/Pi arm64 choices, verified release links, size/version, support boundaries, trust instructions and an accessible recovery/help path. Never show a download button as working before its matching artifact exists. GitHub Pages is a suitable possible host; no Pages config, workflow, deployment or manual Actions run was created.
 
@@ -92,6 +94,5 @@ Only after packaging, signing and disposable-machine acceptance should a static 
 - [WiX: Open Source Maintenance Fee](https://docs.firegiant.com/wix/osmf/)
 - [Inno Setup features](https://jrsoftware.org/isinfo.php) and [published license](https://jrsoftware.org/files/is/license.txt)
 - [Node release support](https://nodejs.org/en/about/previous-releases)
-- [FFmpeg build/license requirements](https://www.ffmpeg.org/legal.html)
 
 These sources guide implementation choices; they do not establish that this installer has passed Windows or Linux acceptance.

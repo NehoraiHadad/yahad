@@ -40,7 +40,7 @@ class _VerifiedFiles(dict):
 
 
 RUNTIME_VERSION = '10.0.14'
-REQUIRED_MEMBERS = frozenset({'payload/bundle.json','payload/runtime/node/node.exe','payload/runtime/ffmpeg/ffmpeg.exe',
+REQUIRED_MEMBERS = frozenset({'payload/bundle.json','payload/runtime/node/node.exe',
     'payload/runtime/caddy/caddy.exe','payload/app/server/main.mjs','payload/app/dist/index.html',
     'host/Yahad.ServiceHost.exe','host/Yahad.ServiceHost.runtimeconfig.json',
     'updater/Yahad.Updater.exe','updater/Yahad.Updater.runtimeconfig.json',

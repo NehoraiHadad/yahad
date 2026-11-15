@@ -4,6 +4,7 @@ export type Kind = 'text' | 'image' | 'video' | 'document' | 'sticker' | 'audio'
 export type SendKind=Exclude<Kind,'poll'|'contact'|'location'|'interactive'>;
 export interface PollOptions {options:string[]}
 export type Receipt = 'pending' | 'sent' | 'delivered' | 'read' | 'unknown' | 'failed';
+export type RecipientState = 'pending' | 'delivered' | 'read';
 export interface ReactionUpdate { target: string; actor: string; emoji: string; time?: number }
 export interface Capabilities {
   interactive?: {textDisplay:boolean;actions:boolean};
@@ -77,6 +78,8 @@ export interface StoredMessage {
   mime?: string;
   filename?: string;
   status: Receipt;
+  /** Private per-recipient receipts of our own group message, keyed by participant JID. */
+  groupReceipts?: Record<string, RecipientState>;
   edited?: boolean;
   editTime?: number;
   originalTimeKnown?: boolean;
@@ -105,6 +108,8 @@ export interface Outgoing {
   bytes?: Buffer;
   mime?: string;
   filename?: string;
+  /** The validated browser-made JPEG preview; present for every image and video send. */
+  jpegThumbnail?: Buffer;
 }
 export type ConnectionState =
   | 'idle'

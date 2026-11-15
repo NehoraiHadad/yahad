@@ -223,11 +223,13 @@ test('request fingerprint binds quote and raw attachment bytes without exposing 
   assert.notEqual(sendRequestHash(body, file), sendRequestHash(body, { ...file, bytes: Buffer.from('different') }));
 });
 
-function upload(f: Awaited<ReturnType<typeof fixture>>, clientId: string, bytes: Buffer, sticker = false, text = 'Synthetic caption', voice = false) {
+function upload(f: Awaited<ReturnType<typeof fixture>>, clientId: string, bytes: Buffer, sticker = false, text = 'Synthetic caption', voice = false, preview?: Buffer) {
   const boundary = '----synthetic-send-outcomes';
   const fields = { clientId, text, sticker: String(sticker), voice: String(voice) };
   const chunks: Buffer[] = Object.entries(fields).map(([name, value]) => Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`));
-  chunks.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="synthetic.bin"\r\nContent-Type: application/octet-stream\r\n\r\n`), bytes, Buffer.from(`\r\n--${boundary}--\r\n`));
+  chunks.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="synthetic.bin"\r\nContent-Type: application/octet-stream\r\n\r\n`), bytes, Buffer.from('\r\n'));
+  if (preview) chunks.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="preview"; filename="preview.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`), preview, Buffer.from('\r\n'));
+  chunks.push(Buffer.from(`--${boundary}--\r\n`));
   return f.req(f.child, f.path + '/media', 'POST', Buffer.concat(chunks), { 'content-type': `multipart/form-data; boundary=${boundary}` });
 }
 
@@ -236,12 +238,12 @@ test('attachment ACK after expiry preserves media bytes for parent, and renewal 
   try {
     f.nearDeadline(); let calls = 0;
     f.c.send = async m => { m.beforeSend?.(); calls++; f.advance(1); return ack(m); };
-    const id = randomUUID(), bytes = readFileSync('fixtures/garden.jpg');
-    assert.equal((await upload(f, id, bytes)).statusCode, 403);
+    const id = randomUUID(), bytes = readFileSync('fixtures/garden.jpg'), preview = readFileSync('fixtures/garden-preview.jpg');
+    assert.equal((await upload(f, id, bytes, false, 'Synthetic caption', false, preview)).statusCode, 403);
     const row = f.row(id)!; assert.equal(row.status, 'sent'); assert.ok(row.mediaId);
     assert.deepEqual((await f.req(f.parent, f.path + '/media/' + row.mediaId)).rawPayload, bytes);
     assert.equal((await f.req(f.child, f.path + '/media/' + row.mediaId)).statusCode, 403);
-    await f.bonus(); assert.equal((await upload(f, id, bytes)).statusCode, 200); assert.equal(calls, 1);
+    await f.bonus(); assert.equal((await upload(f, id, bytes, false, 'Synthetic caption', false, preview)).statusCode, 200); assert.equal(calls, 1);
     assert.equal((await upload(f, id, Buffer.from('changed bytes'))).json().error, 'SEND_ID_CONFLICT'); assert.equal(calls, 1);
   } finally { await f.close(); }
 });
@@ -334,8 +336,8 @@ test('one stable ID reserves asynchronous media preparation across tabs, rejects
     const started = new Promise<void>(r => { began = r; }), held = new Promise<void>(r => { release = r; });
     const measure = f.store.diagnostics.measureAsync.bind(f.store.diagnostics), audio = readFileSync('fixtures/audio.ogg');
     f.store.diagnostics.measureAsync = (async (family: string, operation: string, work: () => Promise<any>) => {
-      if (operation !== 'audio_encode') return measure(family, operation as any, work);
-      began(); await held; return audio;
+      if (operation !== 'media_prepare') return measure(family, operation as any, work);
+      began(); await held; return work();
     }) as typeof f.store.diagnostics.measureAsync;
     const id = randomUUID(), request = upload(f, id, audio, false, '', true).then(r => r);
     await started;

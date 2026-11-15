@@ -38,14 +38,14 @@ Required external inputs:
    `npm ci --ignore-scripts --cache C:/build-cache/npm` once with network available.
    Application packaging subsequently uses production-only, offline restore and
    refuses a missing cache entry rather than falling back to the network.
-4. FFmpeg/Caddy vendor inputs staged by the existing pinned-input verifier.
+4. Caddy vendor inputs staged by the existing pinned-input verifier.
 
 Exact vendor URLs, archive hashes, checksum-document hashes and selected member
-hashes are in [dependency-pins.json](windows/dependency-pins.json). Download those
-archives and checksum documents explicitly to a local build-input directory, then:
+hashes are in [dependency-pins.json](windows/dependency-pins.json). Download that
+archive and checksum document explicitly to a local build-input directory, then:
 
 ```powershell
-python -m installer.windows.dependencies stage --ffmpeg-archive C:/build-inputs/ffmpeg.zip --ffmpeg-checksums C:/build-inputs/ffmpeg-checksums.sha256 --caddy-archive C:/build-inputs/caddy.zip --caddy-checksums C:/build-inputs/caddy-checksums.txt --output .local/vendors
+python -m installer.windows.dependencies stage --caddy-archive C:/build-inputs/caddy.zip --caddy-checksums C:/build-inputs/caddy-checksums.txt --output .local/vendors
 ```
 
 Use the exact files named by the pins, even if your local filenames differ.

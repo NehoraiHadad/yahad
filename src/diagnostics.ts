@@ -10,7 +10,7 @@ import type { Config } from './config.js';
 
 // Closed vocabulary: never accept SQL, paths, request URLs, messages, user IDs or provider errors.
 export const operations = ['db_read', 'db_write', 'db_commit', 'media_read', 'media_write',
-  'api', 'audio_encode', 'connector', 'media_download'] as const;
+  'api', 'media_prepare', 'connector', 'media_download'] as const;
 export type Operation = typeof operations[number];
 export const errorKinds = ['io', 'no_space', 'readonly', 'busy', 'permission', 'internal'] as const;
 type ErrorKind = typeof errorKinds[number];

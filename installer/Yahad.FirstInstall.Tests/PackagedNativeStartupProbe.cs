@@ -47,7 +47,7 @@ internal static class PackagedNativeStartupProbe
             };
             lease = WindowsFileBoundary.AcquireDataLease(data);
             var spec = new VerifiedProcessSpec(node, ["server/main.mjs"],
-                Path.Combine(prepared, "app"), temporary, Path.Combine(prepared, "runtime", "ffmpeg", "ffmpeg.exe"), platform, environment, lease);
+                Path.Combine(prepared, "app"), temporary, platform, environment, lease);
             var launcher = jobs.Launcher(new ServiceProcessLauncher(spec, () => new LocalChildControl()));
             controller = new ServiceController(new Start(launcher), TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(20));
             run = controller.RunAsync(status => { if (status.State == ServiceState.Running) ready.TrySetResult(); });

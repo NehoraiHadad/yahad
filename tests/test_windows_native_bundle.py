@@ -44,11 +44,9 @@ class WindowsBundleTests(unittest.TestCase):
 
     def lock(self,profile='full'):
         components=[{'id':'node','path':'runtime/node/node.exe','version':'24.22.2','sourceUrl':'https://nodejs.org/dist/v24.22.2/node-v24.22.2-win-x64.zip'}]
-        if profile=='full': components += [{'id':'ffmpeg','path':'runtime/ffmpeg/ffmpeg.exe','origin':'project-built-from-official-source','sourceUrl':'https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz'},
-            {'id':'caddy','path':'runtime/caddy/caddy.exe','sourceUrl':'https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_windows_amd64.zip'}]
+        if profile=='full': components += [{'id':'caddy','path':'runtime/caddy/caddy.exe','sourceUrl':'https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_windows_amd64.zip'}]
         for component in components: component['sha256']=hashlib.sha256((self.prepared/component['path']).read_bytes()).hexdigest()
         self.put('legal/runtime-lock.json',json.dumps({'schema':1,'target':'win-x64','components':components}))
-        self.put('legal/ffmpeg-build.json',json.dumps({'sourceSha256':'0'*64,'buildRecipeSha256':'1'*64,'configure':['--disable-gpl','--disable-nonfree','--enable-libopus']}))
 
     def test_full_candidate_content_and_no_install_claim(self):
         result=bundle.build(self.prepared,self.root/'full.zip')
@@ -121,12 +119,8 @@ class WindowsBundleTests(unittest.TestCase):
         value['components'].append({'id':'platform','path':'runtime/node/node.exe','origin':'project-built','sourceCommit':'a'*40,'sourceUrl':'https://github.com/NehoraiHadad/yahad','sha256':'0'*64}); path.write_text(json.dumps(value))
         with self.assertRaisesRegex(bundle.BundleError,'Runtime lock contract'): bundle.validate(self.prepared)
 
-    def test_officially_linked_ffmpeg_not_silently_vendor_official(self):
-        path=self.prepared/'legal/runtime-lock.json'; value=json.loads(path.read_text()); item=next(c for c in value['components'] if c['id']=='ffmpeg'); item['sourceUrl']='https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/example.zip'; item['origin']='community-build'; path.write_text(json.dumps(value))
-        with self.assertRaisesRegex(bundle.BundleError,'Official-source'): bundle.validate(self.prepared)
-
     def test_vendor_origin_cannot_be_self_asserted_with_fake_payload(self):
-        path=self.prepared/'legal/runtime-lock.json'; value=json.loads(path.read_text()); item=next(c for c in value['components'] if c['id']=='ffmpeg'); item['sourceUrl']='https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-fixture/fixture.zip'; item['origin']='upstream-linked-vendor'; path.write_text(json.dumps(value))
+        path=self.prepared/'legal/runtime-lock.json'; value=json.loads(path.read_text()); item=next(c for c in value['components'] if c['id']=='caddy'); item['origin']='official-vendor'; path.write_text(json.dumps(value))
         with self.assertRaisesRegex(bundle.BundleError,'Pinned vendor'): bundle.validate(self.prepared)
 
     def test_private_state_not_packaged(self):
@@ -139,13 +133,29 @@ class WindowsBundleTests(unittest.TestCase):
         self.assertEqual(path.read_bytes(),b'preserve')
 
     def test_core_fixture_cannot_pass_as_full_package(self):
-        (self.prepared/'runtime/ffmpeg/ffmpeg.exe').unlink(); (self.prepared/'runtime/caddy/caddy.exe').unlink(); self.lock('core-fixture')
+        (self.prepared/'runtime/caddy/caddy.exe').unlink(); self.lock('core-fixture')
         result=bundle.validate(self.prepared,'core-fixture'); self.assertFalse(result['familyInstallationReady'])
         with self.assertRaisesRegex(bundle.BundleError,'MISSING_PAYLOAD'): bundle.validate(self.prepared,'full')
 
     def test_undeclared_runtime_namespace_refused(self):
         self.put('runtime/unknown/tool.exe',image())
-        with self.assertRaisesRegex(bundle.BundleError,'Undeclared runtime'): bundle.validate(self.prepared)
+        with self.assertRaisesRegex(bundle.BundleError,'Undeclared runtime namespace: runtime/unknown/tool.exe'): bundle.validate(self.prepared)
+
+    def test_ffmpeg_runtime_refused_in_every_profile(self):
+        # FFmpeg is not part of Yahad: a prepared tree carrying it is refused, never packaged.
+        self.put('runtime/ffmpeg/ffmpeg.exe',image(('kernel32.dll',)))
+        for profile in ('full','core-fixture'):
+            with self.subTest(profile=profile):
+                if profile=='core-fixture': (self.prepared/'runtime/caddy/caddy.exe').unlink(); self.lock(profile)
+                with self.assertRaisesRegex(bundle.BundleError,'Undeclared runtime namespace: runtime/ffmpeg/ffmpeg.exe'): bundle.validate(self.prepared,profile)
+                output=self.root/(profile+'-ffmpeg.zip')
+                with self.assertRaisesRegex(bundle.BundleError,'runtime/ffmpeg/ffmpeg.exe'): bundle.build(self.prepared,output,profile)
+                self.assertFalse(output.exists())
+
+    def test_manifest_launch_map_names_only_shipped_runtimes(self):
+        # No helper entry: Platform is infrastructure, named to the app by the host.
+        self.assertEqual(bundle.validate(self.prepared)['launch'],{'node':'runtime/node/node.exe','entry':'app/server/main.mjs',
+            'caddy':'runtime/caddy/caddy.exe'})
 
     def test_source_tree_and_node_modules_are_not_payload(self):
         for name in ('app/src/main.ts','app/node_modules/tsx/package.json','app/package-lock.json','app/server/extra.mjs'):

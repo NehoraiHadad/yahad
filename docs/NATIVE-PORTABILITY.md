@@ -1,6 +1,8 @@
 # Native app portability increment
 
-Latest private FFmpeg/Caddy and recovery checkpoint: [Private dependency and recovery checkpoint](NATIVE-DEPENDENCIES-CHECKPOINT.md).
+Latest private dependency and recovery checkpoint: [Private dependency and recovery checkpoint](NATIVE-DEPENDENCIES-CHECKPOINT.md).
+
+> Update 2026-11-15: FFmpeg was later removed from Yahad entirely. Voice is recorded as Opus in the browser and remuxed to Ogg Opus there, previews are made in the browser, and the server only validates both. The current packages contain no `runtime/ffmpeg`; the former media-tool row was removed from the table below, and current dependencies are only Node, the .NET helper and Caddy.
 
 Current dependency/lifecycle/access checkpoint: [Private runtime packaging and stage-one handoff](NATIVE-RUNTIME-PACKAGING.md). Earlier counts below describe their respective increments.
 
@@ -37,11 +39,10 @@ The Windows lock is a file; the retained Linux proper-lockfile protocol uses a d
 | .NET | Platform helper, fixture host and WPF UI publish with their native runtime included | Signed bootstrap/service distribution, private extraction/cache directories, Windows DLL/VC runtime closure and security servicing policy |
 | Node 24 | Official Windows x64 ZIP checksum-verified into private task tooling; real app launched by absolute executable path | Put the pinned runtime inside versioned app payloads, validate exact bytes and architecture, never use a global Node install or alter PATH |
 | npm/production modules | Locked dependencies restored on the build machine with lifecycle scripts disabled; app tests and web build succeeded | Target-specific audited production export/SBOM; no npm install on the parent's computer |
-| ffmpeg | Existing synthetic media/security tests passed on the development host, but those are not clean-machine evidence | Private verified target binary plus required DLL/library closure, exact build/source/license notices and codec acceptance |
 | Caddy/TLS | Not executed or installed in this increment | Private target-specific proxy, isolated identity, explicit trust/consent and tablet flow; no global replacement |
 | Python/OpenSSL | Linux engine candidate requires private runtime entries; no Python is needed by the new Windows ACL helper | Linux ABI/stdlib/library closure and helper path integration. Evaluate Windows requirements from the final native updater/TLS design; do not fall back to globally installed tools |
 
-The mock app test gives its child an **empty PATH** and removes development .NET roots/startup hooks and NODE_OPTIONS. Explicit `where.exe` checks cannot locate Node, Python, dotnet, ffmpeg or Caddy through that PATH. The app still starts using the absolute private Node executable and self-contained helper, serves loopback health, rejects a second writer on a different port, closes through private IPC and releases its lease. The test also restarts the same synthetic store and exercises IPC disconnect.
+The mock app test gives its child an **empty PATH** and removes development .NET roots/startup hooks and NODE_OPTIONS. Explicit `where.exe` checks cannot locate Node, Python, dotnet or Caddy through that PATH. The app still starts using the absolute private Node executable and self-contained helper, serves loopback health, rejects a second writer on a different port, closes through private IPC and releases its lease. The test also restarts the same synthetic store and exercises IPC disconnect.
 
 This proves independence from development PATH for the paths exercised. It does **not** simulate a freshly installed OS, prove all media/TLS dependencies exist, or establish that a single installer already bundles them. No global runtime, environment setting or unrelated service was removed or replaced.
 
@@ -49,7 +50,7 @@ This proves independence from development PATH for the paths exercised. It does 
 
 `installer/linux/package_bundle.py` creates deterministic gzip/tar **runtime candidates** for `linux-x64` and `linux-arm64`. These are not release assets accepted by the existing updater. They have `kind: native-runtime-candidate` and `runtimeAcceptance: not-performed`.
 
-Build-machine input consists of `app/` (built frontend, sources and prepared production modules), `runtime/` and `legal/`. It requires Node/Python/ffmpeg/Caddy/OpenSSL executables, the target's esbuild binary, exact app/lockfile agreement, runtime version/hash/source records, an SBOM and license/provenance files. All ELF files are checked for target 64-bit architecture; mixed-architecture native modules are refused. Symlinks/reparse points, hardlinks, private-state files and existing output replacement are refused. Tar ownership/timestamps/modes are deterministic; the final candidate appears with a no-replace hardlink after content hashes have been rechecked during streaming. Build output must support hardlinks.
+Build-machine input consists of `app/` (built frontend, sources and prepared production modules), `runtime/` and `legal/`. It requires Node/Python/Caddy/OpenSSL executables, the target's esbuild binary, exact app/lockfile agreement, runtime version/hash/source records, an SBOM and license/provenance files. All ELF files are checked for target 64-bit architecture; mixed-architecture native modules are refused. Symlinks/reparse points, hardlinks, private-state files and existing output replacement are refused. Tar ownership/timestamps/modes are deterministic; the final candidate appears with a no-replace hardlink after content hashes have been rechecked during streaming. Build output must support hardlinks.
 
 The current checkout's Linux deploy engine is copied into `engine/deploy/` as build input. Its safety/recovery code is retained; the builder does not run it. Its system paths have **not** yet been adapted to bundled private dependencies. Target glibc/OpenSSL/loader/library closure, Python stdlib and native-extension closure, distro dependency choices, polkit launcher, installation and recovery remain gates. Debian/Ubuntu amd64 and physical Pi arm64 require separate actual-machine acceptance.
 

@@ -1,5 +1,7 @@
 # Windows installer architecture review
 
+> Update 2026-11-15: FFmpeg was later removed from Yahad entirely, so the review's FFmpeg-related risks no longer apply; the dated review below is otherwise unchanged.
+
 Read-only review of `installer/` at branch `windows-install-acceptance` (2026-11-03). Goal: shrink the custom installer/updater while keeping what matters for one family PC.
 
 ## Size and coverage today
@@ -41,7 +43,7 @@ Read-only review of `installer/` at branch `windows-install-acceptance` (2026-11
 | 11 | Fixture/test code in product assemblies (`FixtureInstaller.cs`, `NativeFixtureLauncher.cs`, `FixtureBundle.cs`, `SignedFixtureAdmission.cs`, `FixtureAdmissionDocuments.cs`; about 520 lines) and test seams (`JobProcess.cs:8-12`) | None in production | **DROP.** Move it to test projects. |
 | 12 | Legacy single-service path (`NativeServiceInstall.cs`, `WindowsFileBoundary.cs:27-45`) | None; it was never published | **DROP.** |
 | 13 | LAN HTTPS proxy: Caddy under its own account, private CA, owned firewall rule (`ServiceHost/LanProxyService.cs:10-14`, `Setup/NativeLanInstall.cs`, `NativeLanFirewall.cs`) | The app reading the CA private key; leftover firewall rules | **KEEP** (feature). Trim it once its ACL code moves onto the two-ACL model. |
-| 14 | Job objects for the Node child (`Install.Core/JobProcess.cs`) | Orphaned node/ffmpeg processes after a service stop | **KEEP.** About 100 lines with kill-on-close. |
+| 14 | Job objects for the Node child (`Install.Core/JobProcess.cs`) | Orphaned node processes after a service stop | **KEEP.** About 100 lines with kill-on-close. |
 | 15 | *(New)* Release signature: ECDSA P-256 over the release manifest. The key is embedded at install; the verifier already exists in-repo (`ServiceHost/FixtureAdmissionDocuments.cs:33-44`). | GitHub account or repo compromise, the one threat the current design accepts | **ADD.** About 60 lines, plus keeping the signing key out of CI or in a protected environment. |
 
 ## 2. Standard building blocks (checked against docs)

@@ -51,7 +51,7 @@ test('offline packaged Node, bundled server and private CLR run actual mock app 
       CONNECTOR: 'mock', ALLOW_REAL_WHATSAPP: 'no', HOST: '127.0.0.1', COOKIE_SECURE: 'false',
       SETUP_CAPABILITY_FILE: join(root, 'missing-capability'), DIAGNOSTICS_ENABLED: 'false', YAHAD_PLATFORM_HELPER: helper };
     const entry = join(app, 'server/main.mjs');
-    for (const command of ['node', 'npm', 'python', 'dotnet', 'ffmpeg', 'caddy'])
+    for (const command of ['node', 'npm', 'python', 'dotnet', 'caddy'])
       assert.throws(() => execFileSync(join(system32, 'where.exe'), [command], { env: environment, windowsHide: true, stdio: 'ignore' }));
     async function port() {
       const server = createServer(); server.listen(0, '127.0.0.1'); await once(server, 'listening');

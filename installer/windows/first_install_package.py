@@ -38,7 +38,7 @@ def payload(repo,core,vendors,full,node,dotnet,npm_cache,verified_vendor_source,
             original=verified_vendor_source/record['path']
             if original.stat().st_size!=record['size'] or dependencies.digest(original)!=record['sha256']:raise ValueError('Pinned vendor input differs')
             target=vendors/record['path'];target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(original,target)
-    for name in ['legal/dependency-proof.json','legal/ffmpeg-build.json','legal/Caddy-NOTICES.txt']:
+    for name in ['legal/dependency-proof.json','legal/Caddy-NOTICES.txt']:
         shutil.copyfile(verified_vendor_source/name,vendors/name)
     dependencies.add_license_texts(vendors)
     dependencies.validate_staged(bundle.inventory(vendors),spec)
