@@ -14,7 +14,7 @@ Working directory: `C:/projects/yahad-native-install`, a separate worktree of th
 
 Linux retains the data lock directory/heartbeat protocol and key/capability mode checks. File reads now open first with no-follow/nonblocking flags, validate the same descriptor's regular-file type, link count, size and permissions, then read. Capability root ownership and 15-minute expiry remain required. No Linux runtime acceptance was performed in this increment.
 
-Windows uses the app-private **self-contained `native/Yahad.Platform.exe`**, with a bounded JSON protocol over redirected private pipes. No shell, PowerShell execution-policy change, runtime download or installer action is involved. The helper environment omits .NET startup hooks/profiler variables and development runtime roots. Missing/failed helpers fail closed; there is no fallback that ignores permissions or uses POSIX chmod as a substitute.
+Windows uses the **self-contained `Yahad.Platform.exe`** helper. It is infrastructure, installed at `versions\<v>\platform\` beside the service host and the Updater, never inside the app tree. The service host names it to Node as the absolute path in `YAHAD_PLATFORM_HELPER`; the app reads only that variable and refuses a missing, non-absolute or non-`.exe` value. It uses a bounded JSON protocol over redirected private pipes. No shell, PowerShell execution-policy change, runtime download or installer action is involved. The helper environment omits .NET startup hooks/profiler variables and development runtime roots. Missing/failed helpers fail closed; there is no fallback that ignores permissions or uses POSIX chmod as a substitute.
 
 The Windows helper:
 

@@ -11,7 +11,9 @@ internal sealed record InstallPackageManifest(int Format,string Version,string S
 // Where Extract writes: protected directories, protected files and a no-replace commit.
 internal sealed record ExtractTarget(Action<string> CreateDirectory,Func<string,FileStream> CreateFile,Action<string,string> Commit,Func<string,InstallMember,bool> ExistingMatches);
 // One Format-1 archive holding host/ (the service host), updater/ (the Updater
-// service) and payload/ (node, the application, ffmpeg and caddy). Nothing else.
+// service), platform/ (the Platform helper) and payload/ (node, the application,
+// ffmpeg and caddy). Nothing else. Platform is infrastructure: the application
+// tree never carries it, so payload/app/native/ is refused.
 internal sealed class InstallPackage:IDisposable
 {
     internal const int Format=1;
@@ -34,7 +36,7 @@ internal sealed class InstallPackage:IDisposable
             Name(entry.FullName);if(!expected.Remove(entry.FullName)||entry.Length<0||((entry.ExternalAttributes>>16)&0xf000) is not(0 or 0x8000)||((entry.ExternalAttributes&0x400)!=0))throw new IOException("PACKAGE_MEMBER_TYPE");
         }
         if(expected.Count!=0)throw new IOException("PACKAGE_MEMBERS");
-        foreach(var required in new[]{"payload/bundle.json","payload/runtime/node/node.exe","payload/runtime/ffmpeg/ffmpeg.exe","payload/runtime/caddy/caddy.exe","payload/app/server/main.mjs","payload/app/dist/index.html","payload/app/native/Yahad.Platform.exe","host/Yahad.ServiceHost.exe","host/Yahad.ServiceHost.runtimeconfig.json","updater/Yahad.Updater.exe","updater/Yahad.Updater.runtimeconfig.json"})
+        foreach(var required in new[]{"payload/bundle.json","payload/runtime/node/node.exe","payload/runtime/ffmpeg/ffmpeg.exe","payload/runtime/caddy/caddy.exe","payload/app/server/main.mjs","payload/app/dist/index.html","host/Yahad.ServiceHost.exe","host/Yahad.ServiceHost.runtimeconfig.json","updater/Yahad.Updater.exe","updater/Yahad.Updater.runtimeconfig.json","platform/Yahad.Platform.exe","platform/Yahad.Platform.runtimeconfig.json"})
             if(!Manifest.Files.Any(r=>r.Path==required))throw new IOException("PACKAGE_MISSING");
         // The payload digest names the application bundle record itself.
         if(Manifest.Files.Single(f=>f.Path=="payload/bundle.json").Sha256!=Manifest.PayloadDigest)throw new IOException("PACKAGE_PAYLOAD_ANCHOR");
@@ -96,7 +98,8 @@ internal sealed class InstallPackage:IDisposable
     }
     internal static void Name(string name)
     {
-        if(name.Length is <1 or >240||!name.StartsWith("host/",StringComparison.Ordinal)&&!name.StartsWith("updater/",StringComparison.Ordinal)&&!name.StartsWith("payload/",StringComparison.Ordinal)||name.Contains('\\')||name.Contains(':'))throw new IOException("PACKAGE_PATH");
+        if(name.Length is <1 or >240||!name.StartsWith("host/",StringComparison.Ordinal)&&!name.StartsWith("updater/",StringComparison.Ordinal)&&!name.StartsWith("platform/",StringComparison.Ordinal)&&!name.StartsWith("payload/",StringComparison.Ordinal)||
+            name.StartsWith("payload/app/native/",StringComparison.OrdinalIgnoreCase)||name.Contains('\\')||name.Contains(':'))throw new IOException("PACKAGE_PATH");
         foreach(var part in name.Split('/'))if(part is "" or "." or ".."||part.EndsWith('.')||part.EndsWith(' ')||System.Text.RegularExpressions.Regex.IsMatch(part,"^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(\\..*)?$",System.Text.RegularExpressions.RegexOptions.IgnoreCase))throw new IOException("PACKAGE_PATH");
     }
     private static void Digest(string? value){if(value is null||!System.Text.RegularExpressions.Regex.IsMatch(value,"^[a-f0-9]{64}$"))throw new IOException("PACKAGE_DIGEST");}

@@ -45,7 +45,7 @@ class SetupPackageTests(unittest.TestCase):
         self.server=dict(format='yahad-server-bundle',schema=1,sources={name:hashlib.sha256(source[name].encode()).hexdigest() for name in source if name.startswith('src/')},
             packages=[dict(path='node_modules/fastify',name='fastify',version='5.12.7',noticeFiles=[])],outputs=[
             self.output('main',['src/main.ts','src/db.ts','src/database-schema.ts'],['node_modules/fastify'])])
-        self.build=dict(appSourceCommit=SOURCE,helperSourceCommit=SOURCE,packagerSourceCommit=SOURCE,databaseSchema=6,databaseMigrationsFrom=[1,2])
+        self.build=dict(appSourceCommit=SOURCE,packagerSourceCommit=SOURCE,databaseSchema=6,databaseMigrationsFrom=[1,2])
         self.save_build();self.manifest=dict(schema=1,kind='windows-runtime-candidate',profile='full',target='win-x64',version=VERSION,files=[])
         self.refresh_records()
 
@@ -87,7 +87,7 @@ class SetupPackageTests(unittest.TestCase):
                 with self.assertRaisesRegex(full.PackageError,'schema'):self.source()
 
     def test_every_build_input_source_claim_must_match(self):
-        for field in ('appSourceCommit','helperSourceCommit','packagerSourceCommit'):
+        for field in ('appSourceCommit','packagerSourceCommit'):
             with self.subTest(field=field):
                 before=self.build[field];self.build[field]='b'*40;self.save_build()
                 with self.assertRaisesRegex(full.PackageError,'Mixed source'):self.source()
@@ -132,6 +132,15 @@ class SetupPackageTests(unittest.TestCase):
         self.put(self.prepared,'app/.local/synthetic.js','extra');self.refresh_records()
         with self.assertRaisesRegex(full.PackageError,'Private member'):self.source()
 
+    def test_platform_helper_is_never_application_payload(self):
+        # Platform is infrastructure, packaged beside the host (platform/), never under the app.
+        for name in ('app/native/Yahad.Platform.exe','app/Native/coreclr.dll'):
+            with self.subTest(name=name):
+                self.put(self.prepared,name,image());self.refresh_records()
+                with self.assertRaisesRegex(full.PackageError,'Native helper in application payload'):self.source()
+                (self.prepared/name).unlink();self.refresh_records()
+        self.source()
+
     def test_duplicate_json_and_case_directory_collisions_are_refused(self):
         with self.assertRaisesRegex(full.PackageError,'Duplicate JSON'):full._json(b'{"sourceCommit":"a","sourceCommit":"b"}')
         for names in (['A.dll','a.dll'],['folder/one.dll','Folder/two.dll'],['folder','folder/file.dll']):
@@ -173,7 +182,8 @@ class SetupPackageTests(unittest.TestCase):
         with patch.object(full,'describe_build_artifact',side_effect=changed),self.assertRaisesRegex(full.PackageError,'closure changed'):full.validate_native(root,'Yahad.ServiceHost',VERSION,SOURCE,self.repo)
 
     def test_archive_namespace_bytes_and_records_are_exact_and_deterministic(self):
-        entries={'payload/bundle.json':full._encode(self.manifest),'payload/app/server/main.mjs':b'bundle','host/Yahad.ServiceHost.exe':image(),'host/sub/Yahad.dll':image()}
+        entries={'payload/bundle.json':full._encode(self.manifest),'payload/app/server/main.mjs':b'bundle','host/Yahad.ServiceHost.exe':image(),'host/sub/Yahad.dll':image(),
+                 'platform/Yahad.Platform.exe':image()}
         records=full._write_archive(self.root/'a.zip',entries);full._write_archive(self.root/'b.zip',entries)
         self.assertEqual((self.root/'a.zip').read_bytes(),(self.root/'b.zip').read_bytes())
         with zipfile.ZipFile(self.root/'a.zip') as archive:
@@ -181,7 +191,7 @@ class SetupPackageTests(unittest.TestCase):
             for record in records:self.assertEqual(hashlib.sha256(archive.read(record['Path'])).hexdigest(),record['Sha256'])
         with self.assertRaisesRegex(full.PackageError,'namespace'):full._write_archive(self.root/'bad.zip',{'unapproved/code.exe':b'not executed'})
         self.assertFalse((self.root/'bad.zip').exists())
-        for name in ('bootstrap/authority/Yahad.Authority.exe','system-manifest.json','payload2/x','host/../escape'):
+        for name in ('bootstrap/authority/Yahad.Authority.exe','system-manifest.json','payload2/x','host/../escape','platform/../escape','native/Yahad.Platform.exe'):
             with self.subTest(name=name),self.assertRaises(full.PackageError):full._write_archive(self.root/'foreign.zip',{name:b'refused'})
         self.assertFalse((self.root/'foreign.zip').exists())
 
@@ -198,12 +208,11 @@ class RuntimeOnlyBuildTests(unittest.TestCase):
     """End-to-end build() with source identity and the PE/audit boundary stubbed."""
     def setUp(self):
         self.base = SetupPackageTests('test_bundle_sources_and_migration_declaration_are_taken_from_actual_bytes'); self.base.setUp(); self.addCleanup(self.base.tearDown)
-        b = self.base; b.native('Yahad.Platform', b.prepared/'app/native')
+        b = self.base
         for name in ('app/dist/index.html', 'runtime/node/node.exe', 'runtime/ffmpeg/ffmpeg.exe', 'runtime/caddy/caddy.exe'):
             b.put(b.prepared, name, image() if name.endswith('.exe') else b'<html>')
-        b.put(b.prepared, 'legal/runtime-lock.json', json.dumps(dict(components=[dict(id='platform', sourceCommit=SOURCE)])))
         b.refresh_records(); self.application = full._encode(b.manifest); b.put(b.prepared, 'bundle.json', self.application)
-        self.host = b.native('Yahad.ServiceHost'); self.updater = b.native('Yahad.Updater'); self.output = b.root/'out'
+        self.host = b.native('Yahad.ServiceHost'); self.updater = b.native('Yahad.Updater'); self.platform = b.native('Yahad.Platform'); self.output = b.root/'out'
 
     def build(self, describe=None):
         b = self.base
@@ -211,9 +220,9 @@ class RuntimeOnlyBuildTests(unittest.TestCase):
         def audit(path, flag, repo): return b.audit(Path(path).stem)
         with patch.object(full, '_source_identity', return_value=(VERSION, SOURCE, b.tracked)), patch.object(full.verify_archive, 'verify', side_effect=extract), \
              patch.object(full, 'describe_build_artifact', side_effect=describe or audit), patch.object(full, '_unlinked', side_effect=lambda p, file=False: Path(p).absolute()):
-            return full.build(b.repo, b.root/'payload.zip', self.host, self.updater, self.output)
+            return full.build(b.repo, b.root/'payload.zip', self.host, self.updater, self.platform, self.output)
 
-    def test_package_is_format_one_with_only_host_updater_and_payload_members(self):
+    def test_package_is_format_one_with_only_host_updater_platform_and_payload_members(self):
         result = self.build(); metadata = json.loads((self.output/'install-manifest.json').read_bytes())
         self.assertEqual(sorted(metadata), ['DatabaseSchema', 'Files', 'Format', 'PayloadDigest', 'SourceCommit', 'Version', 'ZipSha256'])
         self.assertEqual(metadata['DatabaseSchema'], 6)
@@ -224,7 +233,10 @@ class RuntimeOnlyBuildTests(unittest.TestCase):
         with zipfile.ZipFile(self.output/'install.zip') as archive:
             names = archive.namelist()
             self.assertEqual(set(names), {r['Path'] for r in metadata['Files']}); self.assertEqual(result['files'], len(names))
-            self.assertTrue(all(n.startswith(('host/', 'updater/', 'payload/')) for n in names))
+            self.assertTrue(all(n.startswith(('host/', 'updater/', 'platform/', 'payload/')) for n in names))
+            # The Platform closure is infrastructure beside the host; the app carries none of it.
+            self.assertEqual({n for n in names if n.startswith('platform/')}, {'platform/'+p.name for p in self.platform.iterdir()})
+            self.assertFalse(any(n.startswith('payload/app/native/') for n in names))
             self.assertEqual(archive.read('payload/bundle.json'), self.application)
             for record in metadata['Files']: self.assertEqual(hashlib.sha256(archive.read(record['Path'])).hexdigest(), record['Sha256'])
         self.assertTrue(full.REQUIRED_MEMBERS <= set(names))
@@ -240,9 +252,16 @@ class RuntimeOnlyBuildTests(unittest.TestCase):
                 with self.assertRaises(ValueError): self.build(describe)
                 self.assertFalse((self.output/'install-manifest.json').exists())
 
-    def test_platform_runtime_lock_must_name_the_same_source(self):
-        b = self.base; b.put(b.prepared, 'legal/runtime-lock.json', json.dumps(dict(components=[dict(id='platform', sourceCommit='b'*40)])))
-        with self.assertRaisesRegex(full.PackageError, 'runtime-lock'): self.build()
+    def test_stale_or_mismatched_platform_build_identity_is_refused_before_manifest_is_written(self):
+        b = self.base; exe = self.platform/'Yahad.Platform.exe'
+        def describe(path, flag, repo):
+            value = b.audit(Path(path).stem); return dict(value, sourceCommit='b'*40, version='1.0.0+'+'b'*40) if Path(path) == exe else value
+        with self.assertRaises(ValueError): self.build(describe)
+        self.assertFalse((self.output/'install-manifest.json').exists())
+
+    def test_platform_closure_must_be_a_complete_private_runtime(self):
+        (self.platform/'coreclr.dll').unlink()
+        with self.assertRaisesRegex(full.PackageError, 'Incomplete private'): self.build()
         self.assertFalse((self.output/'install-manifest.json').exists())
 
     def test_required_members_must_all_be_present(self):
@@ -253,8 +272,9 @@ class RuntimeOnlyBuildTests(unittest.TestCase):
     def test_output_must_be_new_and_outside_input_closures(self):
         self.output.mkdir()
         with self.assertRaisesRegex(full.PackageError, 'New output'): self.build()
-        self.output = self.host/'nested-out'
-        with self.assertRaisesRegex(full.PackageError, 'New output'): self.build()
+        for component in (self.host, self.updater, self.platform):
+            self.output = component/'nested-out'
+            with self.subTest(component=component.name), self.assertRaisesRegex(full.PackageError, 'New output'): self.build()
 
     def test_host_change_after_validation_is_refused(self):
         b = self.base; original = full.validate_native

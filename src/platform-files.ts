@@ -1,8 +1,8 @@
 import { closeSync, constants, fstatSync, mkdirSync, chmodSync, openSync, readFileSync } from 'node:fs';
 import { execFileSync, spawn } from 'node:child_process';
-import { dirname, join, resolve, win32 } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join, win32 } from 'node:path';
 import lockfile from 'proper-lockfile';
+import { platformHelper } from './platform-helper.js';
 
 export interface PlatformFiles {
   readMasterKey(path: string): Buffer;
@@ -43,8 +43,7 @@ function decodeReply(output: string): any {
   } catch { throw new Error('Native file boundary refused'); }
 }
 
-export function createPlatformFiles(target: NodeJS.Platform = process.platform,
-  helper = resolve(dirname(fileURLToPath(import.meta.url)), '../native/Yahad.Platform.exe')): PlatformFiles {
+export function createPlatformFiles(target: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): PlatformFiles {
   if (target !== 'win32') return {
     readMasterKey: path => readPosix(path, false)!,
     readSetupCapability: path => readPosix(path, true),
@@ -55,7 +54,7 @@ export function createPlatformFiles(target: NodeJS.Platform = process.platform,
         stale: 10000, update: 3000, retries: 0 });
     },
   };
-  if (!win32.isAbsolute(helper) || !helper.toLowerCase().endsWith('.exe')) throw new Error('Native helper path required');
+  const helper = platformHelper(env);
   const read = (path: string, bootstrap: boolean): Buffer | undefined => {
     let reply: any;
     try {
@@ -127,4 +126,14 @@ export function createPlatformFiles(target: NodeJS.Platform = process.platform,
   };
 }
 
-export const platformFiles = createPlatformFiles();
+// Resolved at first use, so importing this module never requires the host's
+// environment; a Windows process without YAHAD_PLATFORM_HELPER is refused on
+// its first private-file read, before it touches any data.
+let installed: PlatformFiles | undefined;
+const host = () => installed ??= createPlatformFiles();
+export const platformFiles: PlatformFiles = {
+  readMasterKey: path => host().readMasterKey(path),
+  readSetupCapability: path => host().readSetupCapability(path),
+  acquireDataLock: directory => host().acquireDataLock(directory),
+  setupCapabilityPath: () => host().setupCapabilityPath(),
+};

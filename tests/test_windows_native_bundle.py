@@ -28,8 +28,6 @@ class WindowsBundleTests(unittest.TestCase):
         self.root=Path(temporary.name); self.prepared=self.root/'prepared'; self.prepared.mkdir()
         for name in (*bundle.BASE_REQUIRED,*bundle.FULL_REQUIRED): self.put(name,'fixture')
         self.put('app/package.json',json.dumps({'version':'0.5.2','engines':{'node':'>=24.0.0 <25'},'dependencies':{'tsx':'4.20.6'}}))
-        self.put('app/native/Yahad.Platform.runtimeconfig.json',json.dumps({'runtimeOptions':{'includedFrameworks':[{'name':'Microsoft.NETCore.App','version':'10.0.14'}]}}))
-        self.put('app/native/Yahad.Platform.deps.json',json.dumps({'runtimeTarget':{'name':'net10.0/win-x64'},'targets':{'net10.0/win-x64':{'runtimepack/10.0.14':{'runtime':{'System.Private.CoreLib.dll':{}},'native':{'coreclr.dll':{},'hostfxr.dll':{},'hostpolicy.dll':{}}}}}}))
         self.put('legal/SBOM.json','{"fixture":true}')
         for path in self.prepared.rglob('*'):
             if path.suffix in ('.exe','.dll','.node'): path.write_bytes(image(('kernel32.dll',)))
@@ -45,8 +43,7 @@ class WindowsBundleTests(unittest.TestCase):
             'packages':[{'path':'node_modules/fastify','name':'fastify','version':'5.12.7','noticeFiles':[{'name':'LICENSE','sha256':'0'*64}]}]}))
 
     def lock(self,profile='full'):
-        components=[{'id':'node','path':'runtime/node/node.exe','version':'24.22.2','sourceUrl':'https://nodejs.org/dist/v24.22.2/node-v24.22.2-win-x64.zip'},
-            {'id':'platform','path':'app/native/Yahad.Platform.exe','origin':'project-built','sourceCommit':'a'*40,'sourceUrl':'https://github.com/NehoraiHadad/yahad'}]
+        components=[{'id':'node','path':'runtime/node/node.exe','version':'24.22.2','sourceUrl':'https://nodejs.org/dist/v24.22.2/node-v24.22.2-win-x64.zip'}]
         if profile=='full': components += [{'id':'ffmpeg','path':'runtime/ffmpeg/ffmpeg.exe','origin':'project-built-from-official-source','sourceUrl':'https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz'},
             {'id':'caddy','path':'runtime/caddy/caddy.exe','sourceUrl':'https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_windows_amd64.zip'}]
         for component in components: component['sha256']=hashlib.sha256((self.prepared/component['path']).read_bytes()).hexdigest()
@@ -110,9 +107,19 @@ class WindowsBundleTests(unittest.TestCase):
         self.put('runtime/node/node.exe',image(machine=0xaa64)); self.lock()
         with self.assertRaisesRegex(bundle.BundleError,'PE inspection'): bundle.validate(self.prepared)
 
-    def test_framework_dependent_dotnet_refused(self):
-        self.put('app/native/Yahad.Platform.runtimeconfig.json','{"runtimeOptions":{"framework":{"name":"Microsoft.NETCore.App","version":"10.0.14"}}}')
-        with self.assertRaisesRegex(bundle.BundleError,'self-contained'): bundle.validate(self.prepared)
+    def test_platform_helper_is_infrastructure_not_app_payload(self):
+        # Packaged beside the host by setup_package.py; nothing may remain under app/native/.
+        for name in ('app/native/Yahad.Platform.exe','app/native/Yahad.Platform.runtimeconfig.json','app/Native/coreclr.dll'):
+            with self.subTest(name=name):
+                self.put(name,image() if name.endswith(('.exe','.dll')) else '{}')
+                with self.assertRaisesRegex(bundle.BundleError,'Undeclared app namespace'): bundle.validate(self.prepared)
+                (self.prepared/name).unlink()
+        bundle.validate(self.prepared)
+
+    def test_runtime_lock_names_no_platform_component(self):
+        path=self.prepared/'legal/runtime-lock.json'; value=json.loads(path.read_text())
+        value['components'].append({'id':'platform','path':'runtime/node/node.exe','origin':'project-built','sourceCommit':'a'*40,'sourceUrl':'https://github.com/NehoraiHadad/yahad','sha256':'0'*64}); path.write_text(json.dumps(value))
+        with self.assertRaisesRegex(bundle.BundleError,'Runtime lock contract'): bundle.validate(self.prepared)
 
     def test_officially_linked_ffmpeg_not_silently_vendor_official(self):
         path=self.prepared/'legal/runtime-lock.json'; value=json.loads(path.read_text()); item=next(c for c in value['components'] if c['id']=='ffmpeg'); item['sourceUrl']='https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/example.zip'; item['origin']='community-build'; path.write_text(json.dumps(value))
@@ -140,10 +147,6 @@ class WindowsBundleTests(unittest.TestCase):
         self.put('runtime/unknown/tool.exe',image())
         with self.assertRaisesRegex(bundle.BundleError,'Undeclared runtime'): bundle.validate(self.prepared)
 
-    def test_missing_private_dotnet_asset_refused(self):
-        self.put('app/native/Yahad.Platform.deps.json', json.dumps({'runtimeTarget':{'name':'net10.0/win-x64'},'targets':{'net10.0/win-x64':{'app/1':{'runtime':{'missing.dll':{}}}}}}))
-        with self.assertRaisesRegex(bundle.BundleError,'Missing private .NET'): bundle.validate(self.prepared)
-
     def test_source_tree_and_node_modules_are_not_payload(self):
         for name in ('app/src/main.ts','app/node_modules/tsx/package.json','app/package-lock.json','app/server/extra.mjs'):
             with self.subTest(name=name):
@@ -160,7 +163,7 @@ class WindowsBundleTests(unittest.TestCase):
         with self.assertRaisesRegex(bundle.BundleError,'Server bundle contract'): bundle.validate(self.prepared)
 
     def test_native_addon_has_no_node_host_exception(self):
-        self.put('app/native/addon.node',image(('node.exe',)))
+        self.put('app/dist/addon.node',image(('node.exe',)))
         with self.assertRaisesRegex(bundle.BundleError,'MISSING_PRIVATE_DLL'): bundle.validate(self.prepared)
 
     def test_data_folder_never_packaged(self):

@@ -12,9 +12,11 @@ import { loadConfig } from '../src/config.js';
 import { readBootstrap } from '../src/bootstrap.js';
 import { DATABASE_SCHEMA } from '../src/database-schema.js';
 
-const helper = resolve('native/Yahad.Platform.exe');
+// The helper `installer/build.ps1 -Publish` publishes, handed over the way the
+// service host hands over its own image.
+const helper = resolve('installer/artifacts/Yahad.Platform.Bundle/Yahad.Platform.exe');
 const available = process.platform === 'win32' && existsSync(helper);
-const native = createPlatformFiles('win32', helper);
+const native = createPlatformFiles('win32', { YAHAD_PLATFORM_HELPER: helper });
 function fixture() {
   const directory = mkdtempSync(join(tmpdir(), 'yahad-native-app-'));
   const who = execFileSync('whoami.exe', ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true });
@@ -49,12 +51,12 @@ test('Windows native data lease excludes a second process and releases normally'
   await (await native.acquireDataLock(directory))();
 });
 test('missing Windows helper fails closed without falling back to chmod', { skip: process.platform !== 'win32' }, () => {
-  const absent = createPlatformFiles('win32', resolve('native/absent-helper.exe'));
+  const absent = createPlatformFiles('win32', { YAHAD_PLATFORM_HELPER: resolve('installer/artifacts/absent/Yahad.Platform.exe') });
   assert.throws(() => absent.readMasterKey(resolve('package.json')), /Native file boundary refused/);
 });
 test('abrupt Node parent death closes the native helper lifetime pipe and releases its lease', { skip: !available, timeout: 20000 }, async () => {
   const directory = fixture();
-  const owner = fork(resolve('tests/fixtures/native-lock-owner.ts'), [directory], { execArgv: ['--import', 'tsx'], stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+  const owner = fork(resolve('tests/fixtures/native-lock-owner.ts'), [directory], { execArgv: ['--import', 'tsx'], env: { ...process.env, YAHAD_PLATFORM_HELPER: helper }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   const exited = once(owner, 'exit'); owner.stdout!.resume(); owner.stderr!.resume();
   try {
     const [message] = await once(owner, 'message'); assert.deepEqual(message, { ready: true });

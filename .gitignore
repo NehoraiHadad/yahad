@@ -1,7 +1,6 @@
-# Dependencies and generated application/native output
+# Dependencies and generated application output
 node_modules/
 /dist/
-/native/
 **/bin/
 **/obj/
 /installer/artifacts/

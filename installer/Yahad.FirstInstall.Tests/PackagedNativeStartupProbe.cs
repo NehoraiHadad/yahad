@@ -11,8 +11,11 @@ using Yahad.Service;
 // No SCM, installed state, real connector or update application is used.
 internal static class PackagedNativeStartupProbe
 {
-    internal static async Task<int> Run(string prepared, string report)
+    // The prepared app payload carries no Platform helper; the caller names the
+    // published image, which the launcher hands over as YAHAD_PLATFORM_HELPER.
+    internal static async Task<int> Run(string prepared, string platform, string report)
     {
+        platform = Path.GetFullPath(platform);
         var owned = OwnedFixtureDirectory.Create(Path.GetTempPath());
         var jobs = new FixtureProcesses();
         ServiceController? controller = null;
@@ -44,7 +47,7 @@ internal static class PackagedNativeStartupProbe
             };
             lease = WindowsFileBoundary.AcquireDataLease(data);
             var spec = new VerifiedProcessSpec(node, ["server/main.mjs"],
-                Path.Combine(prepared, "app"), temporary, Path.Combine(prepared, "runtime", "ffmpeg", "ffmpeg.exe"), environment, lease);
+                Path.Combine(prepared, "app"), temporary, Path.Combine(prepared, "runtime", "ffmpeg", "ffmpeg.exe"), platform, environment, lease);
             var launcher = jobs.Launcher(new ServiceProcessLauncher(spec, () => new LocalChildControl()));
             controller = new ServiceController(new Start(launcher), TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(20));
             run = controller.RunAsync(status => { if (status.State == ServiceState.Running) ready.TrySetResult(); });

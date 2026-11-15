@@ -97,27 +97,45 @@ foreach(var mode in new[]{"normal","bad-peer","timeout","unexpected"})
 await Check("non-listening real native job with synthetic control channel: "+mode,async()=>
 {
     var directory=Session();var environment=new Dictionary<string,string>{{"HOST","127.0.0.1"},{"CONNECTOR","mock"},{"ALLOW_REAL_WHATSAPP","no"},{"DATA_DIR",directory}};var lease=WindowsFileBoundary.AcquireDataLease(directory);
-    var spec=new VerifiedProcessSpec(node,["-e",ChildScript.Code,directory,mode],directory,directory,node,environment,lease);
+    var platform=Path.Combine(directory,"platform","Yahad.Platform.exe");
+    var spec=new VerifiedProcessSpec(node,["-e",ChildScript.Code,directory,mode],directory,directory,node,platform,environment,lease);
     var launcher=new ServiceProcessLauncher(spec,()=>new FileControl(directory,mode));var auth=new TestAuthorization(null!,()=>new(launcher,lease));
     var controller=new ServiceController(auth,TimeSpan.FromSeconds(10),TimeSpan.FromMilliseconds(mode=="timeout"?1000:5000));var reports=new List<ServiceReport>();
     var before=Environment.GetEnvironmentVariable("NODE_OPTIONS");Environment.SetEnvironmentVariable("NODE_OPTIONS","--require untrusted-hook");
+    // The host's own environment never reaches the child: only the spec names the helper.
+    var beforeHelper=Environment.GetEnvironmentVariable("YAHAD_PLATFORM_HELPER");Environment.SetEnvironmentVariable("YAHAD_PLATFORM_HELPER",Path.Combine(directory,"untrusted.exe"));
     try
     {
         var result=await controller.RunAsync(r=>{reports.Add(r);if(r.State==ServiceState.Running&&mode=="normal")controller.Control(ServiceDefinition.Stop);});
         var observation=JsonDocument.Parse(File.ReadAllText(Path.Combine(directory,"observed.json"))).RootElement;
         Assert(observation.GetProperty("PATH").GetString()==""&&observation.GetProperty("FFMPEG_PATH").GetString()==node&&observation.GetProperty("NODE_OPTIONS").ValueKind==JsonValueKind.Null);
+        Assert(observation.GetProperty("YAHAD_PLATFORM_HELPER").GetString()==platform,"platform helper handed to the child");
         Assert(!Alive(observation.GetProperty("pid").GetInt32())&&!Alive(observation.GetProperty("grandchild").GetInt32())&&result.QuiescenceConfirmed);
         Assert(mode=="normal"?result.Failure==ServiceFailure.None:result.Failure!=ServiceFailure.None);
         if(mode is "bad-peer" or "timeout")Assert(!reports.Any(r=>r.State==ServiceState.Running));
     }
-    finally{Environment.SetEnvironmentVariable("NODE_OPTIONS",before);}
+    finally{Environment.SetEnvironmentVariable("NODE_OPTIONS",before);Environment.SetEnvironmentVariable("YAHAD_PLATFORM_HELPER",beforeHelper);}
+});
+await Check("the app environment cannot replace the host's Platform helper",async()=>
+{
+    var directory=Session();var lease=WindowsFileBoundary.AcquireDataLease(directory);
+    try
+    {
+        var environment=new Dictionary<string,string>{{"DATA_DIR",directory},{"YAHAD_PLATFORM_HELPER",Path.Combine(directory,"other.exe")}};
+        var spec=new VerifiedProcessSpec(node,["-e","process.exit(0)"],directory,directory,node,Path.Combine(directory,"platform","Yahad.Platform.exe"),environment,lease);
+        var refused=false;
+        try{await using var session=await new ServiceProcessLauncher(spec,()=>new FileControl(directory,"normal")).StartAsync(default);}
+        catch(ArgumentException){refused=true;}
+        Assert(refused,"a duplicate YAHAD_PLATFORM_HELPER is refused before any child starts");
+    }
+    finally{lease.Dispose();}
 });
 await Check("root exiting before readiness fails startup at once with its exit code and stage history",async()=>
 {
     // The synthetic channel never reports for this root, so only the observed
     // exit can end the wait; the old behavior held startup to the deadline.
     var directory=Session();var lease=WindowsFileBoundary.AcquireDataLease(directory);
-    var spec=new VerifiedProcessSpec(node,["-e","process.exit(23)"],directory,directory,node,new Dictionary<string,string>{{"DATA_DIR",directory}},lease);
+    var spec=new VerifiedProcessSpec(node,["-e","process.exit(23)"],directory,directory,node,Path.Combine(directory,"platform","Yahad.Platform.exe"),new Dictionary<string,string>{{"DATA_DIR",directory}},lease);
     var launcher=new ServiceProcessLauncher(spec,()=>new FileControl(directory,"normal"));var auth=new TestAuthorization(null!,()=>new(launcher,lease));
     var seen=new List<(Exception Error,StartupStep[] Steps)>();ServiceController? controller=null;
     controller=new ServiceController(auth,TimeSpan.FromSeconds(20),TimeSpan.FromSeconds(5),error=>seen.Add((error,controller!.StartupSteps)));
@@ -192,7 +210,7 @@ internal static class ChildScript
         const fs=require('node:fs'),path=require('node:path'),{spawn}=require('node:child_process');
         const root=process.argv[1],mode=process.argv[2];
         const grandchild=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore',windowsHide:true});
-        fs.writeFileSync(path.join(root,'observed.json'),JSON.stringify({pid:process.pid,grandchild:grandchild.pid,PATH:process.env.PATH,FFMPEG_PATH:process.env.FFMPEG_PATH,NODE_OPTIONS:process.env.NODE_OPTIONS||null}));
+        fs.writeFileSync(path.join(root,'observed.json'),JSON.stringify({pid:process.pid,grandchild:grandchild.pid,PATH:process.env.PATH,FFMPEG_PATH:process.env.FFMPEG_PATH,YAHAD_PLATFORM_HELPER:process.env.YAHAD_PLATFORM_HELPER,NODE_OPTIONS:process.env.NODE_OPTIONS||null}));
         if(mode==='unexpected')setTimeout(()=>process.exit(17),150);
         const watch=setInterval(()=>{if(fs.existsSync(path.join(root,'stop'))){clearInterval(watch);grandchild.once('exit',()=>process.exit(0));grandchild.kill();}},10);
         """;
