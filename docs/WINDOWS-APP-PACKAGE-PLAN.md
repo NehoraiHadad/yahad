@@ -5,7 +5,8 @@ format or installed machine. Line references are to `origin/main` at `2e12ea0`.
 Revision 2 addresses an independent review (33 findings); the appendix maps each
 finding to where it's handled. Revision 3 re-examines the mechanism itself
 (section 2a), moves `Yahad.Platform` to the infrastructure track, and makes the
-bridge conditional on there being any 0.6.x Windows installs (section 11). A
+drops the bridge: the maintainer confirmed that no Windows install exists
+anywhere (section 11). A
 second independent review of revision 3 found six more defects, all accepted
 (end of the appendix).
 
@@ -281,26 +282,17 @@ included (8.3), is written only after health reports that app version and that
 schema, and the app refuses to start when the stored schema
 differs after migration (`src/store.ts:84-85`; `src/db.ts:14-18`).
 
-Format-6 records (0.6.x) are read only by the bridge and its repair (§11.1).
-Without a bridge, they are read only as a kept `uninstalled` record at reinstall
-(§11.0).
+There is no format-6 reader. No 0.6.x install exists (section 11), so a format-6
+record is refused like any unknown format.
 
 ## 5. Release format
 
 ### 5.1 Manifests
 
-The 0.6.x parser rejects unknown fields (`ReleaseManifest.cs:19`, `NativeJson.cs:9`).
-So adding infrastructure fields to `yahad-windows-<v>.json` would make every
-0.6.x machine fail with `RELEASE_MANIFEST_INVALID` and never bridge. So while a
-bridge is needed (section 11), each release carries two signed manifests.
-Without a bridge (§11.0), it carries only the format-2 one:
-
-- **`yahad-windows-<v>.json(.sig)` (legacy, format 1).** Byte-for-byte today's
-  format (`ReleaseManifest.cs:13`), naming `Yahad.Setup-<v>.exe`. Only pre-bridge
-  machines read it.
-- **`yahad-windows-release-<v>.json(.sig)` (format 2).** Bridged machines read
-  only this one. It signs both tracks in one message, so the Updater decides from
-  facts authenticated together:
+One signed manifest, `yahad-windows-release-<v>.json(.sig)` (format 2), replaces
+today's `yahad-windows-<v>.json`. No machine reads the old one (section 11), so
+it isn't published any more. The new manifest signs both tracks in one message,
+so the Updater decides from facts that were authenticated together:
 
   ```json
   { "format": 2, "product": "yahad-windows-release", "version": "0.7.1",
@@ -314,9 +306,9 @@ Without a bridge (§11.0), it carries only the format-2 one:
   ```
 
   It is strict camelCase, rejects duplicates and unknown fields, and is at most
-  4096 bytes. Its signed prefix is `yahad-release-v2\n`, so it can never verify
-  as a legacy manifest (`yahad-release-v1\n`, `ReleaseManifest.cs:47`), nor the
-  reverse.
+  4096 bytes. Its signed prefix is `yahad-release-v2\n`, so a signature over today's
+  format (`yahad-release-v1\n`, `ReleaseManifest.cs:47`) never verifies as one.
+  The v1 verifier and its manifest type are removed.
 
 `databaseMigrationsFrom` brings the Linux rule (`deploy/updater.py:89+`) to
 Windows. Today Windows checks `minimumFromVersion`, that the release is newer,
@@ -528,13 +520,12 @@ New order:
 A crash in steps 1-3 resumes from the `preparing` or `provisioned` record. Every
 step checks before it writes.
 
-**Reinstall over kept data.** The kept record is accepted, whether format 6 or
-7, and the binary-side pointer is rewritten. A format-6 record carries no schema
-(`InstallState.cs:12`), and the app migrates the database during its own start
-(`src/store.ts:60`). So before the first start, the engine reads the stored
-`schema_version` from the database and refuses it outside the embedded app's
-`databaseMigrationsFrom`. It also takes the backup that section 7 takes before a
-schema change. It never infers the schema from the app it just extracted.
+**Over an existing install.** The engine accepts only a format-7 record (a
+kept `uninstalled` one included) and the new layout. A `versions\` layout or any
+other record format is refused before anything is written, with
+`LEGACY_INSTALL_UNSUPPORTED`. The message says to remove that development build
+completely first. No such install exists (section 11), so nothing is carried
+over.
 
 ### 8.4 Uninstall
 
@@ -552,7 +543,7 @@ at the installed engine.
 
 ### 9.1 Selection
 
-On a bridged machine, the Updater reads only the format-2 manifest. A newer tag
+The Updater reads only the format-2 manifest. A newer tag
 without it is "not an update for this machine", as today for a tag without
 Windows assets (`UpdaterEngine.cs:135-138`). After the signature and parse:
 
@@ -616,25 +607,24 @@ change.
 every asset a platform might need (`docs/GITHUB-RUNTIME-UPDATES.md:284-288`):
 
 - the four Linux assets, unchanged;
-- legacy `yahad-windows-<v>.json(.sig)`, only while a bridge is needed (section 11);
+
 - `yahad-windows-release-<v>.json(.sig)`;
 - `yahad-windows-app-<v>.zip`;
 - `Yahad.Setup-<v>.exe` and `Yahad.Setup.exe` (the landing page link).
 
 `collectReleaseAssets` today accepts exactly eight names (`scripts/release-windows.mjs:89-97`).
-It moves to this exact set (nine names, or eleven with the legacy pair) and
-checks:
-- every signature against the committed key;
-- that both manifests name the same version and the same Setup bytes;
+It moves to this exact set of nine names, and checks:
+- the signature against the committed key;
+- that the manifest names this version and the Setup bytes;
 - that the app zip matches its size and hash, and that the `app-tree.json` inside
   it matches `treeSha256`;
 - that `infrastructure.treeSha256` matches the Setup's embedded `infra-tree.json`.
 
 **Signing stays local.** `windows-release-key.mjs sign` always uses
-`yahad-release-v1\n` (`scripts/windows-release-key.mjs:11,36`). It gains a
-prefix chosen from the manifest's own `format`/`product`: v1 for legacy, v2 for
-format 2. It refuses any other combination, and both manifests are signed in one
-local run with the maintainer's key. No CI or GitHub secret is involved.
+`yahad-release-v1\n` (`scripts/windows-release-key.mjs:11,36`). It switches to
+`yahad-release-v2\n` and refuses any manifest that is not format 2 of
+`yahad-windows-release`. The manifest is signed locally with the maintainer's
+key. No CI or GitHub secret is involved.
 
 **Provenance per component.** Today every native artifact must report the
 release's app version and commit (`installer/windows/application_version.py:46-51`;
@@ -697,85 +687,27 @@ are listed in `app-tree.json` and are checked against the app's identity. The
 infra licenses and `runtime-lock.json` stay in `infra\<v>\legal\`, and each
 track gets its own SBOM.
 
-## 11. Moving existing installs
+## 11. Existing installs: none, so no bridge
 
-Machines on 0.6.x understand only the legacy manifest and the `versions\` layout.
-Whether any exist decides between two paths (open question 9).
+The maintainer confirmed that no Windows install exists on any computer. The
+installer was a development candidate that was never accepted on a family
+computer (`README.md` "Windows installer status", `docs/VALIDATION.md`). So the
+first release with the new layout is the first Windows release anyone installs:
+- no bridge release, no legacy manifest, no format-6 or format-1 upgrade-state
+  reader, and no `versions\` code path are built, so there is no migration code
+  to retire later;
+- a leftover development build is refused (8.3, `LEGACY_INSTALL_UNSUPPORTED`)
+  and removed by hand;
+- today's `versions\` code is replaced, not kept beside the new layout.
 
-The Windows installer is a development candidate. It has not been accepted on a
-family computer, and Runtime startup on the ASUS test machine was still being
-diagnosed (`README.md` "Windows installer status", `docs/VALIDATION.md`). Signed
-Windows assets have been published since `v0.6.1`, so a 0.6.x install can exist
-only where someone ran one of those Setups.
-
-### 11.0 No 0.6.x family installs: no bridge (recommended if true)
-
-- The first release with the new layout publishes **no** legacy
-  `yahad-windows-<v>.json`. A 0.6.x test machine then sees "no Windows release"
-  (`UpdaterEngine.cs:135-138`) and is never upgraded into a layout its engine
-  cannot repair.
-- The new Setup refuses to run over a `versions\` install, with a code that says
-  "uninstall with keep-data first". A keep-data uninstall followed by a new
-  install keeps the data. The install accepts the kept format-6 `uninstalled`
-  record for its data id, port and consent (section 8.3).
-- §11.1-11.3, the legacy manifest, the format-1 upgrade state and every
-  `versions\` code path are then **not built**. The legacy manifest's signing
-  path in the release tooling is not built either. This is the smaller and more
-  correct result: no migration code to retire later.
-
-### 11.1 With 0.6.x family installs: bridge release
-
-The bridge is a normal full release, taken through the legacy manifest by the
-existing Updater. Its Setup converts `versions\<old>` into `infra\<i>`,
-`apps\<a>` and `active.json`, switches the images and moves the firewall.
-
-**Repair handover is the critical part.** The 0.6.x repair task runs
-`versions\<old>\Yahad.Setup.exe --repair` (`RepairTask.cs:42`), and only a commit
-re-registers it (`UpgradeHost.cs:264`). That old engine knows neither `infra\`
-nor the pointer, and its strict reader rejects new fields (`NativeJson.cs:9`).
-If it repaired an interrupted bridge, it would either roll back while leaving
-the new trees behind, or commit and register a repair image that does not exist
-(`InstallerImage(To)`). So:
-
-1. **Prepared:** extract and verify `infra\<i>`, including the payload-free
-   engine, and `apps\<a>`.
-2. **Hand over:** re-register the repair task to the new engine
-   `infra\<i>\setup` **before** the first destructive step (fencing). Persist `repairOwner: "bridge"` in the
-   format-2 state. The new engine reads format-6 records, the `versions\` layout
-   and a format-1 upgrade state, so it can repair from any phase.
-3. **Discard or rollback** runs inside the tree it is about to delete, so it
-   first relaunches from a private copy (the 8.1 rule;
-   `SetupOperation.cs:81-88`). The copy re-registers the task to
-   `versions\<old>\Yahad.Setup.exe`, and only then deletes the new trees. The
-   machine is then exactly a 0.6.x install again.
-4. **Commit** writes format 7, keeps `versions\<old>` as the format-7 `Previous`
-   pair, which has a legacy layout, and removes it at the next commit.
-
-If a crash lands between steps 1 and 2, the old engine discards: images never
-moved, and the new trees are unlisted residue. The bridge removes that residue
-on its next attempt, under its own `.partial` rule.
-
-### 11.2 After the bridge
-
-Bridged machines read only the format-2 manifest. Machines still on 0.6.x keep
-taking the legacy manifest's full Setup, which every release carries, and are
-bridged by it.
-
-### 11.3 Retirement
-
-Raising the legacy manifest's `minimumFromVersion`, hard-coded `0.0.0` today
-(`package.ps1:141`), blocks only the Updater path. A Setup run by hand enters
-through `FromThisSetupAsync`, which doesn't check it (`UpgradeHost.cs:91-106`).
-So before the format-6 and `versions\` code is removed, the engine refuses a
-legacy layout on **every** entry (manual, quiet, repair) with
-`RELEASE_UNSUPPORTED_FROM`, and the release notes name the bridge to install
-first. This is open question 5.
+The Linux host runs a manual install that may be overwritten if needed. This
+plan changes no Linux asset, and Linux needs no migration either.
 
 ## 12. Test plan
 
 - **Unit (`Yahad.Install.Tests`):**
   - the format-2 manifest's strictness and size;
-  - domain separation v1/v2, both directions;
+  - a v1-prefixed signature never verifies under v2;
   - `AppPackage`: namespace, collisions, bounds, required members, exact match
     with `app-tree.json`;
   - tree-record hashing;
@@ -796,24 +728,20 @@ first. This is open question 5.
   no embedded package.
 - **First install and reinstall:** a kill at each of prepare, provision, start
   and commit. Expect no `committed` record before health reports the app version
-  and schema. A reinstall over a kept format-6 record with an older stored schema
+  and schema. A reinstall over a kept format-7 record with an older stored schema
   migrates after a backup, and one outside `databaseMigrationsFrom` is refused
-  before the first start.
+  before the first start. A `versions\` layout or a format-6 record is refused
+  with `LEGACY_INSTALL_UNSUPPORTED`, and nothing is written.
 - **State machine:** inject a kill at each persisted phase of `AppUpgradeHost`,
-  of the pair-aware `UpgradeHost`, and of the bridge, then run repair.
+  and of the pair-aware `UpgradeHost`, then run the real repair task.
   - Expect "committed" or "the exact from-pair", never mixed. Failure actions
     are restored and no lease is left held.
   - Cover schema-changing and non-schema apps, and a failure in stop and in
     backup with the pointer never moved.
-    - For the bridge, cover every phase on both sides of the repair handover, and
-    run the **real repair task** after the kill, including a rollback that
-    deletes the engine's own tree (private-copy relaunch, 8.1).
+    - Include an infra rollback that deletes the tree of the engine running it
+    (private-copy relaunch, 8.1).
 - **CI upgrade sets** (`installer/ci-build-upgrade-set.ps1`, `ci-test-suites.ps1`):
-  - without a bridge (§11.0): 0.6.x refused, then keep-data uninstall and a new
-    install keeping the data;
-  - with a bridge (§11.1): 0.6.x → bridge, including an interrupted bridge
-    repaired by the handed-over task;
-  - first new-layout release → app-only;
+  - first install of the new layout → app-only;
   - app-only unhealthy → rollback;
   - app → Setup-track infra upgrade → rollback to the earlier pair;
   - an app needing a newer contract → `APP_NEEDS_INFRASTRUCTURE`;
@@ -847,9 +775,7 @@ first. This is open question 5.
   than guessing.
 - **One data set, three engines:** `UpgradeHost`, `AppUpgradeHost` and repair
   share the install lock and one `upgrade-state.json`, so they never overlap.
-- **Bridge (only with §11.1):** the one release that moves layout, images,
-  firewall and repair ownership together. It needs the full interrupted-bridge
-  coverage and a machine run before it's published.
+
 - **The Windows updater is not yet proven on a family machine.** Every track
   depends on it. Machine acceptance comes before the app track's first use.
 - **Moving Platform changes the app-to-helper path.** A new app on an
@@ -868,7 +794,7 @@ first. This is open question 5.
    latest app package at install time?
 4. **Auto window:** should app-only updates still wait for 03:00-04:59
    (`UpdaterEngine.cs:46-47`)?
-5. **Retiring 0.6.x:** when to refuse legacy layouts on every entry (11.3)?
+5. *Decided:* nothing to retire, because no 0.6.x install exists (section 11).
 6. **Shrinking the infrastructure download (follow-up, not needed for the app
    track).** Platform moved to infrastructure (section 2a), so no .NET runtime
    is left in the app package. Today the host, Updater and Platform each ship a
@@ -898,11 +824,7 @@ first. This is open question 5.
 
    *Recommendation:* (a) in this plan, with (b) as its own change for both
    tracks.
-9. **Are there 0.6.x Windows installs on family computers?** Only the
-   maintainer knows. If there are none, follow §11.0: no bridge, no legacy
-   manifest, and the test machines reinstall with keep-data. If there are any,
-   §11.1 applies. *Recommendation:* §11.0 if there are none, which the README
-   and validation status suggest.
+9. *Decided:* no Windows install exists, so there is no bridge (section 11).
 
 ## Appendix: review disposition
 
@@ -916,7 +838,7 @@ accepted. Two were narrowed:
 | Finding | Where handled |
 | --- | --- |
 | Reference fixes (5) | §1, §3, §5.1, §5.2 |
-| 1 Bridge repair | §11.1 |
+| 1 Bridge repair | §11: no bridge is built, because no install exists |
 | 2 Installer record | §4.5 |
 | 3 Updater `current` | §9.2 |
 | 4 Platform `RequireServer` | §2a, §4.3 (Platform moved to infrastructure) |
@@ -943,7 +865,7 @@ accepted. Two were narrowed:
 | 25 Lease and control contracts | §6, §12 |
 | 26 Signing and asset collection | §10 |
 | 27 Staging and target identity | §9.3, §7 step 1 |
-| 28 Fallback, codes, retirement | §9.4, §11.3 |
+| 28 Fallback, codes, retirement | §9.4, §11 |
 
 ### Revision 3 review
 
@@ -953,7 +875,7 @@ findings were verified at the cited lines and accepted:
 | Finding | Evidence | Handled in |
 |---|---|---|
 | P1: the payload-free engine can't uninstall, because the package is opened before the operation branch | `SetupOperation.cs:45`, `InstallPackage.cs:44` | §4.4, §12 |
-| P1 (bridge only): repair would run from the tree its rollback deletes | `RepairHost.cs:28`, `UpgradeHost.cs:250` | §8.1, §11.1, §12 |
+| P1: repair would run from the tree its rollback deletes | `RepairHost.cs:28`, `UpgradeHost.cs:250` | §8.1, §12; the bridge itself is dropped (§11) |
 | P2: first install saves `committed` before health, which checks only `ok`; a kept format-6 record has no schema | `NativeSetupHost.cs:162,205`, `InstallState.cs:12`, `store.ts:60` | §4.5, §8.3, §12 |
 | P2: `requiresContract ≤ N` is wrong for exact, non-cumulative contracts | `WindowsFileBoundary.cs:113`, `platform-files.ts:41` | §4.3, §5.1, §6, §7, §9.1, §12 |
 | P2: the Platform-path move missed build, fixture, validator and harness sites, and "as today" misdescribed the default path | `platform-files.ts:47,58`, `build.ps1:37`, `prepare_core_fixture.py:46`, `bundle.py:20` | §4.3, §10, §12 |
