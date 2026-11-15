@@ -111,7 +111,9 @@ class WindowsBundleTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.put(name,image() if name.endswith(('.exe','.dll')) else '{}')
                 with self.assertRaisesRegex(bundle.BundleError,'Undeclared app namespace'): bundle.validate(self.prepared)
-                (self.prepared/name).unlink()
+                # Remove the directory too: a leftover app/native/ collides with app/Native/
+                # on a case-sensitive filesystem and would mask the namespace check.
+                (self.prepared/name).unlink(); (self.prepared/name).parent.rmdir()
         bundle.validate(self.prepared)
 
     def test_runtime_lock_names_no_platform_component(self):
