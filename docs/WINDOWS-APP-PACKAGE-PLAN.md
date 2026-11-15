@@ -10,6 +10,8 @@ anywhere (section 11). A
 second independent review of revision 3 found six more defects, all accepted
 (end of the appendix).
 
+> Update 2026-11-15: FFmpeg was later removed from Yahad entirely (voice and previews are made in the browser and only validated by the server). Every FFmpeg reference below, including `runtime\ffmpeg` and the host's FFmpeg resolution, is superseded: the infrastructure tree holds only Node, the .NET pieces and Caddy, and the packagers refuse a `runtime/ffmpeg` path.
+
 ## 1. Problem
 
 On Windows, the only update unit is the whole signed Setup. The Updater fetches
@@ -17,7 +19,7 @@ On Windows, the only update unit is the whole signed Setup. The Updater fetches
 `Yahad.Setup-<v>.exe` and runs it with `--quiet-upgrade`
 (`installer/Yahad.Updater/UpdaterEngine.cs:129-171`, `UpdateLauncher.cs:12`).
 That Setup embeds the entire install package: the .NET service host, the
-Updater, Node 24, FFmpeg, Caddy and the app
+Updater, Node 24, Caddy and the app
 (`installer/Yahad.Setup/InstallPackage.cs:13-14,37`).
 
 So a few-line app fix (for example PR #26, message receipts) costs:
@@ -27,8 +29,9 @@ So a few-line app fix (for example PR #26, message receipts) costs:
   `Yahad.Setup-0.6.4.exe` (release `v0.6.4`), under a 512 MiB cap
   (`installer/Yahad.Install.Core/ReleaseManifest.cs:16`). The app's own share
   is small: the server bundle `main.mjs` is 10.3 MB and `dist/` is under 1 MB
-  (CI run 42003566492, `app-payload.log` and `web.log`). The pinned FFmpeg alone
-  is 151 MiB and Caddy is 51 MiB (`installer/windows/dependency-pins.json`);
+  (CI run 42003566492, `app-payload.log` and `web.log`). Caddy is 51 MiB
+  (`installer/windows/dependency-pins.json`); the former 151 MiB media dependency
+  was removed on 2026-11-15;
 - an extraction of every component into a new `versions\<v>\` tree
   (`installer/Yahad.Setup/UpgradeHost.cs:190-205`);
 - a switch of all three service images: Runtime, Updater and LAN proxy
@@ -113,7 +116,6 @@ language:
 the rare Setup download and don't affect the app track:
 - the host, Updater and Platform each carry their own self-contained .NET
   runtime (decision 6);
-- FFmpeg ships the full LGPL shared build.
 
 ## 3. What can only change through Setup
 
@@ -127,7 +129,7 @@ the rare Setup download and don't affect the app track:
 | Trust key `release-key.spki` | Written at first install (`NativeSetupHost.cs:149-155`), pinned against the embedded key (`ReleaseManifest.cs:82-86`) | Manual only |
 | Service host, Updater, Setup engine (.NET, self-contained) | They are the upgrade machinery | Infrastructure |
 | `Yahad.Platform` (the app's native helper) | The native half of the contract; compiles `Install.Core` (section 2a) | Infrastructure (moved) |
-| Node 24, FFmpeg, Caddy | Node and FFmpeg resolved by the host (`Yahad.ServiceHost/InstalledLaunch.cs:54,69`); Caddy by `LanProxyPaths.Caddy` (`LanProxyService.cs:19,82`) | Infrastructure |
+| Node 24, Caddy | Node resolved by the host (`Yahad.ServiceHost/InstalledLaunch.cs`); Caddy by `LanProxyPaths.Caddy` (`LanProxyService.cs:19,82`) | Infrastructure |
 | `app\package.json`, `server\main.mjs`, `dist\`, `fixtures\`, `deploy\` | JavaScript, HTML and data run by the infrastructure's Node as the restricted Runtime account; no privileged operation and no native code (`installer/windows/bundle.py:18-19`) | **App** |
 | Database schema migrations | Run inside the app at startup (`src/store.ts:60,76-85`, `src/db.ts:8-18`) | **App** |
 
@@ -160,7 +162,7 @@ identities.
   release-key.spki
   active.json                             the active pair (4.3)
   infra\<infra-version>\
-    host\  updater\  platform\  runtime\{node,ffmpeg,caddy}\  legal\
+    host\  updater\  platform\  runtime\{node,caddy}\  legal\
     setup\Yahad.Setup.exe                 payload-free Setup engine (4.4)
     infra-tree.json                       member record of this tree
   apps\<app-version>\
@@ -170,7 +172,7 @@ identities.
 
 `legal\` is split by owner. Today one `legal/` covers the whole Setup
 (`installer/windows/bundle.py:22-26`). The infra tree keeps `runtime-lock.json`,
-the Node, .NET, FFmpeg and Caddy licenses and an infra SBOM. The app tree carries
+the Node, .NET and Caddy licenses and an infra SBOM. The app tree carries
 what the server build writes, `server-bundle.json` and
 `ThirdPartyNotices-server.txt` (`scripts/build-server.mjs:103-111`), plus an app
 SBOM. A new app then never sits beside stale notices for its own dependencies.
@@ -215,7 +217,7 @@ by hand by an administrator is inside it, as it is today.
   - **Service host** (Runtime and LAN modes): refuses to start unless
     `infrastructure.version` equals its own compiled version and
     the contract range equals its own, and that `app.requiresContract` is in
-    that range. It then resolves Node, FFmpeg and
+    that range. It then resolves Node and
     Platform from its `infra\` tree, Caddy likewise (`LanProxyService.cs:19,82`),
     and the app from `apps\<app.version>\`. It passes the Platform path to Node
     as `YAHAD_PLATFORM_HELPER`. That replaces the app-relative
@@ -387,7 +389,7 @@ older app is refused rather than started into a broken contract. A contract
 covers everything an app relies on from infrastructure:
 
 - process launch: the environment variables, including `YAHAD_PLATFORM_HELPER`,
-  and the working directory (`InstalledLaunch.cs:63-69`), Node major, FFmpeg and
+  and the working directory (`InstalledLaunch.cs:63-69`), Node major and
   Caddy behaviour;
 - the Platform command set and reply schema (`installer/Yahad.Platform/Program.cs`):
   `windows-updates`, `read-secret`, `adopt-host-lease`, `lock-data`;
@@ -651,7 +653,7 @@ computes an **infrastructure input digest** over:
   `Yahad.Setup` and `Yahad.Install.Core`, excluding tests;
 - `installer/Directory.Build.props`, `NuGet.Config` and the infra build scripts
   (`package.ps1` infra steps, `installer/windows/*`);
-- the pinned .NET runtime version (`package.ps1:88`) and the Node, FFmpeg and
+- the pinned .NET runtime version (`package.ps1:88`) and the Node and
   Caddy lock;
 - the release key.
 
@@ -796,8 +798,8 @@ The maintainer accepted every recommendation (2026-11-15):
    "update now" stays available.
 5. **Retiring 0.6.x:** nothing to retire, because no install exists (section 11).
 6. **Shrinking the infrastructure download:** NativeAOT for the host, Updater and
-   Platform, and a slim FFmpeg, each as its own infrastructure-track change with
-   an AOT or codec test in CI. Neither blocks this plan.
+   Platform, as its own infrastructure-track change with
+   an AOT test in CI. Neither blocks this plan.
 7. **Per-release distributable Setup:** publish `Yahad.Setup` from a worktree at
    the infra source commit, embedding the cached infra and the new app. No new
    executable.

@@ -15,11 +15,11 @@ import uuid
 from urllib.parse import urlsplit
 
 TARGETS = {'linux-x64': (62, 'linux-x64'), 'linux-arm64': (183, 'linux-arm64')}
-RUNTIMES = ('runtime/node/bin/node', 'runtime/python/bin/python3', 'runtime/ffmpeg/bin/ffmpeg',
+RUNTIMES = ('runtime/node/bin/node', 'runtime/python/bin/python3',
             'runtime/caddy/caddy', 'runtime/openssl/bin/openssl')
 REQUIRED = ('app/package.json', 'app/package-lock.json', 'app/src/main.ts', 'app/dist/index.html',
             'app/node_modules/tsx/package.json', 'runtime/runtime-lock.json', 'legal/SBOM.json', 'legal/Node-LICENSE.txt',
-            'legal/Python-LICENSE.txt', 'legal/FFmpeg-LICENSE.txt', 'legal/ffmpeg-build.json',
+            'legal/Python-LICENSE.txt',
             'legal/Caddy-LICENSE.txt', 'legal/OpenSSL-LICENSE.txt')
 MAX_FILES, MAX_BYTES = 50000, 2 * 1024 ** 3
 
@@ -63,6 +63,7 @@ def build(prepared, output, target, engine_source):
     if output.is_relative_to(prepared) or output.is_relative_to(engine_source): raise PackageError('Output must be outside inputs')
     files = inventory(prepared)
     if any(not name.startswith(('app/', 'runtime/', 'legal/')) for name in files): raise PackageError('Unexpected top-level input')
+    if any(name.startswith('runtime/ffmpeg/') for name in files): raise PackageError('FFmpeg is not part of Yahad; remove runtime/ffmpeg')
     machine, esbuild_target = TARGETS[target]
     executable = (*RUNTIMES, f'app/node_modules/@esbuild/{esbuild_target}/bin/esbuild')
     if any(name not in files for name in (*REQUIRED, *executable)): raise PackageError('Missing runtime/app/license dependency')
@@ -92,11 +93,6 @@ def build(prepared, output, target, engine_source):
     for dependency in package.get('dependencies', {}):
         if not re.fullmatch(r'(?:@[a-zA-Z0-9._-]+/)?[a-zA-Z0-9._-]+', dependency) or f'app/node_modules/{dependency}/package.json' not in files:
             raise PackageError('Production dependency missing')
-    ffmpeg = json.loads(files['legal/ffmpeg-build.json'].read_text(encoding='utf-8'))
-    source = urlsplit(ffmpeg.get('sourceUrl', ''))
-    if not isinstance(ffmpeg.get('configure'), list) or not all(isinstance(arg, str) for arg in ffmpeg['configure']) or not re.fullmatch('[a-f0-9]{64}', ffmpeg.get('sourceSha256', '')) or source.scheme != 'https' or not source.hostname or source.username or source.query or source.fragment:
-        raise PackageError('FFmpeg provenance required')
-    if any(arg == '--enable-nonfree' for arg in ffmpeg['configure']): raise PackageError('Nonredistributable FFmpeg candidate')
     if not isinstance(json.loads(files['legal/SBOM.json'].read_text(encoding='utf-8')), dict): raise PackageError('SBOM required')
     engine = inventory(engine_source, 'engine/deploy/')
     if 'engine/deploy/install.py' not in engine or 'engine/deploy/updater.py' not in engine: raise PackageError('Reviewed Linux engine missing')

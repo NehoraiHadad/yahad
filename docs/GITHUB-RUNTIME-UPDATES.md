@@ -23,7 +23,7 @@ manage a signing key.
 
 The runtime archive contains only `updater.py`. The launcher, supervisor,
 transport, helper ABI, source policy and systemd permissions are installed once
-and cannot be changed through this release path. OS/Node/ffmpeg/Caddy changes,
+and cannot be changed through this release path. OS/Node/Caddy changes,
 permission/source changes or an incompatible immutable ABI require a separately
 reviewed bootstrap. This supports compatible project upgrades end-to-end, not
 all conceivable future host changes.

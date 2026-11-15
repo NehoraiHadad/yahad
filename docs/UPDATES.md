@@ -21,7 +21,7 @@
 
 ## התקנה חד־פעמית על Pi מזוהה
 
-הנחות: ההתקנה לפי PI.md כבר בוצעה, Node24/ffmpeg מותקנים, user `yachad` קיים, הקוד הראשוני ב־`/opt/yachad/releases/v0.2.0` ו־`current` מצביע אליו. אין להריץ לפני זיהוי RAM/OS/CPU בפועל. הנתיבים הבאים הם ברירת מחדל ניתנת לשינוי בקובץ וביחידות systemd יחד.
+הנחות: ההתקנה לפי PI.md כבר בוצעה, Node24 מותקן, user `yachad` קיים, הקוד הראשוני ב־`/opt/yachad/releases/v0.2.0` ו־`current` מצביע אליו. אין להריץ לפני זיהוי RAM/OS/CPU בפועל. הנתיבים הבאים הם ברירת מחדל ניתנת לשינוי בקובץ וביחידות systemd יחד.
 
 ```bash
 sudo useradd --system --home /var/lib/yachad-update-build --shell /usr/sbin/nologin yachad-update

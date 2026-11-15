@@ -174,7 +174,7 @@ class Installer:
                     missing.append('Node has the wrong version. Use Node 24 LTS, not another major version.')
             except InstallError:missing.append('Node could not start. Repair the Node 24 installation inside this Linux/WSL distribution.')
         if not npm:missing.append('npm is missing. Install npm alongside Node 24 inside this Linux/WSL distribution.')
-        requirements=[('ffmpeg','-version','ffmpeg'),('openssl','version','OpenSSL')]
+        requirements=[('openssl','version','OpenSSL')]
         # Existing HTTPS arrangements are preserved, not replaced with Caddy.
         config_dir=self.p('/etc/yachad')
         # An ordinary owner cannot traverse the protected existing config directory.

@@ -18,9 +18,9 @@
 | auth | creds.update + SignalKeyStore מוצפן | שמירה, Buffer roundtrip, מחיקות keys ופרוטובאף |
 | חיבור מחדש | backoff+jitter, restartRequired, terminal logout/badSession/conflict | reconnect ו־logout עם transport מוזרק; לא תעבורה ל־WhatsApp |
 | טקסט/mענה | sendMessage + quoted מאותה קבוצה | מיפוי transport; UI ו־API במצב mock |
-| תמונה/סרטון | bytes + caption + thumbnail אמיתי בזיכרון | מדיה מקומית, thumbnail, API ודפדפן; לא משלוח אמיתי |
+| תמונה/סרטון | bytes + caption + `jpegThumbnail` מ־JPEG שהדפדפן יצר (חלק `preview`) | מדיה מקומית, thumbnail, API ודפדפן; ללא preview תקין השרת מסרב (PREVIEW_REQUIRED / INVALID_PREVIEW / PREVIEW_UNEXPECTED); לא משלוח אמיתי |
 | מסמך | document bytes, MIME מזוהה, filename/caption | מיפוי ו־API; הורדה מאומתת |
-| קול | Opus Ogg עם ptt=true ו־duration אמיתי | המרה ב־ffmpeg, משך, אחסון וניגון דוגמה; לא מיקרופון פיזי |
+| קול | Opus Ogg עם ptt=true ו־duration אמיתי | הקלטת Opus בדפדפן ו־remux ל־Ogg, אימות קפדני בשרת (`src/ogg-opus.ts`), משך, אחסון וניגון דוגמה; אין FFmpeg ואין פענוח בשרת; לא מיקרופון פיזי |
 | מדבקה | WebP bytes | מיפוי ו־API וטעינה בדפדפן; ללא עורך מדבקות מובנה |
 | תגובה | react + key, messages.reaction | קליטה/מיפוי ו־UI mock; זהות ההורה |
 | עריכה | text+edit; protocol MESSAGE_EDIT | נרמול ומדיניות בעלות/זמן; UI/API mock |

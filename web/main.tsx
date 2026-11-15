@@ -89,6 +89,11 @@ import { ConnectionGuidance, useBrowserOnline } from './ConnectionGuidanceView';
 import { UpdatesPanel } from './UpdatesPanel';
 import type { PublicMessage } from '../src/service';
 import type { Capabilities } from '../src/connectors/types';
+import { VOICE_CONSTRAINTS, VOICE_RECORDER_OPTIONS, VOICE_SUPPORT_MESSAGE, finishVoice, voiceSupport } from './voiceRecording';
+import { VOICE_MAX_BYTES, VOICE_MAX_SECONDS } from '../src/opus';
+import { attachmentPreviewKind, makePreview } from './mediaPreview';
+/** A finished recording: the Ogg Opus message to send and the recorder's WebM to listen back to. */
+type Voice = { ogg: Blob; recording: Blob };
 type Me = {
   user: {
     id: string;
@@ -1390,7 +1395,7 @@ function Composer({
     [sticker, setSticker] = useState(false),
     [recording, setRecording] = useState(false),
     [recordPending, setRecordPending] = useState(false),
-    [voice, setVoice] = useState<Blob | null>(null),
+    [voice, setVoice] = useState<Voice | null>(null),
     [seconds, setSeconds] = useState(0),
     [preview, setPreview] = useState(''),
     [stickerPreview, setStickerPreview] = useState('');
@@ -1401,7 +1406,7 @@ function Composer({
     mediaStream = useRef<MediaStream | null>(null),
     chunks = useRef<Blob[]>([]),
     id = useRef(newId()),
-    lastAttempt = useRef<{ id: string; text: string; replyId?: string; file: File | null; voice: Blob | null; sticker: boolean } | null>(null),
+    lastAttempt = useRef<{ id: string; text: string; replyId?: string; file: File | null; voice: Voice | null; sticker: boolean } | null>(null),
     typingAt = useRef(0),
     mounted = useRef(true),
     cancelRecord = useRef(false),
@@ -1461,7 +1466,7 @@ function Composer({
     const timer = setInterval(() => {
       const s = Math.floor((Date.now() - start) / 1000);
       setSeconds(s);
-      if (s >= 120) stopRecording();
+      if (s >= VOICE_MAX_SECONDS) stopRecording();
     }, 250);
     return () => clearInterval(timer);
   }, [recording]);
@@ -1470,7 +1475,8 @@ function Composer({
       setPreview('');
       return;
     }
-    const url = URL.createObjectURL(voice);
+    // Listen back to the recorder's own WebM: the same Opus packets as the Ogg that is sent.
+    const url = URL.createObjectURL(voice.recording);
     setPreview(url);
     return () => URL.revokeObjectURL(url);
   }, [voice]);
@@ -1524,8 +1530,11 @@ function Composer({
       lastAttempt.current = { id: id.current, ...draft };
     }
     submitting.current = true; setBusy(true); onBusyChange(true);
+    // Only a request that left the browser can have an unknown outcome.
+    let requested = false;
     try {
       if (editing) {
+        requested = true;
         await api(`${path}/messages/${encodeURIComponent(editing.id)}`, 'PATCH', { text });
       } else if (file || voice) {
         const form = new FormData();
@@ -1533,18 +1542,27 @@ function Composer({
         form.set('text', text);
         if (reply) form.set('replyId', reply.id);
         if (sticker) form.set('sticker', 'true');
-        if (voice) form.set('voice', 'true');
-        form.set('file', (voice || file)!, voice ? 'voice.webm' : file!.name);
+        if (voice) {
+          form.set('voice', 'true');
+          form.set('file', voice.ogg, 'voice.ogg');
+        } else {
+          form.set('file', file!, file!.name);
+          const kind = sticker ? undefined : await attachmentPreviewKind(file!);
+          if (kind) form.set('preview', await makePreview(file!, kind), 'preview.jpg');
+        }
+        requested = true;
         await api(path + '/media', 'POST', form);
-      } else
+      } else {
+        requested = true;
         await api(path + '/messages', 'POST', { clientId: id.current, text, replyId: reply?.id });
+      }
       if (!mounted.current) return;
       clearDraft();
       if (!editing) celebrate();
       onSent();
     } catch (e) {
       if (mounted.current) {
-        if (!editing && (e as { sendOutcome?: string }).sendOutcome !== 'not_submitted') {
+        if (!editing && requested && (e as { sendOutcome?: string }).sendOutcome !== 'not_submitted') {
           uncertain.current = true; setSendUncertain(true); setEmojiOpen(false); setAttachOpen(false);
         }
         onError((e as Error).message);
@@ -1561,32 +1579,26 @@ function Composer({
   };
   const record = async () => {
     if (!available.current || submitting.current || uncertain.current || recordPending) return;
-    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
-      onError('להקלטה צריך כתובת HTTPS שהמכשיר סומך עליה, או localhost.');
-      return;
-    }
-    if (!window.MediaRecorder) {
-      onError('הדפדפן הזה אינו תומך בהקלטה.');
+    const support = voiceSupport(window);
+    if (support !== 'supported') {
+      onError(VOICE_SUPPORT_MESSAGE[support]);
       return;
     }
     setRecordPending(true);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia(VOICE_CONSTRAINTS);
       if (!mounted.current || !available.current || submitting.current || uncertain.current) {
         stream.getTracks().forEach((t) => t.stop());
         return;
       }
       mediaStream.current = stream;
-      const mime = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus'].find((x) =>
-        MediaRecorder.isTypeSupported(x),
-      );
-      const r = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      const r = new MediaRecorder(stream, VOICE_RECORDER_OPTIONS);
       recorder.current = r;
       chunks.current = [];
       cancelRecord.current = false;
       r.ondataavailable = (e) => {
         if (e.data.size) chunks.current.push(e.data);
-        if (chunks.current.reduce((n, b) => n + b.size, 0) > maxMedia) {
+        if (chunks.current.reduce((n, b) => n + b.size, 0) > Math.min(maxMedia, VOICE_MAX_BYTES)) {
           cancelRecord.current = true;
           stopRecording();
           onError('ההקלטה הגיעה למגבלת הגודל.');
@@ -1594,8 +1606,13 @@ function Composer({
       };
       r.onstop = () => {
         stream.getTracks().forEach((t) => t.stop());
-        if (mounted.current && !cancelRecord.current)
-          setVoice(new Blob(chunks.current, { type: r.mimeType }));
+        if (!mounted.current || cancelRecord.current) return;
+        const recording = new Blob(chunks.current, { type: r.mimeType });
+        void finishVoice(recording).then(result => {
+          if (!mounted.current || cancelRecord.current) return;
+          if ('error' in result) onError(result.error);
+          else setVoice({ ogg: result.ogg, recording });
+        }, () => { if (mounted.current) onError('ההקלטה לא נשמרה כראוי בדפדפן הזה. אפשר לנסות שוב.'); });
       };
       r.onerror = () => {
         cancelRecord.current = true;

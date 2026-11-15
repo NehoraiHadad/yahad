@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
+import * as voiceRecording from '../web/voiceRecording.ts';
+import { VOICE_MAX_BYTES, VOICE_MAX_SECONDS } from '../src/opus.ts';
 
 // Actual Composer hooks, with no browser, provider, disk persistence or real data.
 function harness(extra: Record<string, unknown> = {}) {
@@ -23,13 +25,17 @@ function harness(extra: Record<string, unknown> = {}) {
     newId: () => `synthetic-${++nextId}`, useChatCelebration: () => ({ celebrate() {} }),
     api: (path: string, method = 'GET', body: any) => new Promise<any>((resolve, reject) => requests.push({ path, method, body, resolve, reject })),
     URL: { createObjectURL() { return 'blob:synthetic'; }, revokeObjectURL() {} },
+    ...voiceRecording, VOICE_MAX_BYTES, VOICE_MAX_SECONDS,
+    // Synthetic files are documents: no preview to make.
+    attachmentPreviewKind: async () => undefined, makePreview: async () => { throw new Error('no preview for documents'); },
     ...extra,
   });
-  let props: any = { group: 'synthetic-group', messages: [], caps: {}, enabled: true, suspended: false, editing: null, reply: null, onBusyChange() {}, onError() {}, onSent() {} };
+  const errors: string[] = [];
+  let props: any = { group: 'synthetic-group', messages: [], caps: {}, enabled: true, suspended: false, editing: null, reply: null, onBusyChange() {}, onError(message: string) { errors.push(message); }, onSent() {} };
   const render = () => { cursor = 0; return Composer(props); };
   const flush = (patch = {}) => { props = { ...props, ...patch }; let result = render();
     while (effects.length) { effects.splice(0).forEach(fn => fn()); result = render(); } return result; };
-  return { flush, requests };
+  return { flush, requests, errors };
 }
 
 test('temporary disconnect retains typed draft and idempotency key, blocks send, and resumes after verification', async () => {
@@ -74,8 +80,8 @@ test('Composer is a stable sibling outside the permission-gated message subtree 
 
 test('microphone permission resolving after suspension stops tracks and cannot start hidden recording', async () => {
   let resolve!: (stream: any) => void, stopped = 0, recorders = 0;
-  const h = harness({ window: { isSecureContext: true, MediaRecorder: true },
-    navigator: { mediaDevices: { getUserMedia: () => new Promise(r => { resolve = r; }) } },
+  const navigator = { mediaDevices: { getUserMedia: () => new Promise(r => { resolve = r; }) } };
+  const h = harness({ window: { isSecureContext: true, navigator, MediaRecorder: { isTypeSupported: () => true } }, navigator,
     MediaRecorder: class { constructor() { recorders++; } },
   });
   const pending = h.flush().record();
@@ -113,6 +119,7 @@ test('changing a safe failed payload rotates its ID for removed attachments, rep
     if (change === 'file') state.setFile({ name: 'synthetic.txt' });
     if (change === 'voice') state.setVoice({ synthetic: 'original recording' });
     state = h.flush(); const old = state.id.current, first = state.send();
+    await new Promise(r => setImmediate(r)); // attachments are prepared (preview check) before the request
     h.requests[0].reject(Object.assign(new Error('proven preflight rejection'), { sendOutcome: 'not_submitted' })); await first;
     state = h.flush();
     if (change === 'file') state.setFile(null);
@@ -120,14 +127,15 @@ test('changing a safe failed payload rotates its ID for removed attachments, rep
     state = h.flush(change === 'reply' ? { reply: null } : {});
     const second = state.send();
     assert.notEqual(state.id.current, old, change + ' mutation needs a fresh logical send ID');
+    await new Promise(r => setImmediate(r));
     h.requests[1].resolve(); await second;
   }
 });
 
 test('microphone permission resolving during a send cannot start recording behind pending or uncertain controls', async () => {
   let resolve!: (stream: any) => void, stopped = 0, recorders = 0;
-  const h = harness({ window: { isSecureContext: true, MediaRecorder: true },
-    navigator: { mediaDevices: { getUserMedia: () => new Promise(r => { resolve = r; }) } },
+  const navigator = { mediaDevices: { getUserMedia: () => new Promise(r => { resolve = r; }) } };
+  const h = harness({ window: { isSecureContext: true, navigator, MediaRecorder: { isTypeSupported: () => true } }, navigator,
     MediaRecorder: class { constructor() { recorders++; } },
   });
   let state = h.flush(); const permission = state.record(); state.setText('Synthetic send'); state = h.flush();
@@ -136,4 +144,16 @@ test('microphone permission resolving during a send cannot start recording behin
   assert.equal(stopped, 1); assert.equal(recorders, 0);
   h.requests[0].reject(new Error('Synthetic lost response')); await sending;
   await h.flush().record(); assert.equal(recorders, 0);
+});
+
+test('a browser that cannot record WebM/Opus says voice needs a newer device and never opens the microphone', async () => {
+  let permissions = 0, recorders = 0;
+  const navigator = { mediaDevices: { getUserMedia: async () => { permissions++; return { getTracks: () => [] }; } } };
+  // iPadOS before 18.4: MediaRecorder exists but records only MP4/AAC.
+  const h = harness({ window: { isSecureContext: true, navigator, MediaRecorder: { isTypeSupported: (type: string) => type === 'audio/mp4' } },
+    navigator, MediaRecorder: class { constructor() { recorders++; } } });
+  await h.flush().record();
+  assert.equal(permissions, 0); assert.equal(recorders, 0); assert.equal(h.flush().voice, null);
+  assert.deepEqual(h.errors, [voiceRecording.VOICE_SUPPORT_MESSAGE.unsupported]);
+  assert.match(h.errors[0], /18\.4/);
 });

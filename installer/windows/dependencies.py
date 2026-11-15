@@ -72,7 +72,7 @@ def validate_staged(files, spec=None):
         recorded = json.loads(Path(files['legal/dependency-proof.json']).read_text(encoding='utf-8'))
         if recorded != proof(spec): raise DependencyError('DEPENDENCY_PROVENANCE')
         required = {r['path']:r for s in spec['sources'].values() for r in s['files']}
-        runtime = {name for name in files if name.startswith(('runtime/ffmpeg/', 'runtime/caddy/'))}
+        runtime = {name for name in files if name.startswith(tuple(f'runtime/{source}/' for source in spec['sources']))}
         if runtime != {name for name in required if name.startswith('runtime/')}: raise DependencyError('DEPENDENCY_FILE_SET')
         for name, record in required.items():
             path = Path(files[name])
@@ -98,7 +98,7 @@ def stage(archives, checksum_files, output, spec=None):
     spec = pins() if spec is None else spec
     output = Path(output).absolute()
     if output.exists(): raise DependencyError('NEW_OUTPUT_REQUIRED')
-    # Verify BOTH complete inputs and every selected member before any output.
+    # Verify every complete input and every selected member before any output.
     for name, source in spec['sources'].items(): verify_inputs(archives[name], checksum_files[name], source)
     output.mkdir(parents=True, exist_ok=False)
     for name, source in spec['sources'].items():
@@ -116,9 +116,6 @@ def stage(archives, checksum_files, output, spec=None):
                 if size != record['size'] or hashed.hexdigest()!=record['sha256']: raise DependencyError('INPUT_CHANGED')
     legal = output/'legal'
     (legal/'dependency-proof.json').write_text(json.dumps(proof(spec), indent=2), encoding='utf-8')
-    (legal/'ffmpeg-build.json').write_text(json.dumps({'origin':'upstream-linked-vendor',
-        'publisher':spec['sources']['ffmpeg']['publisher'], 'version':spec['sources']['ffmpeg']['version'],
-        'provenance':'dependency-proof.json', 'distributionReview':'corresponding-sources-and-transitive-notices-pending'}), encoding='utf-8')
     (legal/'Caddy-NOTICES.txt').write_text('Yahad packaging attribution; this is not an upstream NOTICE file.\n'
         'Caddy: https://github.com/caddyserver/caddy — Apache-2.0, included Caddy-LICENSE.txt.\n'
         'Upstream README is included as Caddy-README.md. Transitive license inventory/review remains required before distribution.\n', encoding='utf-8')
@@ -153,12 +150,12 @@ def augment(core, dependencies, output):
 if __name__ == '__main__':
     parser=argparse.ArgumentParser(description=__doc__); sub=parser.add_subparsers(dest='operation',required=True)
     staging=sub.add_parser('stage')
-    for name in ('ffmpeg-archive','ffmpeg-checksums','caddy-archive','caddy-checksums','output'): staging.add_argument('--'+name,required=True,type=Path)
+    for name in ('caddy-archive','caddy-checksums','output'): staging.add_argument('--'+name,required=True,type=Path)
     augmenting=sub.add_parser('augment')
     for name in ('core','dependencies','output'): augmenting.add_argument('--'+name,required=True,type=Path)
     args=parser.parse_args()
     if args.operation=='stage':
-        result=stage({'ffmpeg':args.ffmpeg_archive,'caddy':args.caddy_archive}, {'ffmpeg':args.ffmpeg_checksums,'caddy':args.caddy_checksums}, args.output)
+        result=stage({'caddy':args.caddy_archive}, {'caddy':args.caddy_checksums}, args.output)
         print(json.dumps({'kind':result['kind'],'familyInstallationReady':False}))
     else:
         result=augment(args.core,args.dependencies,args.output)

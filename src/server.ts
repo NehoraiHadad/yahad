@@ -23,7 +23,9 @@ import { ChildAccessError } from './child-access.js';
 import { SendNotSubmittedError, confirmedSend, acknowledgedSend, sendState, sendRequestHash, type SendState } from './send-outcome.js';
 import { unreadCount, markLocallyViewed } from './chat-read-state.js';
 import { ChatService, AppError, deny } from './service.js';
-import { voiceToOpus } from './media.js';
+import { VoiceRejection, validateVoiceOgg } from './ogg-opus.js';
+import { attachmentKind, needsPreview } from './media-kind.js';
+import { validJpegPreview } from './jpeg-preview.js';
 import { validReaction } from './message-actions.js';
 import { updateStatus, requestUpdate, updateTargetSchema } from './updates.js';
 import type { ConnectorHooks, Connector, StoredMessage, SendKind } from './connectors/types.js';
@@ -70,7 +72,7 @@ export async function createApp(
   });
   await app.register(cookie);
   await app.register(multipart, {
-    limits: { fileSize: config.maxMedia, files: 1, fields: 5, fieldSize: 15000, parts: 7 },
+    limits: { fileSize: config.maxMedia, files: 2, fields: 5, fieldSize: 15000, parts: 8 },
   });
   const credentialThrottle = new CredentialThrottle(store);
   let activeLogins = 0;
@@ -475,7 +477,7 @@ export async function createApp(
   });
   async function send(
     s: Session, g: string, data: z.infer<typeof sendSchema>,
-    attachment?: { bytes: Buffer; mime: string; filename: string; kind: SendKind },
+    attachment?: { bytes: Buffer; mime: string; filename: string; kind: SendKind; jpegThumbnail?: Buffer },
     fingerprint = sendRequestHash(data, attachment),
     report: (state: SendState) => void = () => {},
     reservation?: symbol,
@@ -561,7 +563,7 @@ export async function createApp(
       }
       currentSend();
       await submit(id, { id, groupId: g, text: wireText, kind: attachment?.kind || 'text', bytes: attachment?.bytes,
-        mime: attachment?.mime, filename: attachment?.filename, reply: wireReply });
+        mime: attachment?.mime, filename: attachment?.filename, jpegThumbnail: attachment?.jpegThumbnail, reply: wireReply });
       currentSend();
       return { outcome: 'confirmed' as const, message: service.public(f, store.getMessage(f, g, id)!) };
     } catch (error) {
@@ -586,13 +588,17 @@ export async function createApp(
     try {
       const fields: Record<string, string> = {};
       let bytes: Buffer | undefined,
+        preview: Buffer | undefined,
         filename = '',
         mime = '';
       for await (const part of req.parts()) {
         if (part.type === 'file') {
-          filename = part.filename.replace(/[\r\n\\/]/g, '_').slice(0, 160);
-          mime = part.mimetype;
-          bytes = await part.toBuffer();
+          if (part.fieldname === 'preview' && !preview) preview = await part.toBuffer();
+          else if (part.fieldname === 'file' && !bytes) {
+            filename = part.filename.replace(/[\r\n\\/]/g, '_').slice(0, 160);
+            mime = part.mimetype;
+            bytes = await part.toBuffer();
+          } else throw new AppError(400, 'UNEXPECTED_FILE');
         } else fields[part.fieldname] = String(part.value);
       }
       if (!bytes?.length) throw new AppError(400, 'NO_FILE');
@@ -607,45 +613,37 @@ export async function createApp(
       preparationKey = outgoingKey(s.user.familyId, g, outgoingId(data.clientId)); reservation = Symbol();
       preparing.set(preparationKey, { token: reservation, owner: s.user.id, fingerprint });
       report('failed');
-      const { fileTypeFromBuffer } = await import('file-type');
-      const type = await fileTypeFromBuffer(bytes);
-      const detected = (type?.mime || 'application/octet-stream').split(';')[0];
-      let kind: SendKind = 'document';
-      if (fields.voice === 'true') {
-        capable(s, 'audio');
-        if (
-          ![
-            'audio/webm',
-            'video/webm',
-            'audio/ogg',
-            'audio/mp4',
-            'video/mp4',
-            'audio/mpeg',
-            'audio/wav',
-          ].includes(detected)
-        )
-          throw new AppError(400, 'INVALID_AUDIO');
-        try {
-          const recording = bytes;
-          bytes = await store.diagnostics.measureAsync(s.user.familyId, 'audio_encode', () => voiceToOpus(recording));
-        } catch {
-          throw new AppError(422, 'AUDIO_ENCODING_FAILED');
+      const upload = bytes;
+      // Validation only: the browser made the Ogg Opus voice message and the JPEG preview.
+      const prepared = await store.diagnostics.measureAsync(s.user.familyId, 'media_prepare', async () => {
+        if (fields.voice === 'true') {
+          capable(s, 'audio');
+          try { validateVoiceOgg(upload); }
+          catch (error) {
+            if (error instanceof VoiceRejection) throw new AppError(error.code === 'AUDIO_TOO_LARGE' ? 413 : 400, error.code);
+            throw error;
+          }
+          return { kind: 'audio' as SendKind, mime: 'audio/ogg; codecs=opus' };
         }
-        kind = 'audio';
-        mime = 'audio/ogg; codecs=opus';
-        filename = 'voice.ogg';
-      } else if (fields.sticker === 'true') {
-        if (detected !== 'image/webp') throw new AppError(400, 'WEBP_REQUIRED');
-        kind = 'sticker';
-        mime = detected;
-      } else {
-        mime = detected;
-        if (['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(detected))
-          kind = 'image';
-        if (detected === 'video/mp4') kind = 'video';
-      }
+        const { fileTypeFromBuffer } = await import('file-type');
+        const detected = (await fileTypeFromBuffer(upload))?.mime.split(';')[0];
+        if (fields.sticker === 'true') {
+          if (detected !== 'image/webp') throw new AppError(400, 'WEBP_REQUIRED');
+          return { kind: 'sticker' as SendKind, mime: detected };
+        }
+        return { kind: attachmentKind(detected) as SendKind, mime: detected || 'application/octet-stream' };
+      });
+      const { kind } = prepared;
+      mime = prepared.mime;
+      if (kind === 'audio') filename = 'voice.ogg';
+      // Without our preview Baileys would make its own: FFmpeg for video, sharp/jimp
+      // plus a plaintext temporary copy for images. A send never relies on that.
+      if (needsPreview(kind)) {
+        if (!preview) throw new AppError(400, 'PREVIEW_REQUIRED');
+        if (!validJpegPreview(preview)) throw new AppError(400, 'INVALID_PREVIEW');
+      } else if (preview) throw new AppError(400, 'PREVIEW_UNEXPECTED');
       current(s, g);
-      return await send(s, g, data, { bytes, mime, filename, kind }, fingerprint, report, reservation);
+      return await send(s, g, data, { bytes, mime, filename, kind, jpegThumbnail: preview }, fingerprint, report, reservation);
     } finally {
       if (preparationKey && preparing.get(preparationKey)?.token === reservation) preparing.delete(preparationKey);
       activeUploads.delete(req.id);

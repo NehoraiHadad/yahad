@@ -79,7 +79,8 @@ test('media, direct actions and settings remain scoped; unknown and foreign-only
   try {
     const jpg = readFileSync('fixtures/garden.jpg');
     const boundary = 'synthetic-parent-upload';
-    const payload = Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="clientId"\r\n\r\n${randomUUID()}\r\n--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="synthetic.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`), jpg, Buffer.from(`\r\n--${boundary}--\r\n`)]);
+    const payload = Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="clientId"\r\n\r\n${randomUUID()}\r\n--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="synthetic.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`), jpg,
+      Buffer.from(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="preview"; filename="preview.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`), readFileSync('fixtures/garden-preview.jpg'), Buffer.from(`\r\n--${boundary}--\r\n`)]);
     const uploaded = await f.req(f.parent, `/api/groups/${ungranted}/media`, 'POST', payload, { 'content-type': `multipart/form-data; boundary=${boundary}` });
     assert.equal(uploaded.statusCode, 200, uploaded.body);
     const id = uploaded.json().message.id, mediaId = uploaded.json().message.mediaId;
