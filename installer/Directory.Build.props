@@ -6,5 +6,17 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Deterministic>true</Deterministic>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!-- The infrastructure track's own identity (docs/WINDOWS-APP-PACKAGE-PLAN.md 4.3, decision 1):
+         an independent semver, and the contiguous contract range it serves to apps (section 6).
+         The app version stays package.json and is never compiled into a .NET image. -->
+    <YahadInfrastructureVersion>1.0.0</YahadInfrastructureVersion>
+    <YahadInfrastructureContractMin>1</YahadInfrastructureContractMin>
+    <YahadInfrastructureContractMax>1</YahadInfrastructureContractMax>
+    <Version>$(YahadInfrastructureVersion)</Version>
   </PropertyGroup>
+  <ItemGroup>
+    <AssemblyMetadata Include="YahadInfrastructureVersion" Value="$(YahadInfrastructureVersion)" />
+    <AssemblyMetadata Include="YahadInfrastructureContractMin" Value="$(YahadInfrastructureContractMin)" />
+    <AssemblyMetadata Include="YahadInfrastructureContractMax" Value="$(YahadInfrastructureContractMax)" />
+  </ItemGroup>
 </Project>

@@ -15,9 +15,10 @@ internal static class LanProxyPaths
     internal static string Data => Path.Combine(State, "data");
     internal static string Temporary => Path.Combine(State, "temporary");
     internal static string PublicJoin => Path.Combine(State, "join-public");
-    // The proxy runs from the installed release's own folder, like the Runtime.
-    internal static string Caddy(string version) => Path.Combine(InstalledLayout.VersionRoot(version), "payload", "runtime", "caddy", "caddy.exe");
-    internal static string Command(string version) => "\"" + Path.Combine(InstalledLayout.VersionRoot(version), "host", "Yahad.ServiceHost.exe") + "\" --lan-service";
+    // The proxy runs from its infrastructure tree, like the Runtime: Caddy and the
+    // host are infrastructure, so an app update never moves its image or firewall rule.
+    internal static string Caddy(string infrastructure) => InstalledLayout.Caddy(infrastructure);
+    internal static string Command(string infrastructure) => "\"" + InstalledLayout.HostImage(infrastructure) + "\" --lan-service";
 }
 
 // The address the proxy may serve on, and nothing else: Setup wrote it and this
