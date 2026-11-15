@@ -10,8 +10,10 @@ import {createServer} from 'node:net';
 import {once} from 'node:events';
 
 const payload=process.env.YAHAD_NATIVE_LAUNCH_PAYLOAD,host=process.env.YAHAD_NATIVE_FIXTURE_HOST,manifest=process.env.YAHAD_NATIVE_LAUNCH_MANIFEST;
+// The payload carries no Platform helper; the caller names the published image.
+const helper=process.env.YAHAD_PLATFORM_HELPER;
 test('native launcher owns its private environment and serves actual mock-app voice/image/video HTTP requests',
- {skip:process.platform!=='win32'||!payload||!host||!manifest,timeout:90000},async()=>{
+ {skip:process.platform!=='win32'||!payload||!host||!manifest||!helper,timeout:90000},async()=>{
   const root=mkdtempSync(join(tmpdir(),'yahad-native-launch-'));const system32=join(process.env.SystemRoot,'System32');
   const sid=execFileSync(join(system32,'whoami.exe'),['/user','/fo','csv','/nh'],{encoding:'utf8',windowsHide:true}).match(/S-1-5-\d+(?:-\d+)+/)?.[0];assert.ok(sid);
   execFileSync(join(system32,'icacls.exe'),[root,'/inheritance:r','/grant:r',`*${sid}:(OI)(CI)F`,'*S-1-5-18:(OI)(CI)F','*S-1-5-32-544:(OI)(CI)F'],{windowsHide:true,stdio:'pipe'});
@@ -44,7 +46,7 @@ test('native launcher owns its private environment and serves actual mock-app vo
     const video=await upload(fixture('garden.mp4'),'video/mp4','fixture.mp4',{preview:fixture('garden-video-preview.jpg')});assert.equal(video.kind,'video');
     assert.equal(existsSync(marker),false);
     child.stdin.end('stop\n');assert.equal((await exited)[0],0,errors);assert.match(output,/"stopped":true/);
-    const {createPlatformFiles}=await import(new URL('../src/platform-files.ts',import.meta.url));await(await createPlatformFiles('win32',join(payload,'app/native/Yahad.Platform.exe')).acquireDataLock(data))();
+    const {createPlatformFiles}=await import(new URL('../src/platform-files.ts',import.meta.url));await(await createPlatformFiles('win32',{YAHAD_PLATFORM_HELPER:helper}).acquireDataLock(data))();
     assert.equal(readFileSync(keyPath,'utf8'),key.toString('base64'),'existing fixture key changed');
   }finally{if(child.exitCode===null&&child.signalCode===null){child.kill();await exited;}}
  });

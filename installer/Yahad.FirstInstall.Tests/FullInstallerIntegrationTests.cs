@@ -127,13 +127,16 @@ internal static class FullInstallerIntegrationTests
             Deny(()=>(intent with{Binaries=inventory.Where(f=>f.Path!=RemovalIntent.SetupMember(state.Version)).ToArray()}).Require());
             Deny(()=>(intent with{Binaries=[..inventory,inventory[1]]}).Require());return Task.CompletedTask;
         });
-        await check("runtime package accepts only Format 1 host, updater and payload members anchored to its bundle",()=>
+        await check("runtime package accepts only Format 1 host, updater, platform and payload members anchored to its bundle",()=>
         {
             using(var exact=LayoutPackage())Assert(exact.Manifest.Format==1);
             DenyCode("PACKAGE_FORMAT",()=>{using var full=LayoutPackage(format:2);});
             DenyCode("PACKAGE_PATH",()=>{using var bootstrap=LayoutPackage(extra:"bootstrap/authority/Yahad.Authority.exe");});
             DenyCode("PACKAGE_PATH",()=>{using var manifest=LayoutPackage(extra:"system-manifest.json");});
             DenyCode("PACKAGE_MISSING",()=>{using var missing=LayoutPackage(omit:"host/Yahad.ServiceHost.runtimeconfig.json");});DenyCode("PACKAGE_MISSING",()=>{using var missing=LayoutPackage(omit:"updater/Yahad.Updater.exe");});
+            DenyCode("PACKAGE_MISSING",()=>{using var missing=LayoutPackage(omit:"platform/Yahad.Platform.exe");});DenyCode("PACKAGE_MISSING",()=>{using var missing=LayoutPackage(omit:"platform/Yahad.Platform.runtimeconfig.json");});
+            // Platform is infrastructure; the application tree never carries a native helper.
+            foreach(var native in new[]{"payload/app/native/Yahad.Platform.exe","payload/app/Native/coreclr.dll"})DenyCode("PACKAGE_PATH",()=>{using var app=LayoutPackage(extra:native);});
             DenyCode("PACKAGE_PAYLOAD_ANCHOR",()=>{using var anchor=LayoutPackage(payloadDigest:new string('e',64));});
             DenyCode("PACKAGE_SOURCE",()=>{using var source=LayoutPackage(source:new string('0',40)==ApplicationRelease.SourceCommit?new string('1',40):new string('0',40));});
             return Task.CompletedTask;
@@ -170,6 +173,8 @@ internal static class FullInstallerIntegrationTests
             Assert(ServiceSpec.Lan.Command("1.2.3")=="\""+Path.Combine(version,"host","Yahad.ServiceHost.exe")+"\" --lan-service");
             Assert(ServiceSpec.Lan.Command("1.2.4")!=ServiceSpec.Lan.Command("1.2.3"));
             Assert(LanProxyPaths.Caddy("1.2.3")==Path.Combine(version,"payload","runtime","caddy","caddy.exe"));
+            // The Runtime's YAHAD_PLATFORM_HELPER: infrastructure beside the host and Updater, never under the app.
+            Assert(InstalledLayout.PlatformImage("1.2.3")==Path.Combine(version,"platform","Yahad.Platform.exe")&&Path.IsPathFullyQualified(InstalledLayout.PlatformImage("1.2.3")));
             DenyCode("PAYLOAD_VERSION",()=>ServiceSpec.Lan.Command("../other"));
             return Task.CompletedTask;
         });
@@ -210,7 +215,7 @@ internal static class FullInstallerIntegrationTests
     }
     private static InstallPackage LayoutPackage(int format=1,string? extra=null,string? omit=null,string? payloadDigest=null,string? source=null)
     {
-        var names=new List<string>{"host/Yahad.ServiceHost.exe","host/Yahad.ServiceHost.runtimeconfig.json","updater/Yahad.Updater.exe","updater/Yahad.Updater.runtimeconfig.json","payload/bundle.json","payload/runtime/node/node.exe","payload/runtime/caddy/caddy.exe","payload/app/server/main.mjs","payload/app/dist/index.html","payload/app/native/Yahad.Platform.exe","payload/legal/fixture.json"};
+        var names=new List<string>{"host/Yahad.ServiceHost.exe","host/Yahad.ServiceHost.runtimeconfig.json","updater/Yahad.Updater.exe","updater/Yahad.Updater.runtimeconfig.json","payload/bundle.json","payload/runtime/node/node.exe","payload/runtime/caddy/caddy.exe","payload/app/server/main.mjs","payload/app/dist/index.html","platform/Yahad.Platform.exe","platform/Yahad.Platform.runtimeconfig.json","payload/legal/fixture.json"};
         if(extra is not null)names.Add(extra);if(omit is not null){names.Remove(omit);names.Add("payload/legal/other.json");}
         var stream=new MemoryStream();using(var zip=new ZipArchive(stream,ZipArchiveMode.Create,true))foreach(var name in names){using var entry=zip.CreateEntry(name).Open();entry.WriteByte(1);}
         var bytes=stream.ToArray();stream.Position=0;var sha=Hash([1]);

@@ -12,9 +12,13 @@ import { loadConfig } from '../src/config.js';
 import { readBootstrap } from '../src/bootstrap.js';
 import { DATABASE_SCHEMA } from '../src/database-schema.js';
 
-const helper = resolve('native/Yahad.Platform.exe');
+// The helper `installer/build.ps1 -Publish` publishes, handed over the way the
+// service host hands over its own image.
+const helper = resolve('installer/artifacts/Yahad.Platform.Bundle/Yahad.Platform.exe');
 const available = process.platform === 'win32' && existsSync(helper);
-const native = createPlatformFiles('win32', helper);
+// Built on first use: only Windows tests run, and the boundary refuses a POSIX helper path.
+let boundary: ReturnType<typeof createPlatformFiles> | undefined;
+const native = () => boundary ??= createPlatformFiles('win32', { YAHAD_PLATFORM_HELPER: helper });
 function fixture() {
   const directory = mkdtempSync(join(tmpdir(), 'yahad-native-app-'));
   const who = execFileSync('whoami.exe', ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true });
@@ -26,42 +30,42 @@ function fixture() {
 test('Windows native private key reader and app config read through the helper rather than POSIX mode', { skip: !available }, () => {
   const directory = fixture(), path = join(directory, 'master-key');
   const key = randomBytes(32); writeFileSync(path, key.toString('base64'));
-  assert.equal(native.readMasterKey(path).toString(), key.toString('base64'));
+  assert.equal(native().readMasterKey(path).toString(), key.toString('base64'));
   const previous = { ...process.env };
   try {
     process.env.MASTER_KEY_FILE = path; process.env.APP_ORIGIN = 'http://127.0.0.1:3000'; process.env.COOKIE_SECURE = 'false';
-    assert.deepEqual(loadConfig(native).masterKey, key);
+    assert.deepEqual(loadConfig(native()).masterKey, key);
   } finally { process.env = previous; }
 });
 test('Windows capability reads through the helper, is absent when missing and refuses a hard link', { skip: !available }, () => {
   const directory = fixture(), path = join(directory, 'capability');
-  assert.equal(readBootstrap(path, Date.now(), native), undefined);
+  assert.equal(readBootstrap(path, Date.now(), native()), undefined);
   const token = randomBytes(32).toString('base64url');
   writeFileSync(path, JSON.stringify({ token, expiresAt: Date.now() + 60000 }));
-  assert.equal(readBootstrap(path, Date.now(), native)?.token, token);
+  assert.equal(readBootstrap(path, Date.now(), native())?.token, token);
   linkSync(path, join(directory, 'alias'));
-  assert.throws(() => readBootstrap(path, Date.now(), native), /Native file boundary refused/);
+  assert.throws(() => readBootstrap(path, Date.now(), native()), /Native file boundary refused/);
 });
 test('Windows native data lease excludes a second process and releases normally', { skip: !available }, async () => {
-  const directory = fixture(); const release = await native.acquireDataLock(directory);
-  try { await assert.rejects(native.acquireDataLock(directory), /Native data lock refused/); }
+  const directory = fixture(); const release = await native().acquireDataLock(directory);
+  try { await assert.rejects(native().acquireDataLock(directory), /Native data lock refused/); }
   finally { await release(); }
-  await (await native.acquireDataLock(directory))();
+  await (await native().acquireDataLock(directory))();
 });
 test('missing Windows helper fails closed without falling back to chmod', { skip: process.platform !== 'win32' }, () => {
-  const absent = createPlatformFiles('win32', resolve('native/absent-helper.exe'));
+  const absent = createPlatformFiles('win32', { YAHAD_PLATFORM_HELPER: resolve('installer/artifacts/absent/Yahad.Platform.exe') });
   assert.throws(() => absent.readMasterKey(resolve('package.json')), /Native file boundary refused/);
 });
 test('abrupt Node parent death closes the native helper lifetime pipe and releases its lease', { skip: !available, timeout: 20000 }, async () => {
   const directory = fixture();
-  const owner = fork(resolve('tests/fixtures/native-lock-owner.ts'), [directory], { execArgv: ['--import', 'tsx'], stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+  const owner = fork(resolve('tests/fixtures/native-lock-owner.ts'), [directory], { execArgv: ['--import', 'tsx'], env: { ...process.env, YAHAD_PLATFORM_HELPER: helper }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   const exited = once(owner, 'exit'); owner.stdout!.resume(); owner.stderr!.resume();
   try {
     const [message] = await once(owner, 'message'); assert.deepEqual(message, { ready: true });
     owner.kill(); await exited;
     const deadline = Date.now() + 8000;
     while (true) {
-      try { await (await native.acquireDataLock(directory))(); break; }
+      try { await (await native().acquireDataLock(directory))(); break; }
       catch { assert.ok(Date.now() < deadline, 'orphaned native lease'); await new Promise(done => setTimeout(done, 40)); }
     }
   } finally { if (owner.exitCode === null && owner.signalCode === null) { owner.kill(); await exited; } }
@@ -103,7 +107,7 @@ test('actual mock app starts without development tools on PATH, excludes another
     child.send({ type: 'yahad.shutdown' });
     assert.equal((await exited)[0], 0);
     assert.ok(existsSync(join(data, 'app.sqlite')));
-    await (await native.acquireDataLock(data))();
+    await (await native().acquireDataLock(data))();
     const resumed = start(); const resumedExit = once(resumed, 'exit'); let resumedOutput = '';
     resumed.stdout!.on('data', chunk => resumedOutput += chunk.toString()); resumed.stderr!.resume();
     try {
@@ -114,7 +118,7 @@ test('actual mock app starts without development tools on PATH, excludes another
       }
       await fetch(`http://127.0.0.1:${port}/health/ready`);
       resumed.disconnect(); assert.equal((await resumedExit)[0], 0);
-      await (await native.acquireDataLock(data))();
+      await (await native().acquireDataLock(data))();
     } finally { if (resumed.exitCode === null && resumed.signalCode === null) { resumed.kill(); await resumedExit; } }
     assert.equal(readFileSync(keyPath, 'utf8').length, 44);
   } finally { if (child.exitCode === null) { child.kill(); await exited; } }

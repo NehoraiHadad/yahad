@@ -15,11 +15,10 @@ class BundleError(ValueError): pass
 
 # One self-contained ESM file for the single process entry; no source tree, loader or node_modules.
 SERVER = ('app/server/main.mjs',)
-APP_ROOTS = ('app/server/', 'app/native/', 'app/dist/', 'app/fixtures/', 'app/deploy/')
-BASE_REQUIRED = ('app/package.json', *SERVER, 'app/dist/index.html', 'runtime/node/node.exe',
-    'app/native/Yahad.Platform.exe', 'app/native/Yahad.Platform.runtimeconfig.json',
-    'app/native/Yahad.Platform.deps.json', 'app/native/coreclr.dll', 'app/native/hostfxr.dll',
-    'app/native/hostpolicy.dll', 'app/native/System.Private.CoreLib.dll', 'legal/runtime-lock.json',
+# The app carries no native code of its own: the Platform helper is infrastructure,
+# packaged beside the host and Updater (setup_package.py), so app/native/ is undeclared.
+APP_ROOTS = ('app/server/', 'app/dist/', 'app/fixtures/', 'app/deploy/')
+BASE_REQUIRED = ('app/package.json', *SERVER, 'app/dist/index.html', 'runtime/node/node.exe', 'legal/runtime-lock.json',
     'legal/SBOM.json', 'legal/server-bundle.json', 'legal/ThirdPartyNotices-server.txt',
     'legal/Node-LICENSE.txt', 'legal/DotNet-LICENSE.txt', 'legal/DotNet-ThirdPartyNotices.txt')
 FULL_REQUIRED = ('runtime/caddy/caddy.exe', 'legal/Caddy-LICENSE.txt', 'legal/Caddy-NOTICES.txt')
@@ -77,18 +76,8 @@ def validate(prepared, profile='full'):
                 re.fullmatch(r'(?:node_modules/(?:@[a-zA-Z0-9._-]+/)?[a-zA-Z0-9._-]+/)*node_modules/(?:@[a-zA-Z0-9._-]+/)?[a-zA-Z0-9._-]+', str(p.get('path'))) for p in packages)): raise BundleError('Server bundle contract')
     for output in outputs:
         if output.get('size') != files[output['path']].stat().st_size or output.get('sha256') != digest(files[output['path']]): raise BundleError('Server bundle checksum')
-    runtimeconfig = object_file(files['app/native/Yahad.Platform.runtimeconfig.json']).get('runtimeOptions', {})
-    if runtimeconfig.get('framework') or runtimeconfig.get('frameworks') or not any(f.get('name') == 'Microsoft.NETCore.App' and str(f.get('version', '')).startswith('10.') for f in runtimeconfig.get('includedFrameworks', [])): raise BundleError('Helper must have private self-contained .NET')
-    deps = object_file(files['app/native/Yahad.Platform.deps.json'])
-    target = deps.get('runtimeTarget', {}).get('name', '')
-    if not target.endswith('/win-x64') or target not in deps.get('targets', {}): raise BundleError('Private .NET runtime dependency target')
-    for library in deps['targets'][target].values():
-        for category in ('runtime','native'):
-            for asset in library.get(category, {}):
-                leaf = asset.rsplit('/',1)[-1]
-                if not leaf or '\\' in leaf or 'app/native/' + leaf not in files: raise BundleError('Missing private .NET dependency')
     runtime_lock = object_file(files['legal/runtime-lock.json'])
-    expected = {'node':'runtime/node/node.exe', 'platform':'app/native/Yahad.Platform.exe'}
+    expected = {'node':'runtime/node/node.exe'}
     if profile == 'full': expected.update(caddy='runtime/caddy/caddy.exe')
     components = runtime_lock.get('components', [])
     if runtime_lock.get('schema') != 1 or runtime_lock.get('target') != 'win-x64' or not isinstance(components, list) or not all(isinstance(c,dict) for c in components) or len(components) != len(expected) or {c.get('id') for c in components} != set(expected): raise BundleError('Runtime lock contract')
@@ -103,7 +92,6 @@ def validate(prepared, profile='full'):
         if component.get('path') != name or digest(files[name]) != component.get('sha256') or source.scheme != 'https' or not source.hostname or source.username or source.query or source.fragment: raise BundleError('Runtime checksum/provenance')
         if component['id'] == 'node' and (source.hostname != 'nodejs.org' or not re.fullmatch(r'24\.\d+\.\d+', component.get('version',''))): raise BundleError('Official pinned Node 24 required')
         if component['id'] == 'caddy' and (source.hostname != 'github.com' or not source.path.startswith('/caddyserver/caddy/releases/download/')): raise BundleError('Official Caddy required')
-        if component['id'] == 'platform' and (component.get('origin') != 'project-built' or not re.fullmatch('[a-f0-9]{40}', component.get('sourceCommit',''))): raise BundleError('Project build identity required')
         if component['id'] in pinned_components and component != pinned_components[component['id']]: raise BundleError('Pinned vendor component identity')
     object_file(files['legal/SBOM.json'])
     modules = {}
@@ -126,7 +114,6 @@ def validate(prepared, profile='full'):
     return {'schema':1,'kind':'windows-runtime-candidate','target':'win-x64','profile':profile,
         'version':package['version'],'machineAcceptance':'not-performed',
         'familyInstallationReady':False,'launch':{'node':'runtime/node/node.exe','entry':'app/server/main.mjs',
-        'helper':'app/native/Yahad.Platform.exe',
         'caddy':'runtime/caddy/caddy.exe' if profile == 'full' else None},
         'files':records,'peModules':modules}
 

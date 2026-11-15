@@ -33,8 +33,8 @@ test('the Windows transport runs only an absolute Platform helper on Windows and
     assert.throws(() => createWindowsUpdateTransport(), /WINDOWS_UPDATES_UNCONFIGURED/);
     return;
   }
-  assert.throws(() => createWindowsUpdateTransport('Yahad.Platform.exe'), /WINDOWS_UPDATES_UNCONFIGURED/);
-  const missing = createWindowsUpdateTransport(join(privateFixtureDirectory('yahad-no-platform-'), 'Yahad.Platform.exe'));
+  assert.throws(() => createWindowsUpdateTransport({ YAHAD_PLATFORM_HELPER: 'Yahad.Platform.exe' }), /WINDOWS_UPDATES_UNCONFIGURED/);
+  const missing = createWindowsUpdateTransport({ YAHAD_PLATFORM_HELPER: join(privateFixtureDirectory('yahad-no-platform-'), 'Yahad.Platform.exe') });
   await assert.rejects(missing.status(), /WINDOWS_UPDATES_UNAVAILABLE/);
   assert.equal((await updateStatus({} as Config, { role: 'parent', familyId: 'f', id: 'u' } as User, missing) as { reason?: string }).reason, 'PLATFORM_HELPER');
 });

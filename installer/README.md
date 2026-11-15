@@ -137,9 +137,10 @@ node.exe alone is insufficient. The dotnet directory must include its legal file
 
 Output: `.local/packages/<12-character-source-commit>/setup/Yahad.Setup.exe`,
 the project LICENSE, native/system manifests, package hashes and local step logs.
-The app helper is generated at `installer/artifacts/Yahad.Platform.Bundle/`, where
-the existing payload builder expects it. The script refuses a pre-existing package
-output or helper bundle to avoid mixing commits; use a clean build checkout.
+The Platform helper is published into the package output beside the service host
+and the Updater and packaged as infrastructure (`platform/`); the app payload never
+carries it. The script refuses a pre-existing package output to avoid mixing
+commits; use a clean build checkout.
 It does not copy old outputs into backup folders or silently overwrite them.
 
 The wrapper itself has syntax/preflight checks; its complete new entry point still

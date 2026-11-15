@@ -13,7 +13,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
-from .application_version import source_release_version, require_native_build_identity, describe_build_artifact
+from .application_version import source_release_version
 from .setup_package import source_schema
 
 
@@ -42,16 +42,15 @@ def prepare(repo, output, node, dotnet, cache):
     if subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=no'], cwd=repo, text=True).strip():
         raise ValueError('Commit tracked source before preparing a reproducible fixture')
     source_commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip()
-    version=source_release_version(repo)
-    require_native_build_identity(describe_build_artifact(repo/'installer/artifacts/Yahad.Platform.Bundle/Yahad.Platform.exe','--describe',repo),
-        'Yahad.Platform',version,source_commit)
+    source_release_version(repo)
     if output.exists() or output == repo or not cache.is_dir(): raise ValueError('New output and an existing offline cache required')
     output.mkdir(parents=True, exist_ok=False)
     app = output/'app'; app.mkdir()
     shutil.copyfile(repo/'package.json', app/'package.json')
     for name in ('dist', 'fixtures'): shutil.copytree(repo/name, app/name)
+    # No Platform helper here: it is infrastructure, packaged beside the host by
+    # setup_package.py and named to the app by the host (YAHAD_PLATFORM_HELPER).
     stage_public_lan_help(repo, app)
-    shutil.copytree(repo/'installer/artifacts/Yahad.Platform.Bundle', app/'native')
     environment = {k:v for k,v in os.environ.items() if not k.upper().startswith(('NPM_CONFIG_', 'NODE_', 'DOTNET_', 'CORECLR_', 'COR_', 'ESBUILD_'))}
     environment.update(PATH=str(node)+os.pathsep+str(Path(os.environ['SystemRoot'])/'System32'),
         npm_config_cache=str(cache), npm_config_userconfig=str(output/'no-user-npm-config'),
@@ -85,15 +84,13 @@ def prepare(repo, output, node, dotnet, cache):
         with path.open('rb') as stream: return hashlib.file_digest(stream, 'sha256').hexdigest()
     schema, migrations = source_schema(repo)
     (legal/'build-inputs.json').write_text(json.dumps({'appSourceCommit':source_commit,
-        'helperSourceCommit':source_commit, 'packagerSourceCommit':source_commit,
+        'packagerSourceCommit':source_commit,
         'databaseSchema':schema, 'databaseMigrationsFrom':migrations,
         'offlineProductionRestore':True,
         'familyInstallationReady':False}, indent=2), encoding='utf-8')
     version = subprocess.check_output([str(node/'node.exe'), '--version'], env=environment, text=True).strip().removeprefix('v')
     components = [dict(id='node', path='runtime/node/node.exe', version=version,
-        sourceUrl=f'https://nodejs.org/dist/v{version}/node-v{version}-win-x64.zip', sha256=digest(runtime/'node.exe')),
-        dict(id='platform', path='app/native/Yahad.Platform.exe', origin='project-built', sourceCommit=source_commit,
-        sourceUrl='https://github.com/NehoraiHadad/yahad', sha256=digest(app/'native/Yahad.Platform.exe'))]
+        sourceUrl=f'https://nodejs.org/dist/v{version}/node-v{version}-win-x64.zip', sha256=digest(runtime/'node.exe'))]
     (legal/'runtime-lock.json').write_text(json.dumps({'schema':1, 'target':'win-x64', 'components':components}), encoding='utf-8')
     print(json.dumps({'prepared':str(output), 'profile':'core-fixture', 'sourceCommit':source_commit, 'offline':True, 'familyInstallationReady':False}))
 

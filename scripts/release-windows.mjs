@@ -184,9 +184,6 @@ export function buildSigned({ repo, keyFile, out, inputsOf }) {
   if (!inside.startsWith('..') && !isAbsolute(inside) && spawnSync('git', ['check-ignore', '-q', resolvedOut], { cwd: repo }).status !== 0) {
     refuse(`Output ${resolvedOut} is inside the checkout and not git-ignored; it would dirty the tree. Use a directory outside the repository or under .local/.`);
   }
-  if (existsSync(join(repo, 'installer', 'artifacts', 'Yahad.Platform.Bundle'))) {
-    refuse('installer/artifacts/Yahad.Platform.Bundle exists from an earlier build; package.ps1 needs a clean checkout. Use `npm run windows:install`, which builds in a fresh clone.');
-  }
   const inputs = inputsOf(); // after every refusal above, so those need no build tools
   const version = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')).version;
   const packageDirectory = join(resolvedOut, 'package');

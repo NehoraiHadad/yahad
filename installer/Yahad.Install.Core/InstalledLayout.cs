@@ -13,4 +13,7 @@ internal static class InstalledLayout
     internal static string UpdaterRoot=>Path.Combine(StateRoot,"updater");
     internal static string UpdaterImage(string version)=>Path.Combine(VersionRoot(version),"updater","Yahad.Updater.exe");
     internal static string UpdaterCommand(string version)=>"\""+UpdaterImage(version)+"\" --service";
+    // Platform is infrastructure, beside the host and the Updater: the app tree
+    // never carries it. The host hands this image to the app as YAHAD_PLATFORM_HELPER.
+    internal static string PlatformImage(string version)=>Path.Combine(VersionRoot(version),"platform","Yahad.Platform.exe");
 }

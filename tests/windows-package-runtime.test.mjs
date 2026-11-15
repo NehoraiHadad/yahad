@@ -9,15 +9,18 @@ import { createServer } from 'node:net';
 import { once } from 'node:events';
 
 const prepared = process.env.YAHAD_PREPARED_WINDOWS_CORE;
+// The app payload carries no Platform helper: the caller names the published one,
+// as the service host names its own image (YAHAD_PLATFORM_HELPER).
+const helper = process.env.YAHAD_PLATFORM_HELPER;
 test('offline packaged Node, bundled server and private CLR run actual mock app with empty PATH',
-  { skip: process.platform !== 'win32' || !prepared, timeout: 120000 }, async t => {
+  { skip: process.platform !== 'win32' || !prepared || !helper, timeout: 120000 }, async t => {
     const app = join(prepared, 'app');
     assert.equal(process.execPath.toLowerCase(), resolve(prepared, 'runtime/node/node.exe').toLowerCase());
     // The payload carries no source: its schema is the one recorded at build time, and the
     // harness's own lease client comes from this checkout under the caller's loader.
     const { databaseSchema } = JSON.parse(readFileSync(join(prepared, 'legal/build-inputs.json'), 'utf8'));
     const { createPlatformFiles } = await import(new URL('../src/platform-files.ts', import.meta.url));
-    const native = createPlatformFiles('win32', join(app, 'native/Yahad.Platform.exe'));
+    const native = createPlatformFiles('win32', { YAHAD_PLATFORM_HELPER: helper });
     const system32 = join(process.env.SystemRoot, 'System32');
     const root = mkdtempSync(join(tmpdir(), 'yahad-packaged-app-'));
     const data = join(root, 'data'), empty = join(root, 'empty');
@@ -46,7 +49,7 @@ test('offline packaged Node, bundled server and private CLR run actual mock app 
     const environment = { SystemRoot: process.env.SystemRoot, WINDIR: process.env.SystemRoot, TEMP: root, TMP: root,
       LOCALAPPDATA: root, PATH: empty, NODE_ENV: 'production', MASTER_KEY_FILE: key, DATA_DIR: data,
       CONNECTOR: 'mock', ALLOW_REAL_WHATSAPP: 'no', HOST: '127.0.0.1', COOKIE_SECURE: 'false',
-      SETUP_CAPABILITY_FILE: join(root, 'missing-capability'), DIAGNOSTICS_ENABLED: 'false' };
+      SETUP_CAPABILITY_FILE: join(root, 'missing-capability'), DIAGNOSTICS_ENABLED: 'false', YAHAD_PLATFORM_HELPER: helper };
     const entry = join(app, 'server/main.mjs');
     for (const command of ['node', 'npm', 'python', 'dotnet', 'caddy'])
       assert.throws(() => execFileSync(join(system32, 'where.exe'), [command], { env: environment, windowsHide: true, stdio: 'ignore' }));

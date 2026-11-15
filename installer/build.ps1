@@ -34,9 +34,8 @@ if ($Publish) {
     # Folder publication exposes all runtime assets to the package auditor.
     & $DotNet publish (Join-Path $installerRoot 'Yahad.Platform/Yahad.Platform.csproj') -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:DebugType=None -o (Join-Path $installerRoot 'artifacts/Yahad.Platform.Bundle') --nologo "-p:RestoreConfigFile=$restoreConfig"
     if ($LASTEXITCODE -ne 0) { throw 'Private helper publication failed' }
-    $nativeFolder = Join-Path (Split-Path $installerRoot) 'native'
-    New-Item -ItemType Directory $nativeFolder -Force | Out-Null
-    Copy-Item -Path (Join-Path $installerRoot 'artifacts/Yahad.Platform.Bundle/*') -Destination $nativeFolder -Recurse -Force
+    # Platform is infrastructure and is never copied into the app. A developer run
+    # names this image to the app as the service host does: YAHAD_PLATFORM_HELPER.
 
 }
 } finally {

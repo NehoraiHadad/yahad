@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
-import { resolve, dirname, win32 } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { win32 } from 'node:path';
 import { z } from 'zod';
+import { platformHelper } from './platform-helper.js';
 import type { UpdateTarget } from './updates.js';
 
 export type NativeUpdateCommand = { id: string; action: 'check'|'install'|'set_mode'; target?: UpdateTarget; mode?: 'auto'|'notify'; familyId: string; userId: string };
@@ -28,8 +28,10 @@ export function windowsUpdateResult(stdout: string): unknown {
 
 /** The host-selected immutable Platform helper answers `windows-updates`.
  * HTTP never supplies paths, service names or source URLs. */
-export function createWindowsUpdateTransport(helper = resolve(dirname(fileURLToPath(import.meta.url)), '../native/Yahad.Platform.exe')): WindowsUpdateTransport {
-  if (process.platform !== 'win32' || !win32.isAbsolute(helper) || !helper.toLowerCase().endsWith('.exe')) throw new Error('WINDOWS_UPDATES_UNCONFIGURED');
+export function createWindowsUpdateTransport(env: NodeJS.ProcessEnv = process.env): WindowsUpdateTransport {
+  if (process.platform !== 'win32') throw new Error('WINDOWS_UPDATES_UNCONFIGURED');
+  let helper: string;
+  try { helper = platformHelper(env); } catch { throw new Error('WINDOWS_UPDATES_UNCONFIGURED'); }
   const call = (input: unknown) => new Promise<unknown>((accept, reject) => {
     const systemRoot = process.env.SystemRoot || 'C:\\Windows';
     const child = execFile(helper, ['windows-updates'], { encoding: 'utf8', timeout: 16000, maxBuffer: 32768, windowsHide: true,

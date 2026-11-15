@@ -2,8 +2,10 @@
 
 Produces the Format 1 install package Setup embeds: install.zip with only
 payload/ (the verified application payload), host/ (the published
-Yahad.ServiceHost directory) and updater/ (the published Yahad.Updater
-directory), plus install-manifest.json written last.
+Yahad.ServiceHost directory), updater/ (the published Yahad.Updater
+directory) and platform/ (the published Yahad.Platform directory), plus
+install-manifest.json written last. Platform is infrastructure: the payload's
+application tree carries no native helper.
 Never installs or fabricates release receipts; only audit-only --describe entry
 points of verified local project builds run. Outputs remain private candidates.
 """
@@ -39,9 +41,11 @@ class _VerifiedFiles(dict):
 
 RUNTIME_VERSION = '10.0.14'
 REQUIRED_MEMBERS = frozenset({'payload/bundle.json','payload/runtime/node/node.exe',
-    'payload/runtime/caddy/caddy.exe','payload/app/server/main.mjs','payload/app/dist/index.html','payload/app/native/Yahad.Platform.exe',
+    'payload/runtime/caddy/caddy.exe','payload/app/server/main.mjs','payload/app/dist/index.html',
     'host/Yahad.ServiceHost.exe','host/Yahad.ServiceHost.runtimeconfig.json',
-    'updater/Yahad.Updater.exe','updater/Yahad.Updater.runtimeconfig.json'})
+    'updater/Yahad.Updater.exe','updater/Yahad.Updater.runtimeconfig.json',
+    'platform/Yahad.Platform.exe','platform/Yahad.Platform.runtimeconfig.json'})
+COMPONENTS = ('host/', 'updater/', 'platform/')
 MAX_FILE, MAX_TOTAL, MAX_FILES = 512 * 1024**2, 2 * 1024**3, 50000
 PRIVATE = {'.git', '.local', '.agents', '.codex', '.authority', 'data', 'datasets', 'backups', 'secrets',
            'enrollment.json', 'installation.json', 'update-authority.json', 'activation.json',
@@ -160,10 +164,12 @@ def validate_payload_source(repo, prepared, manifest, version, source, tracked):
     # The payload runs the bundle only: no source tree, lockfile or node_modules ships.
     if any(name.startswith(('app/src/', 'app/node_modules/')) or name=='app/package-lock.json' for name in records):
         raise PackageError('Application source or dependency tree in payload')
+    if any(name.casefold().startswith('app/native/') for name in records):
+        raise PackageError('Native helper in application payload')
     if _unlinked(repo/'package.json', file=True).read_bytes()!=_unlinked(prepared/'app/package.json', file=True).read_bytes():
         raise PackageError('Application package bytes differ')
     build = _json((prepared/'legal/build-inputs.json').read_bytes(), 65536)
-    if any(build.get(field)!=source for field in ('appSourceCommit', 'helperSourceCommit', 'packagerSourceCommit')):
+    if any(build.get(field)!=source for field in ('appSourceCommit', 'packagerSourceCommit')):
         raise PackageError('Mixed source build inputs')
     schema, migrations = source_schema(repo)
     if (type(build.get('databaseSchema')) is not int or build['databaseSchema']!=schema or
@@ -236,7 +242,7 @@ def _write_archive(output, entries, expected=None):
     _closed_names(entries)
     for name in entries:
         if name=='payload/bundle.json' or name.startswith(('payload/app/','payload/runtime/','payload/legal/')): continue
-        prefix = next((p for p in ('host/','updater/') if name.startswith(p)),None)
+        prefix = next((p for p in COMPONENTS if name.startswith(p)),None)
         if prefix is None: raise PackageError('Undeclared archive namespace')
         _safe_path(name[len(prefix):],component=True)
     expected=expected if expected is not None else {name:_record(name,value) for name,value in entries.items()}
@@ -275,10 +281,10 @@ def require_members(names):
     if not REQUIRED_MEMBERS<=names: raise PackageError('Required package member missing')
 
 
-def build(repo, payload_zip, runtime_host, updater, output):
-    repo, payload_zip, runtime_host, updater = map(_unlinked,(repo,payload_zip,runtime_host,updater))
+def build(repo, payload_zip, runtime_host, updater, platform, output):
+    repo, payload_zip, runtime_host, updater, platform = map(_unlinked,(repo,payload_zip,runtime_host,updater,platform))
     output = Path(output).absolute()
-    if output.exists() or output==repo or output.is_relative_to(runtime_host) or output.is_relative_to(updater):
+    if output.exists() or output==repo or any(output.is_relative_to(component) for component in (runtime_host,updater,platform)):
         raise PackageError('New output outside input closures required')
     for ancestor in output.parents:
         if ancestor.exists(): _unlinked(ancestor)
@@ -289,17 +295,13 @@ def build(repo, payload_zip, runtime_host, updater, output):
         prepared=Path(scratch)/'payload';verify_archive.verify(_unlinked(payload_zip,file=True),prepared,retain_manifest=True)
         application=(prepared/'bundle.json').read_bytes();manifest=_json(application)
         schema,_=validate_payload_source(repo,prepared,manifest,version,source,tracked)
-        # Platform is part of the verified application, not another caller input.
-        validate_native(prepared/'app/native','Yahad.Platform',version,source,repo)
         host=validate_native(runtime_host,'Yahad.ServiceHost',version,source,repo)
         updates=validate_native(updater,'Yahad.Updater',version,source,repo)
-        runtime_lock=_json((prepared/'legal/runtime-lock.json').read_bytes(),65536)
-        platforms=[c for c in runtime_lock['components'] if c.get('id')=='platform']
-        if len(platforms)!=1 or platforms[0].get('sourceCommit')!=source: raise PackageError('Mixed Platform runtime-lock source')
+        helper=validate_native(platform,'Yahad.Platform',version,source,repo)
         entries={'payload/bundle.json':application};expected={'payload/bundle.json':_record('payload/bundle.json',application)}
         for record in manifest['files']:
             name='payload/'+record['path'];entries[name]=prepared/record['path'];expected[name]=dict(record,path=name)
-        for prefix,component in (('host/',host),('updater/',updates)):
+        for prefix,component in zip(COMPONENTS,(host,updates,helper)):
             for name,path in component.items():
                 entries[prefix+name]=path;expected[prefix+name]=dict(component.records[name],path=prefix+name)
         require_members(entries)
@@ -308,7 +310,7 @@ def build(repo, payload_zip, runtime_host, updater, output):
                    PayloadDigest=_hash(application),DatabaseSchema=schema,Files=records)
         metadata=_encode(saved)
         if len(metadata)>16*1024**2: raise PackageError('Installer manifest bound')
-        host.require_unchanged();updates.require_unchanged()
+        host.require_unchanged();updates.require_unchanged();helper.require_unchanged()
         if _source_identity(repo)!=(version,source,tracked): raise PackageError('Build source changed')
         # Last output is the success prerequisite for Setup's embedded input.
         with (output/'install-manifest.json').open('xb') as destination: destination.write(metadata)
@@ -318,7 +320,7 @@ def build(repo, payload_zip, runtime_host, updater, output):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('repo','payload-zip','runtime-host','updater','output'):
+    for name in ('repo','payload-zip','runtime-host','updater','platform','output'):
         parser.add_argument('--'+name,required=True,type=Path)
     try: print(json.dumps(build(**{k.replace('-','_'):v for k,v in vars(parser.parse_args()).items()}),sort_keys=True))
     except (ValueError,OSError,TypeError,KeyError,AttributeError,subprocess.SubprocessError,zipfile.BadZipFile,zipfile.LargeZipFile) as error:
