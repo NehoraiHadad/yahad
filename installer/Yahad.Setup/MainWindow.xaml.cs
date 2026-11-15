@@ -10,7 +10,7 @@ public partial class MainWindow:Window
     private bool running,completed;private readonly bool uninstall;private SetupResult? result;private readonly UninstallChoice choice=new();
     internal MainWindow(bool uninstall=false,IReadOnlyList<LanChoice>? lanChoices=null,bool? existingAccess=null,bool? existingUpdate=null)
     {
-        InitializeComponent();VersionBadge.Text=ApplicationRelease.Version+" · Windows";this.uninstall=uninstall;Closing+=OnClosing;InitializeLan(lanChoices,existingAccess??(lanChoices is null&&HasExistingAccess()));
+        InitializeComponent();VersionBadge.Text=InstallPackage.DisplayVersion()+" · Windows";this.uninstall=uninstall;Closing+=OnClosing;InitializeLan(lanChoices,existingAccess??(lanChoices is null&&HasExistingAccess()));
         InitializeUpdate(existingUpdate??ExistingInstallation.Present());
         if(!uninstall&&existingUpdateProfile)RemovalEntry.Visibility=Visibility.Visible;
         if(uninstall)

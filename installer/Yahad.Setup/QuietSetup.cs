@@ -35,7 +35,10 @@ internal static class QuietSetup
         {
             var outcome=request.Repair?await RepairHost.RunAsync(Progress):await UpgradeHost.RunAsync(request.UpgradeDirectory!,Progress);
             var done=outcome.Result;
-            File.WriteAllBytes(request.ResultPath,JsonSerializer.SerializeToUtf8Bytes(new{done.Ok,done.Code,done.Url,done.DataPreserved,done.Failure,FromVersion=outcome.From,ToVersion=outcome.To,outcome.RolledBack,Phases=phases,Seconds=Math.Round(clock.Elapsed.TotalSeconds,1)}));
+            // The private copy runs the same repair and writes this result itself.
+            if(done.Code==RepairHost.Relaunched){SetupOperation.StartPrivateCopy("--repair","--result",request.ResultPath);return outcome.Exit;}
+            File.WriteAllBytes(request.ResultPath,JsonSerializer.SerializeToUtf8Bytes(new{done.Ok,done.Code,done.Url,done.DataPreserved,done.Failure,FromVersion=outcome.From?.App.Version,ToVersion=outcome.To?.App.Version,
+                FromInfrastructureVersion=outcome.From?.Infrastructure.Version,ToInfrastructureVersion=outcome.To?.Infrastructure.Version,outcome.RolledBack,Phases=phases,Seconds=Math.Round(clock.Elapsed.TotalSeconds,1)}));
             return outcome.Exit;
         }
         try

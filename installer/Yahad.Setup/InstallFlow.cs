@@ -16,14 +16,19 @@ internal sealed record SetupOwner(string Sid,string ImageSha256)
 }
 internal sealed record SetupProgress(string Phase,int Percent);
 internal sealed record SetupResult(bool Ok,string Code,string? Url=null,string? SetupToken=null,bool DataPreserved=true,LanSetupResult? Lan=null,SetupFailureDetail? Failure=null);
-// Four concrete operations are injected only by the executable composition or
+// The concrete operations are injected only by the executable composition or
 // tests. No JSON/CLI caller can supply paths, accounts, grants or operations.
+// First install (8.3): prepare writes both trees and active.json; provision creates
+// the services, the repair task and the Apps & Features entry and records
+// "provisioned"; start returns only after the Runtime answered healthy for this app
+// and schema; commit is the one step that records "committed".
 internal interface ISetupHostOperations
 {
     Task PrepareAsync(SetupOwner owner,Action<SetupProgress> progress,CancellationToken cancellation);
-    Task PublishServiceAsync(Action<SetupProgress> progress,CancellationToken cancellation);
+    Task ProvisionAsync(Action<SetupProgress> progress,CancellationToken cancellation);
     Task ConfigureLanAsync(LanSetupRequest request,Action<SetupProgress> progress,CancellationToken cancellation);
     Task<SetupResult> StartAndObserveAsync(Action<SetupProgress> progress,CancellationToken cancellation);
+    Task CommitAsync(Action<SetupProgress> progress,CancellationToken cancellation);
     Task<SetupResult> UninstallAsync(Action<SetupProgress> progress,CancellationToken cancellation,UninstallMode mode=UninstallMode.KeepData);
 }
 internal sealed class InstallFlow(ISetupHostOperations host)
@@ -35,11 +40,12 @@ internal sealed class InstallFlow(ISetupHostOperations host)
         if(!owner.Sid.StartsWith("S-1-5-21-",StringComparison.Ordinal))throw new IOException("INSTALL_OWNER_IDENTITY");
         if(uninstall)return await host.UninstallAsync(progress,cancellation,mode);
         progress(new("checking",0));await host.PrepareAsync(owner,progress,cancellation);
-        cancellation.ThrowIfCancellationRequested();progress(new("installing_service",70));await host.PublishServiceAsync(progress,cancellation);
+        cancellation.ThrowIfCancellationRequested();progress(new("installing_service",70));await host.ProvisionAsync(progress,cancellation);
         if(lan is not null)
         {progress(new("configuring_lan",80));await host.ConfigureLanAsync(lan,progress,cancellation);}
         progress(new("starting_server",85));var result=await host.StartAndObserveAsync(progress,cancellation);
         if(!result.Ok)return result;
+        cancellation.ThrowIfCancellationRequested();await host.CommitAsync(progress,cancellation);
         progress(new("ready",100));return result;
     }
 }

@@ -16,8 +16,10 @@ internal sealed record LanRemovalIntent(UninstallMode Mode,LanOwnedState State);
 
 // Production adapter, entered only from the elevated in-process Setup operation.
 // Nothing in a plan, test, command line or a web request invokes this class.
-internal sealed class NativeLanInstall(InstallerState application)
+internal sealed class NativeLanInstall(InstallerState application,InstalledPair pair)
 {
+    // The installation's active pair; an upgrade names the pair it moves to or back to.
+    internal NativeLanInstall(InstallerState application):this(application,application.Active){}
     private static string StateFile=>Path.Combine(LanProxyPaths.State,"owner.json");
     private static string JournalFile=>Path.Combine(LanProxyPaths.State,"web-change.json");
     private static string PreparationFile=>Path.Combine(InstallLocations.State,"lan-preparation.json");
@@ -61,7 +63,7 @@ internal sealed class NativeLanInstall(InstallerState application)
     }
     private LanDeploymentPlan Plan(LanOwnedState state)=>LanDeployment.Create(application.InstallationId,
         [new(state.AdapterId,"selected",state.Address)],state.AdapterId,state.Address,application.Port,
-        LanProxyPaths.Caddy(application.Version),LanProxyPaths.Data,LanProxyPaths.PublicJoin,state.HttpHelp);
+        LanProxyPaths.Caddy(pair.Infrastructure.Version),LanProxyPaths.Data,LanProxyPaths.PublicJoin,state.HttpHelp);
     private void Save(LanOwnedState state)=>Record(StateFile,Json(state));
     // The caller has stopped the Runtime service: a pending change of the launch
     // file goes back to the bytes it replaced.
@@ -83,27 +85,28 @@ internal sealed class NativeLanInstall(InstallerState application)
     private static void RequireConfirmedStop(NativeService proxy){var state=proxy.Observed();LanProxyPolicy.RequireConfirmedStopped(state.State,state.Pid,state.Win32,state.Specific);}
     private NativeService OpenProxyForConfiguration()
     {
-        if(!NativeService.Exists(ServiceSpec.Lan))return NativeService.Create(application.Version,application.OwnerSid,ServiceSpec.Lan);
-        var proxy=NativeService.Open(application.Version,ServiceSpec.Lan);
+        if(!NativeService.Exists(ServiceSpec.Lan))return NativeService.Create(pair.Infrastructure.Version,application.OwnerSid,ServiceSpec.Lan);
+        var proxy=NativeService.Open(pair.Infrastructure.Version,ServiceSpec.Lan);
         try{proxy.ProvisionIfNeverStarted(application.OwnerSid);return proxy;}catch{proxy.Dispose();throw;}
     }
     private static void MakeDirectory(string path,string? acl=null){if(!Directory.Exists(path))NativeInstallFiles.NewDirectory(path,acl);}
-    private byte[] PayloadBytes(string relative,int bound=65536)
+    // An app tree member, read only at the size and digest its installer record names.
+    private static byte[] AppBytes(AppRecord app,string relative,int bound=65536)
     {
-        var member=application.Files.SingleOrDefault(f=>f.Path=="payload/"+relative)??throw new IOException("LAN_PAYLOAD_NOT_SUPPORTED");
+        var member=app.Files.SingleOrDefault(f=>f.Path==relative)??throw new IOException("LAN_PAYLOAD_NOT_SUPPORTED");
         if(member.Size>bound)throw new IOException("LAN_PAYLOAD_NOT_SUPPORTED");
-        var path=Path.Combine(InstallLocations.VersionRoot(application.Version),"payload",relative.Replace('/',Path.DirectorySeparatorChar));
+        var path=Path.Combine(InstalledLayout.AppRoot(app.Version),relative.Replace('/',Path.DirectorySeparatorChar));
         using var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read);
         if(file.Length!=member.Size)throw new IOException("LAN_PAYLOAD_CHANGED");using var memory=new MemoryStream();file.CopyTo(memory);var bytes=memory.ToArray();
         if(Hash(bytes)!=member.Sha256)throw new IOException("LAN_PAYLOAD_CHANGED");return bytes;
     }
-    private string RequirePayload()
+    private static string RequirePayload(AppRecord app)
     {
-        var marker=NativeJson.Read<JsonElement>(PayloadBytes("app/deploy/lan-capabilities.json",4096));
+        var marker=NativeJson.Read<JsonElement>(AppBytes(app,"app/deploy/lan-capabilities.json",4096));
         if(marker.GetProperty("format").GetInt32()!=1||!marker.GetProperty("localHttps").GetBoolean()||
             !marker.GetProperty("exactAdditionalOrigins").GetBoolean()||!marker.GetProperty("ownerLoopbackBootstrap").GetBoolean()||
             marker.GetProperty("publicHelpTemplate").GetString()!="deploy/lan-help.html")throw new IOException("LAN_PAYLOAD_NOT_SUPPORTED");
-        return new UTF8Encoding(false,true).GetString(PayloadBytes("app/deploy/lan-help.html"));
+        return new UTF8Encoding(false,true).GetString(AppBytes(app,"app/deploy/lan-help.html"));
     }
     private static byte[] HelpPage(string template,LanDeploymentPlan plan,string rootSha256)
     {
@@ -154,7 +157,7 @@ internal sealed class NativeLanInstall(InstallerState application)
     {
         if(request.Action==LanSetupAction.Enable)
         {
-            RequirePayload();NetworkPlan.LanOrigin(LanSetupRequest.Choices(),request.AdapterId!,request.Address!);
+            RequirePayload(pair.App);NetworkPlan.LanOrigin(LanSetupRequest.Choices(),request.AdapterId!,request.Address!);
             NativeNetworkProfile.RequirePrivateProfile(request.AdapterId!);
             var resuming=PreparationMatches(request,!File.Exists(StateFile));Read(preparing:resuming);
         }
@@ -164,7 +167,7 @@ internal sealed class NativeLanInstall(InstallerState application)
     {
         var resuming=request.Action==LanSetupAction.Enable&&PreparationMatches(request,!File.Exists(StateFile));var owned=Read(preparing:resuming);
         if(request.Action==LanSetupAction.Disable){if(owned is not null)await DisableAsync(owned,cancellation);return;}
-        var template=RequirePayload();
+        var template=RequirePayload(pair.App);
         if(owned is null&&!resuming&&NativeService.Exists(ServiceSpec.Lan))throw new IOException("LAN_INSTALL_COLLISION");
         if(owned is null&&!resuming)Record(PreparationFile,Json(request));
         using var proxy=OpenProxyForConfiguration();
@@ -219,26 +222,31 @@ internal sealed class NativeLanInstall(InstallerState application)
     private async Task StopProxyIfPresentAsync(CancellationToken cancellation)
     {
         if(!NativeService.Exists(ServiceSpec.Lan))return;
-        using var proxy=NativeService.Open(application.Version,ServiceSpec.Lan);proxy.DisableStartup();await StopProxyAsync(proxy,cancellation);RequireConfirmedStop(proxy);
+        using var proxy=NativeService.Open(pair.Infrastructure.Version,ServiceSpec.Lan);proxy.DisableStartup();await StopProxyAsync(proxy,cancellation);RequireConfirmedStop(proxy);
     }
     // An upgrade moves the proxy with the release: stopped, then its image and its
     // firewall rule, and started again only if it should be running.
     internal static Task StopForUpgradeAsync(NativeService proxy)=>StopProxyAsync(proxy,CancellationToken.None);
-    // What the proxy serves comes with the release, not with the one that enabled the
-    // network. The proxy is stopped. Nothing in it names a version, so after a rollback
-    // the older release serves the same files.
-    internal void RefreshServedFiles()
+    // The public help page comes with the app (6a), not with the one that enabled the
+    // network: an app apply rewrites it from the new app tree, a rollback from the old.
+    // Nothing in it names a version.
+    internal void RefreshHelpPage(AppRecord app)
     {
         var owned=Read(removing:true,preparing:true);if(owned is not {Phase:"enabled",RootSha256:not ""})return;
-        var plan=Plan(owned);
-        Record(Path.Combine(LanProxyPaths.PublicJoin,"index.html"),HelpPage(RequirePayload(),plan,owned.RootSha256));
-        Record(LanProxyPaths.Config,Encoding.UTF8.GetBytes(plan.Caddyfile));
+        Record(Path.Combine(LanProxyPaths.PublicJoin,"index.html"),HelpPage(RequirePayload(app),Plan(owned),owned.RootSha256));
     }
-    internal void Move(NativeService proxy,string? otherVersion){proxy.SwitchImage(application.Version);MoveFirewall(otherVersion);}
-    internal void MoveFirewall(string? otherVersion)
+    // The Caddyfile is infrastructure: only an infrastructure move rewrites it, while
+    // the proxy is stopped.
+    internal void WriteProxyConfig()
+    {
+        var owned=Read(removing:true,preparing:true);if(owned is not {Phase:"enabled",RootSha256:not ""})return;
+        Record(LanProxyPaths.Config,Encoding.UTF8.GetBytes(Plan(owned).Caddyfile));
+    }
+    internal void Move(NativeService proxy,string? otherInfrastructure){proxy.SwitchImage(pair.Infrastructure.Version);MoveFirewall(otherInfrastructure);}
+    internal void MoveFirewall(string? otherInfrastructure)
     {
         var owned=Read(removing:true,preparing:true);if(owned is null)return;
-        NativeLanFirewall.Move(Plan(owned).FirewallRules,otherVersion is null?null:LanProxyPaths.Caddy(otherVersion));
+        NativeLanFirewall.Move(Plan(owned).FirewallRules,otherInfrastructure is null?null:LanProxyPaths.Caddy(otherInfrastructure));
     }
     private static bool ShouldRun(NativeService proxy)
     {
@@ -269,7 +277,7 @@ internal sealed class NativeLanInstall(InstallerState application)
         var plan=Plan(owned);LanDeployment.RequireSelectedAdapter(plan,LanSetupRequest.Choices());
         NativeNetworkProfile.RequirePrivateProfile(owned.AdapterId);NativeLanFirewall.RequirePresentAndMatching(plan.FirewallRules);
         if(!NativeService.Exists(ServiceSpec.Lan))throw new IOException("LAN_SETUP_PAUSED");
-        using var proxy=NativeService.Open(application.Version,ServiceSpec.Lan);await StartProxyAsync(proxy,cancellation);
+        using var proxy=NativeService.Open(pair.Infrastructure.Version,ServiceSpec.Lan);await StartProxyAsync(proxy,cancellation);
         await ProbeAsync(owned,root,true,cancellation);
         return new(plan.Origin,plan.HelpOrigin,root.Sha256Fingerprint,Convert.ToBase64String(root.Der));
     }
@@ -289,7 +297,7 @@ internal sealed class NativeLanInstall(InstallerState application)
         }
         if(NativeService.Exists(ServiceSpec.Lan))
         {
-            using(var proxy=NativeService.Open(application.Version,ServiceSpec.Lan)){RequireConfirmedStop(proxy);proxy.Delete();}
+            using(var proxy=NativeService.Open(pair.Infrastructure.Version,ServiceSpec.Lan)){RequireConfirmedStop(proxy);proxy.Delete();}
             using var wait=CancellationTokenSource.CreateLinkedTokenSource(cancellation);wait.CancelAfter(TimeSpan.FromSeconds(10));
             while(NativeService.Exists(ServiceSpec.Lan))await Task.Delay(100,wait.Token);
         }

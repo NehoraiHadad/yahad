@@ -2,59 +2,136 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Yahad.Service;
 using Yahad.Install;
 namespace Yahad.Setup;
 
-// The administrator-owned installer record of the one Runtime service. It is
-// installer metadata only: the service reads installed.json, never this file.
-internal sealed record InstallerState(int Format,string InstallationId,string DataId,string Version,string PackageDigest,string PayloadDigest,string SourceCommit,
-    string OwnerSid,int Port,string Phase,string SetupSha256,FirstOwnerBinding FirstOwner,UpdateSetupChoice Consent,InstallMember[] Files,string ServiceSid,string? ReleaseKeySha256=null,RetainedRelease? Previous=null)
+// The installed infrastructure tree (docs/WINDOWS-APP-PACKAGE-PLAN.md 4.2): its
+// identity, the SHA-256 of its infra-tree.json and every member relative to
+// infra\<version>\, the tree record included. EngineSha256 names the tree's own
+// payload-free Setup engine (setup/Yahad.Setup.exe).
+internal sealed record InfrastructureRecord(string Version,int ContractMin,int ContractMax,string SourceCommit,string EngineSha256,string TreeSha256,InstallMember[] Files)
 {
-    internal const int CurrentFormat=6;
-    internal static readonly string[] Phases=["preparing","committed","uninstalled","removing_keep_data","removing_all_data"];
+    internal const string EngineMember="setup/"+InstalledLayout.EngineName;
     internal void Require()
     {
-        InstalledLaunch.Id(InstallationId);InstalledLaunch.Id(DataId);InstallLocations.RequireVersion(Version);
-        foreach(var digest in new[]{PackageDigest,PayloadDigest,SetupSha256})InstallLocations.RequireDigest(digest);
-        if(Format!=CurrentFormat||!OwnerSid.StartsWith("S-1-5-21-",StringComparison.Ordinal)||!new SecurityIdentifier(OwnerSid).IsAccountSid()||Port is <1024 or >65535||
-            !Regex.IsMatch(SourceCommit,"^[a-f0-9]{40}$")||!Phases.Contains(Phase)||ServiceSid!=InstallLocations.ServiceSid)throw new IOException("INSTALL_STATE_INVALID");
+        InstallLocations.RequireVersion(Version);InstallLocations.RequireDigest(EngineSha256);InstallLocations.RequireDigest(TreeSha256);
+        if(!InfrastructureRelease.IsContract(ContractMin)||!InfrastructureRelease.IsContract(ContractMax)||ContractMin>ContractMax||!TreeRecord.IsCommit(SourceCommit))throw new IOException("INSTALL_STATE_INVALID");
+        InstallerState.RequireTree(TreeKind.Infrastructure,Files,TreeSha256);
+        if(!Files.Any(f=>f.Path==EngineMember&&f.Sha256==EngineSha256))throw new IOException("INSTALL_STATE_INVALID");
+    }
+    internal bool Supports(int contract)=>contract>=ContractMin&&contract<=ContractMax;
+}
+// The installed app tree: identity, the contract it needs, its app-tree.json digest,
+// the database schema its Runtime last reported healthy (or, before that, the schema
+// its package declares) and every member relative to apps\<version>\.
+internal sealed record AppRecord(string Version,string SourceCommit,int RequiresContract,string TreeSha256,int DatabaseSchema,InstallMember[] Files)
+{
+    internal void Require()
+    {
+        InstallLocations.RequireVersion(Version);InstallLocations.RequireDigest(TreeSha256);
+        if(!InfrastructureRelease.IsContract(RequiresContract)||DatabaseSchema is <1 or >1024||!TreeRecord.IsCommit(SourceCommit))throw new IOException("INSTALL_STATE_INVALID");
+        InstallerState.RequireTree(TreeKind.App,Files,TreeSha256);
+    }
+}
+// One (infrastructure, app) pair: what active.json names, and what one rollback restores.
+internal sealed record InstalledPair(InfrastructureRecord Infrastructure,AppRecord App)
+{
+    internal void Require()
+    {
+        if(Infrastructure is null||App is null)throw new IOException("INSTALL_STATE_INVALID");
+        Infrastructure.Require();App.Require();
+        if(!Infrastructure.Supports(App.RequiresContract))throw new IOException("INSTALL_STATE_INVALID");
+    }
+    internal ActivePointer Pointer()=>new(ActivePointer.CurrentFormat,new(Infrastructure.Version,Infrastructure.ContractMin,Infrastructure.ContractMax,Infrastructure.TreeSha256),
+        new(App.Version,App.RequiresContract,App.TreeSha256));
+    // Two trees are the same tree only when version and record bytes both match.
+    internal bool SameInfrastructure(InstalledPair other)=>Infrastructure.Version==other.Infrastructure.Version&&Infrastructure.TreeSha256==other.Infrastructure.TreeSha256;
+    internal bool SameApp(InstalledPair other)=>App.Version==other.App.Version&&App.TreeSha256==other.App.TreeSha256;
+    internal bool SameTrees(InstalledPair other)=>SameInfrastructure(other)&&SameApp(other);
+    internal string Describe=>Infrastructure.Version+"/"+App.Version;
+}
+// The administrator-owned installer record (format 7). It is installer metadata
+// only: the binaries read active.json and installed.json, never this file.
+internal sealed record InstallerState(int Format,string InstallationId,string DataId,string OwnerSid,int Port,string Phase,FirstOwnerBinding FirstOwner,UpdateSetupChoice Consent,
+    string ServiceSid,InstalledPair Active,string? ReleaseKeySha256=null,InstalledPair? Previous=null)
+{
+    internal const int CurrentFormat=7;
+    internal static readonly string[] Phases=["preparing","provisioned","committed","uninstalled","removing_keep_data","removing_all_data"];
+    internal void Require()
+    {
+        InstalledLaunch.Id(InstallationId);InstalledLaunch.Id(DataId);
+        if(Format!=CurrentFormat||OwnerSid is null||!OwnerSid.StartsWith("S-1-5-21-",StringComparison.Ordinal)||!new SecurityIdentifier(OwnerSid).IsAccountSid()||Port is <1024 or >65535||
+            !Phases.Contains(Phase)||ServiceSid!=InstallLocations.ServiceSid||Active is null||FirstOwner is null||Consent is null)throw new IOException("INSTALL_STATE_INVALID");
         FirstOwner.Require(InstallationId,OwnerSid);Consent.RequirePersisted(DateTimeOffset.UtcNow);
-        RequireMembers(Files);
+        Active.Require();
         if(ReleaseKeySha256 is not null)InstallLocations.RequireDigest(ReleaseKeySha256);
         if(Previous is {} previous)
         {
-            InstallLocations.RequireDigest(previous.SetupSha256);RequireMembers(previous.Files);
-            if(previous.SetupBytes<1||ReleaseManifest.Compare(previous.Version,Version)>=0)throw new IOException("INSTALL_STATE_INVALID");
+            previous.Require();
+            // A retained pair is never newer than the active one on either track, is
+            // never the active pair itself, and a version shared with the active pair
+            // is the very same tree (one directory per version).
+            if(ReleaseManifest.Compare(previous.Infrastructure.Version,Active.Infrastructure.Version)>0||ReleaseManifest.Compare(previous.App.Version,Active.App.Version)>0||
+                previous.Infrastructure.Version==Active.Infrastructure.Version&&!previous.SameInfrastructure(Active)||
+                previous.App.Version==Active.App.Version&&!previous.SameApp(Active)||previous.SameTrees(Active))throw new IOException("INSTALL_STATE_INVALID");
         }
     }
-    internal static void RequireMembers(InstallMember[] files)
+    // A record of another format is a pre-7 (or unknown) layout. Nothing reads it.
+    internal static InstallerState Parse(byte[] bytes)
     {
-        if(files.Length is <10 or >50000)throw new IOException("INSTALL_STATE_INVALID");
-        var names=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach(var f in files){InstallPackage.Name(f.Path);InstallLocations.RequireDigest(f.Sha256);if(f.Size<0||!names.Add(f.Path))throw new IOException("INSTALL_STATE_INVALID");}
+        if(RecordFormat.Of(bytes,"INSTALL_STATE_INVALID")!=CurrentFormat)throw new IOException("LEGACY_INSTALL_UNSUPPORTED");
+        InstallerState state;
+        try{state=NativeJson.Read<InstallerState>(bytes);}catch(JsonException){throw new IOException("INSTALL_STATE_INVALID");}
+        state.Require();return state;
+    }
+    internal byte[] Encode(){Require();return JsonSerializer.SerializeToUtf8Bytes(this);}
+    // Members of one tree, relative to its root: every name is in that tree or is its
+    // record, unique ignoring case, and the record's digest is the recorded tree digest.
+    internal static void RequireTree(TreeKind kind,InstallMember[] files,string treeSha256)
+    {
+        if(files is not {Length:>=2 and <=TreeRecord.MaximumMembers+1})throw new IOException("INSTALL_STATE_INVALID");
+        var names=new HashSet<string>(StringComparer.OrdinalIgnoreCase);var record=TreeRecord.RecordName(kind);
+        foreach(var f in files)
+        {
+            if(f is null||!MemberNames.Valid(f.Path)||f.Path!=record&&!TreeRecord.InTree(kind,f.Path)||f.Size is <0 or >TreeRecord.MaximumMemberBytes||!names.Add(f.Path))throw new IOException("INSTALL_STATE_INVALID");
+            InstallLocations.RequireDigest(f.Sha256);
+        }
+        if(!files.Any(f=>f.Path==record&&f.Sha256==treeSha256))throw new IOException("INSTALL_STATE_INVALID");
     }
 }
-// The release an upgrade replaced. Its directory stays until the next upgrade
-// commits, so one more rollback or repair always has a whole release to run.
-internal sealed record RetainedRelease(string Version,string SetupSha256,long SetupBytes,InstallMember[] Files);
+// The one field read before a record's own strict reader: its integer Format. A
+// record without one is damaged (the caller's code); any other format is a layout
+// this engine does not read, and the caller refuses it as legacy.
+internal static class RecordFormat
+{
+    internal static int Of(byte[] bytes,string invalid)
+    {
+        try
+        {
+            using var document=JsonDocument.Parse(bytes);
+            return document.RootElement.ValueKind==JsonValueKind.Object&&document.RootElement.TryGetProperty("Format",out var value)&&value.ValueKind==JsonValueKind.Number&&value.TryGetInt32(out var parsed)?parsed:throw new IOException(invalid);
+        }
+        catch(JsonException){throw new IOException(invalid);}
+    }
+}
 internal static class ExistingInstallation
 {
     // A preserved computer-only installation has no binaries or LAN state but
     // still has its state root.
     internal static bool Present()=>new[]{InstallLocations.State,InstallLocations.Binaries,InstallLocations.RemovalStateFile}.Any(Path.Exists);
+    // The pre-pair layout kept every release under <binaries>\versions\. Nothing
+    // migrates it: it is refused before anything is written (8.3).
+    internal static void RequireNotLegacy()
+    {if(Path.Exists(Path.Combine(InstallLocations.Binaries,"versions")))throw new IOException("LEGACY_INSTALL_UNSUPPORTED");}
 }
 internal static class InstallLocations
 {
     internal static string State=>InstalledLayout.StateRoot;
     internal static string Binaries=>InstalledLayout.BinaryRoot;
-    internal static string VersionRoot(string version){RequireVersion(version);return InstalledLayout.VersionRoot(version);}
-    internal static string ServiceImage(string version)=>Path.Combine(VersionRoot(version),"host","Yahad.ServiceHost.exe");
-    internal static string ServiceCommand(string version)=>"\""+ServiceImage(version)+"\" --service";
-    // Each release keeps its own Setup, so no running image ever has to be
-    // replaced and the Apps & Features entry moves with the version pointer.
-    internal static string InstallerImage(string version)=>Path.Combine(VersionRoot(version),RemovalIntent.SetupImage);
+    internal static string ServiceCommand(string infrastructure)=>"\""+InstalledLayout.HostImage(infrastructure)+"\" --service";
     internal static string ReleaseKeyFile=>Path.Combine(Binaries,TrustedReleaseKey.InstalledName);
     internal static string UpgradeStateFile=>Path.Combine(State,"upgrade-state.json");
     internal static string RemovalStateFile=>Binaries+".uninstall-state.json";
