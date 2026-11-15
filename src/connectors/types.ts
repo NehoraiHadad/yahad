@@ -108,6 +108,8 @@ export interface Outgoing {
   bytes?: Buffer;
   mime?: string;
   filename?: string;
+  /** The validated browser-made JPEG preview; present for every image and video send. */
+  jpegThumbnail?: Buffer;
 }
 export type ConnectionState =
   | 'idle'

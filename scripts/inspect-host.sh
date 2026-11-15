@@ -8,5 +8,4 @@ printf 'Memory: '; awk '/MemTotal/ {printf "%.0f MiB\n", $2/1024}' /proc/meminfo
 printf 'OS:\n'; cat /etc/os-release
 printf 'Disk space:\n'; df -h .
 printf 'Runtime:\n'; command -v node >/dev/null && node --version || true
-printf 'ffmpeg: '; command -v ffmpeg || true
 printf '\nRead-only inspection only. No hardware assumptions and no installation performed.\n'

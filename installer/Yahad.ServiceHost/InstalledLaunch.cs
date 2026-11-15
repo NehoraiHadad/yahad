@@ -66,7 +66,7 @@ internal sealed class InstalledLaunchResolver:IServiceStartAuthorizer
             // LAN HTTPS keeps Secure cookies. Only the fixed local loopback origin
             // is added for bootstrap; remote origins are never inferred here.
             if(origin.Scheme=="https"&&NetworkPlan.IsPrivateLanV4(origin.Host))environment["APP_ADDITIONAL_ORIGINS"]=$"http://127.0.0.1:{config.Port}";
-            var spec=new VerifiedProcessSpec(node,["server/main.mjs"],app,temporary,Path.Combine(binaries,"payload","runtime","ffmpeg","ffmpeg.exe"),environment,lease);
+            var spec=new VerifiedProcessSpec(node,["server/main.mjs"],app,temporary,environment,lease);
             return new AuthorizedServiceStart(new ServiceProcessLauncher(spec,()=>new LocalChildControl()),lease);
         }
         catch{lease.Dispose();throw;}

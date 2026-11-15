@@ -23,8 +23,10 @@ if (!payload || args.length !== (option('--root') ? 4 : 2)) throw new Error('Use
 const ENTRIES = { 'src/main.ts': 'main' };
 // Optional packages, left unresolved and never shipped, each allowed only through the
 // import kind its caller guards. Baileys reaches its media helpers through
-// `import(...).catch()`: link previews are disabled, image/video thumbnails come
-// from FFmpeg and profile pictures are never set, so sharp's native libvips is dead
+// `import(...).catch()`, and none of them can run: link previews are disabled, every
+// image/video send carries the browser-made jpegThumbnail (src/connectors/baileys.ts
+// refuses one without it), every voice send carries its own waveform, and profile
+// pictures are never set. So sharp's native libvips, jimp and audio-decode are dead
 // weight. ws's native accelerators and debug's colour probe are require()d in
 // try/catch and are absent from the lockfile.
 const OPTIONAL = { 'audio-decode': 'dynamic-import', jimp: 'dynamic-import', 'link-preview-js': 'dynamic-import', sharp: 'dynamic-import',

@@ -21,7 +21,7 @@ node --version
 
 ```bash
 sudo apt update
-sudo apt install -y curl ca-certificates xz-utils unzip ffmpeg python3 openssl caddy
+sudo apt install -y curl ca-certificates xz-utils unzip python3 openssl caddy
 mkdir -p ~/yachad-install
 cd ~/yachad-install
 curl --fail --location --output node-v24.22.1-linux-arm64.tar.xz https://nodejs.org/dist/v24.22.1/node-v24.22.1-linux-arm64.tar.xz

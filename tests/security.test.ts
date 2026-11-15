@@ -9,6 +9,7 @@ import { Store } from '../src/store.js';
 import { createApp } from '../src/server.js';
 import { MockConnector, mockGroups } from '../src/connectors/mock.js';
 import { hash } from '../src/crypto.js';
+import { writeOggOpus } from '../src/ogg-opus.js';
 class QuietMock extends MockConnector {
   override async approved() {}
 }
@@ -491,10 +492,11 @@ test('send, idempotency, scoped replies, real media bytes, edit, delete and reac
   }
 });
 
-test('multipart upload is sniffed, authorized, bounded, converted voice and persists media', async () => {
+test('multipart upload is sniffed, authorized, bounded, validated and persists media', async () => {
   const f = await fixture();
   try {
-    const upload = async (g: string, bytes: Buffer, voice = false, sticker = false) => {
+    const preview = readFileSync('fixtures/garden-preview.jpg');
+    const upload = async (g: string, bytes: Buffer, voice = false, sticker = false, thumb?: Buffer) => {
       const boundary = '----yachad-test';
       const fields = {
         clientId: randomUUID(),
@@ -514,18 +516,45 @@ test('multipart upload is sniffed, authorized, bounded, converted voice and pers
           `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="sample.bin"\r\nContent-Type: image/jpeg\r\n\r\n`,
         ),
         bytes,
-        Buffer.from(`\r\n--${boundary}--\r\n`),
+        Buffer.from('\r\n'),
       );
+      if (thumb)
+        chunks.push(
+          Buffer.from(
+            `--${boundary}\r\nContent-Disposition: form-data; name="preview"; filename="preview.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`,
+          ),
+          thumb,
+          Buffer.from('\r\n'),
+        );
+      chunks.push(Buffer.from(`--${boundary}--\r\n`));
       return f.req(f.child, `/api/groups/${g}/media`, 'POST', Buffer.concat(chunks), {
         'content-type': `multipart/form-data; boundary=${boundary}`,
       });
     };
-    let r = await upload(group, readFileSync('fixtures/garden.jpg'));
+    const refused = (r: { statusCode: number; json(): any; body: string }, code: string) => {
+      assert.equal(r.statusCode, 400, r.body);
+      assert.equal(r.json().error, code);
+    };
+    let r = await upload(group, readFileSync('fixtures/garden.jpg'), false, false, preview);
     assert.equal(r.statusCode, 200, r.body);
     assert.ok(r.json().message.mediaId);
     assert.equal(r.json().message.kind, 'image');
-    r = await upload(blocked, readFileSync('fixtures/garden.jpg'));
+    r = await upload(blocked, readFileSync('fixtures/garden.jpg'), false, false, preview);
     assert.equal(r.statusCode, 404);
+    // Previews: an image or video needs a real small JPEG; anything else must not carry one.
+    refused(await upload(group, readFileSync('fixtures/garden.jpg')), 'PREVIEW_REQUIRED');
+    refused(await upload(group, readFileSync('fixtures/garden.mp4')), 'PREVIEW_REQUIRED');
+    refused(await upload(group, readFileSync('fixtures/garden.jpg'), false, false, Buffer.from('<script>evil()</script>')), 'INVALID_PREVIEW');
+    refused(await upload(group, readFileSync('fixtures/garden.jpg'), false, false, readFileSync('fixtures/garden.jpg')), 'INVALID_PREVIEW');
+    refused(await upload(group, Buffer.from('plain text'), false, false, preview), 'PREVIEW_UNEXPECTED');
+    // Voice: only mono Ogg Opus is accepted; the server never converts.
+    refused(await upload(group, readFileSync('fixtures/voice-chrome-mono.webm'), true), 'AUDIO_NOT_OGG');
+    refused(await upload(group, readFileSync('fixtures/garden.jpg'), true), 'AUDIO_NOT_OGG');
+    const stereoHead = Buffer.alloc(19);
+    stereoHead.write('OpusHead', 0, 'latin1'); stereoHead[8] = 1; stereoHead[9] = 2;
+    stereoHead.writeUInt16LE(312, 10); stereoHead.writeUInt32LE(48000, 12);
+    const stereo = writeOggOpus(stereoHead, Array.from({ length: 10 }, () => Uint8Array.from([0xfc, 1, 2, 3])), 5);
+    refused(await upload(group, Buffer.from(stereo), true), 'AUDIO_NOT_MONO');
     r = await upload(group, Buffer.alloc(2 * 1024 * 1024));
     assert.equal(r.statusCode, 413, r.body);
     r = await upload(group, readFileSync('fixtures/audio.ogg'), true);

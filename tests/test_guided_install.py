@@ -38,10 +38,10 @@ class GuidedInstallLogicTests(unittest.TestCase):
     def test_preflight_collects_all_missing_tools_without_writes(self):
         with tempfile.TemporaryDirectory() as tmp:
             system=System(); installer=u.Installer(system,pathlib.Path(tmp))
-            system.fail=lambda args:args[0] in ('ffmpeg','openssl','caddy')
+            system.fail=lambda args:args[0] in ('openssl','caddy')
             with patch.object(u.shutil,'which',return_value=None):
                 with self.assertRaises(u.InstallError) as raised:installer.prerequisites()
-            for label in ('systemd','Node 24','npm','ffmpeg','OpenSSL','Caddy'):
+            for label in ('systemd','Node 24','npm','OpenSSL','Caddy'):
                 self.assertIn(label,str(raised.exception))
             self.assertEqual(list(pathlib.Path(tmp).iterdir()),[])
             self.assertFalse(any('systemctl' in arg or 'sudo' in arg for call in system.calls for arg in call))
@@ -353,7 +353,7 @@ class GuidedInstallRunTests(unittest.TestCase):
         self.calls.append(args)
         if args==['/usr/bin/cat','/proc/1/comm']:return b'systemd\n'
         if args==['/usr/bin/node','--version']:return b'v24.0.0\n'
-        if args[0] in ('ffmpeg','openssl','caddy'):return b'synthetic version'
+        if args[0] in ('openssl','caddy'):return b'synthetic version'
         self.assertEqual(args[0],'/usr/bin/systemctl')
         action=args[1];unit=args[-1]
         if action=='daemon-reload':return b''

@@ -1,6 +1,8 @@
 # Native installer acceptance gates
 
-Latest private FFmpeg/Caddy and recovery checkpoint: [Private dependency and recovery checkpoint](NATIVE-DEPENDENCIES-CHECKPOINT.md).
+Latest private dependency and recovery checkpoint: [Private dependency and recovery checkpoint](NATIVE-DEPENDENCIES-CHECKPOINT.md).
+
+> Update 2026-11-15: FFmpeg was later removed from Yahad entirely. Voice is recorded as Opus in the browser and remuxed to Ogg Opus there, previews are made in the browser, and the server only validates both. The current packages contain no `runtime/ffmpeg`; earlier acceptance items for it no longer apply, and current dependencies are only Node, the .NET helper and Caddy.
 
 Current dependency/lifecycle/access checkpoint: [Private runtime packaging and stage-one handoff](NATIVE-RUNTIME-PACKAGING.md). Earlier counts below describe their respective increments.
 
@@ -24,7 +26,7 @@ Only synthetic, nonprivileged Windows x64 fixture checks have run in this branch
 | Parent consent | Labeled Hebrew consent-screen preview; process is `asInvoker` | Narrow explained UAC/polkit action, cancellation before/at elevation, no undisclosed firewall/CA change |
 | Package safety | Hashes, sizes, traversal/ADS/device names, duplicates/case, symlink/reparse and unexpected files refused | Authenticode/transport identity, package replacement race, privileged no-follow handle boundary, hostile pre-existing directories |
 | Private files | Native DACL create/owner check, reject broad ACL | Real service SIDs, rights matrix for app/updater/recovery/admin, standard-user isolation; inaccessible secrets and restricted pipe rights |
-| Service lifecycle | Suspended start/job containment, descendants die on disposal and host crash | SCM start/stop/status, before-login start, recovery limits, service upgrade/rollback, reboot/shutdown deadline, graceful SQLite close, no orphan ffmpeg/proxy |
+| Service lifecycle | Suspended start/job containment, descendants die on disposal and host crash | SCM start/stop/status, before-login start, recovery limits, service upgrade/rollback, reboot/shutdown deadline, graceful SQLite close, no orphan proxy |
 | Interrupted preparation | Injected IO failures before/after publish, journal recovery and immutable published fixture | Reboot/power loss at every durable transition, installer-engine rollback, volume semantics, resume same version, stable receipt, no cleanup of unknown files |
 | Failure/retry | Injected generic IO and invalid package, cancellation/resume | Physical disk-full, ACL denial, actual AV lock/quarantine, network cut/offline package, proxy failure, failed CA consent, battery/sleep; actionable Hebrew codes |
 | Network | RFC1918 boundary/adapter-selection tests and real occupied loopback bind | LAN listener, private firewall profile scope, multiple NICs/VPN, wrong interface, public profile refusal, DHCP change, sleep/wake/reboot, tablet routing |

@@ -81,7 +81,7 @@ test('actual mock app starts without development tools on PATH, excludes another
   // The test launches private Node through an absolute path. This proves PATH
   // independence, not that the future installer has bundled every dependency.
   const where = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'where.exe');
-  for (const command of ['node', 'python', 'dotnet', 'ffmpeg', 'caddy'])
+  for (const command of ['node', 'python', 'dotnet', 'caddy'])
     assert.throws(() => execFileSync(where, [command], { env: environment, windowsHide: true, stdio: 'ignore' }));
   const start = (selectedPort = port) => fork(resolve('src/main.ts'), { execArgv: ['--import', 'tsx'], env: { ...environment, PORT: String(selectedPort), APP_ORIGIN: `http://127.0.0.1:${selectedPort}` }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   const child = start(); const exited = once(child, 'exit'); let output = '';

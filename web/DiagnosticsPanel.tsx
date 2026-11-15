@@ -5,7 +5,7 @@ import type { DiagnosticsReport, Operation } from '../src/diagnostics';
 
 const labels: Record<Operation, string> = { db_read: 'קריאה מהמסד', db_write: 'שמירה במסד',
   db_commit: 'סיום עסקה במסד', media_read: 'קריאת קובץ מדיה', media_write: 'כתיבת קובץ מדיה',
-  api: 'מענה של השרת', audio_encode: 'עיבוד הקלטה', connector: 'חיבור WhatsApp', media_download: 'הורדת מדיה מהחיבור' };
+  api: 'מענה של השרת', media_prepare: 'בדיקת קובץ לפני שליחה', connector: 'חיבור WhatsApp', media_download: 'הורדת מדיה מהחיבור' };
 const errors: Record<string, string> = { io: 'קלט/פלט', no_space: 'אין מקום', readonly: 'אחסון לקריאה בלבד',
   busy: 'אחסון תפוס', permission: 'הרשאות קובץ', internal: 'כשל תפעולי', integrity: 'קובץ אבחון לא תקין' };
 const bytes = (n: number | null) => n === null ? 'לא זמין' : n >= 1024 ** 3 ? (n / 1024 ** 3).toFixed(1) + ' GiB' : (n / 1024 ** 2).toFixed(1) + ' MiB';

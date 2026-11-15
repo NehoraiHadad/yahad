@@ -40,7 +40,6 @@ class CandidateTests(unittest.TestCase):
             {'path': name, 'version': '24.22.2' if '/node/' in name else '3.13.0', 'sourceUrl':'https://example.invalid/runtime.tar.xz', 'sha256':hashlib.sha256(header).hexdigest()}
             for name in bundle.RUNTIMES]}))
         self.put('legal/SBOM.json', json.dumps({'kind': 'synthetic-test-only'}))
-        self.put('legal/ffmpeg-build.json', json.dumps({'configure': ['--disable-gpl'], 'sourceUrl': 'https://example.invalid/ffmpeg.tar.xz', 'sourceSha256': '0'*64}))
 
     def build(self, name='output.tar.gz', target='linux-x64'):
         return bundle.build(self.prepared, self.root/name, target, self.engine)
@@ -97,8 +96,9 @@ class CandidateTests(unittest.TestCase):
         self.put('app/.env', 'synthetic only')
         with self.assertRaises(bundle.PackageError): self.build()
 
-    def test_nonfree_ffmpeg_refused(self):
-        self.put('legal/ffmpeg-build.json', json.dumps({'configure':['--enable-nonfree'], 'sourceUrl':'https://example.invalid/ffmpeg.tar.xz', 'sourceSha256':'0'*64}))
+    def test_ffmpeg_runtime_refused(self):
+        header = bytearray(64); header[:6] = b'\x7fELF\x02\x01'; struct.pack_into('<HH', header, 16, 2, bundle.TARGETS['linux-x64'][0])
+        self.put('runtime/ffmpeg/bin/ffmpeg', header)
         with self.assertRaises(bundle.PackageError): self.build()
 
     def test_hardlink_input_refused(self):

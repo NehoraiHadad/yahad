@@ -199,7 +199,7 @@ class RuntimeOnlyBuildTests(unittest.TestCase):
     def setUp(self):
         self.base = SetupPackageTests('test_bundle_sources_and_migration_declaration_are_taken_from_actual_bytes'); self.base.setUp(); self.addCleanup(self.base.tearDown)
         b = self.base; b.native('Yahad.Platform', b.prepared/'app/native')
-        for name in ('app/dist/index.html', 'runtime/node/node.exe', 'runtime/ffmpeg/ffmpeg.exe', 'runtime/caddy/caddy.exe'):
+        for name in ('app/dist/index.html', 'runtime/node/node.exe', 'runtime/caddy/caddy.exe'):
             b.put(b.prepared, name, image() if name.endswith('.exe') else b'<html>')
         b.put(b.prepared, 'legal/runtime-lock.json', json.dumps(dict(components=[dict(id='platform', sourceCommit=SOURCE)])))
         b.refresh_records(); self.application = full._encode(b.manifest); b.put(b.prepared, 'bundle.json', self.application)

@@ -17,7 +17,7 @@ separate owner decisions. A GitHub push or merge by itself does **not** update a
 ## Preserve the installation that already works
 
 The owner reports a Pi 4B ARM64, Debian 13, 4 GB RAM, Node 24.22.1/npm 11.19.1,
-ffmpeg, Caddy/systemd, and an existing private LAN HTTPS origin. The current **live**
+Caddy/systemd, and an existing private LAN HTTPS origin. The current **live**
 configuration is `DATA_DIR=/var/lib/yachad/live`,
 `MASTER_KEY_FILE=/etc/yachad/whatsapp.key`, `CONNECTOR=baileys`. Keep these exact
 values. The mock store `/var/lib/yachad` and its different master key must stay
@@ -32,7 +32,7 @@ No new WhatsApp activation is required or authorized by this runbook.
 ## 1. Approve and validate the exact candidate first
 
 Use the draft PR's final SHA. Review the diff and run the following on an isolated
-Linux test machine with Node 24, Python 3, OpenSSL and ffmpeg. Tests use synthetic
+Linux test machine with Node 24, Python 3 and OpenSSL. Tests use synthetic
 data and injected network/service effects. The root updater suite operates only
 inside temporary fixture directories; it does not run the installed Pi worker.
 

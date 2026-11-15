@@ -9,7 +9,7 @@ namespace Yahad.Service;
 // Supplied only by installed activation admission. No executable/argument JSON
 // or CLI factory.
 internal sealed record VerifiedProcessSpec(string Image,string[] Arguments,string WorkingDirectory,
-    string PrivateTemporaryDirectory,string PrivateFFmpeg,IReadOnlyDictionary<string,string> AppEnvironment,WindowsFileBoundary.DataLease DataLease);
+    string PrivateTemporaryDirectory,IReadOnlyDictionary<string,string> AppEnvironment,WindowsFileBoundary.DataLease DataLease);
 internal readonly record struct ChildReady(uint PeerPid,string Type);
 internal interface IChildControl:IDisposable
 {
@@ -55,7 +55,7 @@ internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,Func<IChil
         {
             var environment=LaunchEnvironment.Clean(spec.PrivateTemporaryDirectory);
             foreach(var pair in spec.AppEnvironment)environment.Add(pair.Key,pair.Value);
-            environment.Add("NODE_ENV","production");environment.Add("FFMPEG_PATH",spec.PrivateFFmpeg);
+            environment.Add("NODE_ENV","production");
             channel=channels();environment.Add("YAHAD_NATIVE_PIPE",channel.Endpoint);
             var lease=handoff=new LaunchLease(spec.PrivateTemporaryDirectory,environment);
             var job=JobProcess.Start(spec.Image,spec.Arguments,spec.WorkingDirectory,environment,(process,pid)=>lease.Publish(spec.DataLease,process,pid,spec.AppEnvironment["DATA_DIR"]));

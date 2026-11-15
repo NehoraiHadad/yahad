@@ -6,7 +6,7 @@ This is the current installation guide. The older `install-updater.py` and 0.3.2
 
 ## One guided command
 
-Use 64-bit Debian/Ubuntu with systemd, Node **24**, npm, Python 3, OpenSSL, ffmpeg and Caddy installed. These operating-system prerequisites and trusting the local HTTPS CA are one-time owner operations. The installer does not disable certificate checks or change firewall/router settings. Keep the server awake and reserve its private LAN IP in the router.
+Use 64-bit Debian/Ubuntu with systemd, Node **24**, npm, Python 3, OpenSSL and Caddy installed. These operating-system prerequisites and trusting the local HTTPS CA are one-time owner operations. The installer does not disable certificate checks or change firewall/router settings. Keep the server awake and reserve its private LAN IP in the router.
 
 Download `yachad-app.zip` from the fixed repository's stable Release, extract it as your ordinary account, inspect the installer, then run from that folder:
 
@@ -69,7 +69,7 @@ From the extracted release folder in an ordinary PowerShell terminal, replace th
 .\deploy\install-windows.ps1 -Distribution Ubuntu -Origin https://192.168.1.10 -CheckOnly
 ```
 
-The check identifies missing WSL, an absent or WSL1 distribution, missing Linux Python/sudo/WSL utilities, unreadable release location, and runtime prerequisites. Systemd, Node 24, npm, ffmpeg, OpenSSL and fresh-install Caddy problems are reported together instead of starting the installer and failing one command at a time. Dependencies belong **inside the selected Linux distribution**, not just on Windows. Node must be available to system services, not only through an interactive shell version manager. Checks may start the selected WSL distribution; they do not install packages, ask for sudo, register tasks, enable WSL/systemd, or change execution policy, firewall, certificates or permissions. `-PlanOnly` remains an offline outline and does not check readiness.
+The check identifies missing WSL, an absent or WSL1 distribution, missing Linux Python/sudo/WSL utilities, unreadable release location, and runtime prerequisites. Systemd, Node 24, npm, OpenSSL and fresh-install Caddy problems are reported together instead of starting the installer and failing one command at a time. Dependencies belong **inside the selected Linux distribution**, not just on Windows. Node must be available to system services, not only through an interactive shell version manager. Checks may start the selected WSL distribution; they do not install packages, ask for sudo, register tasks, enable WSL/systemd, or change execution policy, firewall, certificates or permissions. `-PlanOnly` remains an offline outline and does not check readiness.
 
 | What is missing | Next step |
 | --- | --- |
@@ -77,7 +77,7 @@ The check identifies missing WSL, an absent or WSL1 distribution, missing Linux 
 | Python 3, sudo or WSL utilities | Prepare the missing Linux packages inside that distribution. |
 | systemd | Follow the linked Microsoft systemd instructions, then reopen the distribution. |
 | Node / npm | Prepare Node **24** with npm inside Linux, available on the service PATH. |
-| ffmpeg / OpenSSL / Caddy | Prepare the named Linux package; Caddy is needed for fresh managed HTTPS, not to replace an existing HTTPS setup. |
+| OpenSSL / Caddy | Prepare the named Linux package; Caddy is needed for fresh managed HTTPS, not to replace an existing HTTPS setup. |
 | Release path | Extract the complete release into a simple local folder readable by WSL. |
 | PowerShell refuses the script under local policy | Stop and consult the machine owner/admin; do not bypass execution or security policy. |
 
@@ -96,7 +96,7 @@ Windows must remain awake and the user signed in for this logon task. Updates do
 ## Checks before calling an installation accepted
 
 - Loopback `/health/ready`: correct release, `ok: true`, schema 2.
-- Browser: parent setup, child creation, zero default groups, deliberate grants and tablet login.
+- Browser: parent setup, child creation, zero default groups, deliberate grants and tablet login. Voice messages need a modern browser (iPadOS/iOS 18.4+ Safari, or current Chrome/Edge/Firefox); older devices cannot record and the UI says so.
 - Updater: auto active, request path and timers active/enabled; UI switch confirms requested versus applied mode.
 - Reboot/logon persistence and HTTPS/CA trust on the actual target OS and tablet.
 - Real WhatsApp linking/stickers/history only when the owner deliberately tests them. History is partial and asynchronous; a submitted request is not restored content.

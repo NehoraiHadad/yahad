@@ -22,8 +22,7 @@ BASE_REQUIRED = ('app/package.json', *SERVER, 'app/dist/index.html', 'runtime/no
     'app/native/hostpolicy.dll', 'app/native/System.Private.CoreLib.dll', 'legal/runtime-lock.json',
     'legal/SBOM.json', 'legal/server-bundle.json', 'legal/ThirdPartyNotices-server.txt',
     'legal/Node-LICENSE.txt', 'legal/DotNet-LICENSE.txt', 'legal/DotNet-ThirdPartyNotices.txt')
-FULL_REQUIRED = ('runtime/ffmpeg/ffmpeg.exe', 'runtime/caddy/caddy.exe', 'legal/FFmpeg-LICENSE.txt',
-    'legal/ffmpeg-build.json', 'legal/Caddy-LICENSE.txt', 'legal/Caddy-NOTICES.txt')
+FULL_REQUIRED = ('runtime/caddy/caddy.exe', 'legal/Caddy-LICENSE.txt', 'legal/Caddy-NOTICES.txt')
 MAX_FILES, MAX_BYTES = 50000, 2 * 1024 ** 3
 
 def object_file(path):
@@ -64,8 +63,9 @@ def validate(prepared, profile='full'):
     files = inventory(prepared)
     for name in (*BASE_REQUIRED, *(FULL_REQUIRED if profile == 'full' else ())):
         if name not in files: raise BundleError('MISSING_PAYLOAD: ' + name)
-    runtime_prefixes = ('runtime/node/',) if profile == 'core-fixture' else ('runtime/node/', 'runtime/ffmpeg/', 'runtime/caddy/')
-    if any(name.startswith('runtime/') and not name.startswith(runtime_prefixes) for name in files): raise BundleError('Undeclared runtime namespace')
+    runtime_prefixes = ('runtime/node/',) if profile == 'core-fixture' else ('runtime/node/', 'runtime/caddy/')
+    undeclared = sorted(name for name in files if name.startswith('runtime/') and not name.startswith(runtime_prefixes))
+    if undeclared: raise BundleError('Undeclared runtime namespace: ' + undeclared[0])
     if any(name.startswith('app/') and name != 'app/package.json' and not name.startswith(APP_ROOTS) for name in files) or {name for name in files if name.startswith('app/server/')} != set(SERVER): raise BundleError('Undeclared app namespace')
     package = object_file(files['app/package.json'])
     if package.get('engines', {}).get('node') != '>=24.0.0 <25' or not re.fullmatch(r'\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?', package.get('version', '')): raise BundleError('App package identity')
@@ -89,11 +89,12 @@ def validate(prepared, profile='full'):
                 if not leaf or '\\' in leaf or 'app/native/' + leaf not in files: raise BundleError('Missing private .NET dependency')
     runtime_lock = object_file(files['legal/runtime-lock.json'])
     expected = {'node':'runtime/node/node.exe', 'platform':'app/native/Yahad.Platform.exe'}
-    if profile == 'full': expected.update(ffmpeg='runtime/ffmpeg/ffmpeg.exe', caddy='runtime/caddy/caddy.exe')
+    if profile == 'full': expected.update(caddy='runtime/caddy/caddy.exe')
     components = runtime_lock.get('components', [])
     if runtime_lock.get('schema') != 1 or runtime_lock.get('target') != 'win-x64' or not isinstance(components, list) or not all(isinstance(c,dict) for c in components) or len(components) != len(expected) or {c.get('id') for c in components} != set(expected): raise BundleError('Runtime lock contract')
-    pinned_components = {}
-    if any(c.get('id') == 'ffmpeg' and c.get('origin') == 'upstream-linked-vendor' for c in components):
+    # A component claiming its pinned vendor origin must be the exact staged pinned closure.
+    pinned_sources, pinned_components = dependencies.pins()['sources'], {}
+    if any(c.get('id') in pinned_sources and c.get('origin') == pinned_sources[c['id']]['origin'] for c in components):
         try: pinned_components = dependencies.validate_staged(files)
         except dependencies.DependencyError as error: raise BundleError('Pinned vendor dependency verification') from error
     for component in components:
@@ -104,11 +105,6 @@ def validate(prepared, profile='full'):
         if component['id'] == 'caddy' and (source.hostname != 'github.com' or not source.path.startswith('/caddyserver/caddy/releases/download/')): raise BundleError('Official Caddy required')
         if component['id'] == 'platform' and (component.get('origin') != 'project-built' or not re.fullmatch('[a-f0-9]{40}', component.get('sourceCommit',''))): raise BundleError('Project build identity required')
         if component['id'] in pinned_components and component != pinned_components[component['id']]: raise BundleError('Pinned vendor component identity')
-        if component['id'] == 'ffmpeg' and not pinned_components:
-            # Source builds retain their own contract. The separately pinned
-            # upstream-linked vendor route preserves its actual publisher.
-            build = object_file(files['legal/ffmpeg-build.json'])
-            if component.get('origin') != 'project-built-from-official-source' or source.hostname != 'ffmpeg.org' or not source.path.startswith('/releases/') or not re.fullmatch('[a-f0-9]{64}', build.get('sourceSha256','')) or not re.fullmatch('[a-f0-9]{64}', build.get('buildRecipeSha256','')) or not isinstance(build.get('configure'), list) or any(x in build['configure'] for x in ('--enable-nonfree','--enable-gpl')): raise BundleError('Official-source LGPL FFmpeg build/provenance required')
     object_file(files['legal/SBOM.json'])
     modules = {}
     for name, path in files.items():
@@ -130,7 +126,7 @@ def validate(prepared, profile='full'):
     return {'schema':1,'kind':'windows-runtime-candidate','target':'win-x64','profile':profile,
         'version':package['version'],'machineAcceptance':'not-performed',
         'familyInstallationReady':False,'launch':{'node':'runtime/node/node.exe','entry':'app/server/main.mjs',
-        'helper':'app/native/Yahad.Platform.exe','ffmpeg':'runtime/ffmpeg/ffmpeg.exe' if profile == 'full' else None,
+        'helper':'app/native/Yahad.Platform.exe',
         'caddy':'runtime/caddy/caddy.exe' if profile == 'full' else None},
         'files':records,'peModules':modules}
 

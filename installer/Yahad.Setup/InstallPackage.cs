@@ -11,7 +11,7 @@ internal sealed record InstallPackageManifest(int Format,string Version,string S
 // Where Extract writes: protected directories, protected files and a no-replace commit.
 internal sealed record ExtractTarget(Action<string> CreateDirectory,Func<string,FileStream> CreateFile,Action<string,string> Commit,Func<string,InstallMember,bool> ExistingMatches);
 // One Format-1 archive holding host/ (the service host), updater/ (the Updater
-// service) and payload/ (node, the application, ffmpeg and caddy). Nothing else.
+// service) and payload/ (node, the application and caddy). Nothing else.
 internal sealed class InstallPackage:IDisposable
 {
     internal const int Format=1;
@@ -34,7 +34,7 @@ internal sealed class InstallPackage:IDisposable
             Name(entry.FullName);if(!expected.Remove(entry.FullName)||entry.Length<0||((entry.ExternalAttributes>>16)&0xf000) is not(0 or 0x8000)||((entry.ExternalAttributes&0x400)!=0))throw new IOException("PACKAGE_MEMBER_TYPE");
         }
         if(expected.Count!=0)throw new IOException("PACKAGE_MEMBERS");
-        foreach(var required in new[]{"payload/bundle.json","payload/runtime/node/node.exe","payload/runtime/ffmpeg/ffmpeg.exe","payload/runtime/caddy/caddy.exe","payload/app/server/main.mjs","payload/app/dist/index.html","payload/app/native/Yahad.Platform.exe","host/Yahad.ServiceHost.exe","host/Yahad.ServiceHost.runtimeconfig.json","updater/Yahad.Updater.exe","updater/Yahad.Updater.runtimeconfig.json"})
+        foreach(var required in new[]{"payload/bundle.json","payload/runtime/node/node.exe","payload/runtime/caddy/caddy.exe","payload/app/server/main.mjs","payload/app/dist/index.html","payload/app/native/Yahad.Platform.exe","host/Yahad.ServiceHost.exe","host/Yahad.ServiceHost.runtimeconfig.json","updater/Yahad.Updater.exe","updater/Yahad.Updater.runtimeconfig.json"})
             if(!Manifest.Files.Any(r=>r.Path==required))throw new IOException("PACKAGE_MISSING");
         // The payload digest names the application bundle record itself.
         if(Manifest.Files.Single(f=>f.Path=="payload/bundle.json").Sha256!=Manifest.PayloadDigest)throw new IOException("PACKAGE_PAYLOAD_ANCHOR");

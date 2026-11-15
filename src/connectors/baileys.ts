@@ -32,7 +32,6 @@ import makeWASocket, {
   type MessageUserReceiptUpdate,
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
-import { thumbnail } from '../media.js';
 import type {
   Connector,
   ConnectorHooks,
@@ -592,8 +591,12 @@ export class BaileysConnector implements Connector {
         content.seconds = seconds;
         content.waveform = new Uint8Array(0);
       }
-      if ((m.kind === 'image' || m.kind === 'video') && m.bytes)
-        content.jpegThumbnail = await thumbnail(m.bytes);
+      // Always our browser-made preview: left undefined, Baileys would run FFmpeg (video)
+      // or sharp/jimp over a plaintext temporary copy (image).
+      if (m.kind === 'image' || m.kind === 'video') {
+        if (!m.jpegThumbnail) throw new Error('Preview missing');
+        content.jpegThumbnail = m.jpegThumbnail;
+      }
       const quoted = m.reply?.raw ? parse(m.reply.raw) : undefined;
       return { sock, content, quoted };
     };

@@ -326,7 +326,7 @@ test('third-party console payloads never reach production logging', async () => 
   assert.equal(result.stderr.toString(), '');
 });
 
-test('real adapter maps actual media bytes, captions, Opus duration and thumbnail in memory (stub transport)', async () => {
+test('real adapter maps actual media bytes, captions, Opus duration and the browser-made preview in memory (stub transport)', async () => {
   const { h } = hooks();
   const calls: any[] = [];
   const c = new BaileysConnector(h);
@@ -340,6 +340,7 @@ test('real adapter maps actual media bytes, captions, Opus duration and thumbnai
       };
     },
   } as any;
+  const preview = readFileSync('fixtures/garden-preview.jpg');
   await c.send({ id: 'text-id', groupId: '1@g.us', kind: 'text', text: 'Signature: hello' });
   assert.equal(calls[0].content.text, 'Signature: hello');
   await c.send({
@@ -349,9 +350,9 @@ test('real adapter maps actual media bytes, captions, Opus duration and thumbnai
     text: 'Signature: picture',
     bytes: readFileSync('fixtures/garden.jpg'),
     mime: 'image/jpeg',
+    jpegThumbnail: preview,
   });
-  assert.ok(Buffer.isBuffer(calls[1].content.jpegThumbnail));
-  assert.ok(calls[1].content.jpegThumbnail.length > 100);
+  assert.equal(calls[1].content.jpegThumbnail, preview);
   assert.equal(calls[1].content.caption, 'Signature: picture');
   await c.send({
     id: 'audio-id',
@@ -373,6 +374,17 @@ test('real adapter maps actual media bytes, captions, Opus duration and thumbnai
     filename: 'sample.pdf',
   });
   assert.equal(calls[3].content.caption, 'Signature: document');
+  assert.equal(calls[3].content.jpegThumbnail, undefined);
+});
+
+test('real adapter never lets Baileys make its own preview: an image or video without one is not submitted', async () => {
+  const { h } = hooks(), c = new BaileysConnector(h);
+  let submitted = 0;
+  c.sock = { sendMessage: async () => { submitted++; throw new Error('must not submit'); } } as any;
+  for (const [kind, file, mime] of [['image', 'garden.jpg', 'image/jpeg'], ['video', 'garden.mp4', 'video/mp4']] as const)
+    await assert.rejects(c.send({ id: 'synthetic-' + kind, groupId: '1@g.us', kind, text: '', bytes: readFileSync('fixtures/' + file), mime }),
+      (error: unknown) => error instanceof SendNotSubmittedError);
+  assert.equal(submitted, 0);
 });
 
 test('real adapter rechecks outgoing authorization after asynchronous media preparation before provider submission', async () => {
@@ -380,9 +392,9 @@ test('real adapter rechecks outgoing authorization after asynchronous media prep
   let paused = false, submitted = 0, checks = 0;
   c.sock = { sendMessage: async () => { submitted++; throw new Error('must not submit after pause'); } } as any;
   const preparation = c.send({ id: 'synthetic-revoked-image', groupId: '1@g.us', kind: 'image', text: '',
-    bytes: readFileSync('fixtures/garden.jpg'), mime: 'image/jpeg',
+    bytes: readFileSync('fixtures/garden.jpg'), mime: 'image/jpeg', jpegThumbnail: readFileSync('fixtures/garden-preview.jpg'),
     beforeSend: () => { checks++; if (paused) throw new Error('synthetic session revoked'); } });
-  // thumbnail() has yielded to asynchronous processing; no provider call has started.
+  // Preparation has yielded to asynchronous processing; no provider call has started.
   assert.equal(submitted, 0); paused = true;
   await assert.rejects(preparation, /synthetic session revoked/);
   assert.equal(checks, 1); assert.equal(submitted, 0);
