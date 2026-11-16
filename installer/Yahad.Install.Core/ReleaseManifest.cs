@@ -136,10 +136,10 @@ internal static class ReleaseSelection
         var i=release.Infrastructure;
         // A release whose app cannot run on its own infrastructure is defective on every machine.
         if(release.App.RequiresContract<i.ContractMin||release.App.RequiresContract>i.ContractMax)throw new IOException("APP_NEEDS_INFRASTRUCTURE");
+        // Every release carries an app, so neither track may install an app that is not newer.
         var infra=SemVer.Compare(i.Version,installed.Infrastructure.Version);
-        if(infra<0)return null;
+        if(infra<0||SemVer.Compare(release.Version,installed.App.Version)<=0)return null;
         if(infra>0){RequireFrom(release,installed);return ReleaseTrack.Setup;}
-        if(SemVer.Compare(release.Version,installed.App.Version)<=0)return null;
         // One infrastructure version names exactly one tree (8.1).
         if(i.TreeSha256!=installed.Infrastructure.TreeSha256||i.ContractMin!=installed.Infrastructure.ContractMin||i.ContractMax!=installed.Infrastructure.ContractMax)
             throw new IOException("INFRA_IDENTITY_MISMATCH");
