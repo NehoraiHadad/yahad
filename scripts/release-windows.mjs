@@ -24,7 +24,7 @@
 // scripts/release.mjs package-https and scripts/release-updater.mjs package-github. Only `publish`, after the typed confirmation, pushes or publishes.
 import { createHash, createPrivateKey, createPublicKey } from 'node:crypto';
 import { inflateRawSync } from 'node:zlib';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -357,7 +357,9 @@ export function buildSigned({ repo, keyFile, out, inputsOf, infra }) {
   const manifestFile = join(assets, names.manifest);
   execFileSync(process.execPath, [join(repo, 'scripts', 'windows-release-key.mjs'), 'sign', keyFile, manifestFile], { stdio: 'inherit' });
   checkWindowsRelease(assets, version, spki);
-  return { version, commit, spki, keyId: keyIdOf(spki), assets, manifestFile, setupFile: join(assets, names.setup) };
+  // The web build package.ps1 staged the app with (installer/windows/prepare_core_fixture.py), the release's only one.
+  const dist = join(packageDirectory, 'app-stage', 'app', 'dist');
+  return { version, commit, spki, keyId: keyIdOf(spki), assets, manifestFile, setupFile: join(assets, names.setup), dist };
 }
 
 // ---- throwaway clones --------------------------------------------------------------------------
@@ -374,11 +376,6 @@ async function withTemporaryDirectory(work) {
   const root = mkdtempSync(join(tmpdir(), 'yahad-release-'));
   try { return await work(root); } finally { removeTree(root); }
 }
-function npm(inputs, cwd, ...args) {
-  const cli = join(inputs.NodeDirectory, 'node_modules', 'npm', 'bin', 'npm-cli.js');
-  execFileSync(join(inputs.NodeDirectory, 'node.exe'), [cli, ...args], { cwd, stdio: 'inherit' });
-}
-const installDependencies = (inputs, clone) => npm(inputs, clone, 'ci', '--offline', '--cache', inputs.NpmCache, '--no-audit', '--no-fund');
 
 // ---- windows:install ---------------------------------------------------------------------------
 function shellExecute(file) {
@@ -412,8 +409,8 @@ export async function install({ repo, options, build = buildClonedWindows, launc
 }
 const basenameOf = (path) => path.split(/[\\/]/).at(-1);
 
+// package.ps1 restores the lockfile and builds the web app itself, so the clone needs no npm ci.
 async function buildClonedWindows({ clone, root, keyFile, inputs, infra }) {
-  installDependencies(inputs, clone);
   return buildSigned({ repo: clone, keyFile, out: join(root, 'windows'), inputsOf: () => inputs, infra });
 }
 
@@ -613,16 +610,19 @@ export async function withInfrastructureSource(repo, built, infra, work) {
   try { return await work({ source, sourceCommit: infra.sourceCommit, digest: infra.digest }); } finally { remove(); }
 }
 
+// One npm restore and one web build per release, both inside the Windows build (installer/package.ps1,
+// prepare_core_fixture.py: lockfile-exact, offline, in a private build root). The Linux package then
+// carries that same dist/, so the clone itself never runs npm.
 async function stageRelease({ clone, root, keyFile, inputs, infra }) {
-  installDependencies(inputs, clone);
-  npm(inputs, clone, 'run', 'build');
-  const linux = join(root, 'linux');
-  execFileSync(process.execPath, [join(clone, 'scripts', 'release.mjs'), 'package-https', linux], { cwd: clone, stdio: 'inherit' });
   const runtime = runtimeVersionFor(JSON.parse(readFileSync(join(clone, 'package.json'), 'utf8')).version);
   requireRuntimeAboveBootstrap(runtime, readFileSync(join(clone, 'deploy', 'upgrade-worker-github.py'), 'utf8'));
+  const windows = buildSigned({ repo: clone, keyFile, out: join(root, 'windows'), inputsOf: () => inputs, infra });
+  if (existsSync(join(clone, 'dist'))) refuse('The release clone already has a dist/; the web build is the Windows build's alone.');
+  cpSync(windows.dist, join(clone, 'dist'), { recursive: true, errorOnExist: true, force: false });
+  const linux = join(root, 'linux');
+  execFileSync(process.execPath, [join(clone, 'scripts', 'release.mjs'), 'package-https', linux], { cwd: clone, stdio: 'inherit' });
   const updater = join(root, 'updater');
   execFileSync(process.execPath, [join(clone, 'scripts', 'release-updater.mjs'), 'package-github', runtime, updater], { cwd: clone, stdio: 'inherit' });
-  const windows = buildSigned({ repo: clone, keyFile, out: join(root, 'windows'), inputsOf: () => inputs, infra });
   const assets = join(root, 'assets');
   mkdirSync(assets);
   for (const name of APP_ASSETS) copyFileSync(join(linux, name), join(assets, name));
