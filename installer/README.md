@@ -22,8 +22,9 @@ does **not** create the complete installer.
 
 The tracked `installer/package.ps1` replaces machine-specific private build wrappers.
 It calls the existing Python package validators and native projects. It derives the
-version from package.json, requires clean committed source and new output, rebuilds
-web assets, publishes the project components, assembles the full payload and
+version from package.json, requires clean committed source and new output, restores
+the lockfile offline into a private build root once and builds the web assets and the
+server bundle there, publishes the project components, assembles the full payload and
 embeds it in one self-contained Setup executable. It then runs **read-only**
 `--verify-package` and checks exact source/ZIP identities. It does not install,
 register services, change ACLs/firewall/trust or publish a release.
@@ -36,8 +37,10 @@ Required external inputs:
    on the build machine.
 3. A populated npm cache. From this checkout run
    `npm ci --ignore-scripts --cache C:/build-cache/npm` once with network available.
-   Application packaging subsequently uses production-only, offline restore and
-   refuses a missing cache entry rather than falling back to the network.
+   Application packaging then runs the release's only `npm ci --offline
+   --ignore-scripts`, lockfile-exact, in a private build root, and refuses a missing
+   cache entry rather than falling back to the network. The checkout's own
+   `node_modules` and `dist/` are never used.
 4. Caddy vendor inputs staged by the existing pinned-input verifier.
 
 Exact vendor URLs, archive hashes, checksum-document hashes and selected member
@@ -52,7 +55,7 @@ Use the exact files named by the pins, even if your local filenames differ.
 The verifier does not download or execute vendor inputs. Do not replace a pinned
 binary without reviewing pins, runtime behavior and licenses together.
 
-From a **clean committed checkout**, with npm development dependencies installed:
+From a **clean committed checkout** (no `npm ci` needed in it):
 
 ```powershell
 $inputs = @{
@@ -136,7 +139,7 @@ certificate (Windows SmartScreen warns on the first install; that is accepted).
    npm run windows:install
    ```
 
-   Needs a clean tree. It clones HEAD into a temp folder, runs `npm ci`, builds and signs
+   Needs a clean tree. It clones HEAD into a temp folder, builds and signs
    there (same `installer/package.ps1` and signing tool CI uses, inputs from this checkout's
    `.local/`), copies `Yahad.Setup-<version>.exe` to `.local/windows-install/`, deletes the
    clone, and starts Setup, which shows Windows' single UAC prompt. It publishes nothing.
@@ -148,10 +151,11 @@ certificate (Windows SmartScreen warns on the first install; that is accepted).
 
    Requires a clean checkout of `main` equal to `origin/main`, so the Raspberry Pi never receives an
    unmerged branch. Everything happens in a throwaway clone: bump the patch version (refused unless above
-   the latest release), commit, `npm ci`, build the app, package the Linux assets with
-   `scripts/release.mjs package-https`, package the root updater with
-   `scripts/release-updater.mjs package-github`, build and sign Windows (reusing the cached
-   infrastructure when the bump rule above says it is unchanged), and check the full set of nine assets.
+   the latest release), commit, build and sign Windows (reusing the cached infrastructure when the bump
+   rule above says it is unchanged; its `installer/package.ps1` is the release's one offline `npm ci` and
+   one web build), package the Linux assets from that same `dist/` with `scripts/release.mjs package-https`,
+   package the root updater with `scripts/release-updater.mjs package-github`, and check the full set of
+   nine assets.
    It prints version, commit, key id and asset sizes, and you type the version to confirm. Only then does
    it push the commit and tag atomically and run `gh release create ... --latest` (needs `gh auth login`);
    afterwards run `git pull --ff-only`. Nothing is pushed or published before the confirmation.

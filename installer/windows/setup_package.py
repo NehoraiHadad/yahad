@@ -66,6 +66,9 @@ APP_REQUIRED = frozenset(bundle.REQUIRED)
 REQUIRED_MEMBERS = frozenset({INFRA_TREE, APP_TREE, *(INFRA+name for name in INFRA_REQUIRED), *(APPS+name for name in APP_REQUIRED)})
 COMPONENTS = (('host/','Yahad.ServiceHost'), ('updater/','Yahad.Updater'), ('platform/','Yahad.Platform'))
 MAX_FILE, MAX_TOTAL, MAX_FILES = 512 * 1024**2, 2 * 1024**3, 50000
+# zlib level of every archive member. Measured on infrastructure 1.0.0 (455 MB raw):
+# level 6 deflates it in 45 s to 220.1 MB, level 9 in 119 s to 219.5 MB (0.29% less).
+ARCHIVE_LEVEL = 6
 PRIVATE = {'.git', '.local', '.agents', '.codex', '.authority', 'data', 'datasets', 'backups', 'secrets',
            'enrollment.json', 'installation.json', 'update-authority.json', 'activation.json',
            'bootstrap.json', 'master-key', 'update-policy', 'update-pin'}
@@ -340,16 +343,17 @@ def _write_archive(output, entries, expected=None, member=_tree_member):
         raise PackageError('Archive bound')
     records = []
     with Path(output).open('xb') as stream:
-        with zipfile.ZipFile(stream, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=False) as archive:
+        with zipfile.ZipFile(stream, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=ARCHIVE_LEVEL, allowZip64=False) as archive:
             for name, value in sorted(entries.items(), key=lambda item:_ordinal(item[0])):
                 record = expected[name]
-                if _record(name,value)!=record: raise PackageError('Verified archive input changed')
                 info=zipfile.ZipInfo(name,(2026,10,29,0,0,0));info.create_system=3
                 info.external_attr=(stat.S_IFREG|0o644)<<16;info.compress_type=zipfile.ZIP_DEFLATED
                 # ZipFile's level is not applied to a caller-supplied ZipInfo.
                 # Use the public3.13 property or its3.12 backing field.
-                if hasattr(info,'compress_level'): info.compress_level=9
-                else: info._compresslevel=9
+                if hasattr(info,'compress_level'): info.compress_level=ARCHIVE_LEVEL
+                else: info._compresslevel=ARCHIVE_LEVEL
+                # The one read of each input: the bytes written are hashed as they are
+                # written and must be the verified record, or the archive is refused.
                 hashed=hashlib.sha256();size=0
                 with archive.open(info,'w') as destination:
                     if isinstance(value,bytes): destination.write(value);hashed.update(value);size=len(value)
@@ -413,7 +417,7 @@ def build(repo, app_stage, infra_entry, output, app_archive):
                ZipSha256=bundle.digest(archive),Files=records)
     metadata=_encode(saved)
     if len(metadata)>16*1024**2: raise PackageError('Installer manifest bound')
-    app_files.require_unchanged();infra.files.require_unchanged()
+    # Every archived member was proven against its verified record as it was written.
     if _source_identity(repo,infra.identity)!=identity: raise PackageError('Build source changed')
     # Last output is the success prerequisite for Setup's embedded input.
     with (output/'install-manifest.json').open('xb') as destination: destination.write(metadata)

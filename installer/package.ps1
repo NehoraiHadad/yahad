@@ -13,7 +13,8 @@
 #
 # Outputs under -Output (a new directory; default .local/packages/<commit 12>):
 #   infra-publish/<project>/  the .NET publishes, only when the infrastructure is built
-#   app-stage/app/...          the staged app tree
+#   app-stage/app/...          the staged app tree, from the one offline npm restore
+#                              and web build (installer/windows/prepare_core_fixture.py)
 #   system/install.zip, system/install-manifest.json   the Setup's embedded package
 #   app/yahad-windows-app-<v>.zip                      the app-only asset
 #   setup/Yahad.Setup.exe, setup/LICENSE               the distributable Setup
@@ -53,7 +54,6 @@ try {
     $dotnetExe = (Get-Command $DotNet -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     $pythonExe = (Get-Command $Python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     $nodeRoot = (Resolve-Path -LiteralPath $NodeDirectory).Path
-    $nodeExe = Join-Path $nodeRoot 'node.exe'
     $npmCli = Join-Path $nodeRoot 'node_modules/npm/bin/npm-cli.js'
     $vendorRoot = (Resolve-Path -LiteralPath $VendorDirectory).Path
     $npmRoot = (Resolve-Path -LiteralPath $NpmCache).Path
@@ -144,16 +144,17 @@ try {
         }
         # The payload-free engine (plan 4.4), installed as infra\<version>\setup\.
         RunStep 'engine-publish' $dotnetExe (@('publish',$setupProject) + $common + $singleFile + @('-o',(Join-Path $published 'engine'))) | Out-Null
-        RunStep 'infra-build' $pythonExe @('-m','installer.windows.infra_package','build','--cache',$cacheRoot,'--source',$infraSourceRoot,'--release-key-id',$keyArgument,
+        $infra = RunStep 'infra-build' $pythonExe @('-m','installer.windows.infra_package','build','--cache',$cacheRoot,'--source',$infraSourceRoot,'--release-key-id',$keyArgument,
             '--host',(Join-Path $published 'Yahad.ServiceHost'),'--updater',(Join-Path $published 'Yahad.Updater'),'--platform',(Join-Path $published 'Yahad.Platform'),
-            '--engine',(Join-Path $published 'engine/Yahad.Setup.exe'),'--node',$nodeRoot,'--dotnet',$dotnetRoot,'--vendors',$vendorRoot) | Out-Null
-    }
+            '--engine',(Join-Path $published 'engine/Yahad.Setup.exe'),'--node',$nodeRoot,'--dotnet',$dotnetRoot,'--vendors',$vendorRoot) | ConvertFrom-Json
+    } else { $infra = $plan }
     $entryPath = Join-Path $cacheRoot $plan.infrastructureVersion
-    # Reused or new, the entry is audited by bytes before anything embeds it.
-    $infra = PythonLine @('-m','installer.windows.infra_package','verify','--entry',$entryPath) | ConvertFrom-Json
-    if ($infra.sourceCommit -ne $infraHead -or $infra.inputDigest -ne $infraDigest -or $infra.releaseKeyId -ne $releaseKeyId) { throw 'Cached infrastructure identity mismatch' }
-    # Build assets from this checkout, never from a previous candidate's dist/.
-    RunStep 'web' $nodeExe @($npmCli,'run','build') | Out-Null
+    # Reused or new, the entry's identity is the one its byte audit reported: plan's
+    # for a reused entry, build's for a new one. system-package audits it again by
+    # bytes right before it embeds it, and proves every embedded member while writing.
+    if ($infra.infrastructureVersion -ne $plan.infrastructureVersion -or $infra.sourceCommit -ne $infraHead -or $infra.inputDigest -ne $infraDigest -or $infra.releaseKeyId -ne $releaseKeyId) { throw 'Cached infrastructure identity mismatch' }
+    # The release's one lockfile-exact offline restore, web build and server bundle,
+    # in a private build root: never the checkout's node_modules or a previous dist/.
     $stage = Join-Path $output 'app-stage'
     RunStep 'app-stage' $pythonExe @('-m','installer.windows.prepare_core_fixture','--repo',$repo,'--output',$stage,'--node',$nodeRoot,'--cache',$npmRoot) | Out-Null
     $system = Join-Path $output 'system'

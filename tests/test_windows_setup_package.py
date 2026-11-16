@@ -287,7 +287,7 @@ class SetupPackageTests(unittest.TestCase):
     def test_archive_refuses_changed_verified_bytes_and_preserves_existing_output(self):
         file=put(self.root,'one.dll',b'original');entries={'infra/host/one.dll':file}
         expected={name:full._record(name,value) for name,value in entries.items()};file.write_bytes(b'changed')
-        with self.assertRaisesRegex(full.PackageError,'input changed'):full._write_archive(self.root/'changed.zip',entries,expected)
+        with self.assertRaisesRegex(full.PackageError,'Input changed during archive'):full._write_archive(self.root/'changed.zip',entries,expected)
         output=put(self.root,'existing.zip',b'preserve')
         with self.assertRaises(FileExistsError):full._write_archive(output,entries)
         self.assertEqual(output.read_bytes(),b'preserve')

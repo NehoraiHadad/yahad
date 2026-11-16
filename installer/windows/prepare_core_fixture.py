@@ -8,9 +8,13 @@ build-inputs.json and the Yahad license. Nothing of the infrastructure (Node,
 Caddy, .NET, Platform) is staged here; that is infra_package.py.
 
 Supply private tooling extracted from checksum-verified official Node archives.
-npm and the bundler run here on the build machine only, against a lockfile-
-restored private build root, so the family's machine has no node_modules,
-TypeScript loader or npm install.
+This is the release's one npm restore and its one web build: `npm ci --offline
+--ignore-scripts` restores the lockfile's exact tree into a private build root
+beside the output, then the web build (package.json "build") and the server
+bundler both run there. So neither depends on a node_modules or dist/ of the
+checkout, and the family's machine has no node_modules, TypeScript loader or npm
+install. scripts/release-windows.mjs takes the Linux package's dist/ from
+OUTPUT/app/dist rather than building it a second time.
 """
 import argparse
 import json
@@ -60,21 +64,25 @@ def prepare(repo, output, node, cache):
     output.mkdir(parents=True, exist_ok=False)
     app = output/'app'; app.mkdir()
     shutil.copyfile(repo/'package.json', app/'package.json')
-    for name in ('dist', 'fixtures'): shutil.copytree(repo/name, app/name)
+    shutil.copytree(repo/'fixtures', app/'fixtures')
     stage_public_lan_help(repo, app)
     environment = {k:v for k,v in os.environ.items() if not k.upper().startswith(('NPM_CONFIG_', 'NODE_', 'DOTNET_', 'CORECLR_', 'COR_', 'ESBUILD_'))}
     environment.update(PATH=str(node)+os.pathsep+str(Path(os.environ['SystemRoot'])/'System32'),
         npm_config_cache=str(cache), npm_config_userconfig=str(output/'no-user-npm-config'),
         npm_config_globalconfig=str(output/'no-global-npm-config'))
-    # The locked tree (the bundler is a devDependency) is restored into a private
-    # build root beside the output; only the bundled server and its legal record leave it.
-    with tempfile.TemporaryDirectory(prefix='yahad-server-build-', dir=output.parent) as build_root:
+    # The locked tree (the web build and the bundler are devDependencies) is restored
+    # into a private build root beside the output; only the built dist/, the bundled
+    # server and its legal record leave it. web/ imports from src/.
+    npm = [str(node/'node.exe'), str(node/'node_modules/npm/bin/npm-cli.js')]
+    with tempfile.TemporaryDirectory(prefix='yahad-app-build-', dir=output.parent) as build_root:
         build_root = Path(build_root)
-        for name in ('package.json', 'package-lock.json', 'tsconfig.json'): shutil.copyfile(repo/name, build_root/name)
-        shutil.copytree(repo/'src', build_root/'src')
-        completed = subprocess.run([str(node/'node.exe'), str(node/'node_modules/npm/bin/npm-cli.js'), 'ci',
-            '--ignore-scripts', '--offline', '--no-audit', '--no-fund'], cwd=build_root, env=environment)
+        for name in ('package.json', 'package-lock.json', 'tsconfig.json', 'vite.config.ts'): shutil.copyfile(repo/name, build_root/name)
+        for name in ('src', 'web'): shutil.copytree(repo/name, build_root/name)
+        completed = subprocess.run([*npm, 'ci', '--ignore-scripts', '--offline', '--no-audit', '--no-fund'], cwd=build_root, env=environment)
         if completed.returncode: raise ValueError('Offline restore failed; no network fallback, partial output retained')
+        completed = subprocess.run([*npm, 'run', 'build'], cwd=build_root, env=environment)
+        if completed.returncode or not (build_root/'dist'/'index.html').is_file(): raise ValueError('Web build failed; partial output retained')
+        shutil.copytree(build_root/'dist', app/'dist')
         completed = subprocess.run([str(node/'node.exe'), str(repo/'scripts/build-server.mjs'), '--payload', str(output),
             '--root', str(build_root)], cwd=build_root, env=environment)
         if completed.returncode: raise ValueError('Server bundle build failed; partial output retained')

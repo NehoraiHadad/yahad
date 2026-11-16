@@ -37,6 +37,8 @@ internal static class UpgradeTests
     }
     // A format-2 manifest (5.1). Its infrastructure is the one this build compiles and
     // the fixture's trees describe, unless a case changes it.
+    // Any infrastructure version but the compiled one, valid whatever that one is.
+    private static string OtherInfrastructure=>"1"+InfrastructureRelease.Version;
     private static JsonObject Format2(string keyId,string version="9.9.9",int schema=7,string minimum="0.0.0",string? infra=null,string? infraTree=null,string? appTree=null,int contract=1)=>new()
     {
         ["format"]=2,["product"]="yahad-windows-release",["version"]=version,["sourceCommit"]=PairFixture.AppCommit,["keyId"]=keyId,["createdUnix"]=1700000000,
@@ -186,7 +188,7 @@ internal static class UpgradeTests
             UpgradeHost.RequireAgrees(Of(v=>v["app"]!["databaseMigrationsFrom"]=new JsonArray(6,5)),manifest);
             foreach(var change in new Action<JsonObject>[]
             {
-                v=>{v["version"]="9.9.8";v["infrastructure"]!["setup"]!["name"]=ReleaseManifest.SetupName("9.9.8");v["app"]!["archive"]!["name"]=ReleaseManifest.AppArchiveName("9.9.8");},v=>v["sourceCommit"]=new string('c',40),v=>v["infrastructure"]!["version"]="1.0.1",v=>v["infrastructure"]!["treeSha256"]=new string('d',64),
+                v=>{v["version"]="9.9.8";v["infrastructure"]!["setup"]!["name"]=ReleaseManifest.SetupName("9.9.8");v["app"]!["archive"]!["name"]=ReleaseManifest.AppArchiveName("9.9.8");},v=>v["sourceCommit"]=new string('c',40),v=>v["infrastructure"]!["version"]=OtherInfrastructure,v=>v["infrastructure"]!["treeSha256"]=new string('d',64),
                 v=>v["infrastructure"]!["sourceCommit"]=new string('c',40),v=>v["app"]!["treeSha256"]=new string('d',64),v=>v["app"]!["databaseSchema"]=8,
                 v=>v["app"]!["databaseMigrationsFrom"]=new JsonArray(5),v=>v["app"]!["databaseMigrationsFrom"]=new JsonArray(4,5,6),v=>v["minimumFrom"]!["app"]="0.0.1",v=>v["minimumFrom"]!["infrastructure"]="0.0.1"
             })
