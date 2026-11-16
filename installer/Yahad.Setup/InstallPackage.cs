@@ -2,7 +2,9 @@ using System.Buffers.Binary;
 using System.IO;
 using System.IO.Compression;
 using System.Security.Cryptography;
+using System.Runtime.InteropServices;
 using System.Text.Json;
+using Microsoft.Win32.SafeHandles;
 using Yahad.Install;
 namespace Yahad.Setup;
 
@@ -36,7 +38,7 @@ internal sealed class InstallPackage:IDisposable
     internal static readonly string[] Required=["infra/host/Yahad.ServiceHost.exe","infra/updater/Yahad.Updater.exe",
         "infra/platform/Yahad.Platform.exe","infra/runtime/node/node.exe","infra/runtime/caddy/caddy.exe","infra/"+Setup.InfrastructureRecord.EngineMember,
         ..AppMemberPolicy.Required.Select(m=>AppPrefix+m)];
-    private readonly Stream stream;private readonly ZipArchive archive;private readonly Func<Stream> engine;
+    private readonly Stream stream;private readonly ZipArchive archive;private readonly Func<Stream> engine;private SetupImage? image;
     internal InstallPackageManifest Manifest{get;}
     // engine opens a fresh read of the engine member's bytes each time it is called.
     internal InstallPackage(Stream zip,byte[] manifest,Func<Stream> engine)
@@ -88,21 +90,23 @@ internal sealed class InstallPackage:IDisposable
     }
     // The running image carries a package exactly when it ends in a Setup image trailer;
     // the installed engine (the bare prefix) does not.
-    internal static bool IsEmbedded=>SetupImage.Read(ImagePath()) is not null;
-    private static string ImagePath()=>Environment.ProcessPath??throw new IOException("PACKAGE_NOT_EMBEDDED");
+    internal static bool IsEmbedded{get{using var image=SetupImage.OpenRunning();return image is not null;}}
     // The app this image installs, read from the manifest alone (the archive is verified
     // only when it is installed).
     internal static string DisplayVersion()
     {
-        var image=SetupImage.Read(ImagePath())??throw new IOException("PACKAGE_NOT_EMBEDDED");
+        using var image=SetupImage.OpenRunning()??throw new IOException("PACKAGE_NOT_EMBEDDED");
         var version=NativeJson.Read(image.ReadManifest(),SetupJsonContext.Default.InstallPackageManifest).App?.Version;
         return version is not null&&SemVer.IsVersion(version)?version:throw new IOException("PACKAGE_FORMAT");
     }
-    internal static InstallPackage Embedded()=>FromImage(ImagePath());
-    internal static InstallPackage FromImage(string path)
+    // The package of the running image, read through the one handle that proved it is
+    // that image; the package holds the handle until it is disposed.
+    internal static InstallPackage Embedded()=>From(SetupImage.OpenRunning());
+    internal static InstallPackage FromImage(string path)=>From(SetupImage.Open(path));
+    private static InstallPackage From(SetupImage? image)
     {
-        var image=SetupImage.Read(path)??throw new IOException("PACKAGE_NOT_EMBEDDED");var manifest=image.ReadManifest();var zip=image.Zip();
-        try{return new(zip,manifest,image.Engine);}catch{zip.Dispose();throw;}
+        if(image is null)throw new IOException("PACKAGE_NOT_EMBEDDED");
+        try{return new(image.Zip(),image.ReadManifest(),image.Engine){image=image};}catch{image.Dispose();throw;}
     }
     internal static string Prefix(TreeKind kind)=>kind==TreeKind.Infrastructure?InfraPrefix:AppPrefix;
     // The members of one namespace, relative to its installed tree root.
@@ -176,7 +180,7 @@ internal sealed class InstallPackage:IDisposable
         throw new IOException("PACKAGE_PATH");
     }
     private static void Digest(string? value){if(!TreeRecord.IsDigest(value))throw new IOException("PACKAGE_DIGEST");}
-    public void Dispose(){archive.Dispose();stream.Dispose();}
+    public void Dispose(){archive.Dispose();stream.Dispose();image?.Dispose();}
 }
 // The member rules both archives share: the install package and the app archive (5.2).
 internal static class ArchiveExtraction
@@ -228,35 +232,96 @@ internal static class ArchiveExtraction
 // The trailer is the last 40 bytes: Magic, then the three part lengths as little-endian
 // int64, which with the trailer sum to exactly the file length. The engine part is the
 // bytes of the engine member, so the package does not carry the engine twice
-// (installer/windows/setup_image.py writes this layout).
-internal sealed class SetupImage
+// (installer/windows/setup_package.py write_image writes this layout).
+// One handle, opened without write or delete sharing, serves every part: while it is
+// open the file can be neither rewritten nor renamed, so every read is of one file.
+internal sealed class SetupImage:IDisposable
 {
     internal const int TrailerLength=40;
     internal static ReadOnlySpan<byte> Magic=>"Yahad.SetupImage"u8;
-    private readonly string path;private readonly long engineLength,zipLength,manifestLength;
-    private SetupImage(string path,long engine,long zip,long manifest){this.path=path;engineLength=engine;zipLength=zip;manifestLength=manifest;}
+    private readonly SafeFileHandle file;private readonly long engineLength,zipLength,manifestLength;
+    private SetupImage(SafeFileHandle file,long engine,long zip,long manifest){this.file=file;engineLength=engine;zipLength=zip;manifestLength=manifest;}
+    // The running process's own image. Environment.ProcessPath names whatever file has
+    // that path now, which an unelevated process may have renamed away and replaced
+    // after the elevation prompt; the image is accepted only when the opened file is
+    // the one this process was loaded from (LoadedImage).
+    internal static SetupImage? OpenRunning()
+        =>Open(Environment.ProcessPath??throw new IOException("PACKAGE_NOT_EMBEDDED"),requireLoaded:true);
     // null when the file carries no trailer; a trailer whose lengths do not describe the
     // file is refused.
-    internal static SetupImage? Read(string path)
+    internal static SetupImage? Open(string path)=>Open(path,requireLoaded:false);
+    private static SetupImage? Open(string path,bool requireLoaded)
     {
-        using var file=Open(path);var length=file.Length;if(length<TrailerLength)return null;
-        Span<byte> trailer=stackalloc byte[TrailerLength];file.Position=length-TrailerLength;file.ReadExactly(trailer);
-        if(!trailer[..Magic.Length].SequenceEqual(Magic))return null;
-        var engine=BinaryPrimitives.ReadInt64LittleEndian(trailer[16..]);var zip=BinaryPrimitives.ReadInt64LittleEndian(trailer[24..]);var manifest=BinaryPrimitives.ReadInt64LittleEndian(trailer[32..]);
-        if(engine is <1 or >TreeRecord.MaximumMemberBytes||zip is <1 or >2147483648||manifest is <1 or >16777216||engine+zip+manifest+TrailerLength!=length)throw new IOException("PACKAGE_IMAGE");
-        return new(path,engine,zip,manifest);
+        var handle=File.OpenHandle(path,FileMode.Open,FileAccess.Read,FileShare.Read);
+        try
+        {
+            if(requireLoaded&&!LoadedImage.Is(handle))throw new IOException("PACKAGE_IMAGE_IDENTITY");
+            var length=RandomAccess.GetLength(handle);if(length<TrailerLength){handle.Dispose();return null;}
+            Span<byte> trailer=stackalloc byte[TrailerLength];ReadExactly(handle,trailer,length-TrailerLength);
+            if(!trailer[..Magic.Length].SequenceEqual(Magic)){handle.Dispose();return null;}
+            var engine=BinaryPrimitives.ReadInt64LittleEndian(trailer[16..]);var zip=BinaryPrimitives.ReadInt64LittleEndian(trailer[24..]);var manifest=BinaryPrimitives.ReadInt64LittleEndian(trailer[32..]);
+            if(engine is <1 or >TreeRecord.MaximumMemberBytes||zip is <1 or >2147483648||manifest is <1 or >16777216||engine+zip+manifest+TrailerLength!=length)throw new IOException("PACKAGE_IMAGE");
+            return new(handle,engine,zip,manifest);
+        }
+        catch{handle.Dispose();throw;}
     }
-    internal Stream Engine()=>new ImagePart(Open(path),0,engineLength);
-    internal Stream Zip()=>new ImagePart(Open(path),engineLength,zipLength);
-    internal byte[] ReadManifest()
+    internal Stream Engine()=>new ImagePart(file,0,engineLength);
+    internal Stream Zip()=>new ImagePart(file,engineLength,zipLength);
+    internal byte[] ReadManifest(){var bytes=new byte[manifestLength];ReadExactly(file,bytes,engineLength+zipLength);return bytes;}
+    private static void ReadExactly(SafeFileHandle handle,Span<byte> buffer,long offset)
     {
-        using var file=Open(path);if(file.Length!=engineLength+zipLength+manifestLength+TrailerLength)throw new IOException("PACKAGE_IMAGE");
-        var bytes=new byte[manifestLength];file.Position=engineLength+zipLength;file.ReadExactly(bytes);return bytes;
+        while(buffer.Length>0){var n=RandomAccess.Read(handle,buffer,offset);if(n<=0)throw new IOException("PACKAGE_IMAGE");buffer=buffer[n..];offset+=n;}
     }
-    private static FileStream Open(string path)=>new(path,FileMode.Open,FileAccess.Read,FileShare.Read);
+    public void Dispose()=>file.Dispose();
 }
-// A read-only, seekable window [start, start+length) of one file, which it owns.
-internal sealed class ImagePart(FileStream file,long start,long length):Stream
+// Whether an open file is the image this process was loaded from. Names cannot say:
+// a case-sensitive directory holds Setup.exe and setup.exe, and a file has as many
+// names as it has hard links. So the file at the name the memory manager reports for
+// the main module (which follows renames) is opened and the two are compared by
+// volume and file ID. That name is read again while the second handle, which denies
+// rename and delete, is open: unchanged, it still names the image, and the image is
+// the file that handle holds.
+internal static class LoadedImage
+{
+    internal static bool Is(SafeFileHandle file)=>Is(file,MappedName);
+    // mapped reports the main module's NT path; tests stand in for the memory manager.
+    internal static bool Is(SafeFileHandle file,Func<string?> mapped)
+    {
+        var name=mapped();if(name is null)return false;
+        SafeFileHandle named;
+        try{named=File.OpenHandle(@"\\?\GLOBALROOT"+name,FileMode.Open,FileAccess.Read,FileShare.Read);}
+        catch(Exception e)when(e is IOException or UnauthorizedAccessException){return false;}
+        using(named)return Identity(file) is {} opened&&Identity(named)==opened&&mapped()==name;
+    }
+    // The NT path of a handle's file, as GetMappedFileName reports one.
+    internal static string? NtName(SafeFileHandle file)
+    {
+        var buffer=new char[32768];var n=GetFinalPathNameByHandleW(file,buffer,(uint)buffer.Length,VolumeNameNt);
+        return n is >0 and <32768?new string(buffer,0,(int)n):null;
+    }
+    private static string? MappedName()
+    {
+        var buffer=new char[32768];var n=GetMappedFileNameW(GetCurrentProcess(),GetModuleHandleW(null),buffer,(uint)buffer.Length);
+        return n is >0 and <32768?new string(buffer,0,(int)n):null;
+    }
+    // The 128-bit file ID where the file system has one (NTFS, ReFS), else the volume
+    // serial and 64-bit file index (FAT, exFAT); both handles take the same branch.
+    private static string? Identity(SafeFileHandle file)
+    {
+        var id=new byte[24];if(GetFileInformationByHandleEx(file,FileIdInfo,id,(uint)id.Length))return "id:"+Convert.ToHexString(id);
+        var info=new byte[52];return GetFileInformationByHandle(file,info)?"index:"+Convert.ToHexString(info,28,4)+Convert.ToHexString(info,44,8):null;
+    }
+    private const uint VolumeNameNt=2;private const int FileIdInfo=18;
+    [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)]private static extern uint GetFinalPathNameByHandleW(SafeFileHandle file,[Out] char[] path,uint length,uint flags);
+    [DllImport("kernel32.dll",SetLastError=true)]private static extern bool GetFileInformationByHandleEx(SafeFileHandle file,int kind,[Out] byte[] info,uint size);
+    [DllImport("kernel32.dll",SetLastError=true)]private static extern bool GetFileInformationByHandle(SafeFileHandle file,[Out] byte[] info);
+    [DllImport("kernel32.dll")]private static extern IntPtr GetCurrentProcess();
+    [DllImport("kernel32.dll",CharSet=CharSet.Unicode)]private static extern IntPtr GetModuleHandleW(string? name);
+    [DllImport("kernel32.dll",EntryPoint="K32GetMappedFileNameW",CharSet=CharSet.Unicode,SetLastError=true)]private static extern uint GetMappedFileNameW(IntPtr process,IntPtr address,[Out] char[] name,uint length);
+}
+// A read-only, seekable window [start, start+length) of an image's handle, read by
+// offset; the image owns the handle.
+internal sealed class ImagePart(SafeFileHandle file,long start,long length):Stream
 {
     private long position;
     public override bool CanRead=>true;public override bool CanSeek=>true;public override bool CanWrite=>false;
@@ -266,11 +331,10 @@ internal sealed class ImagePart(FileStream file,long start,long length):Stream
     public override int Read(Span<byte> buffer)
     {
         if(position>=length||buffer.Length==0)return 0;
-        file.Position=start+position;var n=file.Read(buffer[..(int)Math.Min(buffer.Length,length-position)]);position+=n;return n;
+        var n=RandomAccess.Read(file,buffer[..(int)Math.Min(buffer.Length,length-position)],start+position);position+=n;return n;
     }
     public override long Seek(long offset,SeekOrigin origin)=>Position=origin switch{SeekOrigin.Begin=>offset,SeekOrigin.Current=>position+offset,SeekOrigin.End=>length+offset,_=>throw new ArgumentOutOfRangeException(nameof(origin))};
     public override void Flush(){}
     public override void SetLength(long value)=>throw new NotSupportedException();
     public override void Write(byte[] buffer,int offset,int count)=>throw new NotSupportedException();
-    protected override void Dispose(bool disposing){if(disposing)file.Dispose();base.Dispose(disposing);}
 }

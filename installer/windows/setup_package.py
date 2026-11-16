@@ -116,7 +116,8 @@ def _safe_path(name, *, component=False):
     return name
 
 
-def _unlinked(path, *, file=False):
+def _unlinked(path, *, file=False, maximum=None):
+    # maximum bounds a file input; one member's bound unless the caller names another.
     path = Path(path).absolute()
     for current in (path, *path.parents):
         info = current.lstat()
@@ -124,7 +125,7 @@ def _unlinked(path, *, file=False):
             raise PackageError('Linked input or ancestor')
     if file:
         info = path.lstat()
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > MAX_FILE:
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > (MAX_FILE if maximum is None else maximum):
             raise PackageError('Unsafe input file')
     return path
 
@@ -248,7 +249,7 @@ def validate_native(root, artifact, infrastructure, source, repo):
     if entry not in files: raise PackageError('NativeAOT image required')
     _inspect(files,native_entry=entry)
     if NATIVE_AOT_EXPORT not in pe.inspect(_unlinked(files[entry], file=True), exports=True)['exports']: raise PackageError('NativeAOT image required')
-    require_native_build_identity(describe_build_artifact(files[entry], '--describe', repo), artifact, infrastructure, source)
+    require_native_build_identity(describe_build_artifact(files[entry], '--describe', repo), artifact, infrastructure, source, RUNTIME_VERSION)
     files.require_unchanged()
     return files
 
@@ -260,7 +261,7 @@ def validate_engine(path, infrastructure, source, repo):
     if path.name != ENGINE: raise PackageError('Setup engine image required')
     files = _VerifiedFiles({ENGINE:path})
     _inspect(files, native_entry=ENGINE)
-    description = require_native_build_identity(describe_build_artifact(path, '--describe', repo), 'Yahad.Setup', infrastructure, source)
+    description = require_native_build_identity(describe_build_artifact(path, '--describe', repo), 'Yahad.Setup', infrastructure, source, RUNTIME_VERSION)
     if description.get('embeddedPackage') is not False: raise PackageError('Setup engine must be payload-free')
     files.require_unchanged()
     return files
@@ -376,10 +377,10 @@ def _write_archive(output, entries, expected=None, member=_tree_member):
     return records
 
 
-def _copy_verified(source, destination, size, sha256):
-    # One read of a verified input, hashed as it is copied.
+def _copy_verified(source, destination, size, sha256, maximum):
+    # One read of a verified input, hashed as it is copied; maximum is that part's bound.
     hashed=hashlib.sha256();copied=0
-    with _unlinked(source,file=True).open('rb') as stream:
+    with _unlinked(source,file=True,maximum=maximum).open('rb') as stream:
         while chunk:=stream.read(1024*1024):
             copied+=len(chunk)
             if copied>size: raise PackageError('Input changed during image')
@@ -392,8 +393,8 @@ def write_image(output, engine, engine_record, archive, archive_sha256, metadata
     archive_size=Path(archive).stat().st_size
     if not (1<=engine_record['size']<=MAX_FILE and 1<=archive_size<=MAX_TOTAL and 1<=len(metadata)<=MAX_MANIFEST): raise PackageError('Setup image bound')
     with Path(output).open('xb') as destination:
-        _copy_verified(engine,destination,engine_record['size'],engine_record['sha256'])
-        _copy_verified(archive,destination,archive_size,archive_sha256)
+        _copy_verified(engine,destination,engine_record['size'],engine_record['sha256'],MAX_FILE)
+        _copy_verified(archive,destination,archive_size,archive_sha256,MAX_TOTAL)
         destination.write(metadata);destination.write(IMAGE_TRAILER.pack(IMAGE_MAGIC,engine_record['size'],archive_size,len(metadata)))
         destination.flush();os.fsync(destination.fileno())
     if Path(output).stat().st_size!=engine_record['size']+archive_size+len(metadata)+IMAGE_TRAILER.size: raise PackageError('Setup image changed')

@@ -7,7 +7,7 @@ if(args is ["--describe"])
 {
     Console.WriteLine(JsonSerializer.Serialize(new ServiceHostDescription("Yahad.ServiceHost",ServiceDefinition.Name,
         Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion,
-        InfrastructureRelease.Version,InfrastructureRelease.ContractMin,InfrastructureRelease.ContractMax,InfrastructureRelease.SourceCommit,
+        InfrastructureRelease.Version,InfrastructureRelease.ContractMin,InfrastructureRelease.ContractMax,InfrastructureRelease.SourceCommit,InfrastructureRelease.RuntimeVersion,
         ScmEntryImplemented:true,CanInstallService:false,LaunchConfiguration:InstalledLaunch.FileName,
         FamilyInstallationReady:false,ReleaseReady:false),ServiceHostDescriptionJsonContext.Default.ServiceHostDescription));return 0;
 }

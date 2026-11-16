@@ -35,7 +35,7 @@ internal static class SetupEntry
     {
         var commit=InfrastructureRelease.CompiledSourceCommit(typeof(SetupEntry).Assembly);
         Console.WriteLine(JsonSerializer.Serialize(new{artifact="Yahad.Setup",infrastructureVersion=InfrastructureRelease.Version,contractMin=InfrastructureRelease.ContractMin,
-            contractMax=InfrastructureRelease.ContractMax,sourceCommit=commit,version=InfrastructureRelease.Version+"+"+commit,embeddedPackage=InstallPackage.IsEmbedded}));
+            contractMax=InfrastructureRelease.ContractMax,sourceCommit=commit,runtimeVersion=InfrastructureRelease.RuntimeVersion,version=InfrastructureRelease.Version+"+"+commit,embeddedPackage=InstallPackage.IsEmbedded}));
     }
     // The embedded package as this image verified it (zip hash, members, both tree
     // records): every field a signed release manifest must agree on (UpgradeHost.RequireAgrees),

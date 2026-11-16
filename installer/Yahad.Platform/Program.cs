@@ -10,7 +10,7 @@ try
 {
     if (args is ["--describe"])
     {
-        Reply(new JsonObject { ["artifact"]="Yahad.Platform", ["infrastructureVersion"]=InfrastructureRelease.Version, ["contractMin"]=InfrastructureRelease.ContractMin, ["contractMax"]=InfrastructureRelease.ContractMax, ["sourceCommit"]=InfrastructureRelease.SourceCommit,
+        Reply(new JsonObject { ["artifact"]="Yahad.Platform", ["infrastructureVersion"]=InfrastructureRelease.Version, ["contractMin"]=InfrastructureRelease.ContractMin, ["contractMax"]=InfrastructureRelease.ContractMax, ["sourceCommit"]=InfrastructureRelease.SourceCommit, ["runtimeVersion"]=InfrastructureRelease.RuntimeVersion,
             ["version"]=System.Reflection.Assembly.GetExecutingAssembly().GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute),false).Cast<System.Reflection.AssemblyInformationalVersionAttribute>().Single().InformationalVersion });
         return 0;
     }

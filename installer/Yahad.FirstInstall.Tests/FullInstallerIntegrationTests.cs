@@ -241,6 +241,47 @@ internal static class FullInstallerIntegrationTests
                     Assert(package.Manifest.App.Version=="1.0.0");var root=Path.Combine(session,"tree");
                     package.Extract(TreeKind.Infrastructure,root,_=>{},default,TestTarget);
                     Assert(File.ReadAllBytes(Path.Combine(root,"setup","Yahad.Setup.exe")).SequenceEqual(fixture.Engine));
+                    // The open package holds the image: it can be neither renamed away nor rewritten.
+                    Deny(()=>File.Move(path,path+".moved"));
+                    Deny(()=>{using var w=new FileStream(path,FileMode.Open,FileAccess.Write,FileShare.ReadWrite|FileShare.Delete);});
+                }
+                // The running image is accepted only as the file this process was loaded
+                // from: its own image is, a byte-identical copy at another path is not.
+                {
+                    using(var loaded=File.OpenHandle(Environment.ProcessPath!,FileMode.Open,FileAccess.Read,FileShare.Read))Assert(LoadedImage.Is(loaded));
+                    var copy=Path.Combine(session,"copy.exe");File.Copy(Environment.ProcessPath!,copy);
+                    using(var other=File.OpenHandle(copy,FileMode.Open,FileAccess.Read,FileShare.Read))Assert(!LoadedImage.Is(other));
+                    using(var foreign=File.OpenHandle(path,FileMode.Open,FileAccess.Read,FileShare.Read))Assert(!LoadedImage.Is(foreign));
+                    using(var running=SetupImage.OpenRunning())Assert(running is null);
+                    // The attack itself: the running image renamed away and another file
+                    // put at its path. The path now names a file this process was not loaded from.
+                    var own=Environment.ProcessPath!;var away=own+".away-"+Guid.NewGuid().ToString("N");
+                    File.Move(own,away);
+                    try{File.WriteAllBytes(own,image);DenyCode("PACKAGE_IMAGE_IDENTITY",()=>{using var p=InstallPackage.Embedded();});DenyCode("PACKAGE_IMAGE_IDENTITY",()=>_=InstallPackage.IsEmbedded);}
+                    finally{File.Delete(own);File.Move(away,own);}
+                    using(var restored=File.OpenHandle(own,FileMode.Open,FileAccess.Read,FileShare.Read))Assert(LoadedImage.Is(restored));
+                    // The same image under another spelling of its path is still the image.
+                    using(var upper=File.OpenHandle(own.ToUpperInvariant(),FileMode.Open,FileAccess.Read,FileShare.Read))Assert(LoadedImage.Is(upper));
+                }
+                // In a case-sensitive directory the loaded image renamed to setup.exe and
+                // another Setup.exe planted: the names differ only in case, the files differ.
+                {
+                    var folder=Path.Combine(session,"cased");Directory.CreateDirectory(folder);
+                    using(var fsutil=System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Path.Combine(Environment.SystemDirectory,"fsutil.exe"),["file","setCaseSensitiveInfo",folder,"enable"]){UseShellExecute=false,RedirectStandardOutput=true})!)
+                    {fsutil.StandardOutput.ReadToEnd();fsutil.WaitForExit();Assert(fsutil.ExitCode==0);}
+                    var loaded=Path.Combine(folder,"setup.exe");var planted=Path.Combine(folder,"Setup.exe");
+                    File.WriteAllBytes(loaded,fixture.Engine);File.WriteAllBytes(planted,image);
+                    Assert(File.ReadAllBytes(loaded).Length==fixture.Engine.Length&&File.ReadAllBytes(planted).Length==image.Length);
+                    using var image1=File.OpenHandle(loaded,FileMode.Open,FileAccess.Read,FileShare.Read);var mapped=LoadedImage.NtName(image1)!;
+                    using(var other=File.OpenHandle(planted,FileMode.Open,FileAccess.Read,FileShare.Read))
+                    {
+                        Assert(string.Equals(LoadedImage.NtName(other),mapped,StringComparison.OrdinalIgnoreCase));
+                        Assert(!LoadedImage.Is(other,()=>mapped));
+                    }
+                    Assert(LoadedImage.Is(image1,()=>mapped));
+                    // A name that moves while it is checked is refused.
+                    var reads=0;Assert(!LoadedImage.Is(image1,()=>++reads==1?mapped:mapped+".moved"));
+                    Assert(!LoadedImage.Is(image1,()=>null));
                 }
                 // The archive never carries the engine a second time.
                 using(var archive=new ZipArchive(new MemoryStream(fixture.Zip)))Assert(archive.GetEntry(InstallPackage.EnginePath) is null);

@@ -117,15 +117,17 @@ def source_infrastructure_identity(repo):
     return infrastructure_identity_from_props((Path(repo)/PROPS).read_bytes())
 
 
-def require_native_build_identity(description, artifact, infrastructure, source_commit):
-    # Native images are infrastructure: they carry its identity and never the app's.
-    if (not isinstance(description, dict) or description.get('artifact') != artifact or 'applicationVersion' in description or
+def require_native_build_identity(description, artifact, infrastructure, source_commit, runtime_version):
+    # Native images are infrastructure: they carry its identity and never the app's,
+    # and the .NET runtime compiled into them is the pinned one.
+    if (not isinstance(runtime_version, str) or description.get('runtimeVersion') != runtime_version or
+            not isinstance(description, dict) or description.get('artifact') != artifact or 'applicationVersion' in description or
             description.get('infrastructureVersion') != infrastructure.version or
             type(description.get('contractMin')) is not int or description['contractMin'] != infrastructure.contract_min or
             type(description.get('contractMax')) is not int or description['contractMax'] != infrastructure.contract_max or
             not isinstance(source_commit, str) or not _COMMIT.fullmatch(source_commit) or description.get('sourceCommit') != source_commit or
             description.get('version') != infrastructure.version+'+'+source_commit):
-        raise ValueError('Native artifact infrastructure/source identity differs')
+        raise ValueError('Native artifact infrastructure/source/runtime identity differs')
     return description
 
 

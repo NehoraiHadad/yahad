@@ -255,6 +255,10 @@ not carry it: its bytes are the image's own prefix, checked against the
 manifest's size and SHA-256 when the package opens (`PACKAGE_ENGINE`) and again
 as each copy is written. The installed engine is the bare prefix: no trailer,
 no package.
+The running Setup reads every part through one handle that denies write and
+rename, and only after proving that handle is the file the process was loaded
+from (`PACKAGE_IMAGE_IDENTITY`): its path may have been renamed away and replaced
+after the elevation prompt.
 
 That engine serves `--apply-app`, `--repair`, `--uninstall` and the Apps &
 Features entry (`NativeSetupHost.cs:186`). None of these modes may require an

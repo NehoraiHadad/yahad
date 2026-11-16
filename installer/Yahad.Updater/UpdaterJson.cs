@@ -8,7 +8,7 @@ namespace Yahad.Updater;
 [JsonSerializable(typeof(GitHubRelease))]
 internal sealed partial class GitHubJsonContext:JsonSerializerContext;
 // --describe: installer/windows/application_version.py reads these names in this order.
-internal sealed record UpdaterDescription(string Artifact,string ServiceName,string? Version,string InfrastructureVersion,int ContractMin,int ContractMax,string SourceCommit);
+internal sealed record UpdaterDescription(string Artifact,string ServiceName,string? Version,string InfrastructureVersion,int ContractMin,int ContractMax,string SourceCommit,string RuntimeVersion);
 [JsonSourceGenerationOptions(PropertyNamingPolicy=JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(UpdaterDescription))]
 internal sealed partial class UpdaterDescriptionJsonContext:JsonSerializerContext;

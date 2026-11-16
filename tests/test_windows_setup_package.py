@@ -49,7 +49,7 @@ def aot(imported='kernel32.dll'):return image(imported,exported=full.NATIVE_AOT_
 
 def describe(artifact, /, **changed):
     value=dict(artifact=artifact,infrastructureVersion=INFRA.version,contractMin=INFRA.contract_min,contractMax=INFRA.contract_max,
-               sourceCommit=SOURCE,version=INFRA.version+'+'+SOURCE)
+               sourceCommit=SOURCE,runtimeVersion=full.RUNTIME_VERSION,version=INFRA.version+'+'+SOURCE)
     if artifact=='Yahad.Setup': value['embeddedPackage']=False
     return dict(value,**changed)
 
@@ -236,7 +236,7 @@ class SetupPackageTests(unittest.TestCase):
             self.assertEqual(set(full.validate_engine(engine,INFRA,SOURCE,self.repo)),{'Yahad.Setup.exe'})
             audit.assert_called_once_with(engine,'--describe',self.repo)
         for changed in (dict(embeddedPackage=True),dict(embeddedPackage=None),dict(sourceCommit='b'*40,version='1.0.0+'+'b'*40),
-                        dict(infrastructureVersion='1.0.1',version='1.0.1+'+SOURCE),dict(artifact='Yahad.ServiceHost')):
+                        dict(infrastructureVersion='1.0.1',version='1.0.1+'+SOURCE),dict(artifact='Yahad.ServiceHost'),dict(runtimeVersion='10.0.13')):
             with self.subTest(changed=changed),patch.object(full,'describe_build_artifact',return_value=describe('Yahad.Setup',**changed)),self.assertRaises(ValueError):
                 full.validate_engine(engine,INFRA,SOURCE,self.repo)
         renamed=put(self.root/'other','Yahad.Setup-0.6.0.exe',image())
@@ -429,11 +429,21 @@ class InstallPackageBuildTests(unittest.TestCase):
     def test_setup_image_refuses_an_engine_that_changed_after_its_audit(self):
         engine=self.entry/'tree'/'setup'/full.ENGINE;original=engine.read_bytes()
         real=full._copy_verified
-        def changing(source,destination,size,sha256):
+        def changing(source,destination,size,sha256,maximum):
             if Path(source)==engine: engine.write_bytes(original[:-1]+bytes([original[-1]^1]))
-            return real(source,destination,size,sha256)
+            return real(source,destination,size,sha256,maximum)
         with patch.object(full,'_copy_verified',changing):
             with self.assertRaisesRegex(full.PackageError,'Input changed during image'):self.build()
+
+    def test_setup_image_bounds_the_package_by_the_archive_bound_not_the_member_bound(self):
+        # install.zip is bounded by MAX_TOTAL; only the engine is one member (MAX_FILE).
+        engine=(self.entry/'tree'/'setup'/full.ENGINE).stat().st_size;real=full.write_image;seen=[]
+        def bounded(output,engine_path,record,archive,*rest):
+            seen.append(Path(archive).stat().st_size)
+            with patch.object(full,'MAX_FILE',engine):return real(output,engine_path,record,archive,*rest)
+        with patch.object(full,'write_image',bounded):self.build()
+        self.assertGreater(seen[0],engine)
+        self.assertEqual(full.read_image(self.output/full.ENGINE)['archive'],(self.output/'install.zip').read_bytes())
 
     def test_tree_records_list_every_other_member_of_their_tree_exactly_once(self):
         self.build();manifest,members=self.written()

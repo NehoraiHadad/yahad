@@ -97,18 +97,18 @@ class NativeBuildIdentityTests(unittest.TestCase):
     def test_native_images_carry_the_infrastructure_identity_and_never_the_app_version(self):
         source = 'a'*40; infrastructure = Infrastructure('1.2.3', 1, 2)
         for artifact in ('Yahad.ServiceHost', 'Yahad.Platform', 'Yahad.Updater', 'Yahad.Setup'):
-            description = dict(artifact=artifact, infrastructureVersion='1.2.3', contractMin=1, contractMax=2, sourceCommit=source, version='1.2.3+'+source)
-            self.assertEqual(require_native_build_identity(description, artifact, infrastructure, source), description)
+            description = dict(artifact=artifact, infrastructureVersion='1.2.3', contractMin=1, contractMax=2, sourceCommit=source, runtimeVersion='10.0.14', version='1.2.3+'+source)
+            self.assertEqual(require_native_build_identity(description, artifact, infrastructure, source, '10.0.14'), description)
             for field, value in (('infrastructureVersion', '1.2.4'), ('sourceCommit', 'b'*40), ('version', '1.2.3+'+'b'*40), ('version', '1.2.4+'+source),
                                  ('version', source), ('artifact', 'foreign'), ('contractMin', 2), ('contractMax', 3), ('contractMin', True),
-                                 ('contractMax', '2'), ('applicationVersion', '0.6.0')):
+                                 ('contractMax', '2'), ('applicationVersion', '0.6.0'), ('runtimeVersion', '10.0.13'), ('runtimeVersion', None)):
                 mixed = dict(description); mixed[field] = value
                 with self.subTest(artifact=artifact, field=field, value=value), self.assertRaises(ValueError):
-                    require_native_build_identity(mixed, artifact, infrastructure, source)
-            for field in ('infrastructureVersion', 'contractMin', 'contractMax', 'sourceCommit', 'version'):
+                    require_native_build_identity(mixed, artifact, infrastructure, source, '10.0.14')
+            for field in ('infrastructureVersion', 'contractMin', 'contractMax', 'sourceCommit', 'runtimeVersion', 'version'):
                 missing = {k: v for k, v in description.items() if k != field}
                 with self.subTest(artifact=artifact, missing=field), self.assertRaises(ValueError):
-                    require_native_build_identity(missing, artifact, infrastructure, source)
+                    require_native_build_identity(missing, artifact, infrastructure, source, '10.0.14')
 
 
 if __name__ == '__main__': unittest.main()

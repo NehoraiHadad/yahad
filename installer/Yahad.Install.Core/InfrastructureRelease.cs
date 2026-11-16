@@ -13,6 +13,8 @@ public static class InfrastructureRelease
     public static int ContractMin { get; } = RequireContract(Metadata("YahadInfrastructureContractMin"));
     public static int ContractMax { get; } = RequireRange(ContractMin,RequireContract(Metadata("YahadInfrastructureContractMax")));
     public static string SourceCommit => CompiledSourceCommit(Core);
+    // The .NET runtime compiled or bundled into this image; the build requires the pinned one.
+    public static string RuntimeVersion => Environment.Version.ToString();
     public static bool Supports(int contract)=>contract>=ContractMin&&contract<=ContractMax;
     public static string CompiledSourceCommit(Assembly assembly)
     {
