@@ -5,33 +5,47 @@
 //   install                           npm run windows:install: build in a throwaway clone, launch Setup
 //   publish [--version X.Y.Z] [--dry-run]   npm run release:publish: Linux + Windows assets, then GitHub
 //
+// A release is nine assets (docs/WINDOWS-APP-PACKAGE-PLAN.md section 10). `publish` also enforces the
+// infrastructure version rule: inputs changed since the latest release's infrastructure => the version
+// must be bumped; unchanged => its build is reused from a git worktree at that release's commit.
+//
 // Options (all subcommands): --key <key.pem> (default ~/yahad-release-key/key.pem), --node-dir,
-// --dotnet, --npm-cache, --vendors, --package-cache, --python, --pwsh. Inputs default to .local/
+// --dotnet, --npm-cache, --vendors, --package-cache, --infra-cache, --python, --pwsh. Inputs default to .local/
 // of the checkout that runs the command.
 //
 // The Windows build is installer/package.ps1 and the signature is
 // scripts/windows-release-key.mjs sign (both also used by CI); the Linux assets are
 // scripts/release.mjs package-https and scripts/release-updater.mjs package-github. Only `publish`, after the typed confirmation, pushes or publishes.
-import { createHash, createPrivateKey, createPublicKey, verify } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey } from 'node:crypto';
+import { inflateRawSync } from 'node:zlib';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
+import { keyIdOf, verifyRelease } from './windows-release-key.mjs';
 
 const REPOSITORY = 'NehoraiHadad/yahad'; // fixed in installer/Yahad.Updater/GitHubReleaseSource.cs and deploy/updater.py
 const COMMITTED_KEY = 'installer/release-key.spki';
 // The Pi (GitHub-HTTPS trust) needs these two to update the app: deploy/updater-transport.py:26 and
 // deploy/updater.py:229.
-const LINUX_ASSETS = ['yachad-release.json', 'yachad-app.zip'];
+const APP_ASSETS = ['yachad-release.json', 'yachad-app.zip'];
 // Enrolled machines take their root worker from this pair (deploy/updater-transport.py:25). Everything
 // else ignores it: direct workers only look up the assets they require (deploy/updater.py:678).
 const UPDATER_ASSETS = ['yachad-updater.json', 'yachad-updater.zip'];
+const LINUX_ASSETS = [...APP_ASSETS, ...UPDATER_ASSETS];
 // The landing page links releases/latest/download/ this name. The updaters select the versioned file.
 const STABLE_SETUP = 'Yahad.Setup.exe';
-const prefix = Buffer.from('yahad-release-v1\n', 'ascii');
-const keyIdOf = (spki) => createHash('sha256').update(spki).digest('hex').slice(0, 16);
+// The Windows names, as ReleaseManifest.ManifestName / SignatureName / SetupName / AppArchiveName.
+export const windowsNames = (version) => ({
+  manifest: `yahad-windows-release-${version}.json`,
+  signature: `yahad-windows-release-${version}.json.sig`,
+  setup: `Yahad.Setup-${version}.exe`,
+  app: `yahad-windows-app-${version}.zip`
+});
+const INFRASTRUCTURE_PROPS = 'installer/Directory.Build.props';
+const INFRA_INPUTS = 'installer/windows/infra_inputs.py';
 const sha256Of = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
 export class Refusal extends Error {}
@@ -70,26 +84,109 @@ export function requireBuiltKey(packageDirectory, spki) {
   const expected = keyIdOf(spki);
   const verification = JSON.parse(readFileSync(join(packageDirectory, 'verify-package.log'), 'utf8'));
   if (verification.releaseKeyId !== expected) refuse(`The built Setup trusts key ${verification.releaseKeyId ?? 'none'}, not the committed key ${expected}.`);
-  const manifests = readdirSync(join(packageDirectory, 'release')).filter((name) => /^yahad-windows-.+\.json$/.test(name));
+  const manifests = readdirSync(join(packageDirectory, 'release')).filter((name) => /^yahad-windows-release-.+\.json$/.test(name));
   if (manifests.length !== 1) refuse(`Expected one release manifest in ${packageDirectory}/release, found ${manifests.length}.`);
   const manifest = JSON.parse(readFileSync(join(packageDirectory, 'release', manifests[0]), 'utf8'));
+  if (manifest.format !== 2 || manifest.product !== 'yahad-windows-release') refuse(`${manifests[0]} is not format 2 of yahad-windows-release.`);
   if (manifest.keyId !== expected) refuse(`The release manifest names key ${manifest.keyId}, not the committed key ${expected}.`);
   return { manifestName: manifests[0], manifest };
 }
 
-// The check the Updater makes, with the committed key.
-function signatureVerifies(manifestFile, spki) {
-  const signature = readFileSync(`${manifestFile}.sig`);
-  const trusted = createPublicKey({ key: spki, format: 'der', type: 'spki' });
-  return signature.length === 64 && verify('sha256', Buffer.concat([prefix, readFileSync(manifestFile)]), { key: trusted, dsaEncoding: 'ieee-p1363' }, signature);
+// ---- zip reading -------------------------------------------------------------------------------
+// Node has no zip reader and the repository has no zip dependency, so this reads exactly what the
+// builders write: stored or deflated members, no zip64, no data descriptors.
+const LOCAL_SIGNATURE = 0x04034b50;
+function zipMember(buffer, headerOffset, label) {
+  if (headerOffset < 0 || headerOffset + 30 > buffer.length || buffer.readUInt32LE(headerOffset) !== LOCAL_SIGNATURE) refuse(`${label}: no zip member at offset ${headerOffset}.`);
+  const flags = buffer.readUInt16LE(headerOffset + 6);
+  const method = buffer.readUInt16LE(headerOffset + 8);
+  const compressed = buffer.readUInt32LE(headerOffset + 18);
+  const size = buffer.readUInt32LE(headerOffset + 22);
+  const start = headerOffset + 30 + buffer.readUInt16LE(headerOffset + 26) + buffer.readUInt16LE(headerOffset + 28);
+  if ((flags & 0x08) !== 0 || (flags & 0x01) !== 0) refuse(`${label}: zip member with a data descriptor or encryption is not supported.`);
+  if (start + compressed > buffer.length) refuse(`${label}: zip member is truncated.`);
+  const data = buffer.subarray(start, start + compressed);
+  const bytes = method === 0 ? data : method === 8 ? inflateRawSync(data) : refuse(`${label}: zip compression method ${method} is not supported.`);
+  if (bytes.length !== size) refuse(`${label}: zip member size does not match its header.`);
+  return bytes;
 }
 
-// Exactly the eight assets, each consistent with its own manifest. A release missing
-// any one of them would stall one platform's updater.
+// name -> { size, offset } from the central directory.
+export function zipDirectory(buffer, label) {
+  let end = -1;
+  for (let at = buffer.length - 22; at >= Math.max(0, buffer.length - 22 - 65535); at--) {
+    if (buffer.readUInt32LE(at) === 0x06054b50) { end = at; break; }
+  }
+  if (end < 0) refuse(`${label} is not a zip archive.`);
+  const count = buffer.readUInt16LE(end + 10);
+  let at = buffer.readUInt32LE(end + 16);
+  if (count === 0xffff || at === 0xffffffff) refuse(`${label}: zip64 is not supported.`);
+  const entries = new Map();
+  for (let i = 0; i < count; i++) {
+    if (at + 46 > buffer.length || buffer.readUInt32LE(at) !== 0x02014b50) refuse(`${label}: damaged zip directory.`);
+    const nameLength = buffer.readUInt16LE(at + 28);
+    const name = buffer.toString('utf8', at + 46, at + 46 + nameLength);
+    if (entries.has(name)) refuse(`${label}: duplicate zip member ${name}.`);
+    entries.set(name, { size: buffer.readUInt32LE(at + 24), offset: buffer.readUInt32LE(at + 42) });
+    at += 46 + nameLength + buffer.readUInt16LE(at + 30) + buffer.readUInt16LE(at + 32);
+  }
+  return entries;
+}
+const zipRead = (buffer, entries, name, label) => zipMember(buffer, entries.get(name)?.offset ?? -1, `${label}!${name}`);
+
+// The distributable Setup carries install.zip as an uncompressed managed resource (Yahad.Install.Payload,
+// installer/Yahad.Setup/Yahad.Setup.csproj), so the member's local header is present verbatim in the .exe.
+// The same bytes are what `Setup --verify-package` audits and what its embedded-zip hash covers. Exactly
+// one local header must name the member; a second one (a nested or repeated archive) is refused.
+export function embeddedMember(setupBytes, name, label) {
+  const needle = Buffer.from(name, 'utf8');
+  const found = [];
+  for (let at = setupBytes.indexOf(needle); at >= 0; at = setupBytes.indexOf(needle, at + 1)) {
+    const header = at - 30;
+    if (header >= 0 && setupBytes.readUInt32LE(header) === LOCAL_SIGNATURE && setupBytes.readUInt16LE(header + 26) === needle.length) found.push(header);
+  }
+  if (found.length !== 1) refuse(`${label} embeds ${found.length} members named ${name}; expected exactly one.`);
+  return zipMember(setupBytes, found[0], `${label}!${name}`);
+}
+
+// The app archive against its manifest: bytes and hash first, then exactly app-tree.json plus app/ members,
+// app-tree.json hashing to app.treeSha256 and listing exactly those members at their recorded sizes.
+function checkAppArchive(zip, manifest, name) {
+  const archive = manifest.app?.archive;
+  if (archive?.name !== name || archive.bytes !== zip.length || archive.sha256 !== sha256Of(zip)) refuse(`The manifest does not describe ${name} (size or SHA-256 differs).`);
+  const entries = zipDirectory(zip, name);
+  const treeBytes = zipRead(zip, entries, 'app-tree.json', name);
+  if (sha256Of(treeBytes) !== manifest.app.treeSha256) refuse(`app-tree.json inside ${name} does not hash to the manifest's app.treeSha256.`);
+  const outside = [...entries.keys()].filter((member) => member !== 'app-tree.json' && !member.startsWith('app/'));
+  if (outside.length) refuse(`${name} holds members outside app-tree.json and app/: ${outside.slice(0, 3).join(', ')}.`);
+  const listed = new Map(JSON.parse(treeBytes.toString('utf8')).files.map((file) => [file.path, file.size]));
+  const members = [...entries.keys()].filter((member) => member !== 'app-tree.json');
+  if (members.length !== listed.size || members.some((member) => entries.get(member).size !== listed.get(member))) refuse(`${name} does not match its app-tree.json (member names or sizes differ).`);
+}
+
+// The Windows half of a release in `directory`, each file consistent with the signed manifest.
+export function checkWindowsRelease(directory, version, spki) {
+  const names = windowsNames(version);
+  const read = (name) => readFileSync(join(directory, name));
+  const manifestBytes = read(names.manifest);
+  let manifest;
+  try { manifest = verifyRelease(spki, manifestBytes, read(names.signature)); } catch (error) { refuse(`${names.manifest}: ${error.message}.`); }
+  if (!manifest) refuse(`${names.signature} does not verify against the committed key.`);
+  if (manifest.version !== version) refuse(`${names.manifest} is for ${manifest.version}, not ${version}.`);
+  const setupBytes = read(names.setup);
+  const setup = manifest.infrastructure?.setup;
+  if (setup?.name !== names.setup || setup.bytes !== setupBytes.length || setup.sha256 !== sha256Of(setupBytes)) refuse(`${names.manifest} does not describe ${names.setup} (name, size or SHA-256 differs).`);
+  checkAppArchive(read(names.app), manifest, names.app);
+  const infraTree = embeddedMember(setupBytes, 'infra/infra-tree.json', names.setup);
+  if (sha256Of(infraTree) !== manifest.infrastructure.treeSha256) refuse(`infra-tree.json embedded in ${names.setup} does not hash to the manifest's infrastructure.treeSha256.`);
+  return manifest;
+}
+
+// Exactly the nine assets, each consistent with its own manifest. A release missing any one of them would
+// stall one platform's updater.
 export function collectReleaseAssets(directory, version, spki) {
-  const windowsManifest = `yahad-windows-${version}.json`;
-  const setup = `Yahad.Setup-${version}.exe`;
-  const expected = [...LINUX_ASSETS, ...UPDATER_ASSETS, windowsManifest, `${windowsManifest}.sig`, setup, STABLE_SETUP];
+  const names = windowsNames(version);
+  const expected = [...LINUX_ASSETS, names.manifest, names.signature, names.app, names.setup, STABLE_SETUP];
   const found = existsSync(directory) ? readdirSync(directory) : [];
   const missing = expected.filter((name) => !found.includes(name) || statSync(join(directory, name)).size === 0);
   if (missing.length) refuse(`Release asset set incomplete; missing or empty: ${missing.join(', ')}.`);
@@ -102,11 +199,8 @@ export function collectReleaseAssets(directory, version, spki) {
   const runtime = JSON.parse(read('yachad-updater.json').toString('utf8'));
   const runtimeZip = read('yachad-updater.zip');
   if (runtime.kind !== 'yachad-updater' || runtime.version !== runtimeVersionFor(version) || runtime.archive !== 'yachad-updater.zip' || runtime.bytes !== runtimeZip.length || runtime.sha256 !== sha256Of(runtimeZip)) refuse(`yachad-updater.json does not describe yachad-updater.zip at runtime ${runtimeVersionFor(version)}.`);
-  const windows = JSON.parse(read(windowsManifest).toString('utf8'));
-  const setupBytes = read(setup);
-  if (windows.version !== version || windows.keyId !== keyIdOf(spki) || windows.setup.name !== setup || windows.setup.bytes !== setupBytes.length || windows.setup.sha256 !== sha256Of(setupBytes)) refuse(`${windowsManifest} does not describe ${setup} at this version and key.`);
-  if (!read(STABLE_SETUP).equals(setupBytes)) refuse(`${STABLE_SETUP} is not the same file as ${setup}.`);
-  if (!signatureVerifies(join(directory, windowsManifest), spki)) refuse(`${windowsManifest}.sig does not verify against the committed key.`);
+  checkWindowsRelease(directory, version, spki);
+  if (!read(STABLE_SETUP).equals(read(names.setup))) refuse(`${STABLE_SETUP} is not the same file as ${names.setup}.`);
   return expected.map((name) => ({ name, path: join(directory, name), bytes: statSync(join(directory, name)).size }));
 }
 
@@ -129,7 +223,7 @@ export function requireRuntimeAboveBootstrap(runtimeVersion, bootstrapSource) {
 }
 
 // ---- options -----------------------------------------------------------------------------------
-const VALUE_OPTIONS = ['out', 'key', 'version', 'node-dir', 'dotnet', 'npm-cache', 'vendors', 'package-cache', 'python', 'pwsh'];
+const VALUE_OPTIONS = ['out', 'key', 'version', 'node-dir', 'dotnet', 'npm-cache', 'vendors', 'package-cache', 'infra-cache', 'python', 'pwsh'];
 function parse(argv, { flags = [], positional: wanted = 0 } = {}) {
   const options = {}; const positional = [];
   for (let i = 0; i < argv.length; i++) {
@@ -157,6 +251,8 @@ export function resolveInputs(home, options) {
     VendorDirectory: resolve(options.vendors ?? local('vendors')),
     DotNet: resolve(options.dotnet ?? local('tools', 'dotnet', 'dotnet.exe')),
     PackageCache: resolve(options['package-cache'] ?? local('nuget-cache')),
+    // Built infrastructure, one folder per infrastructure version (installer/package.ps1 -InfraCache).
+    InfraCache: resolve(options['infra-cache'] ?? local('infra-cache')),
     Python: options.python ?? 'python' // a command name found on PATH
   };
 }
@@ -171,9 +267,12 @@ function requireUsableKey(options) {
 }
 
 // ---- the Windows build -------------------------------------------------------------------------
-// Builds `repo` (a clean checkout of a committed state) and writes <out>/assets with the three
-// Windows files. Used directly by `build` and inside the throwaway clones of install/publish.
-export function buildSigned({ repo, keyFile, out, inputsOf }) {
+// Builds `repo` (a clean checkout of a committed state) and writes <out>/assets with the four
+// Windows files (manifest, signature, app archive, versioned Setup). Used directly by `build` and inside
+// the throwaway clones of install/publish. The infrastructure cache is inputs.InfraCache. `infra` is
+// { source, sourceCommit, digest } when an earlier infrastructure is reused or the digest is known: a
+// checkout at that commit (package.ps1 -InfraSource) and the input digest the build must report.
+export function buildSigned({ repo, keyFile, out, inputsOf, infra = {} }) {
   const spki = committedKey(repo);
   requireKeyMatches(keyFile, spki);
   if (dirty(repo)) refuse('The working tree is dirty. Commit or discard every change; a release is built from HEAD only.');
@@ -190,6 +289,8 @@ export function buildSigned({ repo, keyFile, out, inputsOf }) {
   mkdirSync(resolvedOut, { recursive: true });
   const args = ['-NoProfile', '-NonInteractive', '-File', join(repo, 'installer', 'package.ps1')];
   for (const name of ['NodeDirectory', 'NpmCache', 'VendorDirectory', 'DotNet', 'PackageCache', 'Python']) args.push(`-${name}`, inputs[name]);
+  args.push('-InfraCache', inputs.InfraCache);
+  if (infra.source) args.push('-InfraSource', infra.source);
   args.push('-ReleaseKey', join(repo, COMMITTED_KEY), '-Output', packageDirectory);
   console.log(`Building ${version} from ${commit} ...`);
   if (spawnSync(inputs.pwsh, args, { cwd: repo, stdio: 'inherit' }).status !== 0) refuse('installer/package.ps1 failed; nothing was signed.');
@@ -197,17 +298,26 @@ export function buildSigned({ repo, keyFile, out, inputsOf }) {
 
   const { manifestName, manifest } = requireBuiltKey(packageDirectory, spki);
   if (manifest.version !== version || manifest.sourceCommit !== commit) refuse(`The manifest says ${manifest.version} at ${manifest.sourceCommit}, expected ${version} at ${commit}.`);
+  if (infra.sourceCommit && manifest.infrastructure.sourceCommit !== infra.sourceCommit) refuse(`The manifest's infrastructure comes from ${manifest.infrastructure.sourceCommit}, not the reused ${infra.sourceCommit}.`);
+  if (infra.digest) {
+    const recorded = JSON.parse(readFileSync(join(packageDirectory, 'package-build.json'), 'utf8')).infraInputDigest;
+    if (recorded !== infra.digest) refuse(`The build recorded infrastructure input digest ${recorded}, expected ${infra.digest}.`);
+  }
+  const names = windowsNames(version);
+  if (manifestName !== names.manifest) refuse(`The build wrote ${manifestName}, expected ${names.manifest}.`);
+  const built = join(packageDirectory, 'release');
+  const unexpected = readdirSync(built).filter((name) => ![names.manifest, names.app, names.setup].includes(name));
+  if (unexpected.length) refuse(`The build left unexpected files in ${built}: ${unexpected.join(', ')}.`);
   const assets = join(resolvedOut, 'assets');
   mkdirSync(assets);
-  const manifestFile = join(assets, manifestName);
-  const setupFile = join(assets, manifest.setup.name);
-  copyFileSync(join(packageDirectory, 'release', manifestName), manifestFile);
-  copyFileSync(join(packageDirectory, 'release', manifest.setup.name), setupFile);
-  const setupBytes = readFileSync(setupFile);
-  if (setupBytes.length !== manifest.setup.bytes || sha256Of(setupBytes) !== manifest.setup.sha256) refuse('The Setup does not match its manifest; nothing was signed.');
+  for (const name of [names.manifest, names.app, names.setup]) {
+    if (!existsSync(join(built, name))) refuse(`The build did not produce ${name}.`);
+    copyFileSync(join(built, name), join(assets, name));
+  }
+  const manifestFile = join(assets, names.manifest);
   execFileSync(process.execPath, [join(repo, 'scripts', 'windows-release-key.mjs'), 'sign', keyFile, manifestFile], { stdio: 'inherit' });
-  if (!signatureVerifies(manifestFile, spki)) refuse('The signature does not verify against the committed key; do not publish.');
-  return { version, commit, spki, keyId: keyIdOf(spki), assets, manifestFile, setupFile };
+  checkWindowsRelease(assets, version, spki);
+  return { version, commit, spki, keyId: keyIdOf(spki), assets, manifestFile, setupFile: join(assets, names.setup) };
 }
 
 // ---- throwaway clones --------------------------------------------------------------------------
@@ -317,7 +427,81 @@ function setVersion(clone, version) {
   }
 }
 
-async function stageRelease({ clone, root, keyFile, inputs }) {
+// ---- infrastructure version rule (plan section 10) ---------------------------------------------
+// The infrastructure input digest is computed by installer/windows/infra_inputs.py, the function
+// installer/package.ps1 uses, from git object ids, so any commit can be digested without a checkout.
+export function inputDigest(repo, python, commit) {
+  const out = execFileSync(python, [INFRA_INPUTS, 'digest', '--commit', commit], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  if (!/^[0-9a-f]{32,}$/.test(out)) refuse(`${INFRA_INPUTS} printed no hex digest for ${commit}.`);
+  return out;
+}
+
+export function infrastructureVersionAt(repo, commit) {
+  const props = git(repo, 'show', `${commit}:${INFRASTRUCTURE_PROPS}`);
+  const version = /<YahadInfrastructureVersion>([^<]+)<\/YahadInfrastructureVersion>/.exec(props)?.[1];
+  if (!version || !isVersion(version)) refuse(`${INFRASTRUCTURE_PROPS} at ${commit} names no usable YahadInfrastructureVersion.`);
+  return version;
+}
+
+// head: { version, digest } of the commit being released; baseline: the latest release's signed
+// infrastructure { version, sourceCommit }, or null when no Windows release exists yet; digestAt(commit).
+//   changed inputs  -> the infrastructure version must be above the baseline's (a new build)
+//   same inputs     -> the version must equal the baseline's (the baseline's build is reused)
+export function planInfrastructure({ head, baseline, digestAt }) {
+  if (!baseline) return { mode: 'first', digest: head.digest };
+  const order = compareVersions(head.version, baseline.version);
+  if (order < 0) refuse(`Infrastructure version ${head.version} is below the latest release's ${baseline.version}.`);
+  if (digestAt(baseline.sourceCommit) !== head.digest) {
+    if (order === 0) refuse(`Infrastructure inputs changed since ${baseline.version} (${baseline.sourceCommit}) but YahadInfrastructureVersion is still ${head.version}. Bump it in ${INFRASTRUCTURE_PROPS}.`);
+    return { mode: 'build', digest: head.digest };
+  }
+  if (order !== 0) refuse(`YahadInfrastructureVersion is ${head.version} but no infrastructure input changed since ${baseline.version} (${baseline.sourceCommit}). Restore ${baseline.version}.`);
+  return { mode: 'reuse', digest: head.digest, sourceCommit: baseline.sourceCommit };
+}
+
+// The latest release's infrastructure identity, read from its signed manifest. A latest release without a
+// Windows release manifest (the format before this layout) leaves nothing to compare with: null.
+function latestBaseline({ tag, version, spki, scratch }) {
+  const names = windowsNames(version);
+  const listed = gh(['api', `repos/${REPOSITORY}/releases/latest`, '--jq', '.assets[].name']).split(/\r?\n/);
+  if (!listed.includes(names.manifest)) return null;
+  gh(['release', 'download', tag, '--repo', REPOSITORY, '--pattern', names.manifest, '--pattern', names.signature, '--dir', scratch]);
+  let manifest;
+  try { manifest = verifyRelease(spki, readFileSync(join(scratch, names.manifest)), readFileSync(join(scratch, names.signature))); } catch (error) { refuse(`The latest release's ${names.manifest}: ${error.message}.`); }
+  if (!manifest) refuse(`The latest release's ${names.signature} does not verify against the committed key.`);
+  return { version: manifest.infrastructure.version, sourceCommit: manifest.infrastructure.sourceCommit };
+}
+
+async function planFromLatest({ repo, inputs, spki, latest }) {
+  const head = git(repo, 'rev-parse', 'HEAD').trim();
+  const digest = inputDigest(repo, inputs.Python, head);
+  return withTemporaryDirectory(async (scratch) => planInfrastructure({
+    head: { version: infrastructureVersionAt(repo, head), digest },
+    baseline: latestBaseline({ tag: `v${latest}`, version: latest, spki, scratch }),
+    digestAt: (commit) => inputDigest(repo, inputs.Python, commit)
+  }));
+}
+
+// A reused infrastructure is packaged from a checkout at its own commit: a git worktree under the
+// git-ignored .local/, removed again whatever happens.
+export async function withInfrastructureSource(repo, plan, work) {
+  if (plan.mode !== 'reuse') return work({ digest: plan.digest });
+  const root = join(repo, '.local', 'infra-source');
+  if (spawnSync('git', ['check-ignore', '-q', root], { cwd: repo }).status !== 0) refuse(`${root} is not git-ignored; the infrastructure worktree would dirty the checkout.`);
+  try { git(repo, 'cat-file', '-e', `${plan.sourceCommit}^{commit}`); } catch { refuse(`The infrastructure commit ${plan.sourceCommit} is not in this checkout; fetch origin.`); }
+  const source = join(root, plan.sourceCommit.slice(0, 12));
+  const remove = () => {
+    try { git(repo, 'worktree', 'remove', '--force', source); } catch { /* not registered */ }
+    rmSync(source, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
+    git(repo, 'worktree', 'prune');
+  };
+  remove(); // a leftover from an interrupted run
+  mkdirSync(root, { recursive: true });
+  git(repo, '-c', 'core.autocrlf=false', '-c', 'core.longpaths=true', 'worktree', 'add', '--detach', source, plan.sourceCommit);
+  try { return await work({ source, sourceCommit: plan.sourceCommit, digest: plan.digest }); } finally { remove(); }
+}
+
+async function stageRelease({ clone, root, keyFile, inputs, infra }) {
   installDependencies(inputs, clone);
   npm(inputs, clone, 'run', 'build');
   const linux = join(root, 'linux');
@@ -326,14 +510,14 @@ async function stageRelease({ clone, root, keyFile, inputs }) {
   requireRuntimeAboveBootstrap(runtime, readFileSync(join(clone, 'deploy', 'upgrade-worker-github.py'), 'utf8'));
   const updater = join(root, 'updater');
   execFileSync(process.execPath, [join(clone, 'scripts', 'release-updater.mjs'), 'package-github', runtime, updater], { cwd: clone, stdio: 'inherit' });
-  const windows = buildSigned({ repo: clone, keyFile, out: join(root, 'windows'), inputsOf: () => inputs });
+  const windows = buildSigned({ repo: clone, keyFile, out: join(root, 'windows'), inputsOf: () => inputs, infra });
   const assets = join(root, 'assets');
   mkdirSync(assets);
-  for (const name of LINUX_ASSETS) copyFileSync(join(linux, name), join(assets, name));
+  for (const name of APP_ASSETS) copyFileSync(join(linux, name), join(assets, name));
   for (const name of UPDATER_ASSETS) copyFileSync(join(updater, name), join(assets, name));
   for (const name of readdirSync(windows.assets)) copyFileSync(join(windows.assets, name), join(assets, name));
   const version = JSON.parse(readFileSync(join(clone, 'package.json'), 'utf8')).version;
-  copyFileSync(join(assets, `Yahad.Setup-${version}.exe`), join(assets, STABLE_SETUP));
+  copyFileSync(join(assets, windowsNames(version).setup), join(assets, STABLE_SETUP));
   return { assets, spki: windows.spki };
 }
 
@@ -342,7 +526,7 @@ const typed = async (question) => {
   try { return (await rl.question(question)).trim(); } finally { rl.close(); }
 };
 
-export async function publish({ repo, options, confirm = typed, stage = stageRelease, log = console.log }) {
+export async function publish({ repo, options, confirm = typed, stage = stageRelease, plan = planFromLatest, log = console.log }) {
   requireReleasable(repo);
   const keyFile = requireUsableKey(options);
   const inputs = resolveInputs(repo, options);
@@ -363,13 +547,16 @@ export async function publish({ repo, options, confirm = typed, stage = stageRel
     git(clone, '-c', `user.name=${identity[0]}`, '-c', `user.email=${identity[1]}`, 'commit', '-q', '-am', `Release ${version}`);
     git(clone, '-c', `user.name=${identity[0]}`, '-c', `user.email=${identity[1]}`, 'tag', '-a', tag, '-m', `Yahad ${version}`);
     const commit = git(clone, 'rev-parse', 'HEAD').trim();
-    const { assets, spki } = await stage({ clone, root, keyFile, inputs });
+    const spki = committedKey(repo);
+    const infrastructure = await plan({ repo, inputs, spki, latest });
+    const { assets } = await withInfrastructureSource(repo, infrastructure, (infra) => stage({ clone, root, keyFile, inputs, infra }));
     const files = collectReleaseAssets(assets, version, spki);
 
     log(`\nRelease ${version} (latest is ${latest})`);
     log(`  commit   ${commit}  (on top of origin/main)`);
     log(`  key id   ${keyIdOf(spki)}`);
     log(`  runtime  ${runtimeVersionFor(version)}  (root updater, for enrolled machines)`);
+    log(`  infra    ${infrastructure.mode === 'reuse' ? `reused from ${infrastructure.sourceCommit}` : infrastructure.mode === 'build' ? 'new version, built from this commit' : 'first Windows release, built from this commit'}`);
     for (const file of files) log(`  asset    ${file.name}  ${(file.bytes / 1048576).toFixed(2)} MiB`);
     if (options['dry-run']) { log('\n--dry-run: nothing was pushed or published; the temporary clone is removed.'); return { version, commit, files, published: false }; }
     const answer = await confirm(`\nType ${version} to push ${tag} to origin/main and publish: `);
