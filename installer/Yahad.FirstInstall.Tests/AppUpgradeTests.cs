@@ -19,6 +19,8 @@ internal static class AppUpgradeTests
         internal readonly Dictionary<string,int> Backups=[];internal readonly HashSet<string> Trees=[from.App.Version],Partials=[];internal string HelpPage=from.App.Version;
         internal readonly List<string> Violations=[];internal readonly HashSet<string> Unhealthy=[];
         internal int KillAt=int.MaxValue,Operations;internal bool Dead;internal string? FailStop,FailBackup;
+        // An app whose Runtime cannot start: the fault an app update may be the fix for.
+        internal readonly HashSet<string> Unstartable=[];
         private void Step(){Operations++;if(Dead)throw new Killed();if(Operations==KillAt){Dead=true;throw new Killed();}}
         // What Windows does after the process died: the lease handle is gone, the
         // automatic Runtime starts on the pointer (migrating a database it can), and the
@@ -27,7 +29,7 @@ internal static class AppUpgradeTests
         {
             Dead=false;KillAt=int.MaxValue;Lease=false;ProxyRunning=true;Run();
         }
-        private void Run(){RuntimeRunning=true;RuntimeApp=Pointer.App;if(Database<RuntimeApp.DatabaseSchema)Database=RuntimeApp.DatabaseSchema;}
+        private void Run(){if(Unstartable.Contains(Pointer.App.Version)){RuntimeRunning=false;return;}RuntimeRunning=true;RuntimeApp=Pointer.App;if(Database<RuntimeApp.DatabaseSchema)Database=RuntimeApp.DatabaseSchema;}
         public long Now=>1700000000;
         public void Save(UpgradeState state){Step();State=UpgradeState.Parse(state.Encode());}
         public void DeleteState(){Step();State=null;}
@@ -46,7 +48,12 @@ internal static class AppUpgradeTests
         public Task StartProxyAsync(){Step();ProxyRunning=true;return Task.CompletedTask;}
         public Task TryRestartProxyAsync(){Step();ProxyRunning=true;return Task.CompletedTask;}
         public Task StopRuntimeAsync(){Step();if(FailStop is {} code)throw new IOException(code);RuntimeRunning=false;return Task.CompletedTask;}
-        public Task StartRuntimeAsync(){Step();if(Lease)Violations.Add("Runtime started under the engine's lease");if(!RuntimeRunning)Run();return Task.CompletedTask;}
+        public Task StartRuntimeAsync()
+        {
+            Step();if(Lease)Violations.Add("Runtime started under the engine's lease");
+            if(!RuntimeRunning){Run();if(!RuntimeRunning)throw new IOException("SERVICE_START_FAILED");}
+            return Task.CompletedTask;
+        }
         public void HoldLease(){Step();if(RuntimeRunning)Violations.Add("lease taken while the Runtime runs");Lease=true;}
         public void ReleaseLease()=>Lease=false;
         public void Backup(string id){Step();if(!Lease)Violations.Add("backup without the lease");if(FailBackup is {} code)throw new IOException(code);Backups[id]=Database;}
@@ -162,6 +169,41 @@ internal static class AppUpgradeTests
                 RequireSettled(machine,scenario,name,false);
                 Assert(UninstallChoice.SamePair(machine.Pointer,scenario.From)&&machine.HelpPage=="1.0.0","pointer and help page never moved");
             });
+        // An app update may be the fix for an app that cannot start (7, admitting): a
+        // discard that cannot bring the old app back still leaves the machine as it was
+        // before the attempt, failure actions restored, nothing held and no upgrade state,
+        // so the corrective apply is admitted.
+        await check("a discard whose old app cannot start still restores failure actions, releases the lease and resolves the state",async()=>
+        {
+            var scenario=new Scenario(6,false);var machine=Fresh(scenario);machine.Unstartable.Add("1.0.0");machine.RuntimeRunning=false;machine.FailBackup="UPGRADE_BACKUP_INVALID";
+            var outcome=(await ForwardAsync(machine,scenario))!;
+            Assert(outcome.Result.Code=="ROLLBACK_FAILED"&&outcome.Exit==3&&outcome.Result.Failure is not null,"the old app is not running again: "+outcome.Result.Code);
+            Assert(machine.State is null,"no upgrade state is left, so a corrective apply is admitted");
+            Assert(!machine.Lease&&machine.FailureActions&&machine.Violations.Count==0,"failure actions restored, lease released: "+string.Join("; ",machine.Violations));
+            Assert(UninstallChoice.SamePair(machine.Pointer,scenario.From)&&UninstallChoice.SamePair(machine.Record.Active,scenario.From)&&machine.Trees.SetEquals(["1.0.0"])&&machine.Backups.Count==0,"the from-pair, unchanged");
+            // The corrective apply: the next app starts.
+            var fixedApp=new Machine(machine.Record,machine.Pointer){RuntimeRunning=false};fixedApp.Unstartable.Add("1.0.0");
+            var corrected=(await ForwardAsync(fixedApp,scenario))!;Assert(corrected.Result.Code=="UPGRADED",corrected.Result.Code);
+        });
+        await check("a repair that discards while the old app cannot start resolves the state instead of looping",async()=>
+        {
+            var scenario=new Scenario(6,false);var clean=Fresh(scenario);clean.Unstartable.Add("1.0.0");clean.RuntimeRunning=false;await ForwardAsync(clean,scenario);
+            var discarding=0;
+            for(var kill=1;kill<=clean.Operations;kill++)
+            {
+                var machine=Fresh(scenario);machine.Unstartable.Add("1.0.0");machine.RuntimeRunning=false;machine.KillAt=kill;await ForwardAsync(machine,scenario);machine.Reboot();
+                if(machine.State is not {} state||UpgradeRules.ForRepair(state.Kind,state.Phase,state.Attempts)!=RepairAction.Discard)continue;
+                discarding++;
+                using var host=new AppUpgradeHost(machine.Record,state,machine,_=>{});
+                var outcome=await RepairHost.Resume(machine.Record,state,RepairAction.Discard,host);
+                // Only a discard that stopped the Runtime starts it again.
+                var restarts=state.Phase is "stopping" or "stopped";
+                Assert(outcome.Result.Code==(restarts?"ROLLBACK_FAILED":"REPAIRED"),"killed at "+kill+" in "+state.Phase+": "+outcome.Result.Code);
+                Assert(machine.State is null&&!machine.Lease&&machine.FailureActions,"killed at "+kill+": state resolved, failure actions restored, lease released");
+                Assert(UninstallChoice.SamePair(machine.Pointer,scenario.From)&&machine.Trees.SetEquals(["1.0.0"])&&machine.Partials.Count==0&&machine.Backups.Count==0,"killed at "+kill+": the from-pair, unchanged");
+            }
+            Assert(discarding>=4,"every discard phase is reached: "+discarding);
+        });
         await check("a refused archive member is reported as itself once nothing of it is left",async()=>
         {
             var scenario=new Scenario(6,false);var machine=Fresh(scenario);var to=scenario.To;

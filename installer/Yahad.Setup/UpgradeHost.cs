@@ -283,17 +283,16 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
     private async Task StopProxyAsync(){if(Proxy() is {} lan)await NativeLanInstall.StopForUpgradeAsync(lan);}
     private async Task RestartProxyAsync(){if(Proxy() is {} lan)await NativeLanInstall.TryRestartAsync(lan);}
     private static async Task RunningAsync(NativeService value)
-    {
-        value.EnableStartup();
-        if(!value.IsRunning()){await value.StopAsync(CancellationToken.None);await value.StartAsync(CancellationToken.None);}
-    }
+    {if(!value.IsRunning()){await value.StopAsync(CancellationToken.None);await value.StartAsync(CancellationToken.None);}}
     // Nothing moved yet, so the installed pair only has to be running again: a failed
-    // or killed Setup may have cleared its failure actions or asked it to stop.
+    // or killed Setup may have cleared its failure actions or asked it to stop. The
+    // attempt is resolved first (failure actions back, target trees and state gone), so
+    // an installed app that cannot start leaves no upgrade state behind.
     public async Task DiscardAsync(string? failure)
     {
         state=state with{Failure=failure??state.Failure};
+        Service().EnableStartup();Updater().EnableStartup();FinishRollback();
         await RunningAsync(Service());await RunningAsync(Updater());await RestartProxyAsync();
-        FinishRollback();
     }
     public async Task RollBackAsync(string failure)
     {

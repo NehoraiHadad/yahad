@@ -122,13 +122,17 @@ internal sealed class AppUpgradeHost(InstallerState installed,UpgradeState state
         }
         catch(Exception failure){machine.ReleaseLease();return Result("ROLLBACK_FAILED",failure:failure);}
     }
-    // The pointer never moved: what was fenced or stopped runs again as it was.
+    // The pointer never moved, so the from-pair is whole once its failure actions are
+    // back and the target is gone: the attempt is resolved before what it stopped is
+    // started again. The old app may be unable to start (an app update may be its fix,
+    // 7 admitting); that leaves no upgrade state to refuse the next apply or to repeat.
     public async Task DiscardAsync(string? failure)
     {
         state=state with{Failure=failure??state.Failure};machine.ReleaseLease();
-        if(Reached("stopping")){await machine.StartRuntimeAsync();await machine.TryRestartProxyAsync();}
         if(Reached("fencing"))machine.RestoreFailureActions();
+        var stopped=Reached("stopping");
         FinishRollback();
+        if(stopped){await machine.StartRuntimeAsync();await machine.TryRestartProxyAsync();}
     }
     public async Task RollBackAsync(string failure)
     {
