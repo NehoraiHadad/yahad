@@ -188,7 +188,7 @@ internal static class FullInstallerIntegrationTests
         await check("install package accepts only Format 2 of this infrastructure with exact infra/ and apps/ trees",()=>
         {
             using(var exact=PairFixture.Open(PairFixture.Package()))Assert(exact.Manifest.Format==2&&exact.Members(TreeKind.App).All(f=>f.Path==InstalledLayout.AppTreeName||f.Path.StartsWith("app/",StringComparison.Ordinal)));
-            void Refused(string code,Func<(byte[] Zip,byte[] Manifest)> fixture){var bytes=fixture();DenyCode(code,()=>{using var p=PairFixture.Open(bytes);});}
+            void Refused(string code,Func<(byte[] Zip,byte[] Manifest,byte[] Engine)> fixture){var bytes=fixture();DenyCode(code,()=>{using var p=PairFixture.Open(bytes);});}
             Refused("PACKAGE_FORMAT",()=>PairFixture.Package(change:m=>m with{Format=1}));
             Refused("PACKAGE_FORMAT",()=>PairFixture.Package(change:m=>m with{Infrastructure=null!}));
             Refused("PACKAGE_FORMAT",()=>PairFixture.Package(change:m=>m with{App=m.App with{Version="1.0"}}));
@@ -221,6 +221,51 @@ internal static class FullInstallerIntegrationTests
             // and two manifest paths that are one Windows path are refused.
             Refused("PACKAGE_MEMBER_TYPE",()=>PairFixture.Package(change:m=>m with{Files=m.Files.Select(f=>f.Path=="infra/legal/fixture.json"?f with{Path="infra/legal/FIXTURE.json"}:f).ToArray()}));
             Refused("PACKAGE_BOUND",()=>PairFixture.Package(change:m=>m with{Files=[..m.Files,m.Files.Single(f=>f.Path=="infra/legal/fixture.json") with{Path="infra/legal/FIXTURE.json"}]}));
+            return Task.CompletedTask;
+        });
+        await check("the Setup image is the engine followed by its package, and the engine member is the image's own prefix",()=>
+        {
+            var fixture=PairFixture.Package();var image=PairFixture.Image(fixture);var session=PrivateSession.Create(Path.GetTempPath());var path=Path.Combine(session,"Yahad.Setup.exe");
+            void Write(byte[] bytes)=>File.WriteAllBytes(path,bytes);
+            void ImageRefused(string code,byte[] bytes){Write(bytes);DenyCode(code,()=>{using var p=InstallPackage.FromImage(path);});}
+            static byte[] Length(byte[] bytes,int field,long delta)
+            {
+                var copy=bytes.ToArray();var at=copy.Length-SetupImage.TrailerLength+field;
+                System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(copy.AsSpan(at),System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(copy.AsSpan(at))+delta);return copy;
+            }
+            try
+            {
+                Write(image);
+                using(var package=InstallPackage.FromImage(path))
+                {
+                    Assert(package.Manifest.App.Version=="1.0.0");var root=Path.Combine(session,"tree");
+                    package.Extract(TreeKind.Infrastructure,root,_=>{},default,TestTarget);
+                    Assert(File.ReadAllBytes(Path.Combine(root,"setup","Yahad.Setup.exe")).SequenceEqual(fixture.Engine));
+                }
+                // The archive never carries the engine a second time.
+                using(var archive=new ZipArchive(new MemoryStream(fixture.Zip)))Assert(archive.GetEntry(InstallPackage.EnginePath) is null);
+                // The bare engine (no trailer) carries no package.
+                ImageRefused("PACKAGE_NOT_EMBEDDED",fixture.Engine);ImageRefused("PACKAGE_NOT_EMBEDDED",[..image,0]);
+                // A trailer whose lengths do not add up to the file is refused, never trimmed.
+                ImageRefused("PACKAGE_IMAGE",[..image[..(image.Length-SetupImage.TrailerLength-1)],..image[^SetupImage.TrailerLength..]]);
+                ImageRefused("PACKAGE_IMAGE",[0,..image]);
+                foreach(var field in new[]{16,24,32})ImageRefused("PACKAGE_IMAGE",Length(image,field,1));
+                ImageRefused("PACKAGE_IMAGE",Length(Length(image,16,-fixture.Engine.Length),24,fixture.Engine.Length));
+                // A boundary moved between two parts breaks the archive's digest.
+                ImageRefused("PACKAGE_HASH",Length(Length(image,16,1),24,-1));
+                // A changed prefix is not the engine the manifest and the tree record name.
+                {var changed=image.ToArray();changed[fixture.Engine.Length/2]^=1;ImageRefused("PACKAGE_ENGINE",changed);}
+                DenyCode("PACKAGE_ENGINE",()=>{using var p=PairFixture.Open(PairFixture.Package(tamper:InstallPackage.EnginePath));});
+                DenyCode("PACKAGE_ENGINE",()=>{using var p=PairFixture.Open(fixture with{Engine=[..fixture.Engine,0]});});
+                // An archive that also carries the engine entry is not this package.
+                {
+                    using var data=new MemoryStream();data.Write(fixture.Zip);
+                    using(var archive=new ZipArchive(data,ZipArchiveMode.Update,true))using(var entry=archive.CreateEntry(InstallPackage.EnginePath).Open())entry.Write(fixture.Engine);
+                    var zip=data.ToArray();var manifest=JsonSerializer.Deserialize<InstallPackageManifest>(fixture.Manifest)! with{ZipSha256=Hash(zip)};
+                    DenyCode("PACKAGE_MEMBERS",()=>{using var p=PairFixture.Open((zip,JsonSerializer.SerializeToUtf8Bytes(manifest),fixture.Engine));});
+                }
+            }
+            finally{Directory.Delete(session,true);}
             return Task.CompletedTask;
         });
         await check("a tree record refuses a member that is also a directory, and one directory spelled two ways",()=>

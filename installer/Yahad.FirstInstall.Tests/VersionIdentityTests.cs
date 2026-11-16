@@ -56,8 +56,8 @@ internal static class VersionIdentityTests
         await check("the package manifest is strict JSON",()=>
         {
             var fixture=PairFixture.Package();var text=System.Text.Encoding.UTF8.GetString(fixture.Manifest);
-            RefuseCode("PACKAGE_FORMAT",()=>{using var p=new InstallPackage(new MemoryStream(fixture.Zip),System.Text.Encoding.UTF8.GetBytes(text[..^1]+",\"Unknown\":1}"));});
-            RefuseCode("PACKAGE_FORMAT",()=>{using var p=new InstallPackage(new MemoryStream(fixture.Zip),JsonSerializer.SerializeToUtf8Bytes(new{Format=1,Version="1.0.0"}));});
+            RefuseCode("PACKAGE_FORMAT",()=>{using var p=new InstallPackage(new MemoryStream(fixture.Zip),System.Text.Encoding.UTF8.GetBytes(text[..^1]+",\"Unknown\":1}"),()=>new MemoryStream(fixture.Engine));});
+            RefuseCode("PACKAGE_FORMAT",()=>{using var p=new InstallPackage(new MemoryStream(fixture.Zip),JsonSerializer.SerializeToUtf8Bytes(new{Format=1,Version="1.0.0"}),()=>new MemoryStream(fixture.Engine));});
             return Task.CompletedTask;
         });
     }

@@ -171,8 +171,10 @@ zip's size and hash, that the zip's `app-tree.json` matches `app.treeSha256`, an
 package embedded in the Setup is the one the manifest signs: it runs that Setup's
 `--verify-package` (which checks the embedded zip, its members and both tree records against its
 own install manifest) and compares the reported infrastructure and app identity, contract,
-schema, migrations, minimum-from pair and release key with the signed manifest. The Setup is a
-compressed single-file bundle, so its embedded bytes are not visible from outside it.
+schema, migrations, minimum-from pair and release key with the signed manifest. The Setup is
+the payload-free engine with the package appended (`[engine][install.zip][install-manifest.json][trailer]`,
+`SetupImage` in `Yahad.Setup/InstallPackage.cs`); the engine member is that prefix, not a
+second copy in the zip.
 Building Windows alone from a clean checkout is `node scripts/release-windows.mjs build <key.pem> --out <new-dir>`,
 which writes the four Windows files and never publishes.
 

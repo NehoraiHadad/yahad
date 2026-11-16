@@ -3,16 +3,20 @@
 From a verified cached infrastructure tree (infra_package.py) and this checkout's
 staged app tree (prepare_core_fixture.py) it writes:
 - install.zip and install-manifest.json, the Format 2 package the distributable
-  Setup embeds (docs/WINDOWS-APP-PACKAGE-PLAN.md 4.1, 5.3): infra/infra-tree.json
+  Setup carries (docs/WINDOWS-APP-PACKAGE-PLAN.md 4.1, 5.3): infra/infra-tree.json
   and the infrastructure members exactly as cached (host/, updater/, platform/,
-  runtime/, legal/, setup/), and apps/app-tree.json with apps/app/...;
+  runtime/, legal/, setup/), and apps/app-tree.json with apps/app/... The manifest
+  lists every member; the archive holds every member but the engine
+  (infra/setup/Yahad.Setup.exe), whose bytes are the Setup image's own prefix;
+- Yahad.Setup.exe, the distributable Setup: the cached payload-free engine, then
+  install.zip, install-manifest.json and a 40-byte trailer (write_image);
 - yahad-windows-app-<v>.zip, the app-only release asset (5.2): exactly
   app-tree.json and app/..., its app-tree.json the same bytes as the install
   package's apps/app-tree.json.
 Each half carries its own identity: the infrastructure its version, contract
 range and infra source commit (from the cache record); the app package.json's
 version, its contract and the release commit (this checkout's HEAD).
-install-manifest.json is written last. Never installs or fabricates release
+The Setup image is written last. Never installs or fabricates release
 receipts; only audit-only --describe entry points of verified local project
 builds run. Outputs remain private candidates.
 """
@@ -23,6 +27,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
+import struct
 import subprocess
 import zipfile
 
@@ -62,6 +67,13 @@ INFRA_REQUIRED = frozenset({'host/Yahad.ServiceHost.exe','host/Yahad.ServiceHost
     'updater/Yahad.Updater.exe','updater/Yahad.Updater.runtimeconfig.json',
     'platform/Yahad.Platform.exe','platform/Yahad.Platform.runtimeconfig.json',
     'runtime/node/node.exe','runtime/caddy/caddy.exe','setup/'+ENGINE, *INFRA_LEGAL})
+# The engine member is not an archive entry: the Setup image's prefix is its bytes.
+ENGINE_MEMBER = INFRA+'setup/'+ENGINE
+# The Setup image trailer (installer/Yahad.Setup/InstallPackage.cs SetupImage): the magic,
+# then the engine, archive and manifest lengths, little-endian int64.
+IMAGE_MAGIC = b'Yahad.SetupImage'
+IMAGE_TRAILER = struct.Struct('<16sqqq')
+MAX_MANIFEST = 16*1024**2
 APP_REQUIRED = frozenset(bundle.REQUIRED)
 REQUIRED_MEMBERS = frozenset({INFRA_TREE, APP_TREE, *(INFRA+name for name in INFRA_REQUIRED), *(APPS+name for name in APP_REQUIRED)})
 COMPONENTS = (('host/','Yahad.ServiceHost'), ('updater/','Yahad.Updater'), ('platform/','Yahad.Platform'))
@@ -370,6 +382,39 @@ def _write_archive(output, entries, expected=None, member=_tree_member):
     return records
 
 
+def _copy_verified(source, destination, size, sha256):
+    # One read of a verified input, hashed as it is copied.
+    hashed=hashlib.sha256();copied=0
+    with _unlinked(source,file=True).open('rb') as stream:
+        while chunk:=stream.read(1024*1024):
+            copied+=len(chunk)
+            if copied>size: raise PackageError('Input changed during image')
+            hashed.update(chunk);destination.write(chunk)
+    if copied!=size or hashed.hexdigest()!=sha256: raise PackageError('Input changed during image')
+
+
+def write_image(output, engine, engine_record, archive, archive_sha256, metadata):
+    """[engine][install.zip][install-manifest.json][trailer], each part proven as it is written."""
+    archive_size=Path(archive).stat().st_size
+    if not (1<=engine_record['size']<=MAX_FILE and 1<=archive_size<=MAX_TOTAL and 1<=len(metadata)<=MAX_MANIFEST): raise PackageError('Setup image bound')
+    with Path(output).open('xb') as destination:
+        _copy_verified(engine,destination,engine_record['size'],engine_record['sha256'])
+        _copy_verified(archive,destination,archive_size,archive_sha256)
+        destination.write(metadata);destination.write(IMAGE_TRAILER.pack(IMAGE_MAGIC,engine_record['size'],archive_size,len(metadata)))
+        destination.flush();os.fsync(destination.fileno())
+    if Path(output).stat().st_size!=engine_record['size']+archive_size+len(metadata)+IMAGE_TRAILER.size: raise PackageError('Setup image changed')
+
+
+def read_image(path):
+    """The three parts' lengths of a Setup image, refusing a trailer that does not describe the file."""
+    data=Path(path).read_bytes()
+    if len(data)<IMAGE_TRAILER.size: raise PackageError('Setup image trailer')
+    magic,engine,archive,manifest=IMAGE_TRAILER.unpack(data[-IMAGE_TRAILER.size:])
+    if (magic!=IMAGE_MAGIC or not 1<=engine<=MAX_FILE or not 1<=archive<=MAX_TOTAL or not 1<=manifest<=MAX_MANIFEST or
+            engine+archive+manifest+IMAGE_TRAILER.size!=len(data)): raise PackageError('Setup image trailer')
+    return dict(engine=data[:engine],archive=data[engine:engine+archive],manifest=data[engine+archive:engine+archive+manifest])
+
+
 def require_members(names):
     names = set(names)
     if not REQUIRED_MEMBERS<=names: raise PackageError('Required package member missing')
@@ -403,8 +448,11 @@ def build(repo, app_stage, infra_entry, output, app_archive):
     entries[APP_TREE]=app_tree;expected[APP_TREE]=_record(APP_TREE,app_tree)
     for name,path in app_files.items(): entries[APPS+name]=path;expected[APPS+name]=dict(app_files.records[name],path=APPS+name)
     require_members(entries)
+    # The engine travels as the Setup image's prefix, never as an archive entry.
+    engine,engine_record=entries.pop(ENGINE_MEMBER),expected.pop(ENGINE_MEMBER)
     output.mkdir(parents=True,exist_ok=False)
     archive=output/'install.zip';records=_write_archive(archive,entries,expected)
+    records=sorted([*records,dict(Path=ENGINE_MEMBER,Size=engine_record['size'],Sha256=engine_record['sha256'])],key=lambda r:_ordinal(r['Path']))
     # The app-only asset: the same verified members and the same app-tree.json bytes.
     shipped={APP_TREE_NAME:app_tree,**app_files}
     _write_archive(app_archive,shipped,{APP_TREE_NAME:_record(APP_TREE_NAME,app_tree),**app_files.records},member=_app_archive_member)
@@ -416,12 +464,13 @@ def build(repo, app_stage, infra_entry, output, app_archive):
                MinimumFrom=dict(App=minimum['app'],Infrastructure=minimum['infrastructure']),
                ZipSha256=bundle.digest(archive),Files=records)
     metadata=_encode(saved)
-    if len(metadata)>16*1024**2: raise PackageError('Installer manifest bound')
+    if len(metadata)>MAX_MANIFEST: raise PackageError('Installer manifest bound')
     # Every archived member was proven against its verified record as it was written.
     if _source_identity(repo,infra.identity)!=identity: raise PackageError('Build source changed')
-    # Last output is the success prerequisite for Setup's embedded input.
     with (output/'install-manifest.json').open('xb') as destination: destination.write(metadata)
-    return dict(output=str(output),appArchive=str(app_archive),infrastructureVersion=infra.identity.version,infraSourceCommit=infra.source_commit,
+    # Last output, the success prerequisite: the Setup image.
+    image=output/ENGINE;write_image(image,engine,engine_record,archive,saved['ZipSha256'],metadata)
+    return dict(output=str(output),setup=str(image),setupSha256=bundle.digest(image),appArchive=str(app_archive),infrastructureVersion=infra.identity.version,infraSourceCommit=infra.source_commit,
                 infraTreeSha256=infra.tree_sha256,appVersion=version,sourceCommit=source,appTreeSha256=saved['App']['TreeSha256'],
                 installSha256=saved['ZipSha256'],files=len(records),machineAcceptance=False,releaseSignatureVerified=False)
 

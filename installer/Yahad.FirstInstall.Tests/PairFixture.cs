@@ -44,10 +44,12 @@ internal static class PairFixture
         return new(InstallerState.CurrentFormat,installation,Guid.NewGuid().ToString("N"),Owner,47123,phase,FirstOwnerBinding.Create(installation,Owner),
             new UpdateSetupChoice(2,true,false,DateTimeOffset.UtcNow.ToUnixTimeSeconds()),InstallLocations.ServiceSid,active??Pair(),releaseKey,previous);
     }
-    // A format-2 archive of the compiled infrastructure and one app. extra/omit change the
-    // archive and the manifest together; tamper changes only the archive's bytes of
-    // one member; change rewrites the manifest after it is built.
-    internal static (byte[] Zip,byte[] Manifest) Package(bool duplicate=false,string? extra=null,string? omit=null,Func<InstallPackageManifest,InstallPackageManifest>? change=null,
+    // A format-2 package of the compiled infrastructure and one app: the archive of every
+    // member but the engine, the manifest, and the engine member's bytes (the Setup
+    // image's prefix). extra/omit change the package and the manifest together; tamper
+    // changes only the package's bytes of one member; change rewrites the manifest after
+    // it is built.
+    internal static (byte[] Zip,byte[] Manifest,byte[] Engine) Package(bool duplicate=false,string? extra=null,string? omit=null,Func<InstallPackageManifest,InstallPackageManifest>? change=null,
         Tree? infra=null,Tree? app=null,int schema=7,int[]? migrations=null,string? tamper=null,PackageMinimumFrom? minimum=null)
     {
         infra??=Infra();app??=App();var entries=new List<(string Path,byte[] Bytes)>();
@@ -55,10 +57,12 @@ internal static class PairFixture
         {var prefix=InstallPackage.Prefix(tree.Kind);entries.AddRange(tree.Members.Select(m=>(prefix+m.Path,m.Bytes)));entries.Add((prefix+TreeRecord.RecordName(tree.Kind),tree.Record));}
         if(omit is not null&&entries.RemoveAll(e=>e.Path==omit)!=1)throw new IOException("FIXTURE_OMIT");
         if(extra is not null)entries.Add((extra,Encoding.UTF8.GetBytes("synthetic extra")));
+        byte[] Written(string path,byte[] bytes)=>path==tamper?bytes.Select(b=>(byte)(b^1)).ToArray():bytes;
+        var engine=entries.Where(e=>e.Path==InstallPackage.EnginePath).Select(e=>Written(e.Path,e.Bytes)).SingleOrDefault()??[];
         using var data=new MemoryStream();
-        using(var zip=new ZipArchive(data,ZipArchiveMode.Create,true))foreach(var(path,bytes)in entries)
+        using(var zip=new ZipArchive(data,ZipArchiveMode.Create,true))foreach(var(path,bytes)in entries.Where(e=>e.Path!=InstallPackage.EnginePath))
         {
-            var written=path==tamper?bytes.Select(b=>(byte)(b^1)).ToArray():bytes;
+            var written=Written(path,bytes);
             using(var stream=zip.CreateEntry(path).Open())stream.Write(written);
             if(duplicate&&path==entries[0].Path){using var again=zip.CreateEntry(path).Open();again.Write(written);}
         }
@@ -66,7 +70,16 @@ internal static class PairFixture
         var manifest=new InstallPackageManifest(InstallPackage.Format,new(infra.Version,InfrastructureRelease.ContractMin,InfrastructureRelease.ContractMax,infra.SourceCommit,infra.Sha256),
             new(app.Version,app.SourceCommit,InfrastructureRelease.ContractMin,app.Sha256,schema,migrations??[5,6]),minimum??new("0.0.0","0.0.0"),TreeRecord.Sha256(archive),
             entries.Select(e=>new InstallMember(e.Path,e.Bytes.Length,TreeRecord.Sha256(e.Bytes))).ToArray());
-        return(archive,JsonSerializer.SerializeToUtf8Bytes(change?.Invoke(manifest)??manifest));
+        return(archive,JsonSerializer.SerializeToUtf8Bytes(change?.Invoke(manifest)??manifest),engine);
     }
-    internal static InstallPackage Open((byte[] Zip,byte[] Manifest) fixture)=>new(new MemoryStream(fixture.Zip),fixture.Manifest);
+    internal static InstallPackage Open((byte[] Zip,byte[] Manifest,byte[] Engine) fixture)=>new(new MemoryStream(fixture.Zip),fixture.Manifest,()=>new MemoryStream(fixture.Engine));
+    // The distributable layout: engine, archive, manifest and the 40-byte trailer.
+    internal static byte[] Image((byte[] Zip,byte[] Manifest,byte[] Engine) fixture)
+    {
+        var trailer=new byte[SetupImage.TrailerLength];SetupImage.Magic.CopyTo(trailer);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(trailer.AsSpan(16),fixture.Engine.Length);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(trailer.AsSpan(24),fixture.Zip.Length);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(trailer.AsSpan(32),fixture.Manifest.Length);
+        return[..fixture.Engine,..fixture.Zip,..fixture.Manifest,..trailer];
+    }
 }

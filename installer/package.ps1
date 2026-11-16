@@ -6,16 +6,18 @@
 #   -InfraCache/<version>/ (installer/windows/infra_package.py) and reused by every
 #   later release whose infrastructure inputs (installer/windows/infra_inputs.py)
 #   are the same; the same version with other inputs refuses, INFRA_BUMP_REQUIRED;
-# - the app tree is staged from this checkout; the distributable Setup is published
-#   from -InfraSource, a clean checkout of the cached infrastructure's source
-#   commit, so every infrastructure image, the Setup and its Install.Core report
-#   that one commit, while the embedded app reports this one.
+# - the app tree is staged from this checkout; the distributable Setup is the
+#   cached payload-free engine with the install package appended
+#   (installer/windows/setup_package.py write_image), so every infrastructure image,
+#   the Setup and its Install.Core report the cached infrastructure's source commit,
+#   while the carried app reports this one. No .NET publish runs on a reuse.
 #
 # Outputs under -Output (a new directory; default .local/packages/<commit 12>):
 #   infra-publish/<project>/  the .NET publishes, only when the infrastructure is built
 #   app-stage/app/...          the staged app tree, from the one offline npm restore
 #                              and web build (installer/windows/prepare_core_fixture.py)
-#   system/install.zip, system/install-manifest.json   the Setup's embedded package
+#   system/install.zip, system/install-manifest.json   the Setup's package
+#   system/Yahad.Setup.exe                             engine + package + trailer
 #   app/yahad-windows-app-<v>.zip                      the app-only asset
 #   setup/Yahad.Setup.exe, setup/LICENSE               the distributable Setup
 #   release/ (with -ReleaseKey only): Yahad.Setup-<v>.exe, yahad-windows-app-<v>.zip
@@ -163,12 +165,14 @@ try {
     $appArchive = Join-Path $appDirectory "yahad-windows-app-$version.zip"
     $package = RunStep 'system-package' $pythonExe @('-m','installer.windows.setup_package','--repo',$repo,'--app-stage',$stage,'--infra-entry',$entryPath,'--output',$system,'--app-archive',$appArchive) | ConvertFrom-Json
     $setup = Join-Path $output 'setup'
-    RunStep 'setup-publish' $dotnetExe (@('publish',$setupProject) + $common + $singleFile + @("-p:SetupPayloadDirectory=$system",'-o',$setup)) | Out-Null
+    New-Item -ItemType Directory -Path $setup | Out-Null
+    Copy-Item -LiteralPath $package.setup -Destination (Join-Path $setup 'Yahad.Setup.exe')
     Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination (Join-Path $setup 'LICENSE')
     # Audit mode only: no install/uninstall/UAC or service operations. Setup's
     # manifest requires administrator rights; RunAsInvoker starts this read-only
     # audit with the build step's own token, elevated or not, and never prompts.
     $executable = Join-Path $setup 'Yahad.Setup.exe'
+    if ((Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerInvariant() -ne $package.setupSha256) { throw 'Setup image copy differs' }
     $start = [Diagnostics.ProcessStartInfo]::new($executable)
     $start.UseShellExecute = $false
     $start.Environment['__COMPAT_LAYER'] = 'RunAsInvoker'

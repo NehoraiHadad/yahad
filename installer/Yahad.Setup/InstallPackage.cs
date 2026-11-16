@@ -1,6 +1,6 @@
+using System.Buffers.Binary;
 using System.IO;
 using System.IO.Compression;
-using System.Reflection;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Yahad.Install;
@@ -23,19 +23,25 @@ internal sealed record ExtractTarget(Action<string> CreateDirectory,Func<string,
 // the app archive's own, so an app is accepted or refused alike whichever package
 // carries it. The required members are installer/windows/setup_package.py's
 // REQUIRED_MEMBERS: the reader refuses what the writer would.
+// The engine member (infra/setup/Yahad.Setup.exe) is listed in Files and in
+// infra-tree.json but is not an archive entry: its bytes are the Setup image's own
+// prefix (SetupImage), checked against the manifest's size and digest when the
+// package opens and again as each copy is written.
 internal sealed class InstallPackage:IDisposable
 {
     internal const int Format=2;
-    internal const string InfraPrefix="infra/",AppPrefix="apps/",ManifestResource="Yahad.Install.Manifest",PayloadResource="Yahad.Install.Payload";
+    internal const string InfraPrefix="infra/",AppPrefix="apps/";
+    internal static readonly string EnginePath=InfraPrefix+Setup.InfrastructureRecord.EngineMember;
     private const string Codes="PACKAGE_";
     internal static readonly string[] Required=["infra/host/Yahad.ServiceHost.exe","infra/host/Yahad.ServiceHost.runtimeconfig.json","infra/updater/Yahad.Updater.exe","infra/updater/Yahad.Updater.runtimeconfig.json",
         "infra/platform/Yahad.Platform.exe","infra/platform/Yahad.Platform.runtimeconfig.json","infra/runtime/node/node.exe","infra/runtime/caddy/caddy.exe","infra/"+Setup.InfrastructureRecord.EngineMember,
         ..AppMemberPolicy.Required.Select(m=>AppPrefix+m)];
-    private readonly Stream stream;private readonly ZipArchive archive;
+    private readonly Stream stream;private readonly ZipArchive archive;private readonly Func<Stream> engine;
     internal InstallPackageManifest Manifest{get;}
-    internal InstallPackage(Stream zip,byte[] manifest)
+    // engine opens a fresh read of the engine member's bytes each time it is called.
+    internal InstallPackage(Stream zip,byte[] manifest,Func<Stream> engine)
     {
-        stream=zip;
+        stream=zip;this.engine=engine;
         try{Manifest=NativeJson.Read<InstallPackageManifest>(manifest);}catch(JsonException){throw new IOException("PACKAGE_FORMAT");}
         var infra=Manifest.Infrastructure;var app=Manifest.App;var minimum=Manifest.MinimumFrom;
         if(Manifest.Format!=Format||infra is null||app is null||minimum is null||Manifest.Files is not {Length:>=16 and <=2*TreeRecord.MaximumMembers+2}||app.DatabaseMigrationsFrom is null||
@@ -63,6 +69,8 @@ internal sealed class InstallPackage:IDisposable
             if(record is null)throw new IOException("PACKAGE_FORMAT");
             Name(record.Path);Digest(record.Sha256);if(!folded.Add(record.Path)||!expected.Add(record.Path)||record.Size is <0 or >TreeRecord.MaximumMemberBytes||(total+=record.Size)>2147483648)throw new IOException("PACKAGE_BOUND");
         }
+        // Every member but the engine is an archive entry.
+        if(!expected.Remove(EnginePath))throw new IOException("PACKAGE_MISSING");
         if(archive.Entries.Count!=expected.Count)throw new IOException("PACKAGE_MEMBERS");
         foreach(var entry in archive.Entries)
         {
@@ -70,28 +78,31 @@ internal sealed class InstallPackage:IDisposable
         }
         if(expected.Count!=0)throw new IOException("PACKAGE_MEMBERS");
         foreach(var required in Required)if(!Manifest.Files.Any(r=>r.Path==required))throw new IOException("PACKAGE_MISSING");
+        var engineRecord=Manifest.Files.Single(r=>r.Path==EnginePath);
+        using(var input=engine())if(input.Length!=engineRecord.Size||Convert.ToHexStringLower(SHA256.HashData(input))!=engineRecord.Sha256)throw new IOException("PACKAGE_ENGINE");
         foreach(var entry in archive.Entries)if(entry.FullName.StartsWith(AppPrefix,StringComparison.Ordinal))AppMemberPolicy.RequireNotImage(entry,Codes);
         RequireTree(TreeKind.Infrastructure,infra.Version,infra.SourceCommit,infra.TreeSha256);
         RequireTree(TreeKind.App,app.Version,app.SourceCommit,app.TreeSha256);
         // Each list the installer record will carry fits its bound (InstallerState).
         foreach(var kind in new[]{TreeKind.Infrastructure,TreeKind.App})if(!InstallerState.WithinListBound(Members(kind)))throw new IOException("PACKAGE_BOUND");
     }
-    internal static bool IsEmbedded=>Assembly.GetExecutingAssembly().GetManifestResourceInfo(PayloadResource) is not null;
+    // The running image carries a package exactly when it ends in a Setup image trailer;
+    // the installed engine (the bare prefix) does not.
+    internal static bool IsEmbedded=>SetupImage.Read(ImagePath()) is not null;
+    private static string ImagePath()=>Environment.ProcessPath??throw new IOException("PACKAGE_NOT_EMBEDDED");
     // The app this image installs, read from the manifest alone (the archive is verified
     // only when it is installed).
     internal static string DisplayVersion()
     {
-        using var metadata=Assembly.GetExecutingAssembly().GetManifestResourceStream(ManifestResource)??throw new IOException("PACKAGE_NOT_EMBEDDED");
-        if(metadata.Length>16777216)throw new IOException("PACKAGE_METADATA_BOUND");using var buffer=new MemoryStream();metadata.CopyTo(buffer);
-        var version=NativeJson.Read<InstallPackageManifest>(buffer.ToArray()).App?.Version;
+        var image=SetupImage.Read(ImagePath())??throw new IOException("PACKAGE_NOT_EMBEDDED");
+        var version=NativeJson.Read<InstallPackageManifest>(image.ReadManifest()).App?.Version;
         return version is not null&&SemVer.IsVersion(version)?version:throw new IOException("PACKAGE_FORMAT");
     }
-    internal static InstallPackage Embedded()
+    internal static InstallPackage Embedded()=>FromImage(ImagePath());
+    internal static InstallPackage FromImage(string path)
     {
-        var assembly=Assembly.GetExecutingAssembly();using var metadata=assembly.GetManifestResourceStream(ManifestResource)??throw new IOException("PACKAGE_NOT_EMBEDDED");
-        if(metadata.Length>16777216)throw new IOException("PACKAGE_METADATA_BOUND");using var buffer=new MemoryStream();metadata.CopyTo(buffer);
-        var payload=assembly.GetManifestResourceStream(PayloadResource)??throw new IOException("PACKAGE_NOT_EMBEDDED");
-        try{return new(payload,buffer.ToArray());}catch{payload.Dispose();throw;}
+        var image=SetupImage.Read(path)??throw new IOException("PACKAGE_NOT_EMBEDDED");var manifest=image.ReadManifest();var zip=image.Zip();
+        try{return new(zip,manifest,image.Engine);}catch{zip.Dispose();throw;}
     }
     internal static string Prefix(TreeKind kind)=>kind==TreeKind.Infrastructure?InfraPrefix:AppPrefix;
     // The members of one namespace, relative to its installed tree root.
@@ -132,7 +143,8 @@ internal sealed class InstallPackage:IDisposable
             throw new IOException("RELEASE_UNSUPPORTED_FROM");
     }
     internal void Extract(TreeKind kind,string root,Action<int> progress,CancellationToken cancellation,ExtractTarget target)
-        =>ArchiveExtraction.Extract(archive,Prefix(kind),Members(kind),root,progress,cancellation,target,"PACKAGE_");
+        =>ArchiveExtraction.Extract(record=>kind==TreeKind.Infrastructure&&record.Path==Setup.InfrastructureRecord.EngineMember?engine():ArchiveExtraction.Entry(archive,Prefix(kind),record,Codes),
+            Members(kind),root,progress,cancellation,target,Codes);
     // An interrupted extraction leaves only expected members and their uncommitted
     // partials. Anything else refuses; the partials are returned for the caller to
     // delete under its own ACL checks.
@@ -171,11 +183,19 @@ internal static class ArchiveExtraction
 {
     // A regular file: no directory, symbolic link or reparse entry.
     internal static bool RegularFile(ZipArchiveEntry entry)=>entry.Length>=0&&((entry.ExternalAttributes>>16)&0xf000) is 0 or 0x8000&&(entry.ExternalAttributes&0x400)==0;
+    // The bytes of one member, an entry of the record's size.
+    internal static Stream Entry(ZipArchive archive,string prefix,InstallMember record,string codes)
+    {
+        var entry=archive.GetEntry(prefix+record.Path)??throw new IOException(codes+"MEMBER");if(entry.Length!=record.Size)throw new IOException(codes+"SIZE");
+        return entry.Open();
+    }
+    internal static void Extract(ZipArchive archive,string prefix,InstallMember[] members,string root,Action<int> progress,CancellationToken cancellation,ExtractTarget target,string codes)
+        =>Extract(record=>Entry(archive,prefix,record,codes),members,root,progress,cancellation,target,codes);
     // Writes every member of one namespace under root through a same-directory partial
     // that is committed by a no-replace rename, so a present member is always whole.
-    // A present member is never rewritten: it must already be byte-identical. codes is
-    // the refusal prefix of the archive being read.
-    internal static void Extract(ZipArchive archive,string prefix,InstallMember[] members,string root,Action<int> progress,CancellationToken cancellation,ExtractTarget target,string codes)
+    // A present member is never rewritten: it must already be byte-identical. open reads
+    // one member's bytes; codes is the refusal prefix of the package being read.
+    internal static void Extract(Func<InstallMember,Stream> open,InstallMember[] members,string root,Action<int> progress,CancellationToken cancellation,ExtractTarget target,string codes)
     {
         var count=0;var full=Path.GetFullPath(root);
         foreach(var record in members)
@@ -183,14 +203,13 @@ internal static class ArchiveExtraction
             cancellation.ThrowIfCancellationRequested();var path=Path.GetFullPath(Path.Combine(full,record.Path.Replace('/',Path.DirectorySeparatorChar)));
             if(!path.StartsWith(full+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))throw new IOException(codes+"PATH");
             target.CreateDirectory(Path.GetDirectoryName(path)!);
-            var entry=archive.GetEntry(prefix+record.Path)??throw new IOException(codes+"MEMBER");if(entry.Length!=record.Size)throw new IOException(codes+"SIZE");
             if(File.Exists(path)){if(!target.ExistingMatches(path,record))throw new IOException("INSTALL_TARGET_CHANGED");}
             else
             {
                 var partial=path+".partial-"+Guid.NewGuid().ToString("N");
                 try
                 {
-                    using(var input=entry.Open())using(var output=target.CreateFile(partial))
+                    using(var input=open(record))using(var output=target.CreateFile(partial))
                     {
                         using var hash=IncrementalHash.CreateHash(HashAlgorithmName.SHA256);var chunk=new byte[1048576];long bytes=0;int n;
                         while((n=input.Read(chunk))>0){cancellation.ThrowIfCancellationRequested();if((bytes+=n)>record.Size)throw new IOException(codes+"SIZE");hash.AppendData(chunk,0,n);output.Write(chunk,0,n);}
@@ -203,4 +222,55 @@ internal static class ArchiveExtraction
             if(++count%100==0||count==members.Length)progress(count*100/members.Length);
         }
     }
+}
+// The distributable Setup: the payload-free engine image, then its install package.
+//   [engine][install.zip][install-manifest.json][trailer]
+// The trailer is the last 40 bytes: Magic, then the three part lengths as little-endian
+// int64, which with the trailer sum to exactly the file length. The engine part is the
+// bytes of the engine member, so the package does not carry the engine twice
+// (installer/windows/setup_image.py writes this layout).
+internal sealed class SetupImage
+{
+    internal const int TrailerLength=40;
+    internal static ReadOnlySpan<byte> Magic=>"Yahad.SetupImage"u8;
+    private readonly string path;private readonly long engineLength,zipLength,manifestLength;
+    private SetupImage(string path,long engine,long zip,long manifest){this.path=path;engineLength=engine;zipLength=zip;manifestLength=manifest;}
+    // null when the file carries no trailer; a trailer whose lengths do not describe the
+    // file is refused.
+    internal static SetupImage? Read(string path)
+    {
+        using var file=Open(path);var length=file.Length;if(length<TrailerLength)return null;
+        Span<byte> trailer=stackalloc byte[TrailerLength];file.Position=length-TrailerLength;file.ReadExactly(trailer);
+        if(!trailer[..Magic.Length].SequenceEqual(Magic))return null;
+        var engine=BinaryPrimitives.ReadInt64LittleEndian(trailer[16..]);var zip=BinaryPrimitives.ReadInt64LittleEndian(trailer[24..]);var manifest=BinaryPrimitives.ReadInt64LittleEndian(trailer[32..]);
+        if(engine is <1 or >TreeRecord.MaximumMemberBytes||zip is <1 or >2147483648||manifest is <1 or >16777216||engine+zip+manifest+TrailerLength!=length)throw new IOException("PACKAGE_IMAGE");
+        return new(path,engine,zip,manifest);
+    }
+    internal Stream Engine()=>new ImagePart(Open(path),0,engineLength);
+    internal Stream Zip()=>new ImagePart(Open(path),engineLength,zipLength);
+    internal byte[] ReadManifest()
+    {
+        using var file=Open(path);if(file.Length!=engineLength+zipLength+manifestLength+TrailerLength)throw new IOException("PACKAGE_IMAGE");
+        var bytes=new byte[manifestLength];file.Position=engineLength+zipLength;file.ReadExactly(bytes);return bytes;
+    }
+    private static FileStream Open(string path)=>new(path,FileMode.Open,FileAccess.Read,FileShare.Read);
+}
+// A read-only, seekable window [start, start+length) of one file, which it owns.
+internal sealed class ImagePart(FileStream file,long start,long length):Stream
+{
+    private long position;
+    public override bool CanRead=>true;public override bool CanSeek=>true;public override bool CanWrite=>false;
+    public override long Length=>length;
+    public override long Position{get=>position;set=>position=value>=0?value:throw new ArgumentOutOfRangeException(nameof(value));}
+    public override int Read(byte[] buffer,int offset,int count)=>Read(buffer.AsSpan(offset,count));
+    public override int Read(Span<byte> buffer)
+    {
+        if(position>=length||buffer.Length==0)return 0;
+        file.Position=start+position;var n=file.Read(buffer[..(int)Math.Min(buffer.Length,length-position)]);position+=n;return n;
+    }
+    public override long Seek(long offset,SeekOrigin origin)=>Position=origin switch{SeekOrigin.Begin=>offset,SeekOrigin.Current=>position+offset,SeekOrigin.End=>length+offset,_=>throw new ArgumentOutOfRangeException(nameof(origin))};
+    public override void Flush(){}
+    public override void SetLength(long value)=>throw new NotSupportedException();
+    public override void Write(byte[] buffer,int offset,int count)=>throw new NotSupportedException();
+    protected override void Dispose(bool disposing){if(disposing)file.Dispose();base.Dispose(disposing);}
 }

@@ -319,9 +319,12 @@ class InstallPackageBuildTests(unittest.TestCase):
             return full.build(b.repo,b.prepared,self.entry,self.output,self.app_archive)
 
     def written(self):
+        # Every package member: the archive's entries and the engine, the image's prefix.
         manifest=json.loads((self.output/'install-manifest.json').read_bytes())
         with zipfile.ZipFile(self.output/'install.zip') as archive:members={name:archive.read(name) for name in archive.namelist()}
-        return manifest,members
+        self.assertNotIn(full.ENGINE_MEMBER,members)
+        members[full.ENGINE_MEMBER]=full.read_image(self.output/full.ENGINE)['engine']
+        return manifest,{name:members[name] for name in sorted(members,key=full._ordinal)}
 
     def test_manifest_is_format_two_with_exact_keys_and_each_tracks_identity(self):
         result=self.build();manifest,members=self.written();data=(self.output/'install-manifest.json').read_bytes()
@@ -336,7 +339,7 @@ class InstallPackageBuildTests(unittest.TestCase):
             TreeSha256=hashlib.sha256(members['apps/app-tree.json']).hexdigest(),Version=VERSION))
         self.assertEqual(manifest['MinimumFrom'],dict(App='0.5.0',Infrastructure='1.0.0'))
         self.assertEqual(manifest['ZipSha256'],hashlib.sha256((self.output/'install.zip').read_bytes()).hexdigest())
-        self.assertEqual({p.name for p in self.output.iterdir()},{'install.zip','install-manifest.json'})
+        self.assertEqual({p.name for p in self.output.iterdir()},{'install.zip','install-manifest.json','Yahad.Setup.exe'})
         self.assertEqual([r['Path'] for r in manifest['Files']],list(members));self.assertEqual(result['files'],len(members))
         for item in manifest['Files']:
             self.assertEqual(sorted(item),['Path','Sha256','Size'])
@@ -377,9 +380,40 @@ class InstallPackageBuildTests(unittest.TestCase):
         self.assertTrue(all(name=='app-tree.json' or name.startswith('app/') for name in asset))
 
     def test_outputs_are_deterministic(self):
-        self.build();first=(self.output/'install.zip').read_bytes(),self.app_archive.read_bytes(),(self.output/'install-manifest.json').read_bytes()
+        names=('install.zip','install-manifest.json',full.ENGINE)
+        self.build();first=self.app_archive.read_bytes(),*((self.output/n).read_bytes() for n in names)
         self.output=self.base.root/'again';self.app_archive=self.base.root/'again-assets'/full.app_archive_name(VERSION);self.app_archive.parent.mkdir()
-        self.build();self.assertEqual(first,((self.output/'install.zip').read_bytes(),self.app_archive.read_bytes(),(self.output/'install-manifest.json').read_bytes()))
+        self.build();self.assertEqual(first,(self.app_archive.read_bytes(),*((self.output/n).read_bytes() for n in names)))
+
+    def test_setup_image_is_the_cached_engine_then_the_package_and_its_trailer(self):
+        result=self.build();image=self.output/full.ENGINE;data=image.read_bytes();parts=full.read_image(image)
+        engine=(self.entry/'tree'/'setup'/full.ENGINE).read_bytes()
+        self.assertEqual(parts['engine'],engine)
+        self.assertEqual(parts['archive'],(self.output/'install.zip').read_bytes())
+        self.assertEqual(parts['manifest'],(self.output/'install-manifest.json').read_bytes())
+        self.assertEqual(data[-40:],full.IMAGE_TRAILER.pack(b'Yahad.SetupImage',len(engine),len(parts['archive']),len(parts['manifest'])))
+        self.assertEqual(result['setupSha256'],hashlib.sha256(data).hexdigest())
+        # The engine member is listed with its cached record, once.
+        manifest=json.loads(parts['manifest'])
+        self.assertEqual([r for r in manifest['Files'] if r['Path']==full.ENGINE_MEMBER],[dict(Path=full.ENGINE_MEMBER,Size=len(engine),Sha256=hashlib.sha256(engine).hexdigest())])
+        self.assertEqual([r['Path'] for r in manifest['Files']],sorted((r['Path'] for r in manifest['Files']),key=full._ordinal))
+
+    def test_setup_image_trailer_must_describe_the_file(self):
+        self.build();data=(self.output/full.ENGINE).read_bytes();probe=self.base.root/'probe.exe'
+        def refused(value):
+            probe.write_bytes(value)
+            with self.assertRaisesRegex(full.PackageError,'Setup image trailer'):full.read_image(probe)
+        refused(data[:-41]+data[-40:]);refused(b'\0'+data);refused(data+b'\0');refused(data[:-40])
+        refused(data[:-40]+full.IMAGE_TRAILER.pack(b'Yahad.SetupImagf',*full.IMAGE_TRAILER.unpack(data[-40:])[1:]))
+
+    def test_setup_image_refuses_an_engine_that_changed_after_its_audit(self):
+        engine=self.entry/'tree'/'setup'/full.ENGINE;original=engine.read_bytes()
+        real=full._copy_verified
+        def changing(source,destination,size,sha256):
+            if Path(source)==engine: engine.write_bytes(original[:-1]+bytes([original[-1]^1]))
+            return real(source,destination,size,sha256)
+        with patch.object(full,'_copy_verified',changing):
+            with self.assertRaisesRegex(full.PackageError,'Input changed during image'):self.build()
 
     def test_tree_records_list_every_other_member_of_their_tree_exactly_once(self):
         self.build();manifest,members=self.written()
