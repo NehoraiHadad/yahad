@@ -20,6 +20,7 @@ export function checkWindowsRelease(directory: string, version: string, spki: Bu
 export function collectReleaseAssets(directory: string, version: string, spki: Buffer, audit?: Audit): { name: string; path: string; bytes: number }[];
 export function planInfrastructure(args: { head: { version: string; digest: string }; baseline: { version: string; sourceCommit: string } | null; digestAt: (commit: string) => string }): InfraPlan;
 export function withInfrastructureSource<T>(repo: string, plan: InfraPlan, work: (infra: Infra) => Promise<T>): Promise<T>;
+export function resolveInputs(home: string, options: Options): { pwsh: string; NodeDirectory: string; NpmCache: string; VendorDirectory: string; DotNet: string; PackageCache: string; InfraCache: string; Python: string };
 export function runtimeVersionFor(appVersion: string): string;
 export function requireRuntimeAboveBootstrap(runtimeVersion: string, bootstrapSource: string): void;
 export function install(args: { repo: string; options: Options; build?: (context: { clone: string; root: string; keyFile: string; inputs: unknown }) => Promise<Built>; launch?: (file: string) => void }): Promise<Built>;

@@ -261,13 +261,18 @@ function parse(argv, { flags = [], positional: wanted = 0 } = {}) {
   return { options, positional };
 }
 
+// The one Node pin (installer/windows/dependency-pins.json), extracted under .local/tools.
+function pinnedNode(home, local) {
+  const pinned = JSON.parse(readFileSync(join(home, 'installer', 'windows', 'dependency-pins.json'), 'utf8')).node.archive.name.replace(/\.zip$/, '');
+  const directory = local('tools', pinned);
+  if (!existsSync(join(directory, 'node.exe'))) refuse(`No node.exe in ${directory}; extract the pinned ${pinned}.zip there or pass --node-dir.`);
+  return directory;
+}
+
 // Build inputs come from the checkout that runs the command, never from a throwaway clone.
 export function resolveInputs(home, options) {
   const local = (...parts) => join(home, '.local', ...parts);
-  // The one Node pin (installer/windows/dependency-pins.json), extracted under .local/tools.
-  const pinned = JSON.parse(readFileSync(join(home, 'installer', 'windows', 'dependency-pins.json'), 'utf8')).node.archive.name.replace(/\.zip$/, '');
-  const nodeDirectory = options['node-dir'] ?? local('tools', pinned);
-  if (!existsSync(join(nodeDirectory, 'node.exe'))) refuse(`No node.exe in ${nodeDirectory}; extract the pinned ${pinned} there or pass --node-dir.`);
+  const nodeDirectory = options['node-dir'] ?? pinnedNode(home, local);
   return {
     pwsh: options.pwsh ?? (existsSync(local('tools', 'pwsh', 'pwsh.exe')) ? local('tools', 'pwsh', 'pwsh.exe') : 'pwsh'),
     NodeDirectory: resolve(nodeDirectory),

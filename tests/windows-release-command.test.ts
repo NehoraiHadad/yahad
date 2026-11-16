@@ -6,7 +6,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdir
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { auditSetup, collectReleaseAssets, install, planInfrastructure, publish, requireBuiltKey, requireRuntimeAboveBootstrap, runtimeVersionFor, withInfrastructureSource } from '../scripts/release-windows.mjs';
+import { auditSetup, collectReleaseAssets, install, planInfrastructure, publish, requireBuiltKey, requireRuntimeAboveBootstrap, resolveInputs, runtimeVersionFor, withInfrastructureSource } from '../scripts/release-windows.mjs';
 
 const scripts = join(import.meta.dirname, '..', 'scripts');
 const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@invalid', ...args], { cwd, stdio: 'pipe', encoding: 'utf8' });
@@ -430,6 +430,24 @@ test('collectReleaseAssets accepts exactly the nine assets and rejects every inc
     writeFileSync(join(root, 'stale', 'yachad-updater.json'), JSON.stringify({ ...runtime, version: '1.0.1' }));
     assert.throws(stale, /at runtime 2\.0\.0/);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('the build uses the Node archive dependency-pins.json pins, never another Node 24 it finds', () => {
+  const home = mkdtempSync(join(tmpdir(), 'yahad-node-pin-'));
+  try {
+    mkdirSync(join(home, 'installer', 'windows'), { recursive: true });
+    const pins = JSON.parse(readFileSync(join('installer', 'windows', 'dependency-pins.json'), 'utf8'));
+    writeFileSync(join(home, 'installer', 'windows', 'dependency-pins.json'), JSON.stringify(pins));
+    const pinned = join(home, '.local', 'tools', pins.node.archive.name.replace(/\.zip$/, ''));
+    // A newer Node 24 beside the pinned one is not the pin.
+    mkdirSync(join(home, '.local', 'tools', 'node-v24.99.0-win-x64'), { recursive: true });
+    writeFileSync(join(home, '.local', 'tools', 'node-v24.99.0-win-x64', 'node.exe'), '');
+    assert.throws(() => resolveInputs(home, {}), new RegExp(`No node\.exe in .*${pins.node.archive.name.replace(/\.zip$/, '').replaceAll('.', '\.')}`));
+    mkdirSync(pinned, { recursive: true });
+    writeFileSync(join(pinned, 'node.exe'), '');
+    assert.equal(resolveInputs(home, {}).NodeDirectory, pinned);
+    assert.equal(resolveInputs(home, { 'node-dir': join(home, 'elsewhere') }).NodeDirectory, join(home, 'elsewhere'));
+  } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
 test('auditSetup runs the file it is given and refuses a program that cannot report a package', () => {
