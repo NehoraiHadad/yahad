@@ -109,6 +109,21 @@ internal static class AppPackageTests
             var tree=Tree("1.0.1",benign);var zip=Zip(Entries(tree));Open(zip,Release(zip,tree.Sha256)).Dispose();
             return Task.CompletedTask;
         });
+        // A manual Setup over the same infrastructure, the Setup track and a first install
+        // all install the app from the install package's apps/ namespace (8.2, 8.3).
+        await check("an app member is accepted or refused alike in the app archive and in a Setup's install package",()=>
+        {
+            var cases=new (string Path,byte[] Bytes,string? Refusal)[]{("app/dist/plugin.node",Text("x"),"FORBIDDEN"),("app/native/x.txt",Text("x"),"FORBIDDEN"),
+                ("app/tools/run.CMD",Text("x"),"FORBIDDEN"),("app/dist/assets/blob.bin",[(byte)'M',(byte)'Z',0x90,0],"PE"),("app/dist/a.txt",Text("xMZ"),null)};
+            foreach(var(path,bytes,refusal) in cases)
+            {
+                var tree=Tree("1.0.1",[..app.Members.Select(m=>(m.Path,m.Bytes)),(path,bytes)]);var zip=Zip(Entries(tree));var setup=PairFixture.Package(app:tree);
+                if(refusal is null){Open(zip,Release(zip,tree.Sha256)).Dispose();PairFixture.Open(setup).Dispose();continue;}
+                DenyCode("APP_PACKAGE_"+refusal,()=>Open(zip,Release(zip,tree.Sha256)).Dispose());
+                DenyCode("PACKAGE_"+refusal,()=>PairFixture.Open(setup).Dispose());
+            }
+            return Task.CompletedTask;
+        });
         await check("names that collide on Windows and non-file entries are refused",()=>
         {
             Refuse("APP_PACKAGE_COLLISION",app,e=>With(e,e[0]));
@@ -127,7 +142,7 @@ internal static class AppPackageTests
         });
         await check("the required members are present",()=>
         {
-            foreach(var required in AppPackage.Required)
+            foreach(var required in AppMemberPolicy.Required)
                 Refuse("APP_PACKAGE_MISSING",Tree("1.0.1",app.Members.Where(m=>m.Path!=required)));
             Refuse("APP_PACKAGE_MISSING",app,e=>[..e.Where(x=>x.Path!=InstalledLayout.AppTreeName)]);
             return Task.CompletedTask;

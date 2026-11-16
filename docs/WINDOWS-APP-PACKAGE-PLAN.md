@@ -338,8 +338,10 @@ and requires runtimes and services (`:37,99`):
 - **Required members:** `app/package.json`, `app/server/main.mjs`,
   `app/dist/index.html`, `app/deploy/lan-capabilities.json` and
   `app/deploy/lan-help.html` (`NativeLanInstall.cs:102-106`), plus
-  `app/legal/server-bundle.json` and `app/legal/ThirdPartyNotices-server.txt`
-  (section 10).
+  the app's legal records `app/legal/server-bundle.json`,
+  `app/legal/ThirdPartyNotices-server.txt`, `app/legal/build-inputs.json`,
+  `app/legal/SBOM.json` and `app/legal/Yahad-LICENSE.txt` (section 10;
+  `bundle.py` `REQUIRED`).
 - **Forbidden:**
   - `app/src/`, `app/node_modules/`, `app/package-lock.json`
     (`installer/windows/setup_package.py:160-162`);
@@ -353,6 +355,12 @@ and requires runtimes and services (`:37,99`):
   extracted (as `InstallPackage.cs:69-71`).
 - **Exact match:** the archive's member set must equal `app-tree.json`'s list
   exactly.
+
+The required and forbidden rules are the app member policy, one rule for app
+members whichever package carries them (`AppMemberPolicy`): the app archive and
+the `apps/` namespace of a Setup's install package, which a first install, the
+Setup track and a manual Setup over the same infrastructure (8.2) install. The
+builder's `bundle.py` `REQUIRED` and `refused_member` are the same lists.
 
 ### 5.3 `app-tree.json` (and `infra-tree.json`)
 

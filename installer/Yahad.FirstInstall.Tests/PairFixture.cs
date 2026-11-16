@@ -15,8 +15,7 @@ internal static class PairFixture
     internal static readonly string AppCommit=new('a',40);
     internal static readonly string[] InfraMembers=["host/Yahad.ServiceHost.exe","host/Yahad.ServiceHost.runtimeconfig.json","updater/Yahad.Updater.exe","updater/Yahad.Updater.runtimeconfig.json",
         "platform/Yahad.Platform.exe","platform/Yahad.Platform.runtimeconfig.json","runtime/node/node.exe","runtime/caddy/caddy.exe","legal/fixture.json",InfrastructureRecord.EngineMember];
-    internal static readonly string[] AppMembers=["app/package.json","app/server/main.mjs","app/dist/index.html","app/deploy/lan-capabilities.json","app/deploy/lan-help.html",
-        "app/legal/server-bundle.json","app/legal/ThirdPartyNotices-server.txt","app/legal/build-inputs.json"];
+    internal static readonly string[] AppMembers=AppMemberPolicy.Required;
     internal sealed record Tree(TreeKind Kind,string Version,string SourceCommit,(string Path,byte[] Bytes)[] Members,byte[] Record)
     {
         internal string Sha256=>TreeRecord.Sha256(Record);

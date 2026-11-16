@@ -169,7 +169,7 @@ internal static class FullInstallerIntegrationTests
             Refused("PACKAGE_FORMAT",()=>PairFixture.Package(schema:0,migrations:[]));
             foreach(var migrations in new[]{new[]{6,5},[5,5],[7],[0,6],[8]})Refused("PACKAGE_FORMAT",()=>PairFixture.Package(migrations:migrations));
             foreach(var extra in new[]{"infra/bootstrap/authority/Yahad.Authority.exe","system-manifest.json","payload/app/server/main.mjs","host/Yahad.ServiceHost.exe",
-                "apps/app/native/Yahad.Platform.exe","apps/app/Native/coreclr.dll","apps/host/x","infra/app/x"})Refused("PACKAGE_PATH",()=>PairFixture.Package(extra:extra));
+                "apps/host/x","infra/app/x"})Refused("PACKAGE_PATH",()=>PairFixture.Package(extra:extra));
             foreach(var required in InstallPackage.Required)Refused("PACKAGE_MISSING",()=>PairFixture.Package(omit:required));
             foreach(var record in new[]{"infra/"+InstalledLayout.InfraTreeName,"apps/"+InstalledLayout.AppTreeName})Refused("PACKAGE_MISSING",()=>PairFixture.Package(omit:record));
             Refused("PACKAGE_SOURCE",()=>PairFixture.Package(change:m=>m with{Infrastructure=m.Infrastructure with{ContractMax=m.Infrastructure.ContractMax+1}}));
@@ -183,10 +183,13 @@ internal static class FullInstallerIntegrationTests
             Refused("PACKAGE_MEMBERS",()=>PairFixture.Package(duplicate:true));
             Refused("PACKAGE_BOUND",()=>PairFixture.Package(change:m=>m with{Files=[..m.Files,m.Files[0]]}));
             // The writer's required members (setup_package.py REQUIRED_MEMBERS), the app's own legal records included.
-            foreach(var legal in new[]{"server-bundle.json","ThirdPartyNotices-server.txt","build-inputs.json"})Assert(InstallPackage.Required.Contains("apps/app/legal/"+legal));
-            // The bundle ships, never the source, the lockfile or node_modules, in any case.
-            foreach(var extra in new[]{"apps/app/src/main.ts","apps/app/node_modules/x/index.js","apps/app/package-lock.json","apps/app/SRC/main.ts","apps/app/Node_Modules/x.js","apps/app/Package-Lock.json"})
-                Refused("PACKAGE_PATH",()=>PairFixture.Package(extra:extra));
+            foreach(var legal in new[]{"server-bundle.json","ThirdPartyNotices-server.txt","build-inputs.json","SBOM.json","Yahad-LICENSE.txt"})Assert(InstallPackage.Required.Contains("apps/app/legal/"+legal));
+            Assert(InstallPackage.Required.Where(r=>r.StartsWith("apps/",StringComparison.Ordinal)).SequenceEqual(AppMemberPolicy.Required.Select(r=>"apps/"+r)));
+            // The bundle ships, never the source, the lockfile, node_modules, native code or an
+            // executable, in any case: the app archive's own policy (AppMemberPolicy).
+            foreach(var extra in new[]{"apps/app/src/main.ts","apps/app/node_modules/x/index.js","apps/app/package-lock.json","apps/app/SRC/main.ts","apps/app/Node_Modules/x.js","apps/app/Package-Lock.json",
+                "apps/app/native/Yahad.Platform.exe","apps/app/Native/coreclr.dll","apps/app/dist/plugin.node","apps/app/dist/a.exe","apps/app/a.DLL","apps/app/tools/a.ps1","apps/app/a.cmd","apps/app/a.Bat"})
+                Refused("PACKAGE_FORBIDDEN",()=>PairFixture.Package(extra:extra));
             // One archive entry per manifest path, exactly: a case-only difference is no match,
             // and two manifest paths that are one Windows path are refused.
             Refused("PACKAGE_MEMBER_TYPE",()=>PairFixture.Package(change:m=>m with{Files=m.Files.Select(f=>f.Path=="infra/legal/fixture.json"?f with{Path="infra/legal/FIXTURE.json"}:f).ToArray()}));

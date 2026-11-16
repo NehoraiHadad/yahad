@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-from installer.windows import setup_package as full, infra_package
+from installer.windows import bundle, setup_package as full, infra_package
 from installer.windows.application_version import Infrastructure
 
 
@@ -355,6 +355,18 @@ class InstallPackageBuildTests(unittest.TestCase):
         self.assertEqual(sorted(manifest['Infrastructure']),sorted(records['PackageInfrastructure']))
         self.assertEqual(sorted(manifest['App']),sorted(records['PackageApp']))
         self.assertEqual(sorted(manifest['Files'][0]),sorted(records['InstallMember']))
+
+    def test_app_member_policy_is_the_builders(self):
+        # installer/Yahad.Setup/AppMemberPolicy.cs is the one reader rule for app members
+        # in the app archive and in the install package's apps/ namespace (5.2).
+        source=(ROOT/'installer/Yahad.Setup/AppMemberPolicy.cs').read_text(encoding='utf-8')
+        def strings(name):
+            return re.findall(r'"([^"]*)"',re.search(name+r'\s*=\s*\[(.*?)\];',source,re.S).group(1))
+        self.assertEqual(strings('Required'),list(bundle.REQUIRED))
+        self.assertEqual(strings('ForbiddenDirectories'),list(bundle.REFUSED_DIRECTORIES))
+        self.assertEqual(strings('ForbiddenExtensions'),list(bundle.REFUSED_SUFFIXES))
+        self.assertEqual([re.search(r'ForbiddenFile="([^"]*)"',source).group(1)],list(bundle.REFUSED_FILES))
+        self.assertEqual(full.APP_REQUIRED,frozenset(bundle.REQUIRED))
 
     def test_app_archive_is_the_app_tree_with_identical_record_bytes(self):
         self.build();manifest,members=self.written()

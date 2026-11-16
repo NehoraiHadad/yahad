@@ -19,19 +19,18 @@ internal sealed record ExtractTarget(Action<string> CreateDirectory,Func<string,
 // namespaces and nothing else: infra/ (infra-tree.json and the host, Updater,
 // Platform, runtime, legal and setup members of the compiled infrastructure) and
 // apps/ (app-tree.json and app/...). Each tree record lists exactly the members
-// of its namespace. app/native/ is refused: Platform is infrastructure. The required
-// members and the refused app paths are installer/windows/setup_package.py's
-// REQUIRED_MEMBERS and validate_payload_source: the reader refuses what the writer would.
+// of its namespace. The apps/ namespace obeys the app member policy (AppMemberPolicy),
+// the app archive's own, so an app is accepted or refused alike whichever package
+// carries it. The required members are installer/windows/setup_package.py's
+// REQUIRED_MEMBERS: the reader refuses what the writer would.
 internal sealed class InstallPackage:IDisposable
 {
     internal const int Format=2;
     internal const string InfraPrefix="infra/",AppPrefix="apps/",ManifestResource="Yahad.Install.Manifest",PayloadResource="Yahad.Install.Payload";
+    private const string Codes="PACKAGE_";
     internal static readonly string[] Required=["infra/host/Yahad.ServiceHost.exe","infra/host/Yahad.ServiceHost.runtimeconfig.json","infra/updater/Yahad.Updater.exe","infra/updater/Yahad.Updater.runtimeconfig.json",
         "infra/platform/Yahad.Platform.exe","infra/platform/Yahad.Platform.runtimeconfig.json","infra/runtime/node/node.exe","infra/runtime/caddy/caddy.exe","infra/"+Setup.InfrastructureRecord.EngineMember,
-        "apps/app/package.json","apps/app/server/main.mjs","apps/app/dist/index.html","apps/app/deploy/lan-capabilities.json","apps/app/deploy/lan-help.html",
-        "apps/app/legal/server-bundle.json","apps/app/legal/ThirdPartyNotices-server.txt","apps/app/legal/build-inputs.json"];
-    // The payload runs the bundle only: no source tree, lockfile or node_modules ships.
-    private static readonly string[] RefusedAppDirectories=["app/src/","app/node_modules/"];private const string RefusedAppFile="app/package-lock.json";
+        ..AppMemberPolicy.Required.Select(m=>AppPrefix+m)];
     private readonly Stream stream;private readonly ZipArchive archive;
     internal InstallPackageManifest Manifest{get;}
     internal InstallPackage(Stream zip,byte[] manifest)
@@ -71,6 +70,7 @@ internal sealed class InstallPackage:IDisposable
         }
         if(expected.Count!=0)throw new IOException("PACKAGE_MEMBERS");
         foreach(var required in Required)if(!Manifest.Files.Any(r=>r.Path==required))throw new IOException("PACKAGE_MISSING");
+        foreach(var entry in archive.Entries)if(entry.FullName.StartsWith(AppPrefix,StringComparison.Ordinal))AppMemberPolicy.RequireNotImage(entry,Codes);
         RequireTree(TreeKind.Infrastructure,infra.Version,infra.SourceCommit,infra.TreeSha256);
         RequireTree(TreeKind.App,app.Version,app.SourceCommit,app.TreeSha256);
     }
@@ -156,8 +156,7 @@ internal sealed class InstallPackage:IDisposable
         {
             var prefix=Prefix(kind);if(!name.StartsWith(prefix,StringComparison.Ordinal))continue;
             var member=name[prefix.Length..];if(member==TreeRecord.RecordName(kind))return;
-            if(kind==TreeKind.App&&(RefusedAppDirectories.Any(d=>member.StartsWith(d,StringComparison.OrdinalIgnoreCase))||string.Equals(member,RefusedAppFile,StringComparison.OrdinalIgnoreCase)))
-                throw new IOException("PACKAGE_PATH");
+            if(kind==TreeKind.App){AppMemberPolicy.RequireName(member,Codes);return;}
             if(TreeRecord.InTree(kind,member))return;
         }
         throw new IOException("PACKAGE_PATH");
