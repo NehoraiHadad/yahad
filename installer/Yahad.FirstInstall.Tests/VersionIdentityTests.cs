@@ -17,7 +17,7 @@ internal static class VersionIdentityTests
         {
             var properties=XDocument.Load(Path.Combine(repo,"installer","Directory.Build.props")).Descendants();
             string Property(string name)=>properties.Single(e=>e.Name.LocalName==name).Value;
-            Assert(InfrastructureRelease.Version==Property("YahadInfrastructureVersion")&&ReleaseManifest.IsVersion(InfrastructureRelease.Version));
+            Assert(InfrastructureRelease.Version==Property("YahadInfrastructureVersion")&&SemVer.IsVersion(InfrastructureRelease.Version));
             Assert(InfrastructureRelease.ContractMin.ToString(System.Globalization.CultureInfo.InvariantCulture)==Property("YahadInfrastructureContractMin"));
             Assert(InfrastructureRelease.ContractMax.ToString(System.Globalization.CultureInfo.InvariantCulture)==Property("YahadInfrastructureContractMax"));
             Assert(InfrastructureRelease.ContractMin<=InfrastructureRelease.ContractMax&&InfrastructureRelease.Supports(InfrastructureRelease.ContractMin));

@@ -74,7 +74,7 @@ internal sealed record InstallerState(int Format,string InstallationId,string Da
             // A retained pair is never newer than the active one on either track, is
             // never the active pair itself, and a version shared with the active pair
             // is the very same tree (one directory per version).
-            if(ReleaseManifest.Compare(previous.Infrastructure.Version,Active.Infrastructure.Version)>0||ReleaseManifest.Compare(previous.App.Version,Active.App.Version)>0||
+            if(SemVer.Compare(previous.Infrastructure.Version,Active.Infrastructure.Version)>0||SemVer.Compare(previous.App.Version,Active.App.Version)>0||
                 previous.Infrastructure.Version==Active.Infrastructure.Version&&!previous.SameInfrastructure(Active)||
                 previous.App.Version==Active.App.Version&&!previous.SameApp(Active)||previous.SameTrees(Active))throw new IOException("INSTALL_STATE_INVALID");
         }
@@ -147,6 +147,6 @@ internal static class InstallLocations
         return "S-1-5-80-"+string.Join('-',Enumerable.Range(0,5).Select(i=>BitConverter.ToUInt32(hash,i*4).ToString(System.Globalization.CultureInfo.InvariantCulture)));
     }
     internal static void RequireVersion(string version)
-    {if(!ReleaseManifest.IsVersion(version))throw new IOException("PAYLOAD_VERSION");}
+    {if(!SemVer.IsVersion(version))throw new IOException("PAYLOAD_VERSION");}
     internal static void RequireDigest(string? value){if(value is null||!Regex.IsMatch(value,"^[a-f0-9]{64}$"))throw new IOException("INSTALL_STATE_INVALID");}
 }

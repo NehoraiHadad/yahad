@@ -37,7 +37,7 @@ internal sealed class InstallPackage:IDisposable
         try{Manifest=NativeJson.Read<InstallPackageManifest>(manifest);}catch(JsonException){throw new IOException("PACKAGE_FORMAT");}
         var infra=Manifest.Infrastructure;var app=Manifest.App;
         if(Manifest.Format!=Format||infra is null||app is null||Manifest.Files is not {Length:>=16 and <=2*TreeRecord.MaximumMembers+2}||app.DatabaseMigrationsFrom is null||
-            !ReleaseManifest.IsVersion(infra.Version)||!ReleaseManifest.IsVersion(app.Version)||!TreeRecord.IsCommit(infra.SourceCommit)||!TreeRecord.IsCommit(app.SourceCommit)||
+            !SemVer.IsVersion(infra.Version)||!SemVer.IsVersion(app.Version)||!TreeRecord.IsCommit(infra.SourceCommit)||!TreeRecord.IsCommit(app.SourceCommit)||
             app.DatabaseSchema is <1 or >1024||!InfrastructureRelease.IsContract(app.RequiresContract))throw new IOException("PACKAGE_FORMAT");
         // Migrations are strictly ascending, each older than the target schema.
         for(var i=0;i<app.DatabaseMigrationsFrom.Length;i++)
@@ -76,7 +76,7 @@ internal sealed class InstallPackage:IDisposable
         using var metadata=Assembly.GetExecutingAssembly().GetManifestResourceStream(ManifestResource)??throw new IOException("PACKAGE_NOT_EMBEDDED");
         if(metadata.Length>16777216)throw new IOException("PACKAGE_METADATA_BOUND");using var buffer=new MemoryStream();metadata.CopyTo(buffer);
         var version=NativeJson.Read<InstallPackageManifest>(buffer.ToArray()).App?.Version;
-        return version is not null&&ReleaseManifest.IsVersion(version)?version:throw new IOException("PACKAGE_FORMAT");
+        return version is not null&&SemVer.IsVersion(version)?version:throw new IOException("PACKAGE_FORMAT");
     }
     internal static InstallPackage Embedded()
     {

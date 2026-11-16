@@ -50,7 +50,7 @@ internal static class UpgradeRules
     // different build nothing can move between. Neither track ever goes back.
     internal static UpgradeTrack Decide(InstalledPair from,InstalledPair to)
     {
-        var infrastructure=ReleaseManifest.Compare(to.Infrastructure.Version,from.Infrastructure.Version);var app=ReleaseManifest.Compare(to.App.Version,from.App.Version);
+        var infrastructure=SemVer.Compare(to.Infrastructure.Version,from.Infrastructure.Version);var app=SemVer.Compare(to.App.Version,from.App.Version);
         if(infrastructure==0&&!to.SameInfrastructure(from))throw new IOException("INFRA_IDENTITY_MISMATCH");
         if(app==0&&!to.SameApp(from))throw new IOException("APP_IDENTITY_MISMATCH");
         if(infrastructure<0||app<0)throw new IOException("INSTALL_DOWNGRADE_REFUSED");

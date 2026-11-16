@@ -17,7 +17,7 @@ internal static class InfrastructureReleaseTests
         }
         await check("infrastructure release identity is the Directory.Build.props value", () =>
         {
-            Assert(ReleaseManifest.IsVersion(InfrastructureRelease.Version) && InfrastructureRelease.Version == Props("YahadInfrastructureVersion"));
+            Assert(SemVer.IsVersion(InfrastructureRelease.Version) && InfrastructureRelease.Version == Props("YahadInfrastructureVersion"));
             Assert(InfrastructureRelease.ContractMin == 1 && InfrastructureRelease.ContractMax == 1);
             Assert(InfrastructureRelease.ContractMin.ToString() == Props("YahadInfrastructureContractMin") && InfrastructureRelease.ContractMax.ToString() == Props("YahadInfrastructureContractMax"));
             Assert(InfrastructureRelease.Supports(1) && !InfrastructureRelease.Supports(0) && !InfrastructureRelease.Supports(2));

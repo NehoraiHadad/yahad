@@ -111,9 +111,9 @@ internal static class UpgradeTests
         });
         await check("release versions compare as numbers",()=>
         {
-            Assert(ReleaseManifest.Compare("10.0.0","9.9.9")>0,"major");Assert(ReleaseManifest.Compare("1.2.10","1.2.9")>0,"patch");Assert(ReleaseManifest.Compare("1.2.3","1.2.3")==0,"equal");
-            Assert(ReleaseManifest.Compare("99999999999999.0.0","99999999999998.0.0")>0,"no overflow");Assert(ReleaseManifest.Compare("1.0.0","1.0.1")<0,"less");
-            DenyCode("RELEASE_MANIFEST_INVALID",()=>ReleaseManifest.Compare("1.0","1.0.0"));
+            Assert(SemVer.Compare("10.0.0","9.9.9")>0,"major");Assert(SemVer.Compare("1.2.10","1.2.9")>0,"patch");Assert(SemVer.Compare("1.2.3","1.2.3")==0,"equal");
+            Assert(SemVer.Compare("99999999999999.0.0","99999999999998.0.0")>0,"no overflow");Assert(SemVer.Compare("1.0.0","1.0.1")<0,"less");
+            DenyCode("RELEASE_MANIFEST_INVALID",()=>SemVer.Compare("1.0","1.0.0"));
             return Task.CompletedTask;
         });
         await check("a build without a release key refuses every upgrade",()=>

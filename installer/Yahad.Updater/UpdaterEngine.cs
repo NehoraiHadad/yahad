@@ -89,7 +89,7 @@ internal sealed class UpdaterEngine(UpdaterPaths paths,string current,Func<byte[
                     case "status":return new(1,true,Status:Status());
                     case "check":if(!UpdaterProtocol.IsId(request.Id))return Refuse("BAD_REQUEST");return BeginCheck(request.Id);
                     case "install":
-                        if(!UpdaterProtocol.IsId(request.Id)||request.Version is null||!ReleaseManifest.IsVersion(request.Version)||!UpdaterProtocol.IsFingerprint(request.Fingerprint))return Refuse("BAD_REQUEST");
+                        if(!UpdaterProtocol.IsId(request.Id)||request.Version is null||!SemVer.IsVersion(request.Version)||!UpdaterProtocol.IsFingerprint(request.Fingerprint))return Refuse("BAD_REQUEST");
                         return Install(request.Id!,new(request.Version,request.Fingerprint!));
                     case "set-mode":
                         if(!UpdaterProtocol.IsId(request.Id)||request.Mode is not(UpdaterProtocol.Auto or UpdaterProtocol.Notify))return Refuse("BAD_REQUEST");
@@ -130,7 +130,7 @@ internal sealed class UpdaterEngine(UpdaterPaths paths,string current,Func<byte[
     {
         var release=await source.LatestAsync(cancellation);
         var version=release.TagName.StartsWith('v')?release.TagName[1..]:release.TagName;
-        if(release.Draft||release.Prerelease||!ReleaseManifest.IsVersion(version)||ReleaseManifest.Compare(version,current)<=0){Latest(null);return;}
+        if(release.Draft||release.Prerelease||!SemVer.IsVersion(version)||SemVer.Compare(version,current)<=0){Latest(null);return;}
         if(version==record.RefusedVersion){Latest(version);return;}
         // A newer tag without a Windows release is simply not an update for this machine.
         var manifestName=ReleaseManifest.ManifestName(version);
@@ -172,8 +172,8 @@ internal sealed class UpdaterEngine(UpdaterPaths paths,string current,Func<byte[
     private StagedRelease? Rediscover(byte[] key)
     {
         if(!Directory.Exists(paths.Staging))return null;
-        var versions=Directory.EnumerateDirectories(paths.Staging).Select(path=>Path.GetFileName(path)!).Where(name=>ReleaseManifest.IsVersion(name)&&name!=record.RefusedVersion&&ReleaseManifest.Compare(name,current)>0).ToList();
-        versions.Sort(ReleaseManifest.Compare);versions.Reverse();
+        var versions=Directory.EnumerateDirectories(paths.Staging).Select(path=>Path.GetFileName(path)!).Where(name=>SemVer.IsVersion(name)&&name!=record.RefusedVersion&&SemVer.Compare(name,current)>0).ToList();
+        versions.Sort(SemVer.Compare);versions.Reverse();
         return versions.Select(version=>Verified(version,key)).FirstOrDefault(found=>found is not null);
     }
     private StagedRelease? Verified(string version,byte[] key)
@@ -238,7 +238,7 @@ internal sealed class UpdaterEngine(UpdaterPaths paths,string current,Func<byte[
         foreach(var directory in Directory.EnumerateDirectories(paths.Staging))
         {
             var name=Path.GetFileName(directory)!;
-            if(!ReleaseManifest.IsVersion(name)||name==record.RefusedVersion||ReleaseManifest.Compare(name,staged?.Version??current)<=0&&name!=staged?.Version)TryDeleteTree(directory);
+            if(!SemVer.IsVersion(name)||name==record.RefusedVersion||SemVer.Compare(name,staged?.Version??current)<=0&&name!=staged?.Version)TryDeleteTree(directory);
         }
     }
     private static void TryDelete(string path){try{File.Delete(path);}catch(Exception error)when(error is IOException or UnauthorizedAccessException){}}

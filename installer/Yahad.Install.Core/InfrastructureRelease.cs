@@ -25,7 +25,7 @@ public static class InfrastructureRelease
     internal static bool IsContract(int value)=>value is >=1 and <=1024;
     private static string Metadata(string key)
         =>Core.GetCustomAttributes<AssemblyMetadataAttribute>().SingleOrDefault(a=>a.Key==key)?.Value??throw new IOException("INFRASTRUCTURE_IDENTITY_MISSING");
-    private static string RequireVersion(string value)=>ReleaseManifest.IsVersion(value)?value:throw new IOException("INFRASTRUCTURE_IDENTITY_MISSING");
+    private static string RequireVersion(string value)=>SemVer.IsVersion(value)?value:throw new IOException("INFRASTRUCTURE_IDENTITY_MISSING");
     private static int RequireContract(string value)
         =>int.TryParse(value,System.Globalization.NumberStyles.None,System.Globalization.CultureInfo.InvariantCulture,out var parsed)&&IsContract(parsed)?parsed:throw new IOException("INFRASTRUCTURE_IDENTITY_MISSING");
     private static int RequireRange(int min,int max)=>max>=min?max:throw new IOException("INFRASTRUCTURE_IDENTITY_MISSING");

@@ -77,7 +77,7 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
                 case "uninstalled":
                     // The family, its data, key and identity stay; only the pair is new. The kept
                     // database must be one this app opens or migrates from (8.3).
-                    if(ReleaseManifest.Compare(target.App.Version,state.Active.App.Version)<0)throw new IOException("INSTALL_DOWNGRADE_REFUSED");
+                    if(SemVer.Compare(target.App.Version,state.Active.App.Version)<0)throw new IOException("INSTALL_DOWNGRADE_REFUSED");
                     if(!package.AcceptsSchema(state.Active.App.DatabaseSchema))throw new IOException("RELEASE_UNSUPPORTED_FROM");
                     if(AnyServiceExists()||Path.Exists(InstallLocations.Binaries))throw new IOException("INSTALL_COLLISION");
                     // Until the first healthy start the record keeps the schema the data is at.
