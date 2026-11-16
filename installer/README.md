@@ -82,7 +82,10 @@ with `infra-build.json` (version, source commit, input digest, tree hash). A lat
 package whose infrastructure input digest equals the cached one reuses those exact
 bytes; the audit checks them against `infra-tree.json`. `-InfraSource <checkout>` names
 the checkout at the infrastructure's source commit that the distributable Setup is
-published from (default: the current checkout).
+published from (default: the current checkout). The release commands
+(`scripts/release-windows.mjs build`, `install`, `publish`) pass it themselves when the
+cache entry for HEAD's infrastructure version was built at another commit: a git worktree
+at that commit (docs/WINDOWS-APP-PACKAGE-PLAN.md section 10).
 
 The digest is `python installer/windows/infra_inputs.py digest [--commit <sha>]`: it
 covers the infrastructure projects (not their tests), `Directory.Build.props`,

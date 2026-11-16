@@ -6,7 +6,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdir
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { auditSetup, collectReleaseAssets, install, planInfrastructure, publish, requireBuiltKey, requireRuntimeAboveBootstrap, resolveInputs, runtimeVersionFor, withInfrastructureSource } from '../scripts/release-windows.mjs';
+import { auditSetup, buildRelease, cachedInfrastructure, collectReleaseAssets, install, planInfrastructure, publish, requireBuiltKey, requireRuntimeAboveBootstrap, historyOf, resolveInfrastructure, resolveInputs, runtimeVersionFor, withInfrastructureSource } from '../scripts/release-windows.mjs';
 
 const scripts = join(import.meta.dirname, '..', 'scripts');
 const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@invalid', ...args], { cwd, stdio: 'pipe', encoding: 'utf8' });
@@ -219,7 +219,9 @@ else if (args[0] === 'release') writeFileSync(state, args.slice(3, args.indexOf(
   };
   const options = { key: pem, 'node-dir': root } as Record<string, string | boolean>;
   const plan = async () => ({ mode: 'build' as const, digest: 'd'.repeat(64) });
-  return { keys, pem, origin, repo, calls, stage, plan, options };
+  // HEAD's infrastructure as infrastructureState reports it: no cache entry for its version.
+  const state = () => ({ version: '1.0.0', digest: 'd'.repeat(64), cache: '/infra-cache', cached: null });
+  return { keys, pem, origin, repo, calls, stage, plan, state, options };
 }
 
 async function withWorld(work: (w: ReturnType<typeof world>, root: string) => Promise<void>) {
@@ -244,7 +246,7 @@ const originMain = (origin: string) => git(origin, 'rev-parse', 'main').trim();
 
 test('release:publish refuses anything but a clean main equal to origin/main', async () => {
   await withWorld(async (w) => {
-    const refused = (pattern: RegExp) => assert.rejects(publish({ repo: w.repo, plan: w.plan, audit: fakeAudit, options: w.options, stage: w.stage(), confirm: async () => '0.5.4' }), pattern);
+    const refused = (pattern: RegExp) => assert.rejects(publish({ repo: w.repo, plan: w.plan, state: w.state, audit: fakeAudit, options: w.options, stage: w.stage(), confirm: async () => '0.5.4' }), pattern);
 
     writeFileSync(join(w.repo, 'stray.txt'), 'x');
     await refused(/working tree is dirty/);
@@ -276,7 +278,7 @@ test('release:publish refuses anything but a clean main equal to origin/main', a
 test('release:publish refuses a version not above the latest, a wrong confirmation and a missing asset', async () => {
   await withWorld(async (w) => {
     const head = originMain(w.origin);
-    const run = (options: Record<string, string | boolean>, confirm: (q: string) => Promise<string>, stage = w.stage()) => publish({ repo: w.repo, plan: w.plan, audit: fakeAudit, options, stage, confirm });
+    const run = (options: Record<string, string | boolean>, confirm: (q: string) => Promise<string>, stage = w.stage()) => publish({ repo: w.repo, plan: w.plan, state: w.state, audit: fakeAudit, options, stage, confirm });
 
     await assert.rejects(run({ ...w.options, version: '0.5.3' }, async () => '0.5.3'), /not above the latest release 0.5.3/);
     await assert.rejects(run({ ...w.options, version: '0.4.9' }, async () => '0.4.9'), /not above the latest release/);
@@ -302,13 +304,13 @@ test('release:publish --dry-run stops before push; a confirmed run pushes the co
   await withWorld(async (w) => {
     const head = originMain(w.origin);
     const logs: string[] = [];
-    const dry = await publish({ repo: w.repo, plan: w.plan, audit: fakeAudit, options: { ...w.options, 'dry-run': true }, stage: w.stage(), confirm: async () => assert.fail('dry run must not ask'), log: (line: string) => logs.push(line) });
+    const dry = await publish({ repo: w.repo, plan: w.plan, state: w.state, audit: fakeAudit, options: { ...w.options, 'dry-run': true }, stage: w.stage(), confirm: async () => assert.fail('dry run must not ask'), log: (line: string) => logs.push(line) });
     assert.equal(dry.published, false);
     assert.match(logs.join('\n'), /Release 0\.5\.4 \(latest is 0\.5\.3\)/);
     assert.equal(originMain(w.origin), head);
     assert.equal(git(w.origin, 'tag', '--list').trim(), '');
 
-    const done = await publish({ repo: w.repo, plan: w.plan, audit: fakeAudit, options: w.options, stage: w.stage(), confirm: async () => '0.5.4', log: () => {} });
+    const done = await publish({ repo: w.repo, plan: w.plan, state: w.state, audit: fakeAudit, options: w.options, stage: w.stage(), confirm: async () => '0.5.4', log: () => {} });
     assert.equal(done.published, true);
     assert.equal(git(w.origin, 'tag', '--list').trim(), 'v0.5.4');
     assert.equal(git(w.origin, 'rev-list', '--count', `${head}..main`).trim(), '1');
@@ -332,7 +334,7 @@ test('release:publish keeps the assets and prints a working retry when gh fails 
   await withWorld(async (w) => {
     process.env.FAKE_GH_FAIL = '1';
     try {
-      await assert.rejects(publish({ repo: w.repo, plan: w.plan, audit: fakeAudit, options: w.options, stage: w.stage(), confirm: async () => '0.5.4', log: () => {} }), (error: Error) => {
+      await assert.rejects(publish({ repo: w.repo, plan: w.plan, state: w.state, audit: fakeAudit, options: w.options, stage: w.stage(), confirm: async () => '0.5.4', log: () => {} }), (error: Error) => {
         assert.match(error.message, /v0\.5\.4 was pushed but gh release create failed/);
         const kept = join(w.repo, '.local', 'release-0.5.4');
         assert.equal(readdirSync(kept).length, 9);
@@ -485,8 +487,9 @@ test('a reused infrastructure is packaged from a git worktree at its commit that
     writeFileSync(join(repo, 'marker.txt'), 'new\n');
     git(repo, 'commit', '-q', '-am', 'new');
 
+    const head = git(repo, 'rev-parse', 'HEAD').trim();
     let seen: any = null;
-    await withInfrastructureSource(repo, { mode: 'reuse' as const, digest: 'd', sourceCommit: old }, async (infra: any) => {
+    await withInfrastructureSource(repo, head, { digest: 'd', sourceCommit: old }, async (infra: any) => {
       seen = infra;
       assert.equal(readFileSync(join(infra.source, 'marker.txt'), 'utf8'), 'old\n');
       assert.equal(git(infra.source, 'rev-parse', 'HEAD').trim(), old);
@@ -496,16 +499,222 @@ test('a reused infrastructure is packaged from a git worktree at its commit that
     assert.equal(existsSync(seen.source), false);
     assert.equal(git(repo, 'worktree', 'list').trim().split('\n').length, 1);
     // Cleaned up when the work throws, too.
-    await assert.rejects(withInfrastructureSource(repo, { mode: 'reuse' as const, digest: 'd', sourceCommit: old }, async (infra: any) => { seen = infra; throw new Error('boom'); }), /boom/);
+    await assert.rejects(withInfrastructureSource(repo, head, { digest: 'd', sourceCommit: old }, async (infra: any) => { seen = infra; throw new Error('boom'); }), /boom/);
     assert.equal(existsSync(seen.source), false);
     assert.equal(git(repo, 'worktree', 'list').trim().split('\n').length, 1);
-    // A fresh build uses the checkout itself: no source, no worktree.
-    assert.deepEqual(await withInfrastructureSource(repo, { mode: 'build' as const, digest: 'd' }, async (infra: any) => infra), { digest: 'd' });
-    await assert.rejects(withInfrastructureSource(repo, { mode: 'reuse' as const, digest: 'd', sourceCommit: 'f'.repeat(40) }, async () => {}), /is not in this checkout/);
+    // Infrastructure from the commit being built uses the checkout itself: no source, no worktree.
+    assert.deepEqual(await withInfrastructureSource(repo, head, { digest: 'd', sourceCommit: head }, async (infra: any) => infra), { digest: 'd', sourceCommit: head });
+    await assert.rejects(withInfrastructureSource(repo, head, { digest: 'd', sourceCommit: 'f'.repeat(40) }, async () => {}), /is not in this checkout/);
     writeFileSync(join(repo, '.gitignore'), '');
     git(repo, 'commit', '-q', '-am', 'unignore');
-    await assert.rejects(withInfrastructureSource(repo, { mode: 'reuse' as const, digest: 'd', sourceCommit: old }, async () => {}), /not git-ignored/);
+    await assert.rejects(withInfrastructureSource(repo, git(repo, 'rev-parse', 'HEAD').trim(), { digest: 'd', sourceCommit: old }, async () => {}), /not git-ignored/);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// ---- one infrastructure source for build, install and publish ----
+// The cache entry's record as infra_package.py cached prints it.
+const cacheRecord = (sourceCommit: string, inputDigest: string) => ({
+  format: 1, infrastructureVersion: '1.0.0', contractMin: 1, contractMax: 1, sourceCommit, inputDigest, treeSha256: 'e'.repeat(64), releaseKeyId: null
+});
+
+test('the infrastructure source is the cache entry of HEAD\'s version, else HEAD, else the reused release', () => {
+  const head = 'a'.repeat(40); const cachedAt = 'b'.repeat(40); const released = 'c'.repeat(40);
+  const digest = 'd'.repeat(64); const other = 'f'.repeat(64);
+  const state = (cached: any) => ({ version: '1.0.0', digest, cache: '/infra-cache', cached });
+  // Every commit here is in the history being built; ancestry has its own test below.
+  const inHistory = () => true;
+  const reuse = { mode: 'reuse' as const, digest, sourceCommit: released };
+  // An entry with the same inputs names the commit it was built at, for every command.
+  assert.deepEqual(resolveInfrastructure({ built: head, inHistory, state: state(cacheRecord(cachedAt, digest)) }), { sourceCommit: cachedAt, digest });
+  assert.deepEqual(resolveInfrastructure({ built: head, inHistory, state: state(cacheRecord(head, digest)) }), { sourceCommit: head, digest });
+  for (const mode of ['build', 'first'] as const) {
+    assert.deepEqual(resolveInfrastructure({ built: head, inHistory, state: state(cacheRecord(cachedAt, digest)), plan: { mode, digest } }), { sourceCommit: cachedAt, digest });
+  }
+  assert.deepEqual(resolveInfrastructure({ built: head, inHistory, state: state(cacheRecord(released, digest)), plan: reuse }), { sourceCommit: released, digest });
+  // An entry with other inputs: package.ps1 would refuse the same.
+  assert.throws(() => resolveInfrastructure({ built: head, inHistory, state: state(cacheRecord(cachedAt, other)) }), /INFRA_BUMP_REQUIRED: infrastructure 1\.0\.0 is cached from inputs f+; HEAD has d+/);
+  assert.throws(() => resolveInfrastructure({ built: head, inHistory, state: state(cacheRecord(released, other)), plan: reuse }), /INFRA_BUMP_REQUIRED/);
+  // A reused release whose infrastructure is not the cached build of that version.
+  assert.throws(() => resolveInfrastructure({ built: head, inHistory, state: state(cacheRecord(cachedAt, digest)), plan: reuse }), new RegExp(`INFRA_SOURCE_MISMATCH: the latest release's infrastructure 1\\.0\\.0 comes from ${released}, but the infra cache holds 1\\.0\\.0 built at ${cachedAt}`));
+  // No entry: the commit being built, or for publish's reuse the released commit.
+  assert.deepEqual(resolveInfrastructure({ built: head, inHistory, state: state(null) }), { sourceCommit: head, digest });
+  assert.deepEqual(resolveInfrastructure({ built: head, inHistory, state: state(null), plan: { mode: 'build', digest } }), { sourceCommit: head, digest });
+  assert.deepEqual(resolveInfrastructure({ built: head, inHistory, state: state(null), plan: { mode: 'first', digest } }), { sourceCommit: head, digest });
+  assert.deepEqual(resolveInfrastructure({ built: head, inHistory, state: state(null), plan: reuse }), { sourceCommit: released, digest });
+});
+
+test('the infrastructure source must be in the history of the commit being built', () => {
+  const root = mkdtempSync(join(tmpdir(), 'yahad-infra-history-'));
+  try {
+    const repo = join(root, 'repo');
+    mkdirSync(repo);
+    git(repo, 'init', '-q', '-b', 'main');
+    writeFileSync(join(repo, 'marker.txt'), 'base\n');
+    git(repo, 'add', '-A'); git(repo, 'commit', '-q', '-m', 'base');
+    const base = git(repo, 'rev-parse', 'HEAD').trim();
+    git(repo, 'checkout', '-q', '-b', 'side');
+    git(repo, 'commit', '-q', '--allow-empty', '-m', 'side');
+    const side = git(repo, 'rev-parse', 'HEAD').trim();
+    git(repo, 'checkout', '-q', 'main');
+    git(repo, 'commit', '-q', '--allow-empty', '-m', 'app only');
+    const head = git(repo, 'rev-parse', 'HEAD').trim();
+    const digest = 'd'.repeat(64);
+    const state = (cached: any) => ({ version: '1.0.0', digest, cache: join(repo, '.local', 'infra-cache'), cached });
+    const resolveAt = (built: string, cached: any, plan: any = null) => resolveInfrastructure({ built, state: state(cached), plan, inHistory: historyOf(repo, built) });
+    assert.deepEqual(resolveAt(head, cacheRecord(base, digest)), { sourceCommit: base, digest });
+    assert.deepEqual(resolveAt(head, cacheRecord(head, digest)), { sourceCommit: head, digest });
+    // A cache entry built on a side branch: refused, naming the entry to remove.
+    assert.throws(() => resolveAt(head, cacheRecord(side, digest)), new RegExp(`INFRA_SOURCE_OUTSIDE_HISTORY: the infra cache holds 1\\.0\\.0 built at ${side}, a commit outside the history of ${head}\\. Remove .*infra-cache[\\\\/]1\\.0\\.0`));
+    assert.throws(() => resolveAt(head, cacheRecord(side, digest), { mode: 'build', digest }), /INFRA_SOURCE_OUTSIDE_HISTORY/);
+    // A released infrastructure outside the history, with no cache entry.
+    assert.throws(() => resolveAt(head, null, { mode: 'reuse', digest, sourceCommit: side }), new RegExp(`INFRA_SOURCE_OUTSIDE_HISTORY: the latest release's infrastructure 1\\.0\\.0 comes from ${side}`));
+    assert.deepEqual(resolveAt(head, null, { mode: 'reuse', digest, sourceCommit: base }), { sourceCommit: base, digest });
+    // publish builds a release commit on top of HEAD: ancestry is asked of HEAD, the release commit itself is in its history.
+    const release = 'e'.repeat(40);
+    assert.deepEqual(resolveAt(release, cacheRecord(head, digest), { mode: 'build', digest }), { sourceCommit: head, digest });
+    assert.deepEqual(resolveAt(release, null, { mode: 'build', digest }), { sourceCommit: release, digest });
+    assert.throws(() => resolveAt(release, cacheRecord(side, digest), { mode: 'build', digest }), /INFRA_SOURCE_OUTSIDE_HISTORY/);
+    // A commit this checkout does not have.
+    assert.throws(() => resolveAt(head, cacheRecord('f'.repeat(40), digest)), /is not in this checkout; fetch origin/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('the cache entry is read through infra_package.py cached', () => {
+  const cache = mkdtempSync(join(tmpdir(), 'yahad-infra-cached-'));
+  const repository = join(import.meta.dirname, '..');
+  try {
+    assert.equal(cachedInfrastructure(repository, 'python', cache, '1.0.0'), null);
+    const record = cacheRecord('b'.repeat(40), 'd'.repeat(64));
+    mkdirSync(join(cache, '1.0.0'));
+    writeFileSync(join(cache, '1.0.0', 'infra-build.json'), JSON.stringify(record));
+    assert.deepEqual(cachedInfrastructure(repository, 'python', cache, '1.0.0'), record);
+    writeFileSync(join(cache, '1.0.0', 'infra-build.json'), JSON.stringify({ ...record, sourceCommit: 'B'.repeat(40) }));
+    assert.throws(() => cachedInfrastructure(repository, 'python', cache, '1.0.0'), /Cannot read infrastructure 1\.0\.0 from .*INFRA_CACHE_CORRUPT: build record/);
+  } finally { rmSync(cache, { recursive: true, force: true }); }
+});
+
+// A clean repository with a committed key, an older commit and HEAD.
+function buildable(root: string) {
+  const keys = pair();
+  const pem = join(root, 'key.pem');
+  writeFileSync(pem, keys.pem);
+  const repo = join(root, 'repo');
+  mkdirSync(join(repo, 'installer'), { recursive: true });
+  writeFileSync(join(repo, '.gitignore'), '.local/\n');
+  writeFileSync(join(repo, 'installer', 'release-key.spki'), keys.spki);
+  writeFileSync(join(repo, 'marker.txt'), 'infrastructure commit\n');
+  git(repo, 'init', '-q');
+  git(repo, 'add', '-A'); git(repo, 'commit', '-q', '-m', 'infrastructure');
+  const older = git(repo, 'rev-parse', 'HEAD').trim();
+  writeFileSync(join(repo, 'marker.txt'), 'app-only commit\n');
+  git(repo, 'commit', '-q', '-am', 'app only');
+  return { repo, pem, older, head: git(repo, 'rev-parse', 'HEAD').trim() };
+}
+
+test('build hands buildSigned the infrastructure the cache names, from a worktree at that commit', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'yahad-build-infra-'));
+  try {
+    const { repo, pem, older, head } = buildable(root);
+    const digest = 'd'.repeat(64);
+    const options = { 'node-dir': root };
+    const run = (cached: any) => {
+      const seen: any[] = [];
+      return buildRelease({
+        repo, keyFile: pem, out: join(root, 'out'), options,
+        state: (at: string, inputs: any) => { assert.equal(at, repo); assert.equal(inputs.InfraCache, join(repo, '.local', 'infra-cache')); return { version: '1.0.0', digest, cache: join(repo, '.local', 'infra-cache'), cached }; },
+        sign: ({ repo: built, infra }: any) => {
+          assert.equal(built, repo);
+          seen.push({ ...infra, marker: infra.source ? readFileSync(join(infra.source, 'marker.txt'), 'utf8') : null, head: infra.source ? git(infra.source, 'rev-parse', 'HEAD').trim() : null });
+          return seen;
+        }
+      }).then(() => seen[0]);
+    };
+    // The cache holds 1.0.0 built at an earlier commit with these inputs: that commit, checked out.
+    const fromCache = await run(cacheRecord(older, digest));
+    assert.deepEqual({ ...fromCache, source: undefined }, { sourceCommit: older, digest, marker: 'infrastructure commit\n', head: older, source: undefined });
+    assert.equal(existsSync(fromCache.source), false, 'the worktree is removed');
+    assert.equal(git(repo, 'worktree', 'list').trim().split('\n').length, 1);
+    assert.equal(git(repo, 'status', '--porcelain').trim(), '');
+    // Cached at HEAD, or not cached: HEAD itself, no -InfraSource.
+    assert.deepEqual(await run(cacheRecord(head, digest)), { sourceCommit: head, digest, marker: null, head: null });
+    assert.deepEqual(await run(null), { sourceCommit: head, digest, marker: null, head: null });
+    // Other inputs under the same version: refused before anything is built.
+    await assert.rejects(buildRelease({ repo, keyFile: pem, out: join(root, 'out'), options, state: () => ({ version: '1.0.0', digest, cache: '/infra-cache', cached: cacheRecord(older, 'f'.repeat(64)) }), sign: () => assert.fail('no build') }), /INFRA_BUMP_REQUIRED/);
+    // The refusals that need no build tools still come first.
+    writeFileSync(join(repo, 'stray.txt'), 'x');
+    await assert.rejects(buildRelease({ repo, keyFile: pem, out: join(root, 'out'), options, state: () => assert.fail('no state'), sign: () => assert.fail('no build') }), /working tree is dirty/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('windows:install builds the clone with the infrastructure the cache names', { skip: process.platform !== 'win32' }, async () => {
+  await withWorld(async (w) => {
+    const older = git(w.repo, 'rev-parse', 'HEAD').trim();
+    git(w.repo, 'commit', '-q', '--allow-empty', '-m', 'app only');
+    const head = git(w.repo, 'rev-parse', 'HEAD').trim();
+    const digest = 'd'.repeat(64);
+    const run = (cached: any) => {
+      let seen: any = null;
+      return install({
+        repo: w.repo, options: w.options, launch: () => {},
+        state: () => ({ version: '1.0.0', digest, cache: '/infra-cache', cached }),
+        build: async ({ clone, root, infra }: any) => {
+          seen = { ...infra, worktreeHead: infra.source ? git(infra.source, 'rev-parse', 'HEAD').trim() : null };
+          assert.equal(git(clone, 'rev-parse', 'HEAD').trim(), head);
+          const setupFile = join(root, 'Yahad.Setup-0.5.3.exe');
+          writeFileSync(setupFile, 'setup');
+          return { version: '0.5.3', commit: head, setupFile };
+        }
+      }).then(() => seen);
+    };
+    const fromCache = await run(cacheRecord(older, digest));
+    assert.equal(fromCache.sourceCommit, older);
+    assert.equal(fromCache.worktreeHead, older);
+    assert.ok(fromCache.source.startsWith(join(w.repo, '.local', 'infra-source')), 'the worktree comes from the maintainer\'s checkout');
+    assert.equal(existsSync(fromCache.source), false);
+    assert.deepEqual(await run(null), { sourceCommit: head, digest, worktreeHead: null });
+    await assert.rejects(run(cacheRecord(older, 'f'.repeat(64))), /INFRA_BUMP_REQUIRED/);
+  });
+});
+
+test('release:publish packages the infrastructure the cache names and refuses a reuse the cache contradicts', async () => {
+  await withWorld(async (w) => {
+    const older = git(w.repo, 'rev-parse', 'HEAD').trim();
+    git(w.repo, 'commit', '-q', '--allow-empty', '-m', 'app only');
+    git(w.repo, 'push', '-q', 'origin', 'main');
+    const head = git(w.repo, 'rev-parse', 'HEAD').trim();
+    const digest = 'd'.repeat(64);
+    const run = async (plan: any, cached: any) => {
+      let seen: any = null;
+      const logs: string[] = [];
+      const done = await publish({
+        repo: w.repo, audit: fakeAudit, options: { ...w.options, 'dry-run': true }, confirm: async () => assert.fail('dry run'), log: (line: string) => logs.push(line),
+        plan: async () => plan, state: () => ({ version: '1.0.0', digest, cache: '/infra-cache', cached }),
+        stage: async (args: any) => {
+          seen = { ...args.infra, worktreeHead: args.infra.source ? git(args.infra.source, 'rev-parse', 'HEAD').trim() : null };
+          return w.stage()(args);
+        }
+      });
+      return { seen, done, logs: logs.join('\n') };
+    };
+    // A new infrastructure version already built locally at an earlier commit: that build, from its commit.
+    let result = await run({ mode: 'build', digest }, cacheRecord(head, digest));
+    assert.equal(result.seen.sourceCommit, head);
+    assert.equal(result.seen.worktreeHead, head, 'the release commit is not the cached commit, so HEAD is checked out');
+    assert.match(result.logs, new RegExp(`infra    new version, packaged from ${head}`));
+    // No cache entry: a reuse packages the released commit, a new version the release commit itself.
+    result = await run({ mode: 'reuse', digest, sourceCommit: older }, null);
+    assert.equal(result.seen.sourceCommit, older);
+    assert.equal(result.seen.worktreeHead, older);
+    result = await run({ mode: 'build', digest }, null);
+    assert.equal(result.seen.sourceCommit, result.done.commit);
+    assert.equal(result.seen.source, undefined);
+    assert.match(result.logs, /infra    new version, built from this commit/);
+    // A reuse whose released commit is not the cached build of that version, and a cache of other inputs.
+    await assert.rejects(run({ mode: 'reuse', digest, sourceCommit: older }, cacheRecord(head, digest)), /INFRA_SOURCE_MISMATCH: the latest release's infrastructure 1\.0\.0 comes from/);
+    await assert.rejects(run({ mode: 'build', digest }, cacheRecord(head, 'f'.repeat(64))), /INFRA_BUMP_REQUIRED/);
+    assert.equal(git(w.repo, 'worktree', 'list').trim().split('\n').length, 1);
+    assert.equal(w.calls().some((call) => call[0] === 'release'), false);
+  });
 });
 
 test('every release carries a runtime above the bootstrap and above every earlier release', () => {
@@ -541,13 +750,13 @@ test('the real updater packager produces a pair that the release check accepts',
 test('windows:install refuses a dirty tree, builds in a clone that is removed, copies the Setup out and launches it', { skip: process.platform !== 'win32' }, async () => {
   await withWorld(async (w) => {
     writeFileSync(join(w.repo, 'stray.txt'), 'x');
-    await assert.rejects(install({ repo: w.repo, options: w.options, build: async () => assert.fail('no build'), launch: () => assert.fail('no launch') }), /working tree is dirty/);
+    await assert.rejects(install({ repo: w.repo, options: w.options, state: w.state, build: async () => assert.fail('no build'), launch: () => assert.fail('no launch') }), /working tree is dirty/);
     rmSync(join(w.repo, 'stray.txt'));
 
     const launched: string[] = [];
     let clonePath = '';
     const result = await install({
-      repo: w.repo, options: w.options,
+      repo: w.repo, options: w.options, state: w.state,
       build: async ({ clone, root }: { clone: string; root: string }) => {
         clonePath = clone;
         assert.equal(git(clone, 'config', 'core.autocrlf').trim(), 'false');

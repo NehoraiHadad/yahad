@@ -651,6 +651,30 @@ version's first release, from that commit. It is cached by
 `infra-tree.json` digest. Later releases reuse it and build only the app
 and the distributable Setup (decision 7).
 
+**One infrastructure source for every build.** `infra_package.py plan()` reuses a
+cache entry only when the Setup is published from a checkout of the entry's own
+source commit (`-InfraSource`), and refuses `INFRA_SOURCE_MISMATCH` otherwise. So
+every command of `scripts/release-windows.mjs` that builds (`build`, `install`,
+`publish`) resolves that commit the same way (`resolveInfrastructure`), from the
+cache entry for HEAD's `YahadInfrastructureVersion`, read through
+`infra_package.py cached`:
+- an entry with HEAD's input digest: its `sourceCommit`;
+- an entry with another digest: refused early, `INFRA_BUMP_REQUIRED`;
+- no entry: the commit being built, except a `publish` that reuses the latest
+  release's infrastructure, which takes that release's commit. A `publish` reuse
+  whose released commit differs from an existing entry's commit is refused.
+
+The resolved commit must be the commit being built or one of its ancestors
+(`git merge-base --is-ancestor`), for every command; otherwise the command refuses
+`INFRA_SOURCE_OUTSIDE_HISTORY` and names the cache entry to remove. Because `publish`
+builds only from a HEAD equal to `origin/main`, a release's infrastructure commit is
+always on `origin/main`.
+
+A commit other than the one being built is checked out as a git worktree under the
+git-ignored `.local/infra-source/` and removed afterwards. `buildSigned` then
+requires the manifest's `infrastructure.sourceCommit` and the build's recorded
+input digest to be the resolved ones.
+
 **Version bump rule, per component.** "Anything under `installer/`" is not the
 right test, because infra inputs also live outside it. The release command
 computes an **infrastructure input digest** over:

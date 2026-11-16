@@ -5,6 +5,8 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -55,6 +57,33 @@ class CacheTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaisesRegex(cache.InfraError, 'INFRA_KEY_MISMATCH'): self.plan(key)
         for key in ('ABCDEF0123456789', '0123', None, ''):
             with self.subTest(key=key), self.assertRaises(cache.InfraError): cache.plan(self.cache, self.source, key)
+
+    def test_cached_reads_the_validated_record_of_a_version_or_none(self):
+        self.assertIsNone(cache.cached(self.cache, '1.0.0'))
+        entry = infra_entry(self.cache, KEY)
+        self.assertEqual(cache.cached(self.cache, '1.0.0'), json.loads((entry/'infra-build.json').read_bytes()))
+        self.assertIsNone(cache.cached(self.cache, '1.0.1'))
+        for version in ('../1.0.0', '1.0', '01.0.0', '', None):
+            with self.subTest(version=version), self.assertRaisesRegex(cache.InfraError, 'Infrastructure version required'): cache.cached(self.cache, version)
+        # The record is validated, and it must be the record of the version it is filed under.
+        moved = entry.rename(self.cache/'1.0.1')
+        with self.assertRaisesRegex(cache.InfraError, 'INFRA_CACHE_CORRUPT: entry version'): cache.cached(self.cache, '1.0.1')
+        value = json.loads((moved/'infra-build.json').read_bytes()); value['sourceCommit'] = 'F'*40
+        put(moved, 'infra-build.json', json.dumps(value))
+        with self.assertRaisesRegex(cache.InfraError, 'INFRA_CACHE_CORRUPT: build record'): cache.cached(self.cache, '1.0.1')
+
+    def test_cached_command_prints_one_json_line(self):
+        def run(version):
+            done = subprocess.run([sys.executable, '-m', 'installer.windows.infra_package', 'cached', '--cache', str(self.cache), '--version', version],
+                                  cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)
+            return done.returncode, done.stdout.splitlines(), done.stderr
+        self.assertEqual(run('1.0.0')[:2], (0, ['null']))
+        entry = infra_entry(self.cache, KEY)
+        code, lines, _ = run('1.0.0')
+        self.assertEqual((code, len(lines)), (0, 1))
+        self.assertEqual(json.loads(lines[0]), json.loads((entry/'infra-build.json').read_bytes()))
+        code, lines, error = run('../x')
+        self.assertNotEqual(code, 0); self.assertEqual(lines, []); self.assertIn('Infrastructure refused: Infrastructure version required', error)
 
     def test_corrupt_entries_are_refused_by_the_audit(self):
         def changed_member(entry): (entry/'tree/runtime/node/node.exe').write_bytes(image()+b'changed')

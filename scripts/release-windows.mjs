@@ -7,7 +7,13 @@
 //
 // A release is nine assets (docs/WINDOWS-APP-PACKAGE-PLAN.md section 10). `publish` also enforces the
 // infrastructure version rule: inputs changed since the latest release's infrastructure => the version
-// must be bumped; unchanged => its build is reused from a git worktree at that release's commit.
+// must be bumped; unchanged => its build is reused from that release's commit.
+//
+// Every command that builds (build, install, publish) packages the infrastructure from one commit,
+// resolved by resolveInfrastructure: the infra cache entry of HEAD's infrastructure version when there is
+// one (its commit, or a refusal when its inputs differ), else the commit being built, or for a publish
+// that reuses the latest release's infrastructure, that release's commit. A commit other than the one
+// being built is checked out as a git worktree under .local/infra-source (package.ps1 -InfraSource).
 //
 // Options (all subcommands): --key <key.pem> (default ~/yahad-release-key/key.pem), --node-dir,
 // --dotnet, --npm-cache, --vendors, --package-cache, --infra-cache, --python, --pwsh. Inputs default to .local/
@@ -296,22 +302,29 @@ function requireUsableKey(options) {
 }
 
 // ---- the Windows build -------------------------------------------------------------------------
-// Builds `repo` (a clean checkout of a committed state) and writes <out>/assets with the four
-// Windows files (manifest, signature, app archive, versioned Setup). Used directly by `build` and inside
-// the throwaway clones of install/publish. The infrastructure cache is inputs.InfraCache. `infra` is
-// { source, sourceCommit, digest } when an earlier infrastructure is reused or the digest is known: a
-// checkout at that commit (package.ps1 -InfraSource) and the input digest the build must report.
-export function buildSigned({ repo, keyFile, out, inputsOf, infra = {} }) {
+// The refusals that need no build tools: committed key, matching private key, clean tree, fresh output.
+function requireBuildable({ repo, keyFile, out }) {
   const spki = committedKey(repo);
   requireKeyMatches(keyFile, spki);
   if (dirty(repo)) refuse('The working tree is dirty. Commit or discard every change; a release is built from HEAD only.');
-  const commit = git(repo, 'rev-parse', 'HEAD').trim();
   const resolvedOut = resolve(out);
   if (existsSync(resolvedOut)) refuse(`Output directory ${resolvedOut} already exists; choose a new one.`);
   const inside = relative(repo, resolvedOut);
   if (!inside.startsWith('..') && !isAbsolute(inside) && spawnSync('git', ['check-ignore', '-q', resolvedOut], { cwd: repo }).status !== 0) {
     refuse(`Output ${resolvedOut} is inside the checkout and not git-ignored; it would dirty the tree. Use a directory outside the repository or under .local/.`);
   }
+  return { spki, resolvedOut };
+}
+
+// Builds `repo` (a clean checkout of a committed state) and writes <out>/assets with the four
+// Windows files (manifest, signature, app archive, versioned Setup). Used by `build` (buildRelease) and inside
+// the throwaway clones of install/publish. The infrastructure cache is inputs.InfraCache. `infra` is
+// what withInfrastructure resolved: { sourceCommit, digest }, plus `source`, a checkout at sourceCommit
+// (package.ps1 -InfraSource), when the infrastructure comes from another commit than `repo`'s HEAD.
+// The built manifest must name sourceCommit and the build must record digest.
+export function buildSigned({ repo, keyFile, out, inputsOf, infra }) {
+  const { spki, resolvedOut } = requireBuildable({ repo, keyFile, out });
+  const commit = git(repo, 'rev-parse', 'HEAD').trim();
   const inputs = inputsOf(); // after every refusal above, so those need no build tools
   const version = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')).version;
   const packageDirectory = join(resolvedOut, 'package');
@@ -327,11 +340,9 @@ export function buildSigned({ repo, keyFile, out, inputsOf, infra = {} }) {
 
   const { manifestName, manifest } = requireBuiltKey(packageDirectory, spki);
   if (manifest.version !== version || manifest.sourceCommit !== commit) refuse(`The manifest says ${manifest.version} at ${manifest.sourceCommit}, expected ${version} at ${commit}.`);
-  if (infra.sourceCommit && manifest.infrastructure.sourceCommit !== infra.sourceCommit) refuse(`The manifest's infrastructure comes from ${manifest.infrastructure.sourceCommit}, not the reused ${infra.sourceCommit}.`);
-  if (infra.digest) {
-    const recorded = JSON.parse(readFileSync(join(packageDirectory, 'package-build.json'), 'utf8')).infraInputDigest;
-    if (recorded !== infra.digest) refuse(`The build recorded infrastructure input digest ${recorded}, expected ${infra.digest}.`);
-  }
+  if (manifest.infrastructure.sourceCommit !== infra.sourceCommit) refuse(`The manifest's infrastructure comes from ${manifest.infrastructure.sourceCommit}, not the resolved ${infra.sourceCommit}.`);
+  const recorded = JSON.parse(readFileSync(join(packageDirectory, 'package-build.json'), 'utf8')).infraInputDigest;
+  if (recorded !== infra.digest) refuse(`The build recorded infrastructure input digest ${recorded}, expected ${infra.digest}.`);
   const names = windowsNames(version);
   if (manifestName !== names.manifest) refuse(`The build wrote ${manifestName}, expected ${names.manifest}.`);
   const built = join(packageDirectory, 'release');
@@ -377,7 +388,7 @@ function shellExecute(file) {
   if (result.status !== 0) refuse(`Could not launch ${file}`);
 }
 
-export async function install({ repo, options, build = buildClonedWindows, launch = shellExecute }) {
+export async function install({ repo, options, build = buildClonedWindows, launch = shellExecute, state = infrastructureState }) {
   if (process.platform !== 'win32') refuse('windows:install runs on Windows.');
   if (dirty(repo)) refuse('The working tree is dirty. Commit or discard every change first; the installer is built from HEAD.');
   const keyFile = requireUsableKey(options);
@@ -385,8 +396,9 @@ export async function install({ repo, options, build = buildClonedWindows, launc
   const destination = join(repo, '.local', 'windows-install');
   const built = await withTemporaryDirectory(async (root) => {
     const clone = join(root, 'repo');
-    cloneHead(repo, clone);
-    const result = await build({ clone, root, keyFile, inputs });
+    const head = cloneHead(repo, clone);
+    // The clone is HEAD, so HEAD's cache entry decides; an infrastructure worktree comes from this checkout.
+    const result = await withInfrastructure({ repo, built: head, state: state(repo, inputs) }, (infra) => build({ clone, root, keyFile, inputs, infra }));
     // Copied out before the clone goes: the Setup is self-contained.
     mkdirSync(destination, { recursive: true });
     const target = join(destination, basenameOf(result.setupFile));
@@ -400,9 +412,18 @@ export async function install({ repo, options, build = buildClonedWindows, launc
 }
 const basenameOf = (path) => path.split(/[\\/]/).at(-1);
 
-async function buildClonedWindows({ clone, root, keyFile, inputs }) {
+async function buildClonedWindows({ clone, root, keyFile, inputs, infra }) {
   installDependencies(inputs, clone);
-  return buildSigned({ repo: clone, keyFile, out: join(root, 'windows'), inputsOf: () => inputs });
+  return buildSigned({ repo: clone, keyFile, out: join(root, 'windows'), inputsOf: () => inputs, infra });
+}
+
+// ---- build -------------------------------------------------------------------------------------
+// `build` of this checkout itself: the refusals first, then the infrastructure source, then the build.
+export async function buildRelease({ repo, keyFile, out, options, state = infrastructureState, sign = buildSigned }) {
+  requireBuildable({ repo, keyFile, out });
+  const inputs = resolveInputs(repo, options);
+  const head = git(repo, 'rev-parse', 'HEAD').trim();
+  return withInfrastructure({ repo, built: head, state: state(repo, inputs) }, (infra) => sign({ repo, keyFile, out, inputsOf: () => inputs, infra }));
 }
 
 // ---- release:publish ---------------------------------------------------------------------------
@@ -511,14 +532,76 @@ async function planFromLatest({ repo, inputs, spki, latest }) {
   }));
 }
 
-// A reused infrastructure is packaged from a checkout at its own commit: a git worktree under the
-// git-ignored .local/, removed again whatever happens.
-export async function withInfrastructureSource(repo, plan, work) {
-  if (plan.mode !== 'reuse') return work({ digest: plan.digest });
+// The infra cache entry of `version` (installer/package.ps1 -InfraCache), read and validated by
+// installer/windows/infra_package.py, the module package.ps1 plans with: its build record, or null.
+export function cachedInfrastructure(repo, python, cache, version) {
+  const run = spawnSync(python, ['-m', 'installer.windows.infra_package', 'cached', '--cache', cache, '--version', version], { cwd: repo, encoding: 'utf8', windowsHide: true });
+  if (run.error || run.status !== 0) refuse(`Cannot read infrastructure ${version} from ${cache}: ${(run.stderr || run.error?.message || `exit ${run.status}`).trim()}`);
+  try { return JSON.parse(run.stdout); } catch { refuse(`infra_package.py cached printed no record for ${version}.`); }
+}
+
+// What decides where a build of this checkout's HEAD takes its infrastructure from: HEAD's
+// infrastructure version and input digest, and the infra cache's entry for that version.
+export function infrastructureState(repo, inputs) {
+  const head = git(repo, 'rev-parse', 'HEAD').trim();
+  const version = infrastructureVersionAt(repo, head);
+  return { version, digest: inputDigest(repo, inputs.Python, head), cache: inputs.InfraCache, cached: cachedInfrastructure(repo, inputs.Python, inputs.InfraCache, version) };
+}
+
+// The one commit the infrastructure is packaged from, the one infra_package.py plan() accepts.
+// `built` is the commit being built (publish's release commit, else HEAD), `state` is infrastructureState,
+// `plan` is publish's planInfrastructure result (none for build and install), and `inHistory(commit)`
+// says whether a commit is in the history of `built` (historyOf).
+//   cache entry, same inputs  -> its source commit: one infrastructure version names one build
+//   cache entry, other inputs -> refused, INFRA_BUMP_REQUIRED
+//   no entry                  -> the latest release's commit when publish reuses it, else `built`
+// The source must be `built` or one of its ancestors, so a release never names infrastructure from a
+// commit outside its own history (for publish: outside origin/main, which HEAD equals).
+export function resolveInfrastructure({ built, state, plan = null, inHistory }) {
+  const { version, digest, cache, cached } = state;
+  if (cached) {
+    if (cached.inputDigest !== digest) refuse(`INFRA_BUMP_REQUIRED: infrastructure ${version} is cached from inputs ${cached.inputDigest}; HEAD has ${digest}. Raise YahadInfrastructureVersion in ${INFRASTRUCTURE_PROPS}.`);
+    if (plan?.mode === 'reuse' && plan.sourceCommit !== cached.sourceCommit) {
+      refuse(`INFRA_SOURCE_MISMATCH: the latest release's infrastructure ${version} comes from ${plan.sourceCommit}, but the infra cache holds ${version} built at ${cached.sourceCommit}. One version names one build, and this cache entry is not the released one.`);
+    }
+    if (cached.sourceCommit !== built && !inHistory(cached.sourceCommit)) {
+      refuse(`INFRA_SOURCE_OUTSIDE_HISTORY: the infra cache holds ${version} built at ${cached.sourceCommit}, a commit outside the history of ${built}. Remove ${join(cache, version)} so it is rebuilt from this commit.`);
+    }
+    return { sourceCommit: cached.sourceCommit, digest };
+  }
+  if (plan?.mode === 'reuse') {
+    if (!inHistory(plan.sourceCommit)) refuse(`INFRA_SOURCE_OUTSIDE_HISTORY: the latest release's infrastructure ${version} comes from ${plan.sourceCommit}, a commit outside the history of ${built}.`);
+    return { sourceCommit: plan.sourceCommit, digest };
+  }
+  return { sourceCommit: built, digest };
+}
+
+// Whether a commit is in the history of the commit being built. That commit is `repo`'s HEAD, or for
+// publish a release commit whose parent is `repo`'s HEAD, so ancestry is asked of HEAD in `repo`.
+export function historyOf(repo, built) {
+  const head = git(repo, 'rev-parse', 'HEAD').trim();
+  return (commit) => {
+    if (commit === built) return true;
+    try { git(repo, 'cat-file', '-e', `${commit}^{commit}`); } catch { refuse(`The infrastructure commit ${commit} is not in this checkout; fetch origin.`); }
+    const run = spawnSync('git', ['merge-base', '--is-ancestor', commit, head], { cwd: repo });
+    if (run.status !== 0 && run.status !== 1) refuse(`git merge-base --is-ancestor ${commit} ${head} failed (${run.error?.message ?? `exit ${run.status}`}).`);
+    return run.status === 0;
+  };
+}
+
+// Runs `work(infra)` with the resolved infrastructure source.
+export function withInfrastructure({ repo, built, state, plan = null }, work) {
+  return withInfrastructureSource(repo, built, resolveInfrastructure({ built, state, plan, inHistory: historyOf(repo, built) }), work);
+}
+
+// An infrastructure from another commit than the one being built is packaged from a checkout at its
+// own commit: a git worktree under the git-ignored .local/ of `repo`, removed again whatever happens.
+export async function withInfrastructureSource(repo, built, infra, work) {
+  if (infra.sourceCommit === built) return work({ sourceCommit: infra.sourceCommit, digest: infra.digest });
   const root = join(repo, '.local', 'infra-source');
   if (spawnSync('git', ['check-ignore', '-q', root], { cwd: repo }).status !== 0) refuse(`${root} is not git-ignored; the infrastructure worktree would dirty the checkout.`);
-  try { git(repo, 'cat-file', '-e', `${plan.sourceCommit}^{commit}`); } catch { refuse(`The infrastructure commit ${plan.sourceCommit} is not in this checkout; fetch origin.`); }
-  const source = join(root, plan.sourceCommit.slice(0, 12));
+  try { git(repo, 'cat-file', '-e', `${infra.sourceCommit}^{commit}`); } catch { refuse(`The infrastructure commit ${infra.sourceCommit} is not in this checkout; fetch origin.`); }
+  const source = join(root, infra.sourceCommit.slice(0, 12));
   const remove = () => {
     try { git(repo, 'worktree', 'remove', '--force', source); } catch { /* not registered */ }
     rmSync(source, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
@@ -526,8 +609,8 @@ export async function withInfrastructureSource(repo, plan, work) {
   };
   remove(); // a leftover from an interrupted run
   mkdirSync(root, { recursive: true });
-  git(repo, '-c', 'core.autocrlf=false', '-c', 'core.longpaths=true', 'worktree', 'add', '--detach', source, plan.sourceCommit);
-  try { return await work({ source, sourceCommit: plan.sourceCommit, digest: plan.digest }); } finally { remove(); }
+  git(repo, '-c', 'core.autocrlf=false', '-c', 'core.longpaths=true', 'worktree', 'add', '--detach', source, infra.sourceCommit);
+  try { return await work({ source, sourceCommit: infra.sourceCommit, digest: infra.digest }); } finally { remove(); }
 }
 
 async function stageRelease({ clone, root, keyFile, inputs, infra }) {
@@ -555,7 +638,7 @@ const typed = async (question) => {
   try { return (await rl.question(question)).trim(); } finally { rl.close(); }
 };
 
-export async function publish({ repo, options, confirm = typed, stage = stageRelease, plan = planFromLatest, audit = auditSetup, log = console.log }) {
+export async function publish({ repo, options, confirm = typed, stage = stageRelease, plan = planFromLatest, state = infrastructureState, audit = auditSetup, log = console.log }) {
   requireReleasable(repo);
   const keyFile = requireUsableKey(options);
   const inputs = resolveInputs(repo, options);
@@ -578,14 +661,19 @@ export async function publish({ repo, options, confirm = typed, stage = stageRel
     const commit = git(clone, 'rev-parse', 'HEAD').trim();
     const spki = committedKey(repo);
     const infrastructure = await plan({ repo, inputs, spki, latest });
-    const { assets } = await withInfrastructureSource(repo, infrastructure, (infra) => stage({ clone, root, keyFile, inputs, infra }));
+    let source;
+    const { assets } = await withInfrastructure({ repo, built: commit, state: state(repo, inputs), plan: infrastructure }, (infra) => {
+      source = infra.sourceCommit;
+      return stage({ clone, root, keyFile, inputs, infra });
+    });
     const files = collectReleaseAssets(assets, version, spki, audit);
 
     log(`\nRelease ${version} (latest is ${latest})`);
     log(`  commit   ${commit}  (on top of origin/main)`);
     log(`  key id   ${keyIdOf(spki)}`);
     log(`  runtime  ${runtimeVersionFor(version)}  (root updater, for enrolled machines)`);
-    log(`  infra    ${infrastructure.mode === 'reuse' ? `reused from ${infrastructure.sourceCommit}` : infrastructure.mode === 'build' ? 'new version, built from this commit' : 'first Windows release, built from this commit'}`);
+    const kind = { reuse: 'reused from the latest release', build: 'new version', first: 'first Windows release' }[infrastructure.mode];
+    log(`  infra    ${kind}, ${source === commit ? 'built from this commit' : `packaged from ${source}`}`);
     for (const file of files) log(`  asset    ${file.name}  ${(file.bytes / 1048576).toFixed(2)} MiB`);
     if (options['dry-run']) { log('\n--dry-run: nothing was pushed or published; the temporary clone is removed.'); return { version, commit, files, published: false }; }
     const answer = await confirm(`\nType ${version} to push ${tag} to origin/main and publish: `);
@@ -619,7 +707,7 @@ async function main(repo, argv) {
     if (!existsSync(keyFile)) refuse(`Key file not found: ${keyFile}`);
     const checkout = insideCheckout(keyFile);
     if (checkout) refuse(`Refusing a signing key inside the checkout ${checkout}. Keep it outside any repository.`);
-    const built = buildSigned({ repo, keyFile, out: options.out, inputsOf: () => resolveInputs(repo, options) });
+    const built = await buildRelease({ repo, keyFile, out: options.out, options });
     console.log(`\nSigned release ${built.version} written to ${built.assets} (nothing was published).`);
   } else if (command === 'install') {
     await install({ repo, options: parse(rest).options });

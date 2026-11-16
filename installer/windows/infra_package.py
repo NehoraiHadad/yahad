@@ -20,8 +20,9 @@ after every member is audited by bytes against infra-tree.json (verify()). The
 same version with another input digest is INFRA_BUMP_REQUIRED: one infrastructure
 version names exactly one tree.
 
-CLI (installer/package.ps1):
+CLI (installer/package.ps1; cached: scripts/release-windows.mjs):
   plan   --cache C --source S --release-key-id K|none
+  cached --cache C --version V   the validated build record of C/<V>, or null
   build  --cache C --source S --release-key-id K|none --host H --updater U --platform P
          --engine E --node N --dotnet D --vendors V
   verify --entry C/<v>
@@ -37,7 +38,7 @@ import subprocess
 import uuid
 
 from . import dependencies, infra_inputs
-from .application_version import source_infrastructure_identity, Infrastructure
+from .application_version import source_infrastructure_identity, Infrastructure, _stable
 from .setup_package import (PackageError, _VerifiedFiles, _inventory, _json, _record, _hash, _unlinked, _inspect,
     validate_native, validate_engine, tree_record, parse_tree_record, COMPONENTS, ENGINE, INFRA_PREFIXES, INFRA_REQUIRED,
     INFRA_TREE_NAME, RUNTIME_VERSION)
@@ -117,6 +118,19 @@ def verify(entry):
 def describe(entry):
     return dict(infrastructureVersion=entry.identity.version, contractMin=entry.identity.contract_min, contractMax=entry.identity.contract_max,
                 sourceCommit=entry.source_commit, inputDigest=entry.input_digest, treeSha256=entry.tree_sha256, releaseKeyId=entry.release_key_id)
+
+
+def cached(cache, version):
+    """The build record of the cache entry for infrastructure `version`, or None
+    when the cache has none. Read-only: it says which commit and inputs that
+    version was built from, so a release command can hand package.ps1 the
+    -InfraSource plan() requires; plan() and verify() still audit the tree."""
+    if not _stable(version): raise InfraError('Infrastructure version required: '+repr(version))
+    entry = Path(cache).absolute()/version
+    if not entry.exists(): return None
+    record = read_record(_unlinked(entry))
+    if record['infrastructureVersion'] != version: raise InfraError('INFRA_CACHE_CORRUPT: entry version')
+    return record
 
 
 def plan(cache, source, release_key_id):
@@ -227,16 +241,18 @@ def build(cache, source, release_key_id, host, updater, platform, engine, node, 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest='operation', required=True)
-    planning = sub.add_parser('plan'); building = sub.add_parser('build'); verifying = sub.add_parser('verify')
+    planning = sub.add_parser('plan'); building = sub.add_parser('build'); verifying = sub.add_parser('verify'); reading = sub.add_parser('cached')
     for parser_ in (planning, building):
         for name in ('cache', 'source'): parser_.add_argument('--'+name, required=True, type=Path)
         parser_.add_argument('--release-key-id', required=True)
     for name in ('host', 'updater', 'platform', 'engine', 'node', 'dotnet', 'vendors'): building.add_argument('--'+name, required=True, type=Path)
     verifying.add_argument('--entry', required=True, type=Path)
+    reading.add_argument('--cache', required=True, type=Path); reading.add_argument('--version', required=True)
     args = vars(parser.parse_args()); operation = args.pop('operation')
     try:
         if operation == 'plan': result = plan(**args)
         elif operation == 'build': result = describe(build(**args))
+        elif operation == 'cached': result = cached(**args)
         else: result = describe(verify(args['entry']))
         print(json.dumps(result, sort_keys=True))
     except (ValueError, OSError, TypeError, KeyError, subprocess.SubprocessError) as error:
