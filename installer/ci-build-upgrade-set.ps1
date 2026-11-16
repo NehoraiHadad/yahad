@@ -143,9 +143,9 @@ try {
             Run $node @($npm, 'version', $Version, '--no-git-tag-version', '--ignore-scripts')
             if ($Infrastructure) {
                 $props = Join-Path $tree 'installer/Directory.Build.props'
-                $infrastructure = [regex]::Matches([IO.File]::ReadAllText($props), '<YahadInfrastructureVersion>([^<]*)</YahadInfrastructureVersion>')
-                if ($infrastructure.Count -ne 1) { throw "Expected one YahadInfrastructureVersion in $props" }
-                ReplaceOnce $props $infrastructure[0].Value "<YahadInfrastructureVersion>$(BumpVersion $infrastructure[0].Groups[1].Value)</YahadInfrastructureVersion>"
+                $declaredInfra = [regex]::Matches([IO.File]::ReadAllText($props), '<YahadInfrastructureVersion>([^<]*)</YahadInfrastructureVersion>')
+                if ($declaredInfra.Count -ne 1) { throw "Expected one YahadInfrastructureVersion in $props" }
+                ReplaceOnce $props $declaredInfra[0].Value "<YahadInfrastructureVersion>$(BumpVersion $declaredInfra[0].Groups[1].Value)</YahadInfrastructureVersion>"
             }
             $result = & $Patch $tree
             MarkHelpPage $tree $Version
