@@ -40,6 +40,43 @@ internal static class UpgradeFiles
         if(state.Phase!="committed")throw new IOException("INSTALL_INCOMPLETE");
         return state;
     }
+    // The installed key is the root of trust (TrustedReleaseKey.Require).
+    internal static byte[]? InstalledKey()
+    {
+        var path=InstallLocations.ReleaseKeyFile;if(!File.Exists(path))return null;
+        return NativeInstallFiles.ReadRecord(path);
+    }
+    internal static string Partial(string root)=>root+".partial";
+    // The space for the new trees and the database copy, on both volumes.
+    internal static void RequireSpace(long treeBytes,string data)
+    {
+        if(new DriveInfo(Path.GetPathRoot(InstallLocations.Binaries)!).AvailableFreeSpace<checked(treeBytes+536870912L)||
+            new DriveInfo(Path.GetPathRoot(InstallLocations.State)!).AvailableFreeSpace<checked(DatabaseBackup.Size(data)+536870912L))throw new IOException("DISK_SPACE");
+    }
+    // One new tree, extracted beside its final name and renamed into it whole. Anything
+    // already there is left from an earlier failed attempt at this version, never a tree
+    // in use: each target version is newer than every retained one.
+    internal static void PrepareTree(string root,Action<string,ExtractTarget> extract)
+    {
+        var partial=Partial(root);Remove(partial);Remove(root);var parent=Path.GetDirectoryName(root)!;
+        if(!Directory.Exists(parent))NativeInstallFiles.EnsureDirectoryUnder(InstallLocations.Binaries,parent);
+        NativeInstallFiles.EnsureDirectoryUnder(parent,partial);
+        extract(partial,new ExtractTarget(directory=>NativeInstallFiles.EnsureDirectoryUnder(partial,directory),NativeInstallFiles.CreateNewFile,NativeInstallFiles.CommitNew,(_,_)=>false));
+        Directory.Move(partial,root);
+    }
+    // Retention after a commit is the active pair and the one it replaced; every other
+    // tree goes, and every backup but the one this upgrade took.
+    internal static void Retain(InstalledPair active,InstalledPair previous,string backupRoot,string keepBackup)
+    {
+        foreach(var(kind,parent) in new[]{(TreeKind.Infrastructure,InstalledLayout.InfraParent),(TreeKind.App,InstalledLayout.AppParent)})
+        {
+            if(!Directory.Exists(parent))continue;
+            foreach(var directory in Directory.EnumerateDirectories(parent))
+            {if(!UpgradeRules.Retained(kind,Path.GetFileName(directory),active,previous))Remove(directory);}
+        }
+        if(Directory.Exists(backupRoot))foreach(var directory in Directory.EnumerateDirectories(backupRoot))
+        {if(Path.GetFileName(directory)!=keepBackup)Remove(directory);}
+    }
     internal static async Task<HealthObservation?> ReadHealthAsync(int port)
     {
         using var client=new HttpClient(new HttpClientHandler{UseProxy=false,AllowAutoRedirect=false}){Timeout=TimeSpan.FromSeconds(10)};
@@ -67,23 +104,28 @@ internal static class UpgradeFiles
     }
     internal static long HealthDeadline()=>DateTimeOffset.UtcNow.ToUnixTimeSeconds()+UpgradeRules.HealthWindowSeconds;
 }
-// The Setup track (8.1, 8.2): a Setup carrying (infraB, appY) moves an installation
-// from (infraA, appX). A newer infrastructure prepares infra\B (and apps\Y when the app
+// What repair asks of either track's host (RepairHost.Resume).
+internal interface IUpgradeRepair:IDisposable
+{
+    Task DiscardAsync(string? failure);
+    Task RollBackAsync(string failure);
+    void FinishRollback();
+    void FinishCommitAfterRepair();
+}
+// The Setup track (8.1): a Setup carrying (infraB, appY) moves an installation from
+// (infraA, appX) with infraB newer. It prepares infra\B (and apps\Y when the app
 // changes) and switches the three images, the firewall, the Caddyfile, the help page
-// and the pointer. The same infrastructure, byte for byte, prepares only apps\Y and
-// switches only the help page and the pointer: the Updater and the proxy keep running
-// on their images. Rollback returns everything to the from-pair, which was committed
+// and the pointer. Rollback returns everything to the from-pair, which was committed
 // together. A service's image is its infrastructure pointer; one SCM call moves it.
-internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Action<SetupProgress> progress):IDisposable
+// The same infrastructure with a newer app is the app track (7, AppUpgradeHost).
+internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Action<SetupProgress> progress):IUpgradeRepair
 {
     private InstallerState installed=installed;private UpgradeState state=state;private NativeService? service,updater,proxy;
     private string Dataset=>Path.Combine(InstallLocations.State,"datasets",installed.DataId);
     private string DataPath=>Path.Combine(Dataset,"data");
     private string BackupRoot=>Path.Combine(Dataset,"upgrade-backup");
     private string Backup=>Path.Combine(BackupRoot,state.Id);
-    private bool MovesInfrastructure=>state.Track==UpgradeTrack.Infrastructure;
     private bool MovesApp=>!state.To.SameApp(state.From);
-    private static string Partial(string root)=>root+".partial";
     internal UpgradeState State=>state;
     // An administrator ran a newer Setup over this installation: the same move, instead
     // of asking them to remove it first. They elevated this image, which is what a signed
@@ -96,19 +138,23 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
         var state=NativeSetupHost.ReadState();
         return state.Phase=="committed"&&UpgradeRules.IsUpgrade(state.Active,package.Pair());
     }
+    // The manual path (8.2): the embedded pair decides the track. The same infrastructure,
+    // byte for byte, applies only the embedded app through the app track's state machine.
     internal static async Task<UpgradeOutcome> FromThisSetupAsync(InstallPackage package,Action<SetupProgress> progress)
     {
         InstalledPair? from=null;var to=package.Pair();
         try
         {
             var installed=UpgradeFiles.ReadInstalled();from=installed.Active;
-            TrustedReleaseKey.Require(InstalledKey(),TrustedReleaseKey.Embedded);
-            RequireAdmission(installed,package);
-            using var host=new UpgradeHost(installed,UpgradeState.Begin(installed.Active,to,DateTimeOffset.UtcNow.ToUnixTimeSeconds()),progress);
+            TrustedReleaseKey.Require(UpgradeFiles.InstalledKey(),TrustedReleaseKey.Embedded);
+            if(RequireAdmission(installed,package)==UpgradeTrack.App)
+                return await AppUpgradeHost.ApplyAsync(installed,new AppSource(package.AppRecord(),(root,target,p)=>package.Extract(TreeKind.App,root,p,CancellationToken.None,target)),progress);
+            using var host=new UpgradeHost(installed,UpgradeState.Begin(UpgradeState.SetupKind,installed.Active,to,DateTimeOffset.UtcNow.ToUnixTimeSeconds()),progress);
             return await host.ForwardAsync(package);
         }
         catch(Exception error){return new(new(false,SetupOperation.Code(error),DataPreserved:true,Failure:SetupFailureDetail.From(error)),from,to);}
     }
+    // --quiet-upgrade <stage>: the Updater staged this Setup with its signed release.
     internal static async Task<UpgradeOutcome> RunAsync(string directory,Action<SetupProgress> progress)
     {
         InstalledPair? from=null,to=null;
@@ -119,56 +165,47 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
             var installed=UpgradeFiles.ReadInstalled();from=installed.Active;
             if(File.Exists(InstallLocations.UpgradeStateFile))throw new IOException("UPGRADE_INCOMPLETE");
             progress(new("checking",0));
-            var key=TrustedReleaseKey.Require(InstalledKey(),TrustedReleaseKey.Embedded);
-            // The signed v1 manifest describes the app this Setup carries; the installed
-            // schema it is checked against is the record's, never a live answer (4.5).
-            var manifest=ReadRelease(directory,key,installed.Active.App.Version,installed.Active.App.DatabaseSchema);
-            using var package=InstallPackage.Embedded();RequireThisSetup(manifest,package);to=package.Pair();
-            RequireAdmission(installed,package);
-            using var host=new UpgradeHost(installed,UpgradeState.Begin(installed.Active,to,DateTimeOffset.UtcNow.ToUnixTimeSeconds()),progress);
+            var key=TrustedReleaseKey.Require(UpgradeFiles.InstalledKey(),TrustedReleaseKey.Embedded);
+            // The release this image is: its own version names the files it reads.
+            using var package=InstallPackage.Embedded();to=package.Pair();
+            var release=ReleaseStage.Read(directory,package.Manifest.App.Version,key);
+            ReleaseStage.RequireTrack(release,installed,ReleaseTrack.Setup);
+            RequireThisSetup(release,package);
+            if(RequireAdmission(installed,package)!=UpgradeTrack.Infrastructure)throw new IOException("RELEASE_TRACK_MISMATCH");
+            using var host=new UpgradeHost(installed,UpgradeState.Begin(UpgradeState.SetupKind,installed.Active,to,DateTimeOffset.UtcNow.ToUnixTimeSeconds()),progress);
             return await host.ForwardAsync(package);
         }
         catch(Exception error){return new(new(false,SetupOperation.Code(error),DataPreserved:true,Failure:SetupFailureDetail.From(error)),from,to);}
     }
-    // Which track, or the refusal by name; and the recorded schema must be the target
-    // or one the app migrates from.
-    private static void RequireAdmission(InstallerState installed,InstallPackage package)
+    // Which track, or the refusal by name; the installed pair must be one this release
+    // moves from, and the recorded schema the target or one the app migrates from.
+    private static UpgradeTrack RequireAdmission(InstallerState installed,InstallPackage package)
     {
-        _=UpgradeRules.Decide(installed.Active,package.Pair());
+        var track=UpgradeRules.Decide(installed.Active,package.Pair());
+        package.RequireFrom(installed.Active);
         if(!package.AcceptsSchema(installed.Active.App.DatabaseSchema))throw new IOException("RELEASE_UNSUPPORTED_FROM");
+        return track;
     }
     // Refuses at once when another Setup is running; repair may wait for it.
     internal static SetupInstallLock Lock(TimeSpan? wait)
     {try{return new SetupInstallLock(wait);}catch(IOException error)when(error.Message=="INSTALL_BUSY"){throw new IOException("UPGRADE_LOCKED");}}
-    private static byte[]? InstalledKey()
-    {
-        var path=InstallLocations.ReleaseKeyFile;if(!File.Exists(path))return null;
-        return NativeInstallFiles.ReadRecord(path);
-    }
-    // The directory is not trusted: exactly one manifest, read once, and only
-    // those bytes are verified and parsed.
-    private static ReleaseManifest ReadRelease(string directory,byte[] key,string installedVersion,int installedSchema)
-    {
-        if(!Path.IsPathFullyQualified(directory)||!Directory.Exists(directory))throw new IOException("RELEASE_SIGNATURE_INVALID");
-        var found=Directory.EnumerateFiles(directory,"yahad-windows-*.json").Take(2).ToArray();if(found.Length!=1)throw new IOException("RELEASE_SIGNATURE_INVALID");
-        var manifest=ReadBounded(found[0],ReleaseManifest.MaximumBytes+1);if(manifest is null)throw new IOException("RELEASE_SIGNATURE_INVALID");
-        var value=ReleaseVerification.Verify(key,manifest,ReadBounded(found[0]+".sig",65),installedVersion,installedSchema);
-        if(Path.GetFileName(found[0])!=ReleaseManifest.ManifestName(value.Version))throw new IOException("RELEASE_MANIFEST_INVALID");
-        return value;
-    }
-    private static byte[]? ReadBounded(string path,int maximum)
-    {
-        if(!File.Exists(path))return null;
-        using var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read);if(file.Length>maximum)return null;
-        var bytes=new byte[file.Length];file.ReadExactly(bytes);return bytes;
-    }
     // Only the signed Setup installs its release. The running image cannot change
-    // under this process, and it carries the app the manifest names.
-    private static void RequireThisSetup(ReleaseManifest manifest,InstallPackage package)
+    // under this process, and it carries exactly the pair the manifest names.
+    private static void RequireThisSetup(ReleaseManifest release,InstallPackage package)
     {
-        var image=Environment.ProcessPath??throw new IOException("SETUP_IMAGE");var app=package.Manifest.App;
-        if(new FileInfo(image).Length!=manifest.Setup.Bytes||SetupOperation.HashFile(image)!=manifest.Setup.Sha256||
-            app.Version!=manifest.Version||app.SourceCommit!=manifest.SourceCommit||app.DatabaseSchema!=manifest.DatabaseSchema)throw new IOException("RELEASE_SETUP_MISMATCH");
+        var image=Environment.ProcessPath??throw new IOException("SETUP_IMAGE");var setup=release.Infrastructure.Setup;
+        if(new FileInfo(image).Length!=setup.Bytes||SetupOperation.HashFile(image)!=setup.Sha256)throw new IOException("RELEASE_SETUP_MISMATCH");
+        RequireAgrees(release,package.Manifest);
+    }
+    // Every field both manifests carry is the same. Migration sources are a set: the
+    // package lists them ascending, the release in any order.
+    internal static void RequireAgrees(ReleaseManifest release,InstallPackageManifest package)
+    {
+        var ri=release.Infrastructure;var pi=package.Infrastructure;var ra=release.App;var pa=package.App;
+        if(pi.Version!=ri.Version||pi.ContractMin!=ri.ContractMin||pi.ContractMax!=ri.ContractMax||pi.SourceCommit!=ri.SourceCommit||pi.TreeSha256!=ri.TreeSha256||
+            pa.Version!=release.Version||pa.SourceCommit!=release.SourceCommit||pa.TreeSha256!=ra.TreeSha256||pa.RequiresContract!=ra.RequiresContract||pa.DatabaseSchema!=ra.DatabaseSchema||
+            !pa.DatabaseMigrationsFrom.SequenceEqual(ra.DatabaseMigrationsFrom.Order())||
+            package.MinimumFrom.App!=release.MinimumFrom.App||package.MinimumFrom.Infrastructure!=release.MinimumFrom.Infrastructure)throw new IOException("RELEASE_SETUP_MISMATCH");
     }
     private void Advance(string phase){state=state with{Phase=phase};UpgradeFiles.Save(state);progress(new(phase,0));}
     private async Task<UpgradeOutcome> ForwardAsync(InstallPackage package)
@@ -179,8 +216,8 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
         {
             service=NativeService.Open(from.Infrastructure.Version);updater=NativeService.Open(from.Infrastructure.Version,ServiceSpec.Updater);
             UpgradeFiles.EnsureUpdaterState(installed.Consent.Automatic);
-            Prepare(package);service.ClearFailureActions();if(MovesInfrastructure)updater.ClearFailureActions();Advance("prepared");
-            if(MovesInfrastructure){await updater.StopAsync(CancellationToken.None);await StopProxyAsync();}
+            Prepare(package);service.ClearFailureActions();updater.ClearFailureActions();Advance("prepared");
+            await updater.StopAsync(CancellationToken.None);await StopProxyAsync();
             await service.StopAsync(CancellationToken.None);Advance("stopped");
             if(state.SchemaChanged)DatabaseBackup.Create(DataPath,Backup);
             Advance("backed_up");
@@ -188,11 +225,8 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
             state=state with{HealthDeadlineUnix=UpgradeFiles.HealthDeadline()};
             await service.StartAsync(CancellationToken.None);Advance("started");
             await UpgradeFiles.RequireHealthyAsync(service,installed.Port,to.App.Version,state.ToSchema,state.HealthDeadlineUnix);
-            if(MovesInfrastructure)
-            {
-                if(Proxy() is {} lan)await Network(to).StartAfterUpgradeAsync(lan);
-                await updater.StartAsync(CancellationToken.None);
-            }
+            if(Proxy() is {} lan)await Network(to).StartAfterUpgradeAsync(lan);
+            await updater.StartAsync(CancellationToken.None);
             Advance("healthy");
         }
         catch(Exception failure){return await RecoverAsync(failure);}
@@ -201,15 +235,12 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
         return new(new(true,"UPGRADED",LocalUrl),state.From,state.To);
     }
     // Everything a pair names, moved while the services it moves are stopped: the
-    // images, the firewall rule and the Caddyfile on an infrastructure move, then the
-    // help page of the pair's app and the pointer.
+    // images, the firewall rule and the Caddyfile, then the help page of the pair's app
+    // and the pointer.
     private void Point(InstalledPair pair,InstalledPair other)
     {
-        if(MovesInfrastructure)
-        {
-            Service().SwitchImage(pair.Infrastructure.Version);Updater().SwitchImage(pair.Infrastructure.Version);
-            if(Proxy() is {} lan){var network=Network(pair);network.Move(lan,other.Infrastructure.Version);network.WriteProxyConfig();}
-        }
+        Service().SwitchImage(pair.Infrastructure.Version);Updater().SwitchImage(pair.Infrastructure.Version);
+        if(Proxy() is {} lan){var network=Network(pair);network.Move(lan,other.Infrastructure.Version);network.WriteProxyConfig();}
         if(MovesApp&&Proxy() is not null)Network(pair).RefreshHelpPage(pair.App);
         UpgradeFiles.WritePointer(pair);
     }
@@ -217,29 +248,18 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
     private UpgradeOutcome Result(string code,bool rolledBack=false,Exception? failure=null)
         =>new(new(code is "UPGRADED" or "REPAIRED",code,LocalUrl,Failure:failure is null?null:SetupFailureDetail.From(failure)),state.From,state.To,rolledBack);
     private static void ClearStateResidue()=>FullInstallerResidue.Clear(InstallLocations.State);
-    // The target trees: infra\B on an infrastructure move, apps\Y when the app changes.
+    // The target trees: infra\B, and apps\Y when the app changes.
     private IEnumerable<(TreeKind Kind,string Root)> Targets()
     {
-        if(MovesInfrastructure)yield return(TreeKind.Infrastructure,InstalledLayout.InfraRoot(state.To.Infrastructure.Version));
+        yield return(TreeKind.Infrastructure,InstalledLayout.InfraRoot(state.To.Infrastructure.Version));
         if(MovesApp)yield return(TreeKind.App,InstalledLayout.AppRoot(state.To.App.Version));
     }
     private void Prepare(InstallPackage package)
     {
-        // The space for the new trees and the database copy, on both volumes.
-        var files=Targets().Sum(t=>package.Members(t.Kind).Sum(f=>f.Size));
-        if(new DriveInfo(Path.GetPathRoot(InstallLocations.Binaries)!).AvailableFreeSpace<checked(files+536870912L)||
-            new DriveInfo(Path.GetPathRoot(InstallLocations.State)!).AvailableFreeSpace<checked(DatabaseBackup.Size(DataPath)+536870912L))throw new IOException("DISK_SPACE");
+        UpgradeFiles.RequireSpace(Targets().Sum(t=>package.Members(t.Kind).Sum(f=>f.Size)),DataPath);
         foreach(var(kind,root) in Targets())
         {
-            // Anything here is left from an earlier failed attempt at this version, never
-            // a tree in use: each target version is newer than every retained one.
-            UpgradeFiles.Remove(Partial(root));UpgradeFiles.Remove(root);
-            var partial=Partial(root);var parent=Path.GetDirectoryName(root)!;
-            if(!Directory.Exists(parent))NativeInstallFiles.EnsureDirectoryUnder(InstallLocations.Binaries,parent);
-            NativeInstallFiles.EnsureDirectoryUnder(parent,partial);
-            package.Extract(kind,partial,p=>progress(new("extracting",p)),CancellationToken.None,new ExtractTarget(
-                directory=>NativeInstallFiles.EnsureDirectoryUnder(partial,directory),NativeInstallFiles.CreateNewFile,NativeInstallFiles.CommitNew,(_,_)=>false));
-            Directory.Move(partial,root);
+            UpgradeFiles.PrepareTree(root,(partial,target)=>package.Extract(kind,partial,p=>progress(new("extracting",p)),CancellationToken.None,target));
             var pair=state.To;
             if(kind==TreeKind.Infrastructure)TreeRecord.VerifyInstalled(root,kind,pair.Infrastructure.Version,pair.Infrastructure.TreeSha256);
             else TreeRecord.VerifyInstalled(root,kind,pair.App.Version,pair.App.TreeSha256);
@@ -269,34 +289,34 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
     }
     // Nothing moved yet, so the installed pair only has to be running again: a failed
     // or killed Setup may have cleared its failure actions or asked it to stop.
-    internal async Task DiscardAsync(string? failure)
+    public async Task DiscardAsync(string? failure)
     {
         state=state with{Failure=failure??state.Failure};
         await RunningAsync(Service());await RunningAsync(Updater());await RestartProxyAsync();
         FinishRollback();
     }
-    internal async Task RollBackAsync(string failure)
+    public async Task RollBackAsync(string failure)
     {
         state=state with{Phase="rolling_back",Failure=failure,RestoreData=UpgradeRules.RestoresData(state),Attempts=state.Attempts+1};UpgradeFiles.Save(state);progress(new("rolling_back",0));
         var runtime=Service();var self=Updater();
-        if(MovesInfrastructure){await self.StopAsync(CancellationToken.None);await StopProxyAsync();}
+        await self.StopAsync(CancellationToken.None);await StopProxyAsync();
         await runtime.StopAsync(CancellationToken.None);
         Point(state.From,state.To);
         if(state.RestoreData)DatabaseBackup.Restore(DataPath,Backup);
         await runtime.StartAsync(CancellationToken.None);
         await UpgradeFiles.RequireHealthyAsync(runtime,installed.Port,state.From.App.Version,state.FromSchema,UpgradeFiles.HealthDeadline());
-        if(MovesInfrastructure)await self.StartAsync(CancellationToken.None);
+        await self.StartAsync(CancellationToken.None);
         await RestartProxyAsync();
         runtime.EnableStartup();self.EnableStartup();Advance("rolled_back");FinishRollback();
     }
     // The target trees go, partial or whole; none of them is a from-pair tree.
-    internal void FinishRollback()
+    public void FinishRollback()
     {
-        foreach(var(_,root) in Targets()){UpgradeFiles.Remove(Partial(root));UpgradeFiles.Remove(root);}
+        foreach(var(_,root) in Targets()){UpgradeFiles.Remove(UpgradeFiles.Partial(root));UpgradeFiles.Remove(root);}
         UpgradeFiles.Remove(Backup);UpgradeFiles.DeleteState();
     }
     // Everything from here is idempotent: a repair after a crash repeats it.
-    internal void FinishCommitAfterRepair(){Service().EnableStartup();Updater().EnableStartup();Commit();}
+    public void FinishCommitAfterRepair(){Service().EnableStartup();Updater().EnableStartup();Commit();}
     private void Commit()
     {
         if(UninstallChoice.SamePair(installed.Active,state.From))
@@ -309,15 +329,7 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
         NativeInstallFiles.SetTreeAcl(InstallLocations.Binaries,NativeSetupHost.BinaryAcl);NativeSetupHost.Register(installed);
         // Repair moves to the new tree's engine only now (8.1).
         RepairTask.Register(state.To.Infrastructure.Version,DateTimeOffset.Now);
-        // Retention is the active pair and the one it replaced; every other tree goes.
-        foreach(var(kind,parent) in new[]{(TreeKind.Infrastructure,InstalledLayout.InfraParent),(TreeKind.App,InstalledLayout.AppParent)})
-        {
-            if(!Directory.Exists(parent))continue;
-            foreach(var directory in Directory.EnumerateDirectories(parent))
-            {if(!UpgradeRules.Retained(kind,Path.GetFileName(directory),state.To,state.From))UpgradeFiles.Remove(directory);}
-        }
-        if(Directory.Exists(BackupRoot))foreach(var directory in Directory.EnumerateDirectories(BackupRoot))
-        {if(Path.GetFileName(directory)!=state.Id)UpgradeFiles.Remove(directory);}
+        UpgradeFiles.Retain(state.To,state.From,BackupRoot,state.Id);
         UpgradeFiles.DeleteState();
     }
     public void Dispose(){service?.Dispose();service=null;updater?.Dispose();updater=null;proxy?.Dispose();proxy=null;}

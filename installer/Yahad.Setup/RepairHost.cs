@@ -38,21 +38,27 @@ internal static class RepairHost
         if(!SetupOperation.Within(image,InstalledLayout.InfraParent))return null;
         return Path.GetRelativePath(InstalledLayout.InfraParent,image).Split(Path.DirectorySeparatorChar)[0];
     }
+    private static UpgradeOutcome Done(InstallerState installed,UpgradeState state,string code,bool rolledBack=false,Exception? failure=null)
+        =>new(new(code=="REPAIRED",code,"http://127.0.0.1:"+installed.Port+"/",Failure:failure is null?null:SetupFailureDetail.From(failure)),state.From,state.To,rolledBack);
     private static async Task<UpgradeOutcome> ResumeAsync(InstallerState installed,UpgradeState state,Action<SetupProgress> progress)
     {
-        var url="http://127.0.0.1:"+installed.Port+"/";
-        UpgradeOutcome Done(string code,bool rolledBack=false,Exception? failure=null)=>new(new(code=="REPAIRED",code,url,Failure:failure is null?null:SetupFailureDetail.From(failure)),state.From,state.To,rolledBack);
-        var action=UpgradeRules.ForRepair(state.Phase,state.Attempts);
+        var action=UpgradeRules.ForRepair(state.Kind,state.Phase,state.Attempts);
         // An engine never deletes the tree it runs from: it hands the repair to a private
         // copy of itself (8.1), which takes the lock once this process has let it go.
-        if(RunningTree() is {} own&&Deletes(state,action,own))return Done(HandOff);
+        if(RunningTree() is {} own&&Deletes(state,action,own))return Done(installed,state,HandOff);
         if(action==RepairAction.GiveUp)
         {
             // Stop retrying until an administrator acts; the record stays for them.
             ServiceStartupDiagnostic.TryRecordUpgrade(state.Id,state.From.Describe,state.To.Describe,state.Attempts);
-            return Done("ROLLBACK_FAILED");
+            return Done(installed,state,"ROLLBACK_FAILED");
         }
-        using var host=new UpgradeHost(installed,state,progress);
+        using IUpgradeRepair host=state.Kind==UpgradeState.AppKind?new AppUpgradeHost(installed,state,new NativeAppMachine(installed),progress):new UpgradeHost(installed,state,progress);
+        return await Resume(installed,state,action,host);
+    }
+    // The persisted phase's rule, the same for either track's host.
+    internal static async Task<UpgradeOutcome> Resume(InstallerState installed,UpgradeState state,RepairAction action,IUpgradeRepair host)
+    {
+        UpgradeOutcome Done(string code,bool rolledBack=false,Exception? failure=null)=>RepairHost.Done(installed,state,code,rolledBack,failure);
         try
         {
             switch(action)

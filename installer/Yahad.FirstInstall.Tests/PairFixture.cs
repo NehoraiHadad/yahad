@@ -47,7 +47,7 @@ internal static class PairFixture
     // archive and the manifest together; tamper changes only the archive's bytes of
     // one member; change rewrites the manifest after it is built.
     internal static (byte[] Zip,byte[] Manifest) Package(bool duplicate=false,string? extra=null,string? omit=null,Func<InstallPackageManifest,InstallPackageManifest>? change=null,
-        Tree? infra=null,Tree? app=null,int schema=7,int[]? migrations=null,string? tamper=null)
+        Tree? infra=null,Tree? app=null,int schema=7,int[]? migrations=null,string? tamper=null,PackageMinimumFrom? minimum=null)
     {
         infra??=Infra();app??=App();var entries=new List<(string Path,byte[] Bytes)>();
         foreach(var tree in new[]{infra,app})
@@ -63,7 +63,7 @@ internal static class PairFixture
         }
         var archive=data.ToArray();
         var manifest=new InstallPackageManifest(InstallPackage.Format,new(infra.Version,InfrastructureRelease.ContractMin,InfrastructureRelease.ContractMax,infra.SourceCommit,infra.Sha256),
-            new(app.Version,app.SourceCommit,InfrastructureRelease.ContractMin,app.Sha256,schema,migrations??[5,6]),TreeRecord.Sha256(archive),
+            new(app.Version,app.SourceCommit,InfrastructureRelease.ContractMin,app.Sha256,schema,migrations??[5,6]),minimum??new("0.0.0","0.0.0"),TreeRecord.Sha256(archive),
             entries.Select(e=>new InstallMember(e.Path,e.Bytes.Length,TreeRecord.Sha256(e.Bytes))).ToArray());
         return(archive,JsonSerializer.SerializeToUtf8Bytes(change?.Invoke(manifest)??manifest));
     }

@@ -110,6 +110,10 @@ if(args is ["--full-installer-only"])
     {try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);}});
     await UpgradeTests.RunAsync(async(name,run)=>
     {try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);}});
+    await AppPackageTests.RunAsync(async(name,run)=>
+    {try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);}});
+    await AppUpgradeTests.RunAsync(async(name,run)=>
+    {try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);}});
     await UpdaterTests.RunAsync(async(name,run)=>
     {try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);}});
     await InstallAclTests.RunAsync(async(name,run)=>
