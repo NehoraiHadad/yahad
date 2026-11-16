@@ -1,12 +1,18 @@
 name: Windows install acceptance
 
-# Runs the synthetic C# suites, then builds Yahad.Setup.exe from the exact
-# commit and runs real machine acceptance on a disposable Windows runner:
-# install, readiness, first family over HTTP, repair, refused releases, upgrade
-# with a schema change, health rollback, interrupted-upgrade recovery, keep-data
-# uninstall, reinstall with the family intact, and full removal
-# (installer/machine-acceptance.ps1). The releases are signed by a key generated
-# in this job and destroyed with it; the real signing key never touches CI.
+# Runs the synthetic C# suites, then builds an upgrade set from the exact commit
+# (installer/ci-build-upgrade-set.ps1: n, app-only n+app, an unhealthy app, an
+# infrastructure bump n1, a broken n1 app, a contract-too-high manifest and
+# refused manifests on both tracks, all sharing one infrastructure cache) and
+# runs real machine acceptance on a disposable Windows runner
+# (installer/machine-acceptance.ps1): install, readiness, first family over
+# HTTP, repair, refused releases, app-only update through the Updater with LAN
+# untouched, app health rollback, Setup-track health rollback and interrupted-
+# upgrade recovery, infrastructure upgrade, replay refusal, keep-data
+# uninstall, reinstall with the family intact, full removal, same-infrastructure
+# manual Setup, and removal of a moved install. The releases are signed by a
+# key generated in this job and destroyed with it; the real signing key never
+# touches CI.
 on:
   push:
     branches: [main, windows-install-acceptance]
@@ -132,14 +138,12 @@ jobs:
         run: |
           & ".local/tools/node-$env:NODE_VERSION-win-x64/node.exe" scripts/windows-release-key.mjs keygen "$env:RUNNER_TEMP/release-key"
           if ($LASTEXITCODE -ne 0) { throw 'Key generation failed' }
-      - name: Build the N, N+1 and broken releases
+      - name: Build the upgrade set (n, app, unhealthy, n1, broken, contract, refused)
         shell: pwsh
-        run: ./installer/ci-build-upgrade-set.ps1 -Key "$env:RUNNER_TEMP/release-key" -NodeDirectory ".local/tools/node-$env:NODE_VERSION-win-x64" -NpmCache .local/npm-cache -VendorDirectory .local/vendors -DotNet .local/tools/dotnet/dotnet.exe -PackageCache .local/nuget-cache -Output .local/packages/set
-      - name: Machine acceptance (install, repair, upgrade, rollback, reinstall, removal)
+        run: ./installer/ci-build-upgrade-set.ps1 -Key "$env:RUNNER_TEMP/release-key" -NodeDirectory ".local/tools/node-$env:NODE_VERSION-win-x64" -NpmCache .local/npm-cache -VendorDirectory .local/vendors -DotNet .local/tools/dotnet/dotnet.exe -PackageCache .local/nuget-cache -InfraCache .local/packages/infra-cache -Output .local/packages/set
+      - name: Machine acceptance (install, app update, rollbacks, infrastructure upgrade, reinstall, removal)
         shell: pwsh
-        run: |
-          $set = '.local/packages/set'
-          ./installer/machine-acceptance.ps1 -Setup "$set/n/setup/Yahad.Setup.exe" -Base "$set/n/release" -Upgrade "$set/n1/release" -Broken "$set/broken/release" -Refused "$set/refused" -Output .local/acceptance -Disposable
+        run: ./installer/machine-acceptance.ps1 -Set .local/packages/set -Output .local/acceptance -Disposable
       - name: Destroy the ephemeral release key
         if: always()
         shell: pwsh
@@ -151,7 +155,10 @@ jobs:
           name: install-acceptance-${{ github.sha }}
           path: |
             .local/acceptance/
+            .local/packages/set/upgrade-set.json
             .local/packages/set/*/*.log
             .local/packages/set/*/package-build.json
+            .local/packages/infra-cache/*/*.log
+            .local/packages/infra-cache/*/*.json
           retention-days: 14
           if-no-files-found: warn
