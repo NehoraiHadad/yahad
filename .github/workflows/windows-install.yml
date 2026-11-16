@@ -150,7 +150,7 @@ jobs:
         run: ./installer/ci-build-upgrade-set.ps1 -Key "$env:RUNNER_TEMP/release-key" -NodeDirectory "$env:NODE_DIRECTORY" -NpmCache .local/npm-cache -VendorDirectory .local/vendors -DotNet .local/tools/dotnet/dotnet.exe -PackageCache .local/nuget-cache -InfraCache .local/packages/infra-cache -Output .local/packages/set
       - name: Machine acceptance (install, app update, rollbacks, infrastructure upgrade, reinstall, removal)
         shell: pwsh
-        run: ./installer/machine-acceptance.ps1 -Set .local/packages/set -Output .local/acceptance -Disposable
+        run: ./installer/machine-acceptance.ps1 -Set .local/packages/set -Output .local/acceptance -DotNet .local/tools/dotnet/dotnet.exe -PackageCache .local/nuget-cache -Disposable
       - name: Destroy the ephemeral release key
         if: always()
         shell: pwsh

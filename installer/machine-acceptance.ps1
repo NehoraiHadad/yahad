@@ -37,6 +37,10 @@ param(
     # The signed upgrade set from installer/ci-build-upgrade-set.ps1.
     [Parameter(Mandatory=$true)][string]$Set,
     [Parameter(Mandatory=$true)][string]$Output,
+    # The SDK and package cache the set was built with: PlaceLanProxy compiles
+    # LanDeployment to write the Caddyfile enable writes.
+    [Parameter(Mandatory=$true)][string]$DotNet,
+    [Parameter(Mandatory=$true)][string]$PackageCache,
     [switch]$Disposable
 )
 $ErrorActionPreference = 'Stop'
@@ -392,6 +396,18 @@ function NewLanDirectory([string]$Path, [string]$Descriptor) {
     $security.SetSecurityDescriptorSddlForm($Descriptor)
     [IO.FileSystemAclExtensions]::Create([IO.DirectoryInfo]::new($Path), $security)
 }
+# The Caddyfile is LanDeployment's own, as enable writes it (HTTPS only, as placed).
+function WriteLanCaddyfile($Installation, $Choice, [string]$Infra) {
+    $dotnetExe = (Resolve-Path -LiteralPath $DotNet).Path
+    $env:DOTNET_ROOT = Split-Path $dotnetExe
+    $env:DOTNET_CLI_HOME = Join-Path $out 'dotnet-home'
+    $env:NUGET_PACKAGES = (Resolve-Path -LiteralPath $PackageCache).Path
+    $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'; $env:DOTNET_NOLOGO = '1'
+    & $dotnetExe run (Join-Path $PSScriptRoot 'lan-caddyfile.cs') ('-p:RestoreConfigFile=' + (Join-Path $PSScriptRoot 'NuGet.Config')) -- `
+        (Join-Path $lanRoot 'Caddyfile') $Installation.InstallationId $Choice.Id $Choice.Address ([string]$Installation.Port) (LanCaddy $Infra) `
+        (Join-Path $lanRoot 'data') (Join-Path $lanRoot 'join-public') 'false' *> (Join-Path $out 'lan-caddyfile.log')
+    if ($LASTEXITCODE -ne 0) { throw "lan-caddyfile ended $LASTEXITCODE; see lan-caddyfile.log" }
+}
 # What a finished home-network enable leaves: the two ACLs of NativeLanInstall, its
 # records, LanDeployment's Caddyfile and firewall rule, and the service. A machine
 # without a private address fails here, naming what it has.
@@ -419,17 +435,9 @@ function PlaceLanProxy([string]$Infra) {
     $records = @{
         'proxy.json' = Json @{ AdapterId=$choice.Id; Address=$choice.Address }
         'owner.json' = Json @{ Phase='enabled'; AdapterId=$choice.Id; Address=$choice.Address; HttpHelp=$false; RootSha256='' }
-        'Caddyfile' = @(
-            '{', '    admin off', '    persist_config off', '    skip_install_trust', '    auto_https disable_redirects',
-            '    log {', '        output discard', '    }',
-            '    storage file_system {', ('        root "' + (Join-Path $lanRoot 'data').Replace('\', '/') + '"'), '    }',
-            '    servers {', '        protocols h1 h2', '    }', '}',
-            "https://$($choice.Address) {", "    bind $($choice.Address)", '    tls internal',
-            '    @ownerOnly path /health /health/* /api/setup /api/setup/*', '    respond @ownerOnly 404',
-            "    reverse_proxy 127.0.0.1:$($installation.Port) {", '        flush_interval -1', '    }', '}', ''
-        ) -join "`n"
     }
     foreach ($name in $records.Keys) { [IO.File]::WriteAllText((Join-Path $lanRoot $name), $records[$name], [Text.UTF8Encoding]::new($false)) }
+    WriteLanCaddyfile $installation $choice $Infra
 
     $rule = New-Object -ComObject HNetCfg.FWRule
     $rule.Name = $lanRuleName
