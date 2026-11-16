@@ -617,7 +617,7 @@ async function stageRelease({ clone, root, keyFile, inputs, infra }) {
   const runtime = runtimeVersionFor(JSON.parse(readFileSync(join(clone, 'package.json'), 'utf8')).version);
   requireRuntimeAboveBootstrap(runtime, readFileSync(join(clone, 'deploy', 'upgrade-worker-github.py'), 'utf8'));
   const windows = buildSigned({ repo: clone, keyFile, out: join(root, 'windows'), inputsOf: () => inputs, infra });
-  if (existsSync(join(clone, 'dist'))) refuse('The release clone already has a dist/; the web build is the Windows build's alone.');
+  if (existsSync(join(clone, 'dist'))) refuse('The release clone already has a dist/; only the Windows build makes the web build.');
   cpSync(windows.dist, join(clone, 'dist'), { recursive: true, errorOnExist: true, force: false });
   const linux = join(root, 'linux');
   execFileSync(process.execPath, [join(clone, 'scripts', 'release.mjs'), 'package-https', linux], { cwd: clone, stdio: 'inherit' });
