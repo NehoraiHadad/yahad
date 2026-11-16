@@ -155,9 +155,11 @@ internal static class ReleaseManifestTests
         await check("release selection: infrastructure newer, equal or older against app newer or equal", () =>
         {
             var installed = Installed();
+            // Every release carries an app: a newer infrastructure with an app that is not newer
+            // would downgrade or replay the app, so it is not an update for this machine.
             var cases = new (string Infra, string App, ReleaseTrack? Expected)[]
             {
-                ("2.0.0", "1.0.1", ReleaseTrack.Setup), ("2.0.0", "1.0.0", ReleaseTrack.Setup), ("1.0.1", "2.0.0", ReleaseTrack.Setup),
+                ("2.0.0", "1.0.1", ReleaseTrack.Setup), ("2.0.0", "1.0.0", null), ("2.0.0", "0.9.0", null), ("1.0.1", "2.0.0", ReleaseTrack.Setup),
                 ("1.0.0", "1.0.1", ReleaseTrack.App), ("1.0.0", "1.0.0", null),
                 ("0.9.0", "1.0.1", null), ("0.9.0", "1.0.0", null),
             };

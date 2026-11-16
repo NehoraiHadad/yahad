@@ -549,9 +549,11 @@ The Updater reads only the format-2 manifest. A newer tag
 without it is "not an update for this machine", as today for a tag without
 Windows assets (`UpdaterEngine.cs:135-138`). After the signature and parse:
 
-1. If `infrastructure.version` is newer than the installed one, take the **Setup
-   track**. Its Setup carries the new app too, so infrastructure fixes such as a
-   Node security update are never skipped.
+1. If `infrastructure.version` is newer than the installed one and the app is
+   newer, take the **Setup track**. Its Setup carries the new app too, so
+   infrastructure fixes such as a Node security update are never skipped. Every
+   release carries an app, so a release whose app is not newer is not an update on
+   either track: the Setup track would downgrade or replay the app.
 2. Otherwise, if the app is newer, `infrastructure.version` equals the installed
    one, and `requiresContract` is in its contract range, take the **app track**.
 3. Otherwise, if the app needs a contract outside the release's own
