@@ -1,5 +1,5 @@
 # Real machine acceptance for the upgrade set of installer/ci-build-upgrade-set.ps1
-# (n, app, unhealthy, n1, broken, contract, refused). Every check is what a person
+# (n, app, unhealthy, n1, broken, contract, mismatch, refused). Every check is what a person
 # or administrator observes (Setup results, services, HTTP answers, the account they
 # created), so it keeps gating when the mechanism behind it changes. One installation
 # is carried through every move; pairs are (infrastructure, app):
@@ -93,7 +93,10 @@ $app = Variant 'app'
 $unhealthy = Variant 'unhealthy'
 $n1 = Variant 'n1'
 $broken = Variant 'broken'
-$contract = ReleaseIn (Join-Path $setDirectory 'contract') $index.contract
+# Every stage below is named by its version, as the Updater stages one (plan 9.3):
+# --apply-app reads the release's version from its stage directory's name.
+$contract = ReleaseIn (Join-Path $setDirectory "contract\$($index.contract)") $index.contract
+$mismatch = ReleaseIn (Join-Path $setDirectory "mismatch\$($index.mismatch)") $index.mismatch
 $refusedDirectory = Join-Path $setDirectory 'refused'
 if ($index.refused.app -ne $app.Version -or $index.refused.setup -ne $n1.Version) { throw 'The refused stages are not of app and n1' }
 # What each move below means, from the signed manifests themselves.
@@ -101,6 +104,8 @@ if ($app.Infra -ne $n.Infra -or $app.Value.infrastructure.treeSha256 -ne $n.Valu
 if ($broken.Value.infrastructure.treeSha256 -ne $n1.Value.infrastructure.treeSha256 -or $n1.Infra -eq $n.Infra) { throw 'broken is not on n1''s new infrastructure' }
 if ($app.Schema -ne $n.Schema + 1 -or $unhealthy.Schema -ne $app.Schema + 1 -or $n1.Schema -ne $app.Schema + 1) { throw 'The app and Setup moves do not each change the schema' }
 if ($contract.Value.app.requiresContract -le $contract.Value.infrastructure.contractMax) { throw 'The contract release needs a contract its infrastructure serves' }
+if ($mismatch.Version -ne $n1.Version -or $mismatch.Value.infrastructure.setup.sha256 -eq $n1.Value.infrastructure.setup.sha256 -or
+    (Get-FileHash -LiteralPath $mismatch.Setup -Algorithm SHA256).Hash.ToLowerInvariant() -ne $n1.Value.infrastructure.setup.sha256) { throw 'The mismatch release does not pair n1''s Setup with another Setup''s bytes' }
 # Setup runs for installation; from the reinstall on, the newer release's.
 $setupPath = $n.Setup
 # Stages for runs that are not the Updater's, in exactly the Updater's shape. Setup
@@ -134,7 +139,7 @@ function NewStage($Release, [string]$Track, [string]$Path) {
 }
 function StageOf($Release, [string]$Track) {
     $key = "$($Release.Version)/$Track"
-    if (!$stages.ContainsKey($key)) { $stages[$key] = Join-Path $stageRoot "$($Release.Version)-$Track"; NewStage $Release $Track $stages[$key] }
+    if (!$stages.ContainsKey($key)) { $stages[$key] = Join-Path $stageRoot "$Track\$($Release.Version)"; NewStage $Release $Track $stages[$key] }
     return $stages[$key]
 }
 # The staged release's identity as the Updater offers it (plan 9.3): SHA-256 of the
@@ -864,12 +869,13 @@ try {
         # Stages of the next release on each track, each wrong only in its signature: the
         # installed engine refuses the app stage, n1's own Setup refuses its Setup stage.
         foreach ($case in 'foreign', 'unsigned', 'tampered') {
-            $null = RunSetupExpecting (EngineOf $n.Infra) @('--apply-app', (Join-Path $refusedDirectory "app\$case")) (Join-Path $out "refuse-app-$case-result.json") 'RELEASE_SIGNATURE_INVALID' 2
-            $stage = Join-Path $refusedDirectory "setup\$case"
+            $null = RunSetupExpecting (EngineOf $n.Infra) @('--apply-app', (Join-Path $refusedDirectory "app\$case\$($app.Version)")) (Join-Path $out "refuse-app-$case-result.json") 'RELEASE_SIGNATURE_INVALID' 2
+            $stage = Join-Path $refusedDirectory "setup\$case\$($n1.Version)"
             $null = RunSetupExpecting (Join-Path $stage $n1.SetupName) @('--quiet-upgrade', $stage) (Join-Path $out "refuse-setup-$case-result.json") 'RELEASE_SIGNATURE_INVALID' 2
         }
-        # A valid release is installed only by its own signed Setup.
-        $null = RunSetupExpecting $n.Setup @('--quiet-upgrade', (StageOf $n1 'setup')) (Join-Path $out 'refuse-mismatch-result.json') 'RELEASE_SETUP_MISMATCH' 2
+        # A signed release installs only through the Setup it names: n1's Setup refuses
+        # n1's release re-signed naming another Setup's bytes.
+        $null = RunSetupExpecting $mismatch.Setup @('--quiet-upgrade', $mismatch.Directory) (Join-Path $out 'refuse-mismatch-result.json') 'RELEASE_SETUP_MISMATCH' 2
         # An app needing a contract its own infrastructure does not serve is a defect of
         # the release on every machine (plan 9.1), never an app-track update.
         $null = RunSetupExpecting (EngineOf $n.Infra) @('--apply-app', $contract.Directory) (Join-Path $out 'refuse-contract-result.json') 'APP_NEEDS_INFRASTRUCTURE' 2
@@ -907,7 +913,7 @@ try {
         RequireLanHelpOverHttps $app.Version
     }
     Phase 'app-unhealthy' {
-        # The app migrates the database, then never becomes ready.
+        # The app migrates the database, then exits before it ever serves.
         $move = InstallThroughUpdater $unhealthy 'app' 'app-unhealthy'
         RequireMove $move.Result 'ROLLED_BACK_UNHEALTHY' $app $unhealthy $true
         $script:appRollbackSeconds = RollbackSecondsOf $move.Result

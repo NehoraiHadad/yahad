@@ -5,14 +5,20 @@
 # infrastructure version of HEAD:
 #   n/          HEAD as committed: (I, A), schema S.
 #   app/        (I, A+1), schema S+1 with a real migration: the app track.
-#   unhealthy/  from app/: (I, A+2), schema S+2, /health/ready answers 503: app-track rollback.
+#   unhealthy/  from app/: (I, A+2), schema S+2, migrates and then exits before it serves:
+#               app-track rollback. The Runtime stops on its own, so the engine's health
+#               gate ends at once instead of waiting out its window.
 #   n1/         from app/: (I+1, A+3), schema S+2: the Setup track.
 #   broken/     from n1/: (I+1, A+4), schema S+3, 503: Setup-track rollback from (I, A+1),
 #               and the upgrade killed mid-way that repair undoes.
-#   contract/   app/'s release re-signed with requiresContract above its own
+#   contract/<A+1>/  app/'s release re-signed with requiresContract above its own
 #               infrastructure's range: APP_NEEDS_INFRASTRUCTURE (plan 9.1).
-#   refused/<track>/<case>/  well-formed stages wrong only in their signature:
+#   mismatch/<A+3>/  n1/'s release re-signed naming another Setup's bytes, beside n1/'s
+#               own Setup: RELEASE_SETUP_MISMATCH.
+#   refused/<track>/<case>/<version>/  well-formed stages wrong only in their signature:
 #               foreign key, no signature, tampered. app/ is from app/, setup/ from n1/.
+# Each of these is a stage as the Updater writes one (plan 9.3): a directory named by its
+# version holding exactly that track's three files; --apply-app reads the version from it.
 # Every build shares one -InfraCache, as releases do (plan 10): app/ and unhealthy/
 # reuse n/'s infrastructure build and broken/ reuses n1/'s, so I and I+1 are each built
 # once. Each variant's LAN help page names its app version, so acceptance can tell
@@ -92,6 +98,11 @@ try {
         ReplaceOnce (Join-Path $Tree 'src/store.ts') $StoreAnchor "$StoreAnchor $migration"
         return $migration
     }
+    # The app migrates the database, then exits before it ever serves: the Runtime
+    # service stops on its own during startup.
+    function MakeExitAfterMigrating([string]$Tree) {
+        ReplaceOnce (Join-Path $Tree 'src/main.ts') "  stage = 'listen';" "  process.exit(startupExit.app);`n  stage = 'listen';"
+    }
     # The app starts, migrates and serves, but its readiness never passes.
     function MakeUnhealthy([string]$Tree) {
         $ready = 'return { ok: true, version: String(info.version), databaseSchema: DATABASE_SCHEMA };'
@@ -167,7 +178,7 @@ try {
     $unhealthy = NewVariant 'unhealthy' $app.Commit (BumpVersion $baseVersion 2) $false {
         param($Tree)
         $null = BumpSchema $Tree ($schema + 1) $app.Patch
-        MakeUnhealthy $Tree
+        MakeExitAfterMigrating $Tree
     } $repo
     $n1 = NewVariant 'n1' $app.Commit (BumpVersion $baseVersion 3) $true { param($Tree) BumpSchema $Tree ($schema + 1) $app.Patch } $null
     $broken = NewVariant 'broken' $n1.Commit (BumpVersion $baseVersion 4) $false {
@@ -186,13 +197,24 @@ try {
     if (($built -join ',') -ne ($expected -join ',')) { throw "The infrastructure cache holds $($built -join ','), expected one build each of $($expected -join ',')" }
 
     # app/'s release, wrong only in the contract its app needs; signed by the trusted key.
-    $contract = Join-Path $set 'contract'
+    $contract = Join-Path $set "contract/$($app.Release.Version)"
     New-Item -ItemType Directory -Path $contract | Out-Null
     $contractManifest = Join-Path $contract (Split-Path $app.Release.Manifest -Leaf)
     Copy-Item -LiteralPath $app.Release.Manifest -Destination $contractManifest
     ReplaceMember $contractManifest 'requiresContract' '\d+' ([string]([int]$app.Release.Value.infrastructure.contractMax + 1))
     Sign (Join-Path $keyDir 'key.pem') $contractManifest
     Copy-Item -LiteralPath (Join-Path $app.Release.Directory (TrackFile $app.Release 'app')) -Destination $contract
+
+    # n1/'s release naming n/'s Setup bytes, signed by the trusted key, beside n1/'s own
+    # Setup: only the Setup a signed release names installs it.
+    $mismatch = Join-Path $set "mismatch/$($n1.Release.Version)"
+    New-Item -ItemType Directory -Path $mismatch | Out-Null
+    $mismatchManifest = Join-Path $mismatch (Split-Path $n1.Release.Manifest -Leaf)
+    Copy-Item -LiteralPath $n1.Release.Manifest -Destination $mismatchManifest
+    if ($n.Value.infrastructure.setup.sha256 -eq $n1.Release.Value.infrastructure.setup.sha256) { throw 'n and n1 have the same Setup' }
+    ReplaceMember $mismatchManifest 'sha256' "`"$($n1.Release.Value.infrastructure.setup.sha256)`"" "`"$($n.Value.infrastructure.setup.sha256)`""
+    Sign (Join-Path $keyDir 'key.pem') $mismatchManifest
+    Copy-Item -LiteralPath (Join-Path $n1.Release.Directory (TrackFile $n1.Release 'setup')) -Destination $mismatch
 
     # Well-formed stages of the next release on each track, each wrong in its signature only.
     $refused = Join-Path $set 'refused'
@@ -207,7 +229,7 @@ try {
             $name = Split-Path $good.Manifest -Leaf
             $cases = @{}
             foreach ($case in 'foreign', 'unsigned', 'tampered') {
-                $cases[$case] = Join-Path $refused "$($source.Track)/$case"
+                $cases[$case] = Join-Path $refused "$($source.Track)/$case/$($good.Version)"
                 New-Item -ItemType Directory -Force -Path $cases[$case] | Out-Null
                 Copy-Item -LiteralPath $good.Manifest -Destination (Join-Path $cases[$case] $name)
                 Copy-Item -LiteralPath $file -Destination $cases[$case]
@@ -227,6 +249,7 @@ try {
         format = 1
         releases = [ordered]@{ n=$n.Version; app=$app.Release.Version; unhealthy=$unhealthy.Release.Version; n1=$n1.Release.Version; broken=$broken.Release.Version }
         contract = $app.Release.Version
+        mismatch = $n1.Release.Version
         refused = [ordered]@{ app=$app.Release.Version; setup=$n1.Release.Version }
     }
     WriteFile (Join-Path $set 'upgrade-set.json') (($index | ConvertTo-Json -Depth 3) + "`n")

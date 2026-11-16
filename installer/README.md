@@ -171,9 +171,10 @@ which writes the four Windows files and never publishes.
 
 CI never sees this key. `installer/ci-build-upgrade-set.ps1` generates a throwaway key in the
 job, builds the acceptance upgrade set from the exact commit with one shared `-InfraCache`
-(base `n`, app-only `app`, an unhealthy app, an infrastructure bump `n1`, a broken app on
-`n1`, a contract-too-high manifest and foreign, unsigned and tampered manifests on both
-tracks), signs it with `scripts/windows-release-key.mjs sign` and destroys the key with the job.
+(base `n`, app-only `app`, an app that exits after migrating, an infrastructure bump `n1`, a
+broken app on `n1`, a contract-too-high manifest, `n1`'s manifest naming another Setup's bytes
+and foreign, unsigned and tampered manifests on both tracks, each staged in a directory named
+by its version), signs it with `scripts/windows-release-key.mjs sign` and destroys the key with the job.
 
 Installation writes the build's key to `%ProgramFiles%\Yahad.FirstInstall\release-key.spki`,
 and that file is the trust root from then on. A machine installed from a keyless

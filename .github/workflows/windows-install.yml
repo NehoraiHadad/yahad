@@ -1,9 +1,10 @@
 name: Windows install acceptance
 
 # Runs the synthetic C# suites, then builds an upgrade set from the exact commit
-# (installer/ci-build-upgrade-set.ps1: n, app-only n+app, an unhealthy app, an
-# infrastructure bump n1, a broken n1 app, a contract-too-high manifest and
-# refused manifests on both tracks, all sharing one infrastructure cache) and
+# (installer/ci-build-upgrade-set.ps1: n, app-only n+app, an app that exits
+# after migrating, an infrastructure bump n1, a broken n1 app, a contract-too-high
+# manifest, a release naming another Setup and refused manifests on both tracks,
+# all sharing one infrastructure cache) and
 # runs real machine acceptance on a disposable Windows runner
 # (installer/machine-acceptance.ps1): install, readiness, first family over
 # HTTP, repair, refused releases, app-only update through the Updater with LAN
@@ -138,7 +139,7 @@ jobs:
         run: |
           & ".local/tools/node-$env:NODE_VERSION-win-x64/node.exe" scripts/windows-release-key.mjs keygen "$env:RUNNER_TEMP/release-key"
           if ($LASTEXITCODE -ne 0) { throw 'Key generation failed' }
-      - name: Build the upgrade set (n, app, unhealthy, n1, broken, contract, refused)
+      - name: Build the upgrade set (n, app, unhealthy, n1, broken, contract, mismatch, refused)
         shell: pwsh
         run: ./installer/ci-build-upgrade-set.ps1 -Key "$env:RUNNER_TEMP/release-key" -NodeDirectory ".local/tools/node-$env:NODE_VERSION-win-x64" -NpmCache .local/npm-cache -VendorDirectory .local/vendors -DotNet .local/tools/dotnet/dotnet.exe -PackageCache .local/nuget-cache -InfraCache .local/packages/infra-cache -Output .local/packages/set
       - name: Machine acceptance (install, app update, rollbacks, infrastructure upgrade, reinstall, removal)
