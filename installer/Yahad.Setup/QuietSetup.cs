@@ -26,7 +26,7 @@ internal static class QuietSetup
     private static string Full(string path)=>Path.IsPathFullyQualified(path)?path:throw new IOException("SETUP_ARGUMENTS");
     internal static UpdateSetupChoice? Consent(Request request,bool existing,DateTimeOffset now)
         =>request.Uninstall||existing?null:new(2,true,request.AutomaticUpdates==true,now.ToUnixTimeSeconds());
-    internal static async Task<int> RunAsync(Request request,string[] arguments)
+    internal static async Task<int> RunAsync(Request request)
     {
         SetupResult result;var clock=System.Diagnostics.Stopwatch.StartNew();var phases=new List<object>();string? current=null;
         // Phase entry times only, so an operator or CI can see where time goes.
@@ -35,7 +35,7 @@ internal static class QuietSetup
         // process writes one only when the copy never started.
         int HandOff()
         {
-            try{return PrivateCopy.Run(arguments);}
+            try{return PrivateCopy.Run();}
             catch(Exception error)
             {
                 var failed=new SetupResult(false,SetupOperation.Code(error),DataPreserved:request.Mode==UninstallMode.KeepData,Failure:SetupFailureDetail.From(error));

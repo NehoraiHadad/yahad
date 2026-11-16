@@ -231,6 +231,9 @@ internal static class UpgradeTests
             var origin=InstalledLayout.EngineImage("1.2.3");
             Assert(PrivateCopy.IsOrigin(origin,origin)&&PrivateCopy.IsOrigin(origin.ToUpperInvariant(),origin),"origin");
             Assert(!PrivateCopy.IsOrigin(InstalledLayout.EngineImage("1.2.4"),origin)&&!PrivateCopy.IsOrigin(origin,null),"other engine");
+            // The copy is given this engine's command line after its image name, unchanged.
+            Assert(PrivateCopy.Arguments(@"""C:\Program Files\Y\Yahad.Setup.exe"" --quiet-uninstall --data keep --result ""C:\a b\r.json""")==@" --quiet-uninstall --data keep --result ""C:\a b\r.json""","quoted");
+            Assert(PrivateCopy.Arguments(@"C:\Y\Yahad.Setup.exe"+"\t"+@"--repair --result C:\r.json")=="\t"+@"--repair --result C:\r.json"&&PrivateCopy.Arguments(@"C:\Y\Yahad.Setup.exe")=="","unquoted");
             return Task.CompletedTask;
         });
         await check("a reinstall restores only the migration copy bound to its own attempt",()=>
