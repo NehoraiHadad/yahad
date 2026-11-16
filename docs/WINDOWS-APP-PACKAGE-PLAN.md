@@ -287,6 +287,18 @@ differs after migration (`src/store.ts:84-85`; `src/db.ts:14-18`).
 There is no format-6 reader. No 0.6.x install exists (section 11), so a format-6
 record is refused like any unknown format.
 
+**Size.** The member lists are the payload-free uninstall inventory (8.4), so
+the record keeps them, and its size has one bound derived from the tree bound.
+Each of the four lists, encoded as the record encodes it, is at most 16 MiB
+(the tree record's own bound), and every package that installs a tree checks
+this when it is opened (`PACKAGE_BOUND`, `APP_PACKAGE_BOUND`). Everything else
+is validated identifiers, under 64 KiB. So a record is at most 4 × 16 MiB +
+64 KiB, the one bound every reader reads with (`InstallerState.MaximumBytes`).
+The upgrade record holds two pairs and has the same bound. Admission also
+encodes the exact record its commit will write, so an oversized record is
+refused before anything changes. A move never writes a record that a later
+read refuses.
+
 ## 5. Release format
 
 ### 5.1 Manifests
@@ -550,8 +562,10 @@ inventory becomes:
 - every member of the active and `Previous` `infra-tree.json` and `app-tree.json`;
 - the installed engine.
 
-The receipt and the `Inspect` rules stay unchanged. The uninstall string points
-at the installed engine.
+The `Inspect` rules stay unchanged. The receipt carries the record, its mode
+and its stage, and derives the inventory from the record. It does not store
+the inventory a second time, so its bound is the record's plus 64 KiB. The
+uninstall string points at the installed engine.
 
 ## 9. Updater
 

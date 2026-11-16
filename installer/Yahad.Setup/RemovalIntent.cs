@@ -4,19 +4,23 @@ using Yahad.Install;
 namespace Yahad.Setup;
 
 // The protected external receipt outlives both removable roots, so a retry
-// never needs a deleted record to rediscover what it is removing.
-internal sealed record RemovalIntent(int Format,InstallerState State,UninstallMode Mode,InstallMember[] Binaries,string Stage)
+// never needs a deleted record to rediscover what it is removing. It carries the
+// record itself: the binary inventory is the one that record implies (Inventory),
+// derived, never stored a second time, so the receipt is the record's bound plus a
+// mode and a stage.
+internal sealed record RemovalIntent(int Format,InstallerState State,UninstallMode Mode,string Stage)
 {
+    internal const int MaximumBytes=InstallerState.MaximumBytes+InstallerState.FixedMaximumBytes;
     internal static readonly string[] Stages=["prepared","lan_removed","services_removed","data_removed","binaries_removed"];
+    internal InstallMember[] Binaries=>Inventory(State);
     internal void Require()
     {
-        if(State is null||Binaries is null)throw new IOException("UNINSTALL_INTENT_INVALID");
+        if(State is null)throw new IOException("UNINSTALL_INTENT_INVALID");
         State.Require();UninstallChoice.Require(Mode);
         if(Format!=InstallerState.CurrentFormat||State.Phase!=UninstallChoice.Phase(Mode)||!Stages.Contains(Stage))throw new IOException("UNINSTALL_INTENT_INVALID");
-        // The receipt's inventory is exactly the one its record implies.
-        var expected=Inventory(State).ToDictionary(f=>f.Path,StringComparer.OrdinalIgnoreCase);
-        if(Binaries.Length!=expected.Count||Binaries.Any(f=>f is null||!expected.TryGetValue(f.Path,out var e)||e!=f))throw new IOException("UNINSTALL_INTENT_INVALID");
     }
+    internal byte[] Encode(){Require();return InstallerState.Bounded(JsonSerializer.SerializeToUtf8Bytes(this),MaximumBytes);}
+    internal static RemovalIntent Read(string path)=>Parse(NativeInstallFiles.ReadRecord(path,MaximumBytes));
     // A receipt of another format was written by a pre-pair Setup: nothing finishes it.
     internal static RemovalIntent Parse(byte[] bytes)
     {

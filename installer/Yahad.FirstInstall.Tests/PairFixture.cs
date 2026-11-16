@@ -23,10 +23,12 @@ internal static class PairFixture
         internal InstallMember[] Files=>[..Members.Select(m=>new InstallMember(m.Path,m.Bytes.Length,TreeRecord.Sha256(m.Bytes))),new(TreeRecord.RecordName(Kind),Record.Length,Sha256)];
     }
     private static byte[] Content(string member,string salt)=>Encoding.UTF8.GetBytes(member=="app/server/main.mjs"?"synthetic-app-not-executed"+salt:"synthetic "+member+salt);
+    // The record escapes as setup_package.py's json.dumps does: only what JSON requires.
+    private static readonly JsonSerializerOptions Builder=new(){Encoder=System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping};
     internal static Tree Build(TreeKind kind,string version,string commit,IEnumerable<string> names,string salt="")
     {
         var members=names.Order(StringComparer.Ordinal).Select(n=>(n,Content(n,salt))).ToArray();
-        var record=JsonSerializer.SerializeToUtf8Bytes(new{format=TreeRecord.CurrentFormat,version,sourceCommit=commit,files=members.Select(m=>new{path=m.Item1,size=(long)m.Item2.Length,sha256=TreeRecord.Sha256(m.Item2)})});
+        var record=JsonSerializer.SerializeToUtf8Bytes(new{format=TreeRecord.CurrentFormat,version,sourceCommit=commit,files=members.Select(m=>new{path=m.Item1,size=(long)m.Item2.Length,sha256=TreeRecord.Sha256(m.Item2)})},Builder);
         return new(kind,version,commit,members,record);
     }
     internal static Tree Infra(string? version=null,string salt="")=>Build(TreeKind.Infrastructure,version??InfrastructureRelease.Version,InfrastructureRelease.SourceCommit,InfraMembers,salt);

@@ -27,7 +27,7 @@ internal static class UpgradeFiles
     }
     internal static void Save(UpgradeState state)=>NativeInstallFiles.Publish(InstallLocations.UpgradeStateFile,state.Encode());
     internal static UpgradeState Load()
-    {InstallLocations.RequireStateRoot();return UpgradeState.Parse(NativeInstallFiles.ReadRecord(InstallLocations.UpgradeStateFile,67108864));}
+    {InstallLocations.RequireStateRoot();return UpgradeState.Parse(NativeInstallFiles.ReadRecord(InstallLocations.UpgradeStateFile,UpgradeState.MaximumBytes));}
     internal static void DeleteState()=>File.Delete(InstallLocations.UpgradeStateFile);
     // The pointer every binary runs; written only while the Runtime is stopped.
     internal static void WritePointer(InstalledPair pair)=>NativeInstallFiles.Publish(InstalledLayout.ActivePointerFile,pair.Pointer().Encode());
@@ -181,9 +181,11 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
     // moves from, and the recorded schema the target or one the app migrates from.
     private static UpgradeTrack RequireAdmission(InstallerState installed,InstallPackage package)
     {
-        var track=UpgradeRules.Decide(installed.Active,package.Pair());
+        var to=package.Pair();var track=UpgradeRules.Decide(installed.Active,to);
         package.RequireFrom(installed.Active);
         if(!package.AcceptsSchema(installed.Active.App.DatabaseSchema))throw new IOException("RELEASE_UNSUPPORTED_FROM");
+        // The record the commit writes, checked before anything changes.
+        _=installed.After(to).Encode();
         return track;
     }
     // Refuses at once when another Setup is running; repair may wait for it.
@@ -320,7 +322,7 @@ internal sealed class UpgradeHost(InstallerState installed,UpgradeState state,Ac
     {
         if(UninstallChoice.SamePair(installed.Active,state.From))
         {
-            var next=installed with{Active=state.To,Previous=state.From};
+            var next=installed.After(state.To);
             NativeInstallFiles.Publish(InstallLocations.StateFile,next.Encode());installed=next;
         }
         else if(!UninstallChoice.SamePair(installed.Active,state.To))throw new IOException("INSTALL_STATE_INVALID");

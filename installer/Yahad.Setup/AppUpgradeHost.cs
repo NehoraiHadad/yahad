@@ -78,6 +78,8 @@ internal sealed class AppUpgradeHost(InstallerState installed,UpgradeState state
         try
         {
             if(UpgradeRules.Decide(installed.Active,to)!=UpgradeTrack.App)throw new IOException("RELEASE_TRACK_MISMATCH");
+            // The record the commit writes, checked before anything changes.
+            _=installed.After(to).Encode();
             var machine=new NativeAppMachine(installed);
             using var host=new AppUpgradeHost(installed,UpgradeState.Begin(UpgradeState.AppKind,installed.Active,to,machine.Now),machine,progress);
             return await host.ForwardAsync(source);
@@ -153,7 +155,7 @@ internal sealed class AppUpgradeHost(InstallerState installed,UpgradeState state
     {
         Advance("committed");
         InstallerState next;
-        if(UninstallChoice.SamePair(installed.Active,state.From))next=installed with{Active=state.To,Previous=state.From};
+        if(UninstallChoice.SamePair(installed.Active,state.From))next=installed.After(state.To);
         else if(UninstallChoice.SamePair(installed.Active,state.To))next=installed;
         else throw new IOException("INSTALL_STATE_INVALID");
         machine.Commit(next);installed=next;

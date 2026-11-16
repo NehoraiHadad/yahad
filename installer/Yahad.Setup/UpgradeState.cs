@@ -16,6 +16,8 @@ internal sealed record UpgradeState(int Format,string Id,string Kind,InstalledPa
     long StartedUnix,long HealthDeadlineUnix,int Attempts,string? Failure)
 {
     internal const int CurrentFormat=2;
+    // Two pairs and validated identifiers: the installer record's bound (InstallerState).
+    internal const int MaximumBytes=InstallerState.MaximumBytes;
     internal const string SetupKind="setup",AppKind="app";
     internal static readonly string[] SetupPhases=["preparing","prepared","stopped","backed_up","switched","started","healthy","committed","rolling_back","rolled_back"];
     // In step order: AppUpgradeHost compares positions in it.
@@ -35,7 +37,7 @@ internal sealed record UpgradeState(int Format,string Id,string Kind,InstalledPa
         UpgradeTrack track;try{track=Track;}catch(IOException){throw new IOException("INSTALL_STATE_INVALID");}
         if(track!=(Kind==AppKind?UpgradeTrack.App:UpgradeTrack.Infrastructure))throw new IOException("INSTALL_STATE_INVALID");
     }
-    internal byte[] Encode(){Require();return JsonSerializer.SerializeToUtf8Bytes(this);}
+    internal byte[] Encode(){Require();return InstallerState.Bounded(JsonSerializer.SerializeToUtf8Bytes(this),MaximumBytes);}
     internal static UpgradeState Parse(byte[] bytes)
     {
         if(RecordFormat.Of(bytes,"INSTALL_STATE_INVALID")!=CurrentFormat)throw new IOException("LEGACY_INSTALL_UNSUPPORTED");

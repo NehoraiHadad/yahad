@@ -51,6 +51,8 @@ internal sealed class AppPackage:IDisposable
             var record=archive.GetEntry(InstalledLayout.AppTreeName)!;
             App=new(release.Version,release.SourceCommit,signed.RequiresContract,signed.TreeSha256,signed.DatabaseSchema,
                 [..tree.Files.Select(f=>new InstallMember(f.Path,f.Size,f.Sha256)),new(InstalledLayout.AppTreeName,record.Length,signed.TreeSha256)]);
+            // The list the installer record will carry fits its bound (InstallerState).
+            if(!InstallerState.WithinListBound(App.Files))throw new IOException("APP_PACKAGE_BOUND");
         }
         catch{archive.Dispose();throw;}
     }

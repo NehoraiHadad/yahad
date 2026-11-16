@@ -401,17 +401,14 @@ internal static class UpgradeTests
             var moved=PairFixture.State("removing_keep_data",PairFixture.Pair("1.0.1","1.0.1"),PairFixture.Pair("1.0.0","1.0.1"));moved.Require();
             var movedInventory=RemovalIntent.Inventory(moved);
             Assert(movedInventory.Length==1+2*active.Infrastructure.Files.Length+active.App.Files.Length&&movedInventory.Any(f=>f.Path=="infra/1.0.0/setup/Yahad.Setup.exe")&&movedInventory.Any(f=>f.Path=="infra/1.0.1/setup/Yahad.Setup.exe"),"two infrastructures, one app");
-            var intent=new RemovalIntent(InstallerState.CurrentFormat,full,UninstallMode.KeepData,inventory,"prepared");intent.Require();
+            var intent=new RemovalIntent(InstallerState.CurrentFormat,full,UninstallMode.KeepData,"prepared");intent.Require();Assert(intent.Binaries.SequenceEqual(inventory),"the receipt's inventory is its record's");
             // A retry reads the recorded state back as separate objects.
             intent.RequireSameInstallation(NativeJson.Read<InstallerState>(JsonSerializer.SerializeToUtf8Bytes(full with{Phase="committed"})));
             DenyCode("UNINSTALL_INTENT_INVALID",()=>intent.RequireSameInstallation(full with{Previous=PairFixture.Pair("1.0.0","1.0.0",appSalt:"rebuilt")}));
             DenyCode("UNINSTALL_INTENT_INVALID",()=>intent.RequireSameInstallation(full with{Previous=null}));
-            foreach(var path in new[]{"infra/2.0.0/host/x","other","release-key.spki2","versions/1.0.1/host/Yahad.ServiceHost.exe","apps/1.0.1/app/native/x","infra/1.0.0/host/../x"})
-                DenyCode("UNINSTALL_INTENT_INVALID",()=>(intent with{Binaries=[..inventory,new(path,1,new string('d',64))]}).Require());
-            // Without a recorded key or previous pair, neither is admissible.
-            var bare=new RemovalIntent(InstallerState.CurrentFormat,state,UninstallMode.KeepData,plain,"prepared");bare.Require();
-            DenyCode("UNINSTALL_INTENT_INVALID",()=>(bare with{Binaries=[..plain,new("release-key.spki",91,new string('f',64))]}).Require());
-            DenyCode("UNINSTALL_INTENT_INVALID",()=>(bare with{Binaries=[..plain,..previous.App.Files.Select(f=>f with{Path="apps/1.0.0/"+f.Path})]}).Require());
+            // Without a recorded key or previous pair, neither is in the inventory.
+            var bare=new RemovalIntent(InstallerState.CurrentFormat,state,UninstallMode.KeepData,"prepared");bare.Require();
+            Assert(bare.Binaries.SequenceEqual(plain)&&!bare.Binaries.Any(f=>f.Path=="release-key.spki"||f.Path.StartsWith("apps/1.0.0/",StringComparison.Ordinal)),"neither key nor previous app");
             // The previous pair is older than the active one on both tracks; never the reverse.
             DenyCode("INSTALL_STATE_INVALID",()=>(full with{Previous=PairFixture.Pair("1.0.0","1.0.2")}).Require());
             DenyCode("INSTALL_STATE_INVALID",()=>(full with{Previous=PairFixture.Pair("2.0.0","1.0.0")}).Require());

@@ -73,6 +73,8 @@ internal sealed class InstallPackage:IDisposable
         foreach(var entry in archive.Entries)if(entry.FullName.StartsWith(AppPrefix,StringComparison.Ordinal))AppMemberPolicy.RequireNotImage(entry,Codes);
         RequireTree(TreeKind.Infrastructure,infra.Version,infra.SourceCommit,infra.TreeSha256);
         RequireTree(TreeKind.App,app.Version,app.SourceCommit,app.TreeSha256);
+        // Each list the installer record will carry fits its bound (InstallerState).
+        foreach(var kind in new[]{TreeKind.Infrastructure,TreeKind.App})if(!InstallerState.WithinListBound(Members(kind)))throw new IOException("PACKAGE_BOUND");
     }
     internal static bool IsEmbedded=>Assembly.GetExecutingAssembly().GetManifestResourceInfo(PayloadResource) is not null;
     // The app this image installs, read from the manifest alone (the archive is verified

@@ -48,7 +48,7 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
     internal static InstallerState ReadState()
     {
         InstallLocations.RequireStateRoot();
-        return InstallerState.Parse(NativeInstallFiles.ReadRecord(InstallLocations.StateFile));
+        return InstallerState.Read(InstallLocations.StateFile);
     }
     private void Save(string phase)
     {state=state! with{Phase=phase};NativeInstallFiles.Publish(InstallLocations.StateFile,state.Encode());}
@@ -263,7 +263,7 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
     {
         var path=InstallLocations.RemovalStateFile;
         foreach(var partial in Directory.EnumerateFiles(Path.GetDirectoryName(path)!,Path.GetFileName(path)+".partial-*"))File.Delete(partial);
-        NativeInstallFiles.Publish(path,Json(intent));
+        NativeInstallFiles.Publish(path,intent.Encode());
     }
     public async Task<SetupResult> UninstallAsync(Action<SetupProgress> progress,CancellationToken cancellation,UninstallMode mode=UninstallMode.KeepData)
     {
@@ -272,7 +272,7 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
         // A pre-pair layout is refused before anything is written.
         ExistingInstallation.RequireNotLegacy();
         if(!File.Exists(InstallLocations.RemovalStateFile)&&!File.Exists(InstallLocations.StateFile))throw new IOException("INSTALL_STATE_INVALID");
-        RemovalIntent? intent=File.Exists(InstallLocations.RemovalStateFile)?RemovalIntent.Parse(NativeInstallFiles.ReadRecord(InstallLocations.RemovalStateFile)):null;
+        RemovalIntent? intent=File.Exists(InstallLocations.RemovalStateFile)?RemovalIntent.Read(InstallLocations.RemovalStateFile):null;
         var recorded=File.Exists(InstallLocations.StateFile)?ReadState():null;
         if(File.Exists(InstallLocations.UpgradeStateFile))throw new IOException("UPGRADE_INCOMPLETE");
         if(intent is not null)
@@ -308,10 +308,10 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
                 if(intent is null)
                 {
                     operationPhase=UninstallPhase.InspectData;
-                    var inventory=Inventory();_=InspectBinaries(inventory,state.Phase is "committed" or "provisioned",true,"UNINSTALL_UNOWNED_FILE_PRESERVED");
+                    _=InspectBinaries(Inventory(),state.Phase is "committed" or "provisioned",true,"UNINSTALL_UNOWNED_FILE_PRESERVED");
                     if(mode==UninstallMode.DeleteData&&Directory.Exists(InstallLocations.State))_=RemovalTree.Inspect(InstallLocations.State,WindowsFileBoundary.RequireNoLink);
                     operationPhase=UninstallPhase.WriteRemovalReceipt;
-                    state=state with{Phase=UninstallChoice.Phase(mode)};intent=new(InstallerState.CurrentFormat,state,mode,inventory,"prepared");SaveRemoval(intent);Save(state.Phase);
+                    state=state with{Phase=UninstallChoice.Phase(mode)};intent=new(InstallerState.CurrentFormat,state,mode,"prepared");SaveRemoval(intent);Save(state.Phase);
                 }
                 if(!intent.AtLeast("lan_removed"))
                 {
