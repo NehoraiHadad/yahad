@@ -150,7 +150,6 @@ try {
             $result = & $Patch $tree
             MarkHelpPage $tree $Version
             Run git @('-c', 'user.name=ci', '-c', 'user.email=ci@invalid', 'commit', '-q', '-am', "CI fixture: $Name")
-            Run $node @($npm, 'ci', '--offline', '--cache', $inputs.NpmCache, '--no-audit', '--no-fund')
             $commit = (& git rev-parse HEAD).Trim()
         } finally { Pop-Location }
         $release = Package $tree $Name $Version $(if ($InfraSource) { $InfraSource } else { $tree })

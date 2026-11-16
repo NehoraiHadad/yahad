@@ -134,11 +134,13 @@ jobs:
           Invoke-WebRequest $source.checksums.url -OutFile "$d/caddy-checksums"
           python -m installer.windows.dependencies stage --caddy-archive "$d/caddy-archive" --caddy-checksums "$d/caddy-checksums" --output .local/vendors
           if ($LASTEXITCODE -ne 0) { throw 'Vendor staging failed' }
-      - name: Install locked npm dependencies
+      # Online, once: fills the npm cache that every package build's offline restore
+      # (installer/windows/prepare_core_fixture.py) reads, as the README's build machine does.
+      - name: Fill the npm cache from the lockfile
         shell: pwsh
         run: |
           $node = $env:NODE_DIRECTORY
-          & "$node/node.exe" "$node/node_modules/npm/bin/npm-cli.js" ci --cache .local/npm-cache --no-audit --no-fund
+          & "$node/node.exe" "$node/node_modules/npm/bin/npm-cli.js" ci --ignore-scripts --cache .local/npm-cache --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
       - name: Generate an ephemeral release key
         shell: pwsh
