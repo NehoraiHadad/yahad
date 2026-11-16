@@ -34,7 +34,9 @@ Required external inputs:
 1. Official Node **24.x Windows x64 ZIP**, extracted with its LICENSE and npm CLI.
 2. .NET 10 SDK with its LICENSE/ThirdPartyNotices; publishing restores the currently
    pinned private runtime **10.0.14**. SDK/package downloads require network access
-   on the build machine.
+   on the build machine. ServiceHost, Updater and Platform publish as NativeAOT, so
+   an infrastructure build also needs the MSVC x64 build tools and a Windows SDK
+   (Visual Studio 2022 Build Tools, `VCTools` workload).
 3. A populated npm cache. From this checkout run
    `npm ci --ignore-scripts --cache C:/build-cache/npm` once with network available.
    Application packaging then runs the release's only `npm ci --offline

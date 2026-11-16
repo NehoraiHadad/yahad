@@ -114,8 +114,8 @@ language:
 
 **Not changed by this plan, noted for the infrastructure track.** These shrink
 the rare Setup download and don't affect the app track:
-- the host, Updater and Platform each carry their own self-contained .NET
-  runtime (decision 6);
+- the host, Updater and Platform each carried their own self-contained .NET
+  runtime (decision 6; NativeAOT since infrastructure 1.0.2);
 
 ## 3. What can only change through Setup
 
@@ -864,6 +864,9 @@ The maintainer accepted every recommendation (2026-11-15):
 6. **Shrinking the infrastructure download:** NativeAOT for the host, Updater and
    Platform, as its own infrastructure-track change with
    an AOT test in CI. Neither blocks this plan.
+   Done in infrastructure 1.0.2: each is one native exe, and the Setup fell from
+   287 to 128.5 MB with the single engine of 4.4
+   ([WINDOWS-SETUP-SIZE-AND-DELIVERY.md](WINDOWS-SETUP-SIZE-AND-DELIVERY.md)).
 7. **Per-release distributable Setup:** the cached infrastructure's engine with
    the release's install package appended (4.4). No .NET publish per release and
    no new executable. (Revised 2026-11-17; it was a `Yahad.Setup` publish from a
