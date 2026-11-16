@@ -546,15 +546,20 @@ export function infrastructureState(repo, inputs) {
 }
 
 // The one commit the infrastructure is packaged from, the one infra_package.py plan() accepts.
-// `built` is the commit being built (publish's release commit, else HEAD), `state` is infrastructureState,
+// `built` is the commit being built (publish's release commit, else HEAD), `head` is `repo`'s HEAD
+// (for publish equal to origin/main, the release commit's parent), `state` is infrastructureState,
 // `plan` is publish's planInfrastructure result (none for build and install), and `inHistory(commit)`
 // says whether a commit is in the history of `built` (historyOf).
 //   cache entry, same inputs  -> its source commit: one infrastructure version names one build
 //   cache entry, other inputs -> refused, INFRA_BUMP_REQUIRED
-//   no entry                  -> the latest release's commit when publish reuses it, else `built`
+//   no entry                  -> the latest release's commit when publish reuses it, else `head`
+// A new build comes from `head`, never from publish's release commit: that commit exists only in the
+// release clone until it is pushed, while the cache entry the build leaves names its source commit for
+// good. Built from the release commit, a --dry-run or a refused confirmation would leave an entry
+// naming a commit that never reaches origin, and every later release would refuse it.
 // The source must be `built` or one of its ancestors, so a release never names infrastructure from a
 // commit outside its own history (for publish: outside origin/main, which HEAD equals).
-export function resolveInfrastructure({ built, state, plan = null, inHistory }) {
+export function resolveInfrastructure({ built, head = built, state, plan = null, inHistory }) {
   const { version, digest, cache, cached } = state;
   if (cached) {
     if (cached.inputDigest !== digest) refuse(`INFRA_BUMP_REQUIRED: infrastructure ${version} is cached from inputs ${cached.inputDigest}; HEAD has ${digest}. Raise YahadInfrastructureVersion in ${INFRASTRUCTURE_PROPS}.`);
@@ -570,16 +575,17 @@ export function resolveInfrastructure({ built, state, plan = null, inHistory }) 
     if (!inHistory(plan.sourceCommit)) refuse(`INFRA_SOURCE_OUTSIDE_HISTORY: the latest release's infrastructure ${version} comes from ${plan.sourceCommit}, a commit outside the history of ${built}.`);
     return { sourceCommit: plan.sourceCommit, digest };
   }
-  return { sourceCommit: built, digest };
+  return { sourceCommit: head, digest };
 }
 
 // Whether a commit is in the history of the commit being built. That commit is `repo`'s HEAD, or for
 // publish a release commit whose parent is `repo`'s HEAD, so ancestry is asked of HEAD in `repo`.
+// Every ancestor of HEAD is in `repo`, so a commit `repo` does not have is outside that history.
 export function historyOf(repo, built) {
   const head = git(repo, 'rev-parse', 'HEAD').trim();
   return (commit) => {
     if (commit === built) return true;
-    try { git(repo, 'cat-file', '-e', `${commit}^{commit}`); } catch { refuse(`The infrastructure commit ${commit} is not in this checkout; fetch origin.`); }
+    try { git(repo, 'cat-file', '-e', `${commit}^{commit}`); } catch { return false; }
     const run = spawnSync('git', ['merge-base', '--is-ancestor', commit, head], { cwd: repo });
     if (run.status !== 0 && run.status !== 1) refuse(`git merge-base --is-ancestor ${commit} ${head} failed (${run.error?.message ?? `exit ${run.status}`}).`);
     return run.status === 0;
@@ -588,7 +594,8 @@ export function historyOf(repo, built) {
 
 // Runs `work(infra)` with the resolved infrastructure source.
 export function withInfrastructure({ repo, built, state, plan = null }, work) {
-  return withInfrastructureSource(repo, built, resolveInfrastructure({ built, state, plan, inHistory: historyOf(repo, built) }), work);
+  const head = git(repo, 'rev-parse', 'HEAD').trim();
+  return withInfrastructureSource(repo, built, resolveInfrastructure({ built, head, state, plan, inHistory: historyOf(repo, built) }), work);
 }
 
 // An infrastructure from another commit than the one being built is packaged from a checkout at its
