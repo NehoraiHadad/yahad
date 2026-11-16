@@ -4,7 +4,7 @@ import os
 
 class PEError(ValueError): pass
 
-def inspect(path):
+def inspect(path, *, exports=False):
     if os.path.getsize(path) > 512 * 1024 ** 2: raise PEError('PE size')
     with open(path, 'rb') as stream: data = stream.read()
     def span(offset, size):
@@ -71,7 +71,21 @@ def inspect(path):
                 if dword(entry) != 1: raise PEError('PE delay VA form unsupported')
                 imports.add(string(dword(entry + 4)))
             else: raise PEError('PE unterminated delay imports')
-    return {'machine': 'anycpu-il' if managed else 'x64', 'managed': managed, 'imports': sorted(imports)}
+    result = {'machine': 'anycpu-il' if managed else 'x64', 'managed': managed, 'imports': sorted(imports)}
+    if exports:
+        # Export names only (no ordinals or forwarders), each bounded and printable ASCII.
+        names = set()
+        rva, size = directory(0)
+        if rva:
+            if size < 40 or size > 16 * 1024 * 1024: raise PEError('PE export table')
+            table = offset(rva, 40); count, pointers = dword(table + 24), dword(table + 32)
+            if count > 65536: raise PEError('PE export count')
+            for i in range(count):
+                start = offset(dword(offset(pointers + i * 4, 4))); end = data.find(b'\0', start, min(len(data), start + 513))
+                if end <= start or any(c < 0x21 or c > 0x7e for c in data[start:end]): raise PEError('PE export name')
+                names.add(data[start:end].decode('ascii'))
+        result['exports'] = sorted(names)
+    return result
 
 # Explicit Windows desktop OS contracts, not a lookup in the developer's PATH
 # or installed DLL directories. VC redistributables are intentionally excluded.

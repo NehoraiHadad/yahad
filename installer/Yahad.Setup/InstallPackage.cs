@@ -33,8 +33,8 @@ internal sealed class InstallPackage:IDisposable
     internal const string InfraPrefix="infra/",AppPrefix="apps/";
     internal static readonly string EnginePath=InfraPrefix+Setup.InfrastructureRecord.EngineMember;
     private const string Codes="PACKAGE_";
-    internal static readonly string[] Required=["infra/host/Yahad.ServiceHost.exe","infra/host/Yahad.ServiceHost.runtimeconfig.json","infra/updater/Yahad.Updater.exe","infra/updater/Yahad.Updater.runtimeconfig.json",
-        "infra/platform/Yahad.Platform.exe","infra/platform/Yahad.Platform.runtimeconfig.json","infra/runtime/node/node.exe","infra/runtime/caddy/caddy.exe","infra/"+Setup.InfrastructureRecord.EngineMember,
+    internal static readonly string[] Required=["infra/host/Yahad.ServiceHost.exe","infra/updater/Yahad.Updater.exe",
+        "infra/platform/Yahad.Platform.exe","infra/runtime/node/node.exe","infra/runtime/caddy/caddy.exe","infra/"+Setup.InfrastructureRecord.EngineMember,
         ..AppMemberPolicy.Required.Select(m=>AppPrefix+m)];
     private readonly Stream stream;private readonly ZipArchive archive;private readonly Func<Stream> engine;
     internal InstallPackageManifest Manifest{get;}
@@ -42,7 +42,7 @@ internal sealed class InstallPackage:IDisposable
     internal InstallPackage(Stream zip,byte[] manifest,Func<Stream> engine)
     {
         stream=zip;this.engine=engine;
-        try{Manifest=NativeJson.Read<InstallPackageManifest>(manifest);}catch(JsonException){throw new IOException("PACKAGE_FORMAT");}
+        try{Manifest=NativeJson.Read(manifest,SetupJsonContext.Default.InstallPackageManifest);}catch(JsonException){throw new IOException("PACKAGE_FORMAT");}
         var infra=Manifest.Infrastructure;var app=Manifest.App;var minimum=Manifest.MinimumFrom;
         if(Manifest.Format!=Format||infra is null||app is null||minimum is null||Manifest.Files is not {Length:>=16 and <=2*TreeRecord.MaximumMembers+2}||app.DatabaseMigrationsFrom is null||
             !SemVer.IsVersion(infra.Version)||!SemVer.IsVersion(app.Version)||!TreeRecord.IsCommit(infra.SourceCommit)||!TreeRecord.IsCommit(app.SourceCommit)||
@@ -95,7 +95,7 @@ internal sealed class InstallPackage:IDisposable
     internal static string DisplayVersion()
     {
         var image=SetupImage.Read(ImagePath())??throw new IOException("PACKAGE_NOT_EMBEDDED");
-        var version=NativeJson.Read<InstallPackageManifest>(image.ReadManifest()).App?.Version;
+        var version=NativeJson.Read(image.ReadManifest(),SetupJsonContext.Default.InstallPackageManifest).App?.Version;
         return version is not null&&SemVer.IsVersion(version)?version:throw new IOException("PACKAGE_FORMAT");
     }
     internal static InstallPackage Embedded()=>FromImage(ImagePath());

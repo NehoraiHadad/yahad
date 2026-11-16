@@ -14,7 +14,6 @@ internal sealed class GitHubReleaseSource:IDisposable
     internal const string Latest="https://api.github.com/repos/NehoraiHadad/yahad/releases/latest";
     internal const int MaximumListBytes=262144,MaximumRedirects=5;
     private static readonly HashSet<string> Hosts=new(StringComparer.Ordinal){"api.github.com","github.com","objects.githubusercontent.com","release-assets.githubusercontent.com"};
-    private static readonly JsonSerializerOptions ListOptions=new(){MaxDepth=8,PropertyNamingPolicy=JsonNamingPolicy.SnakeCaseLower,RespectRequiredConstructorParameters=true,RespectNullableAnnotations=true};
     private readonly HttpClient client;
     internal GitHubReleaseSource():this(new SocketsHttpHandler{AllowAutoRedirect=false,UseProxy=false,UseCookies=false,AutomaticDecompression=DecompressionMethods.None,ConnectTimeout=TimeSpan.FromSeconds(30)}){}
     internal GitHubReleaseSource(HttpMessageHandler handler){client=new HttpClient(handler){Timeout=Timeout.InfiniteTimeSpan};}
@@ -23,7 +22,7 @@ internal sealed class GitHubReleaseSource:IDisposable
     internal static GitHubRelease ParseRelease(byte[] bytes)
     {
         if(bytes.Length>MaximumListBytes)throw new IOException("GITHUB_RESPONSE_BOUND");GitHubRelease? value;
-        try{value=JsonSerializer.Deserialize<GitHubRelease>(bytes,ListOptions);}catch(JsonException){throw new IOException("GITHUB_LIST_INVALID");}
+        try{value=JsonSerializer.Deserialize(bytes,GitHubJsonContext.Default.GitHubRelease);}catch(JsonException){throw new IOException("GITHUB_LIST_INVALID");}
         if(value is null||value.Assets.Length>1000)throw new IOException("GITHUB_LIST_INVALID");
         return value;
     }

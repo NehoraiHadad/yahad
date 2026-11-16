@@ -11,7 +11,7 @@ namespace Yahad.Setup;
 // so its files are reached without following a link it may have left there.
 internal static class DatabaseBackup
 {
-    private sealed record Entry(string Name,long Bytes,string Sha256);
+    internal sealed record Entry(string Name,long Bytes,string Sha256);
     private static readonly string[] Names=["app.sqlite-wal","app.sqlite-shm","app.sqlite"];
     private const string ManifestName="manifest.json";
     internal static long Size(string data)=>Names.Select(n=>new FileInfo(Path.Combine(data,n))).Where(f=>f.Exists).Sum(f=>f.Length);
@@ -40,7 +40,7 @@ internal static class DatabaseBackup
     internal static void Restore(string data,string backup,WindowsFileBoundary.DataLease held)
     {
         ArgumentNullException.ThrowIfNull(held);
-        var entries=NativeJson.Read<Entry[]>(NativeInstallFiles.ReadRecord(Path.Combine(backup,ManifestName),65536));
+        var entries=NativeJson.Read(NativeInstallFiles.ReadRecord(Path.Combine(backup,ManifestName),65536),SetupJsonContext.Default.EntryArray);
         if(entries.Any(e=>!Names.Contains(e.Name)))throw new IOException("UPGRADE_BACKUP_INVALID");
         foreach(var entry in entries)
         {

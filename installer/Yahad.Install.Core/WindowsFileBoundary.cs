@@ -109,7 +109,7 @@ public static class WindowsFileBoundary
     public static void ValidateHostLease(string descriptor, string directory, int ownerPid, string nonce)
     {
         using var file = OpenRead(descriptor);
-        var grant = NativeJson.Read<HostLeaseGrant>(file.Small(4096));
+        var grant = NativeJson.Read(file.Small(4096), NativeJsonContext.Default.HostLeaseGrant);
         if (grant.Format != 1 || grant.ProcessId != ownerPid || ownerPid < 1 || grant.Nonce != nonce || nonce.Length != 64 ||
             !string.Equals(grant.DataDirectory, directory, StringComparison.OrdinalIgnoreCase) || grant.Handle == 0 || grant.Handle > long.MaxValue) throw new IOException("NATIVE_HANDOFF_IDENTITY");
         using var owner = Native.OpenProcess(0x1000 | 0x40, false, ownerPid); if (owner.IsInvalid) throw new Win32Exception(); RequireSameIdentity(owner);

@@ -93,7 +93,7 @@ internal sealed record InstallerState(int Format,string InstallationId,string Da
     {
         if(RecordFormat.Of(bytes,"INSTALL_STATE_INVALID")!=CurrentFormat)throw new IOException("LEGACY_INSTALL_UNSUPPORTED");
         InstallerState state;
-        try{state=NativeJson.Read<InstallerState>(bytes);}catch(JsonException){throw new IOException("INSTALL_STATE_INVALID");}
+        try{state=NativeJson.Read(bytes,SetupJsonContext.Default.InstallerState);}catch(JsonException){throw new IOException("INSTALL_STATE_INVALID");}
         state.Require();return state;
     }
     internal byte[] Encode(){Require();return Bounded(JsonSerializer.SerializeToUtf8Bytes(this),MaximumBytes);}

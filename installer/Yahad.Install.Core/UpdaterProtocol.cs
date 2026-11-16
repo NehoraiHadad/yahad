@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using System.Text.RegularExpressions;
 namespace Yahad.Install;
 
@@ -17,12 +18,12 @@ internal sealed record UpdaterReply(int V,bool Ok,string? Code=null,UpdaterStatu
 internal sealed record UpdaterRecord(int Format,string Mode,string? Phase=null,UpdaterLastRequest? LastRequest=null,UpdaterLastMode? LastModeRequest=null,long? CheckedAt=null,long? LastUpdateAt=null,string? Latest=null,string? Error=null,string? RefusedVersion=null)
 {
     internal static UpdaterRecord Seed(bool automatic)=>new(1,automatic?UpdaterProtocol.Auto:UpdaterProtocol.Notify);
-    internal byte[] Encode()=>JsonSerializer.SerializeToUtf8Bytes(this,UpdaterProtocol.Options);
+    internal byte[] Encode()=>JsonSerializer.SerializeToUtf8Bytes(this,UpdaterJsonContext.Default.UpdaterRecord);
     internal static UpdaterRecord Parse(byte[] bytes)
     {
         try
         {
-            var value=JsonSerializer.Deserialize<UpdaterRecord>(bytes,UpdaterProtocol.Options);
+            var value=JsonSerializer.Deserialize(bytes,UpdaterJsonContext.Default.UpdaterRecord);
             if(value is {Format:1,Mode:UpdaterProtocol.Auto or UpdaterProtocol.Notify})return value;
         }
         catch(JsonException){}
@@ -33,27 +34,32 @@ internal static class UpdaterProtocol
 {
     internal const string PipeName="Yahad.Updater",Auto="auto",Notify="notify";
     internal const int MaximumFrame=4096;
-    // Reply, status, last request, target: four objects, and the serializer refuses a
-    // value at the limit, so the values of the deepest one need a fifth level.
-    internal static readonly JsonSerializerOptions Options=new()
-    {MaxDepth=5,PropertyNamingPolicy=JsonNamingPolicy.CamelCase,UnmappedMemberHandling=JsonUnmappedMemberHandling.Disallow,AllowDuplicateProperties=false};
     internal static bool IsId(string? value)=>value is not null&&Guid.TryParseExact(value,"D",out var id)&&id.ToString("D")==value;
     internal static bool IsFingerprint(string? value)=>value is not null&&Regex.IsMatch(value,@"\A[a-f0-9]{64}\z");
-    internal static byte[] Frame<T>(T value)
+    // Only the protocol's own options cross the pipe (UpdaterJsonContext).
+    internal static JsonTypeInfo<T> Protocol<T>(JsonTypeInfo<T> type)
+        =>ReferenceEquals(type.Options,UpdaterJsonContext.Default.Options)?type:throw new InvalidOperationException("UPDATER_JSON_OPTIONS");
+    internal static byte[] Frame<T>(T value,JsonTypeInfo<T> type)
     {
-        var body=JsonSerializer.SerializeToUtf8Bytes(value,Options);if(body.Length>MaximumFrame)throw new IOException("UPDATER_FRAME");
+        var body=JsonSerializer.SerializeToUtf8Bytes(value,Protocol(type));if(body.Length>MaximumFrame)throw new IOException("UPDATER_FRAME");
         return [..BitConverter.GetBytes(body.Length),..body];
     }
-    internal static async Task WriteAsync<T>(Stream stream,T value,CancellationToken cancellation)
-    {await stream.WriteAsync(Frame(value),cancellation);await stream.FlushAsync(cancellation);}
+    internal static async Task WriteAsync<T>(Stream stream,T value,JsonTypeInfo<T> type,CancellationToken cancellation)
+    {await stream.WriteAsync(Frame(value,type),cancellation);await stream.FlushAsync(cancellation);}
     // The length is checked before anything is allocated, and the body is parsed
     // only once all of it arrived.
-    internal static async Task<T> ReadAsync<T>(Stream stream,CancellationToken cancellation)
+    internal static async Task<T> ReadAsync<T>(Stream stream,JsonTypeInfo<T> type,CancellationToken cancellation)
     {
+        Protocol(type);
         var header=new byte[4];await stream.ReadExactlyAsync(header,cancellation);var length=BitConverter.ToInt32(header);
         if(length is <1 or >MaximumFrame)throw new IOException("UPDATER_FRAME");
         var body=new byte[length];await stream.ReadExactlyAsync(body,cancellation);
-        try{return JsonSerializer.Deserialize<T>(body,Options)??throw new IOException("UPDATER_FRAME");}
+        try{return JsonSerializer.Deserialize(body,type)??throw new IOException("UPDATER_FRAME");}
         catch(JsonException){throw new IOException("UPDATER_FRAME");}
     }
 }
+// Reply, status, last request, target: four objects, and the serializer refuses a
+// value at the limit, so the values of the deepest one need a fifth level.
+[JsonSourceGenerationOptions(MaxDepth=5,PropertyNamingPolicy=JsonKnownNamingPolicy.CamelCase,UnmappedMemberHandling=JsonUnmappedMemberHandling.Disallow,AllowDuplicateProperties=false)]
+[JsonSerializable(typeof(UpdaterRequest))][JsonSerializable(typeof(UpdaterReply))][JsonSerializable(typeof(UpdaterRecord))]
+internal sealed partial class UpdaterJsonContext:JsonSerializerContext;

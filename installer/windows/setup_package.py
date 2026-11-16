@@ -63,9 +63,7 @@ ENGINE = 'Yahad.Setup.exe'
 # The infrastructure tree's own legal records (infra_package.py) and the app's (bundle.APP_LEGAL).
 INFRA_LEGAL = ('legal/runtime-lock.json', 'legal/SBOM.json', 'legal/Node-LICENSE.txt', 'legal/DotNet-LICENSE.txt',
                'legal/DotNet-ThirdPartyNotices.txt', 'legal/Caddy-LICENSE.txt', 'legal/Yahad-LICENSE.txt')
-INFRA_REQUIRED = frozenset({'host/Yahad.ServiceHost.exe','host/Yahad.ServiceHost.runtimeconfig.json',
-    'updater/Yahad.Updater.exe','updater/Yahad.Updater.runtimeconfig.json',
-    'platform/Yahad.Platform.exe','platform/Yahad.Platform.runtimeconfig.json',
+INFRA_REQUIRED = frozenset({'host/Yahad.ServiceHost.exe','updater/Yahad.Updater.exe','platform/Yahad.Platform.exe',
     'runtime/node/node.exe','runtime/caddy/caddy.exe','setup/'+ENGINE, *INFRA_LEGAL})
 # The engine member is not an archive entry: the Setup image's prefix is its bytes.
 ENGINE_MEMBER = INFRA+'setup/'+ENGINE
@@ -229,31 +227,27 @@ def validate_payload_source(repo, prepared, records, version, source, tracked):
     return schema, migrations
 
 
+# The symbol ILC exports from every NativeAOT image for debuggers; an apphost, a
+# single-file bundle or a C++ image has none.
+NATIVE_AOT_EXPORT = 'DotNetRuntimeDebugHeader'
+
+
+def _runtime_remnant(name):
+    # What a framework-dependent or self-contained publish leaves beside its apphost.
+    folded = name.casefold()
+    return folded.endswith(('.dll', '.runtimeconfig.json', '.deps.json'))
+
+
 def validate_native(root, artifact, infrastructure, source, repo):
-    files = _VerifiedFiles(_inventory(root),root=root); entry = artifact+'.exe'; stem = artifact
-    required = {entry, stem+'.dll', stem+'.runtimeconfig.json', stem+'.deps.json',
-                'coreclr.dll', 'hostfxr.dll', 'hostpolicy.dll', 'System.Private.CoreLib.dll'}
-    if not required<=files.keys(): raise PackageError('Incomplete private .NET runtime')
-    runtime = _json(files[stem+'.runtimeconfig.json'].read_bytes(), 65536)['runtimeOptions']
-    expected = {'Microsoft.NETCore.App'}
-    frameworks = runtime.get('includedFrameworks', [])
-    if ('framework' in runtime or 'frameworks' in runtime or not isinstance(frameworks, list) or
-            len(frameworks)!=len(expected) or {f.get('name') for f in frameworks}!=expected or any(f.get('version')!=RUNTIME_VERSION for f in frameworks)):
-        raise PackageError('Private .NET 10.0.14 framework closure required')
-    deps = _json(files[stem+'.deps.json'].read_bytes()); target = deps.get('runtimeTarget', {}).get('name', '')
-    if not target.endswith('/win-x64') or target not in deps.get('targets', {}): raise PackageError('Private .NET dependency target')
-    for identifier,library in deps['targets'][target].items():
-        if any(name+'.Runtime.' in identifier for name in expected) and identifier.rsplit('/',1)[-1]!=RUNTIME_VERSION:
-            raise PackageError('Mixed private .NET runtime version')
-        for category in ('runtime', 'native', 'resources', 'runtimeTargets'):
-            for asset, metadata in library.get(category, {}).items():
-                _safe_path(asset, component=True); leaf = asset.rsplit('/', 1)[-1]
-                if category=='resources':
-                    locale = metadata.get('locale'); _safe_path(locale, component=True); leaf = locale+'/'+leaf
-                if category=='runtimeTargets' and metadata.get('rid') not in ('win-x64', 'win', 'any'):
-                    raise PackageError('Foreign private .NET dependency')
-                if leaf not in files: raise PackageError('Missing private .NET dependency')
+    # A host, Updater or Platform component is exactly one NativeAOT x64 image
+    # (plan decision 6): no managed entry, no .NET runtime and no other file beside it.
+    files = _VerifiedFiles(_inventory(root),root=root); entry = artifact+'.exe'
+    others = sorted(name for name in files if name!=entry)
+    if any(_runtime_remnant(name) for name in others): raise PackageError('.NET runtime remnant beside a NativeAOT image')
+    if others: raise PackageError('NativeAOT component holds only '+entry)
+    if entry not in files: raise PackageError('NativeAOT image required')
     _inspect(files,native_entry=entry)
+    if NATIVE_AOT_EXPORT not in pe.inspect(_unlinked(files[entry], file=True), exports=True)['exports']: raise PackageError('NativeAOT image required')
     require_native_build_identity(describe_build_artifact(files[entry], '--describe', repo), artifact, infrastructure, source)
     files.require_unchanged()
     return files

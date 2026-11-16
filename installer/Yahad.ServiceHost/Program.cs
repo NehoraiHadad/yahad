@@ -5,11 +5,11 @@ using Yahad.Install;
 
 if(args is ["--describe"])
 {
-    Console.WriteLine(JsonSerializer.Serialize(new{artifact="Yahad.ServiceHost",serviceName=ServiceDefinition.Name,
-        version=Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion,
-        infrastructureVersion=InfrastructureRelease.Version,contractMin=InfrastructureRelease.ContractMin,contractMax=InfrastructureRelease.ContractMax,sourceCommit=InfrastructureRelease.SourceCommit,
-        scmEntryImplemented=true,canInstallService=false,launchConfiguration=InstalledLaunch.FileName,
-        familyInstallationReady=false,releaseReady=false}));return 0;
+    Console.WriteLine(JsonSerializer.Serialize(new ServiceHostDescription("Yahad.ServiceHost",ServiceDefinition.Name,
+        Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion,
+        InfrastructureRelease.Version,InfrastructureRelease.ContractMin,InfrastructureRelease.ContractMax,InfrastructureRelease.SourceCommit,
+        ScmEntryImplemented:true,CanInstallService:false,LaunchConfiguration:InstalledLaunch.FileName,
+        FamilyInstallationReady:false,ReleaseReady:false),ServiceHostDescriptionJsonContext.Default.ServiceHostDescription));return 0;
 }
 if(args is ["--lan-service"])
 {

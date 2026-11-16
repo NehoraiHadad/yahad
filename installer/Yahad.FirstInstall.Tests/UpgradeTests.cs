@@ -405,7 +405,7 @@ internal static class UpgradeTests
             Assert(movedInventory.Length==1+2*active.Infrastructure.Files.Length+active.App.Files.Length&&movedInventory.Any(f=>f.Path=="infra/1.0.0/setup/Yahad.Setup.exe")&&movedInventory.Any(f=>f.Path=="infra/1.0.1/setup/Yahad.Setup.exe"),"two infrastructures, one app");
             var intent=new RemovalIntent(InstallerState.CurrentFormat,full,UninstallMode.KeepData,"prepared");intent.Require();Assert(intent.Binaries.SequenceEqual(inventory),"the receipt's inventory is its record's");
             // A retry reads the recorded state back as separate objects.
-            intent.RequireSameInstallation(NativeJson.Read<InstallerState>(JsonSerializer.SerializeToUtf8Bytes(full with{Phase="committed"})));
+            intent.RequireSameInstallation(NativeJson.Read(JsonSerializer.SerializeToUtf8Bytes(full with{Phase="committed"}),SetupJsonContext.Default.InstallerState));
             DenyCode("UNINSTALL_INTENT_INVALID",()=>intent.RequireSameInstallation(full with{Previous=PairFixture.Pair("1.0.0","1.0.0",appSalt:"rebuilt")}));
             DenyCode("UNINSTALL_INTENT_INVALID",()=>intent.RequireSameInstallation(full with{Previous=null}));
             // Without a recorded key or previous pair, neither is in the inventory.

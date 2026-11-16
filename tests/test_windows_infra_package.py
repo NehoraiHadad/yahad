@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from installer.windows import infra_package as cache, setup_package as full, dependencies
 from installer.windows.application_version import Infrastructure
-from tests.test_windows_setup_package import image, infra_entry, put, INFRA, INFRA_SOURCE
+from tests.test_windows_setup_package import aot, image, infra_entry, put, INFRA, INFRA_SOURCE
 
 DIGEST, KEY = 'd'*64, '0123456789abcdef'
 
@@ -126,7 +126,7 @@ class BuildTests(unittest.TestCase):
         self.components = {}
         for artifact in ('Yahad.ServiceHost', 'Yahad.Updater', 'Yahad.Platform'):
             root = self.root/artifact
-            for name in (artifact+'.exe', artifact+'.dll', artifact+'.runtimeconfig.json', 'coreclr.dll'): put(root, name, image() if name.endswith(('.exe', '.dll')) else '{}')
+            put(root, artifact+'.exe', aot())  # a NativeAOT publish: the image alone
             self.components[artifact] = root
         self.engine = put(self.root/'engine', 'Yahad.Setup.exe', image())
         self.node = self.root/'node'
@@ -185,6 +185,10 @@ class BuildTests(unittest.TestCase):
         self.assertEqual((sbom['infrastructureVersion'], sbom['sourceCommit']), ('1.0.0', INFRA_SOURCE))
         self.assertEqual([r['id'] for r in sbom['runtimes']], ['node', 'caddy'])
         self.assertEqual(sbom['dotnet']['runtimeVersion'], full.RUNTIME_VERSION)
+        self.assertNotIn('selfContained', sbom['dotnet'])
+        self.assertEqual(sbom['dotnet']['deployment'], {'host/Yahad.ServiceHost.exe':'native-aot', 'updater/Yahad.Updater.exe':'native-aot',
+                                                        'platform/Yahad.Platform.exe':'native-aot', 'setup/Yahad.Setup.exe':'self-contained-single-file'})
+        self.assertEqual(sorted(sbom['dotnet']['deployment']), sorted(sbom['dotnet']['images']))
         self.assertTrue(all((tree/name).is_file() for name in sbom['dotnet']['images']+sbom['dotnet']['notices']))
         self.assertNotIn('serverBundleDependencies', sbom)
 

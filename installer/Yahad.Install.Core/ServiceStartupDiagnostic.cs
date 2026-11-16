@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 namespace Yahad.Install;
 
 internal enum StartupDiagnosticRole { Runtime, Updater }
@@ -15,6 +16,13 @@ internal sealed class ChildExitedException(int exitCode):IOException("SERVICE_CH
 // Fixed local Application event only. No source-registration/registry writes,
 // exception text, paths, arguments, tokens or data. Logging cannot replace the
 // original failure when the event log is unavailable.
+// The events' fields, in this order and spelled exactly so (default options).
+internal sealed record StartupDiagnosticStep(string Stage,long Ms,string? Failure);
+internal sealed record StartupDiagnostic(int Format,string Role,string SourceCommit,int ProcessId,string? Code,int HResult,int? NativeError,int? ExitCode,
+    string[] Sites,StartupDiagnosticStep[]? Steps);
+internal sealed record UpgradeDiagnostic(int Format,string Upgrade,string From,string To,int Attempts);
+[JsonSerializable(typeof(StartupDiagnostic))][JsonSerializable(typeof(UpgradeDiagnostic))]
+internal sealed partial class DiagnosticJsonContext:JsonSerializerContext;
 internal static class ServiceStartupDiagnostic
 {
     internal static string Encode(StartupDiagnosticRole role,Exception error,IReadOnlyList<StartupStep>? steps=null)
@@ -25,16 +33,21 @@ internal static class ServiceStartupDiagnostic
             if(cause is ChildExitedException exited)exit??=exited.ExitCode;
             if(cause is Win32Exception win32){native=win32.NativeErrorCode;break;}if(cause.InnerException is not{} inner)break;cause=inner;
         }
-        return JsonSerializer.Serialize(new{Format=1,Role=role.ToString(),SourceCommit=InfrastructureRelease.SourceCommit,ProcessId=Environment.ProcessId,
-            Code=KnownCode(error.Message),HResult=error.HResult,NativeError=native,ExitCode=exit,Sites=Sites(error),
-            Steps=steps?.TakeLast(16).Select(step=>new{step.Stage,Ms=step.ElapsedMilliseconds,step.Failure}).ToArray()});
+        return JsonSerializer.Serialize(new StartupDiagnostic(1,role.ToString(),InfrastructureRelease.SourceCommit,Environment.ProcessId,
+            KnownCode(error.Message),error.HResult,native,exit,Sites(error),
+            steps?.TakeLast(16).Select(step=>new StartupDiagnosticStep(step.Stage,step.ElapsedMilliseconds,step.Failure)).ToArray()),DiagnosticJsonContext.Default.StartupDiagnostic);
     }
-    // Compiled Yahad method names and IL offsets locate a refusal that has no
-    // allowlisted code; with the exact build they map to one source line.
+    // Compiled Yahad method names and code offsets locate a refusal that has no
+    // allowlisted code; with the exact build they map to one source line. A JIT image
+    // reports the IL offset; a NativeAOT image has no IL, so it reports the offset into
+    // the method's native code. DiagnosticMethodInfo needs no reflection metadata.
     internal static string[] Sites(Exception error)=>new StackTrace(error,false).GetFrames()
-        .Where(frame=>frame.GetMethod()?.DeclaringType?.Assembly.GetName().Name?.StartsWith("Yahad.",StringComparison.Ordinal)==true)
-        .Select(frame=>frame.GetMethod()!.DeclaringType!.FullName+"."+frame.GetMethod()!.Name+"+IL_"+frame.GetILOffset().ToString("X4"))
+        .Select(frame=>(Frame:frame,Method:DiagnosticMethodInfo.Create(frame)))
+        .Where(site=>site.Method?.DeclaringAssemblyName.StartsWith("Yahad.",StringComparison.Ordinal)==true)
+        .Select(site=>site.Method!.DeclaringTypeName+"."+site.Method.Name+Offset(site.Frame))
         .Where(site=>site.Length<=512).Take(4).ToArray();
+    private static string Offset(StackFrame frame)
+        =>frame.GetILOffset() is var il and not StackFrame.OFFSET_UNKNOWN?"+IL_"+il.ToString("X4"):"+NATIVE_"+frame.GetNativeOffset().ToString("X4");
     internal static string? KnownCode(string value)=>value switch
     {
         "NATIVE_REPARSE_KIND_OR_HARDLINK" or "NATIVE_LOCAL_PATH"=>value,
@@ -47,7 +60,7 @@ internal static class ServiceStartupDiagnostic
     // The repair gave up on an upgrade; an administrator has to act. Versions and
     // the upgrade identifier only.
     internal static bool TryRecordUpgrade(string id,string from,string to,int attempts)
-    {try{return Write(JsonSerializer.Serialize(new{Format=1,Upgrade=id,From=from,To=to,Attempts=attempts}),3003);}catch{return false;}}
+    {try{return Write(JsonSerializer.Serialize(new UpgradeDiagnostic(1,id,from,to,attempts),DiagnosticJsonContext.Default.UpgradeDiagnostic),3003);}catch{return false;}}
     private static bool Write(string value,uint id)
     {
         // RegisterEventSource retrieves a handle; an unregistered fixed source
