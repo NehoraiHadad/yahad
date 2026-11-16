@@ -28,8 +28,9 @@ class NativeLanAssetTests(unittest.TestCase):
         self.assertEqual(stage_public_lan_help(self.repo,self.app), ['deploy/lan-help.html','deploy/lan-capabilities.json'])
         self.assertEqual({p.name for p in (self.app/'deploy').iterdir()}, {'lan-help.html','lan-capabilities.json'})
 
-    def test_legacy_checkpoint_is_supported_but_half_contract_refuses(self):
-        self.assertEqual(stage_public_lan_help(self.repo,self.app), [])
+    def test_missing_or_half_contract_refuses(self):
+        # Both assets are required members of every app tree (plan 5.2).
+        with self.assertRaises(ValueError): stage_public_lan_help(self.repo,self.app)
         source = self.repo/'deploy'; source.mkdir()
         (source/'lan-help.html').write_text('public',encoding='utf-8')
         with self.assertRaises(ValueError): stage_public_lan_help(self.repo,self.app)

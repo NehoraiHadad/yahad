@@ -4,7 +4,8 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 from installer.windows.application_version import (Infrastructure, package_release_version, package_infrastructure_contract, source_release_version,
-    require_source_release_version, source_infrastructure_identity, infrastructure_identity_from_props, require_native_build_identity)
+    require_source_release_version, source_infrastructure_identity, infrastructure_identity_from_props, require_native_build_identity,
+    package_minimum_from)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -67,6 +68,29 @@ class InfrastructureIdentityTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'infrastructure contract'):
                 package_infrastructure_contract(json.dumps(dict(version='0.6.0', yahadInfrastructureContract=value)), infrastructure)
         with self.assertRaisesRegex(ValueError, 'infrastructure contract'): package_infrastructure_contract('{"version":"0.6.0"}', infrastructure)
+
+
+class MinimumFromTests(unittest.TestCase):
+    def declare(self, value): return json.dumps(dict(version='0.6.0', yahadWindowsMinimumFrom=value))
+
+    def test_checked_in_declaration_is_read_against_both_tracks(self):
+        data = (ROOT/'package.json').read_bytes()
+        minimum = package_minimum_from(data, source_release_version(ROOT), source_infrastructure_identity(ROOT).version)
+        self.assertEqual(sorted(minimum), ['app', 'infrastructure'])
+
+    def test_declaration_is_exact_canonical_and_never_newer_than_the_release(self):
+        self.assertEqual(package_minimum_from(self.declare(dict(app='0.5.0', infrastructure='1.0.0')), '0.6.0', '1.0.0'),
+                         dict(app='0.5.0', infrastructure='1.0.0'))
+        self.assertEqual(package_minimum_from(self.declare(dict(app='0.6.0', infrastructure='0.9.0')), '0.6.0', '0.10.0'),
+                         dict(app='0.6.0', infrastructure='0.9.0'))
+        for value in (None, {}, dict(app='0.5.0'), dict(app='0.5.0', infrastructure='1.0.0', extra='1.0.0'), dict(app='05.0.0', infrastructure='1.0.0'),
+                      dict(app='0.5', infrastructure='1.0.0'), dict(app=5, infrastructure='1.0.0'), dict(app='0.5.0', infrastructure='1.0.0-rc')):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'minimumFrom declaration'):
+                package_minimum_from(self.declare(value), '0.6.0', '1.0.0')
+        with self.assertRaisesRegex(ValueError, 'minimumFrom declaration'): package_minimum_from('{"version":"0.6.0"}', '0.6.0', '1.0.0')
+        for value in (dict(app='0.6.1', infrastructure='1.0.0'), dict(app='0.6.0', infrastructure='1.0.1')):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'newer than the release'):
+                package_minimum_from(self.declare(value), '0.6.0', '1.0.0')
 
 
 class NativeBuildIdentityTests(unittest.TestCase):
