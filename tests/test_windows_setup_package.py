@@ -1,4 +1,4 @@
-"""Synthetic runtime-only (Format 1) packaging contracts; fixture executables are never invoked."""
+"""Synthetic Format 2 install-package contracts; fixture executables are never invoked."""
 import hashlib
 import json
 from pathlib import Path
@@ -12,9 +12,15 @@ from unittest.mock import patch
 import zipfile
 
 from installer.windows import setup_package as full
+from installer.windows.application_version import Infrastructure
 
 
 VERSION, SOURCE = '0.6.0', 'a'*40
+INFRA = Infrastructure('1.0.0', 1, 1)
+PROPS = ('<Project>\n  <PropertyGroup>\n    <YahadInfrastructureVersion>1.0.0</YahadInfrastructureVersion>\n'
+         '    <YahadInfrastructureContractMin>1</YahadInfrastructureContractMin>\n'
+         '    <YahadInfrastructureContractMax>1</YahadInfrastructureContractMax>\n'
+         '    <Version>$(YahadInfrastructureVersion)</Version>\n  </PropertyGroup>\n</Project>\n')
 
 
 def image(imported='kernel32.dll'):
@@ -27,19 +33,27 @@ def image(imported='kernel32.dll'):
     return bytes(data)
 
 
+def describe(artifact, /, **changed):
+    value=dict(artifact=artifact,infrastructureVersion=INFRA.version,contractMin=INFRA.contract_min,contractMax=INFRA.contract_max,
+               sourceCommit=SOURCE,version=INFRA.version+'+'+SOURCE)
+    if artifact=='Yahad.Setup': value['embeddedPackage']=False
+    return dict(value,**changed)
+
+
 class SetupPackageTests(unittest.TestCase):
     def setUp(self):
         self.temporary=tempfile.TemporaryDirectory(prefix='yahad-full-package-test-');self.addCleanup(self.temporary.cleanup)
         self.root=Path(self.temporary.name);self.repo=self.root/'repo';self.prepared=self.root/'payload';self.repo.mkdir();self.prepared.mkdir()
         self.tracked=['package.json','package-lock.json','src/database-schema.ts','src/db.ts','src/main.ts']
         source={
-            'package.json':json.dumps({'version':VERSION}),
+            'package.json':json.dumps({'version':VERSION,'yahadInfrastructureContract':1}),
             'package-lock.json':json.dumps({'version':VERSION,'packages':{'':{'version':VERSION},'node_modules/fastify':{'version':'5.12.7'},'node_modules/vite':{'version':'7.3.7','dev':True}}}),
             'src/database-schema.ts':'export const DATABASE_SCHEMA = 6;\nexport const DATABASE_MIGRATIONS_FROM = [1, 2] as const;\n',
             'src/db.ts':"import type { DatabaseSync } from 'node:sqlite';\nexport function migrate() {}\n",
             'src/main.ts':"import { migrate } from './db.js';\n",
         }
         for name,value in source.items():self.put(self.repo,name,value)
+        self.put(self.repo,'installer/Directory.Build.props',PROPS)
         self.put(self.prepared,'app/package.json',source['package.json'])
         for name in full.bundle.SERVER:self.put(self.prepared,name,'// bundled '+name+'\n')
         self.server=dict(format='yahad-server-bundle',schema=1,sources={name:hashlib.sha256(source[name].encode()).hexdigest() for name in source if name.startswith('src/')},
@@ -73,7 +87,7 @@ class SetupPackageTests(unittest.TestCase):
         self.put(root,artifact+'.deps.json',json.dumps(dict(runtimeTarget=dict(name='net10.0/win-x64'),targets={'net10.0/win-x64':libraries})))
         return root
 
-    def audit(self,artifact):return dict(artifact=artifact,applicationVersion=VERSION,sourceCommit=SOURCE,version='1.0.0+'+SOURCE)
+    def engine(self):return self.put(self.root/'engine','Yahad.Setup.exe',image())
 
     def test_bundle_sources_and_migration_declaration_are_taken_from_actual_bytes(self):
         self.assertEqual(self.source(),(6,[1,2]))
@@ -133,13 +147,25 @@ class SetupPackageTests(unittest.TestCase):
         with self.assertRaisesRegex(full.PackageError,'Private member'):self.source()
 
     def test_platform_helper_is_never_application_payload(self):
-        # Platform is infrastructure, packaged beside the host (platform/), never under the app.
+        # Platform is infrastructure (infra/platform/), never under the app.
         for name in ('app/native/Yahad.Platform.exe','app/Native/coreclr.dll'):
             with self.subTest(name=name):
                 self.put(self.prepared,name,image());self.refresh_records()
                 with self.assertRaisesRegex(full.PackageError,'Native helper in application payload'):self.source()
                 (self.prepared/name).unlink();self.refresh_records()
         self.source()
+
+    def test_release_identity_reads_both_tracks_and_the_app_contract(self):
+        self.assertEqual(full.release_identity(self.repo),(VERSION,INFRA,1))
+        for package in ({'version':VERSION},{'version':VERSION,'yahadInfrastructureContract':2},{'version':VERSION,'yahadInfrastructureContract':0},
+                        {'version':VERSION,'yahadInfrastructureContract':True},{'version':VERSION,'yahadInfrastructureContract':'1'},
+                        {'version':VERSION,'yahadInfrastructureContract':1.0}):
+            with self.subTest(package=package):
+                self.put(self.repo,'package.json',json.dumps(package))
+                with self.assertRaisesRegex(ValueError,'infrastructure contract'):full.release_identity(self.repo)
+        self.put(self.repo,'package.json',json.dumps({'version':VERSION,'yahadInfrastructureContract':1}))
+        self.put(self.repo,'installer/Directory.Build.props',PROPS.replace('<YahadInfrastructureVersion>1.0.0','<YahadInfrastructureVersion>01.0.0'))
+        with self.assertRaisesRegex(ValueError,'Infrastructure identity'):full.release_identity(self.repo)
 
     def test_duplicate_json_and_case_directory_collisions_are_refused(self):
         with self.assertRaisesRegex(full.PackageError,'Duplicate JSON'):full._json(b'{"sourceCommit":"a","sourceCommit":"b"}')
@@ -156,47 +182,84 @@ class SetupPackageTests(unittest.TestCase):
                 return original(path,*args,**kwargs)
             with self.subTest(attributes=attributes,links=links),patch.object(Path,'lstat',metadata),self.assertRaises(full.PackageError):full._unlinked(file,file=True)
 
-    def test_native_audit_is_source_bound_and_never_executed_by_tests(self):
-        root=self.native();description=self.audit('Yahad.ServiceHost')
+    def test_native_audit_is_infrastructure_and_source_bound_and_never_executed_by_tests(self):
+        root=self.native();description=describe('Yahad.ServiceHost')
         with patch.object(full,'describe_build_artifact',return_value=description) as audit:
-            files=full.validate_native(root,'Yahad.ServiceHost',VERSION,SOURCE,self.repo)
+            files=full.validate_native(root,'Yahad.ServiceHost',INFRA,SOURCE,self.repo)
             self.assertIn('coreclr.dll',files);audit.assert_called_once_with(root/'Yahad.ServiceHost.exe','--describe',self.repo)
-        with patch.object(full,'describe_build_artifact',return_value=dict(description,sourceCommit='b'*40)),self.assertRaises(ValueError):full.validate_native(root,'Yahad.ServiceHost',VERSION,SOURCE,self.repo)
+        for changed in (dict(sourceCommit='b'*40),dict(infrastructureVersion='1.0.1'),dict(version='1.0.1+'+SOURCE),dict(contractMax=2),
+                        dict(contractMin=True),dict(applicationVersion=VERSION),dict(artifact='Yahad.Updater')):
+            with self.subTest(changed=changed),patch.object(full,'describe_build_artifact',return_value=dict(description,**changed)),self.assertRaises(ValueError):
+                full.validate_native(root,'Yahad.ServiceHost',INFRA,SOURCE,self.repo)
 
     def test_missing_dependency_and_nonprivate_native_import_fail_before_audit(self):
         root=self.native();(root/'coreclr.dll').unlink()
-        with patch.object(full,'describe_build_artifact') as audit,self.assertRaisesRegex(full.PackageError,'Incomplete private'):full.validate_native(root,'Yahad.ServiceHost',VERSION,SOURCE,self.repo)
+        with patch.object(full,'describe_build_artifact') as audit,self.assertRaisesRegex(full.PackageError,'Incomplete private'):full.validate_native(root,'Yahad.ServiceHost',INFRA,SOURCE,self.repo)
         audit.assert_not_called();self.put(root,'coreclr.dll',image());self.put(root,'Yahad.ServiceHost.exe',image('private-missing.dll'))
-        with patch.object(full,'describe_build_artifact') as audit,self.assertRaisesRegex(full.PackageError,'private native dependency'):full.validate_native(root,'Yahad.ServiceHost',VERSION,SOURCE,self.repo)
+        with patch.object(full,'describe_build_artifact') as audit,self.assertRaisesRegex(full.PackageError,'private native dependency'):full.validate_native(root,'Yahad.ServiceHost',INFRA,SOURCE,self.repo)
         audit.assert_not_called()
 
     def test_every_declared_private_runtime_asset_must_be_present(self):
         root=self.native();path=root/'Yahad.ServiceHost.deps.json';deps=json.loads(path.read_text())
         next(iter(deps['targets']['net10.0/win-x64'].values()))['runtime']['missing.dll']={};path.write_text(json.dumps(deps))
-        with patch.object(full,'describe_build_artifact') as audit,self.assertRaisesRegex(full.PackageError,'Missing private .NET dependency'):full.validate_native(root,'Yahad.ServiceHost',VERSION,SOURCE,self.repo)
+        with patch.object(full,'describe_build_artifact') as audit,self.assertRaisesRegex(full.PackageError,'Missing private .NET dependency'):full.validate_native(root,'Yahad.ServiceHost',INFRA,SOURCE,self.repo)
         audit.assert_not_called()
 
     def test_native_input_change_during_audit_is_not_blessed_by_source_description(self):
         root=self.native()
-        def changed(*args):self.put(root,'coreclr.dll',image()+b'changed');return self.audit('Yahad.ServiceHost')
-        with patch.object(full,'describe_build_artifact',side_effect=changed),self.assertRaisesRegex(full.PackageError,'closure changed'):full.validate_native(root,'Yahad.ServiceHost',VERSION,SOURCE,self.repo)
+        def changed(*args):self.put(root,'coreclr.dll',image()+b'changed');return describe('Yahad.ServiceHost')
+        with patch.object(full,'describe_build_artifact',side_effect=changed),self.assertRaisesRegex(full.PackageError,'closure changed'):full.validate_native(root,'Yahad.ServiceHost',INFRA,SOURCE,self.repo)
+
+    def test_engine_is_one_payload_free_infrastructure_image(self):
+        engine=self.engine()
+        with patch.object(full,'describe_build_artifact',return_value=describe('Yahad.Setup')) as audit:
+            self.assertEqual(set(full.validate_engine(engine,INFRA,SOURCE,self.repo)),{'Yahad.Setup.exe'})
+            audit.assert_called_once_with(engine,'--describe',self.repo)
+        for changed in (dict(embeddedPackage=True),dict(embeddedPackage=None),dict(sourceCommit='b'*40,version='1.0.0+'+'b'*40),
+                        dict(infrastructureVersion='1.0.1',version='1.0.1+'+SOURCE),dict(artifact='Yahad.ServiceHost')):
+            with self.subTest(changed=changed),patch.object(full,'describe_build_artifact',return_value=describe('Yahad.Setup',**changed)),self.assertRaises(ValueError):
+                full.validate_engine(engine,INFRA,SOURCE,self.repo)
+        with patch.object(full,'describe_build_artifact',return_value={k:v for k,v in describe('Yahad.Setup').items() if k!='embeddedPackage'}),self.assertRaisesRegex(full.PackageError,'payload-free'):
+            full.validate_engine(engine,INFRA,SOURCE,self.repo)
+        renamed=self.put(self.root/'other','Yahad.Setup-0.6.0.exe',image())
+        with patch.object(full,'describe_build_artifact') as audit,self.assertRaisesRegex(full.PackageError,'engine image'):full.validate_engine(renamed,INFRA,SOURCE,self.repo)
+        audit.assert_not_called()
+        # A single-file image has no siblings to load a private library from.
+        self.put(self.root/'engine','Yahad.Setup.exe',image('hostfxr.dll'))
+        with patch.object(full,'describe_build_artifact') as audit,self.assertRaisesRegex(full.PackageError,'private native dependency'):full.validate_engine(engine,INFRA,SOURCE,self.repo)
+        audit.assert_not_called()
+
+    def test_tree_record_is_ordinal_sorted_camel_case_and_bound(self):
+        record=lambda data:dict(size=len(data),sha256=hashlib.sha256(data).hexdigest())
+        # Ordinal is UTF-16 code units: a surrogate pair sorts before U+FF01, unlike code points.
+        members={'app/b':record(b'b'),'app/B':record(b'B'),'app/！':record(b'x'),'app/\U0001f600':record(b'y'),'app/a/z':record(b'z')}
+        data=full.tree_record(VERSION,SOURCE,members);value=json.loads(data)
+        self.assertFalse(data.startswith(b'\xef\xbb\xbf'));self.assertEqual(sorted(value),['files','format','sourceCommit','version'])
+        self.assertEqual((value['format'],value['version'],value['sourceCommit']),(1,VERSION,SOURCE))
+        self.assertEqual([f['path'] for f in value['files']],['app/B','app/a/z','app/b','app/\U0001f600','app/！'])
+        self.assertTrue(all(sorted(f)==['path','sha256','size'] for f in value['files']))
+        with self.assertRaisesRegex(full.PackageError,'Tree record bound'):full.tree_record(VERSION,SOURCE,{})
 
     def test_archive_namespace_bytes_and_records_are_exact_and_deterministic(self):
-        entries={'payload/bundle.json':full._encode(self.manifest),'payload/app/server/main.mjs':b'bundle','host/Yahad.ServiceHost.exe':image(),'host/sub/Yahad.dll':image(),
-                 'platform/Yahad.Platform.exe':image()}
+        entries={'infra/infra-tree.json':b'{}','apps/app-tree.json':b'{}','apps/app/server/main.mjs':b'bundle','apps/app/legal/build-inputs.json':b'{}',
+                 'infra/host/Yahad.ServiceHost.exe':image(),'infra/host/sub/Yahad.dll':image(),'infra/platform/Yahad.Platform.exe':image(),
+                 'infra/runtime/node/node.exe':image(),'infra/legal/SBOM.json':b'{}','infra/setup/Yahad.Setup.exe':image(),'infra/updater/Yahad.Updater.exe':image()}
         records=full._write_archive(self.root/'a.zip',entries);full._write_archive(self.root/'b.zip',entries)
         self.assertEqual((self.root/'a.zip').read_bytes(),(self.root/'b.zip').read_bytes())
+        self.assertEqual([r['Path'] for r in records],sorted(entries))
         with zipfile.ZipFile(self.root/'a.zip') as archive:
-            self.assertEqual(set(archive.namelist()),{r['Path'] for r in records})
+            self.assertEqual(archive.namelist(),[r['Path'] for r in records])
             for record in records:self.assertEqual(hashlib.sha256(archive.read(record['Path'])).hexdigest(),record['Sha256'])
         with self.assertRaisesRegex(full.PackageError,'namespace'):full._write_archive(self.root/'bad.zip',{'unapproved/code.exe':b'not executed'})
         self.assertFalse((self.root/'bad.zip').exists())
-        for name in ('bootstrap/authority/Yahad.Authority.exe','system-manifest.json','payload2/x','host/../escape','platform/../escape','native/Yahad.Platform.exe'):
+        for name in ('payload/bundle.json','bundle.json','host/Yahad.ServiceHost.exe','platform/Yahad.Platform.exe','infra/native/Yahad.Platform.exe',
+                     'infra/app/package.json','infra/host/../escape','infra/host/','infra/apps/app-tree.json','apps/app/native/Yahad.Platform.exe',
+                     'apps/app/Native/coreclr.dll','apps/runtime/node/node.exe','apps/infra-tree.json','infra/app-tree.json','install-manifest.json'):
             with self.subTest(name=name),self.assertRaises(full.PackageError):full._write_archive(self.root/'foreign.zip',{name:b'refused'})
         self.assertFalse((self.root/'foreign.zip').exists())
 
     def test_archive_refuses_changed_verified_bytes_and_preserves_existing_output(self):
-        file=self.put(self.root,'one.dll',b'original');entries={'host/one.dll':file}
+        file=self.put(self.root,'one.dll',b'original');entries={'infra/host/one.dll':file}
         expected={name:full._record(name,value) for name,value in entries.items()};file.write_bytes(b'changed')
         with self.assertRaisesRegex(full.PackageError,'input changed'):full._write_archive(self.root/'changed.zip',entries,expected)
         output=self.put(self.root,'existing.zip',b'preserve')
@@ -204,60 +267,108 @@ class SetupPackageTests(unittest.TestCase):
         self.assertEqual(output.read_bytes(),b'preserve')
 
 
-class RuntimeOnlyBuildTests(unittest.TestCase):
-    """End-to-end build() with source identity and the PE/audit boundary stubbed."""
+class InstallPackageBuildTests(unittest.TestCase):
+    """End-to-end build() with the Git checks, archive extraction and the PE/audit boundary stubbed."""
+    LEGAL = ('legal/SBOM.json','legal/runtime-lock.json','legal/Node-LICENSE.txt','legal/ThirdPartyNotices-server.txt')
+
     def setUp(self):
         self.base = SetupPackageTests('test_bundle_sources_and_migration_declaration_are_taken_from_actual_bytes'); self.base.setUp(); self.addCleanup(self.base.tearDown)
         b = self.base
-        for name in ('app/dist/index.html', 'runtime/node/node.exe', 'runtime/caddy/caddy.exe'):
-            b.put(b.prepared, name, image() if name.endswith('.exe') else b'<html>')
-        b.refresh_records(); self.application = full._encode(b.manifest); b.put(b.prepared, 'bundle.json', self.application)
-        self.host = b.native('Yahad.ServiceHost'); self.updater = b.native('Yahad.Updater'); self.platform = b.native('Yahad.Platform'); self.output = b.root/'out'
+        for name in ('app/dist/index.html', 'app/deploy/lan-capabilities.json', 'app/deploy/lan-help.html', 'runtime/node/node.exe', 'runtime/caddy/caddy.exe', *self.LEGAL):
+            b.put(b.prepared, name, image() if name.endswith('.exe') else b'{}')
+        b.refresh_records(); b.put(b.prepared, 'bundle.json', full._encode(b.manifest))
+        self.host = b.native('Yahad.ServiceHost'); self.updater = b.native('Yahad.Updater'); self.platform = b.native('Yahad.Platform')
+        self.engine = b.engine(); self.output = b.root/'out'
 
-    def build(self, describe=None):
+    def build(self, audit=None):
         b = self.base
         def extract(archive, output, retain_manifest=False): shutil.copytree(b.prepared, output)
-        def audit(path, flag, repo): return b.audit(Path(path).stem)
-        with patch.object(full, '_source_identity', return_value=(VERSION, SOURCE, b.tracked)), patch.object(full.verify_archive, 'verify', side_effect=extract), \
-             patch.object(full, 'describe_build_artifact', side_effect=describe or audit), patch.object(full, '_unlinked', side_effect=lambda p, file=False: Path(p).absolute()):
-            return full.build(b.repo, b.root/'payload.zip', self.host, self.updater, self.platform, self.output)
+        with patch.object(full, '_committed_source', return_value=(SOURCE, b.tracked)), patch.object(full.verify_archive, 'verify', side_effect=extract), \
+             patch.object(full, 'describe_build_artifact', side_effect=audit or (lambda path, flag, repo: describe(Path(path).stem))), \
+             patch.object(full, '_unlinked', side_effect=lambda p, file=False: Path(p).absolute()):
+            return full.build(b.repo, b.root/'payload.zip', self.host, self.updater, self.platform, self.engine, self.output)
 
-    def test_package_is_format_one_with_only_host_updater_platform_and_payload_members(self):
-        result = self.build(); metadata = json.loads((self.output/'install-manifest.json').read_bytes())
-        self.assertEqual(sorted(metadata), ['DatabaseSchema', 'Files', 'Format', 'PayloadDigest', 'SourceCommit', 'Version', 'ZipSha256'])
-        self.assertEqual(metadata['DatabaseSchema'], 6)
-        self.assertEqual((metadata['Format'], metadata['Version'], metadata['SourceCommit']), (1, VERSION, SOURCE))
-        self.assertEqual(metadata['PayloadDigest'], hashlib.sha256(self.application).hexdigest())
-        self.assertEqual(metadata['ZipSha256'], hashlib.sha256((self.output/'install.zip').read_bytes()).hexdigest())
+    def written(self):
+        manifest = json.loads((self.output/'install-manifest.json').read_bytes())
+        with zipfile.ZipFile(self.output/'install.zip') as archive: members = {name: archive.read(name) for name in archive.namelist()}
+        return manifest, members
+
+    def test_manifest_is_format_two_with_exact_keys_and_both_identities(self):
+        result = self.build(); manifest, members = self.written(); data = (self.output/'install-manifest.json').read_bytes()
+        self.assertFalse(data.startswith(b'\xef\xbb\xbf'))
+        self.assertEqual(sorted(manifest), ['App', 'Files', 'Format', 'Infrastructure', 'ZipSha256'])
+        self.assertIs(type(manifest['Format']), int); self.assertEqual(manifest['Format'], 2)
+        self.assertEqual(manifest['Infrastructure'], dict(Version='1.0.0', ContractMin=1, ContractMax=1, SourceCommit=SOURCE,
+            TreeSha256=hashlib.sha256(members['infra/infra-tree.json']).hexdigest()))
+        self.assertEqual(manifest['App'], dict(Version=VERSION, SourceCommit=SOURCE, RequiresContract=1,
+            TreeSha256=hashlib.sha256(members['apps/app-tree.json']).hexdigest(), DatabaseSchema=6, DatabaseMigrationsFrom=[1, 2]))
+        self.assertEqual(manifest['ZipSha256'], hashlib.sha256((self.output/'install.zip').read_bytes()).hexdigest())
         self.assertEqual({p.name for p in self.output.iterdir()}, {'install.zip', 'install-manifest.json'})
-        with zipfile.ZipFile(self.output/'install.zip') as archive:
-            names = archive.namelist()
-            self.assertEqual(set(names), {r['Path'] for r in metadata['Files']}); self.assertEqual(result['files'], len(names))
-            self.assertTrue(all(n.startswith(('host/', 'updater/', 'platform/', 'payload/')) for n in names))
-            # The Platform closure is infrastructure beside the host; the app carries none of it.
-            self.assertEqual({n for n in names if n.startswith('platform/')}, {'platform/'+p.name for p in self.platform.iterdir()})
-            self.assertFalse(any(n.startswith('payload/app/native/') for n in names))
-            self.assertEqual(archive.read('payload/bundle.json'), self.application)
-            for record in metadata['Files']: self.assertEqual(hashlib.sha256(archive.read(record['Path'])).hexdigest(), record['Sha256'])
-        self.assertTrue(full.REQUIRED_MEMBERS <= set(names))
-        self.assertFalse(any('Authority' in n or n.startswith('bootstrap/') or n == 'system-manifest.json' for n in names))
+        self.assertEqual([r['Path'] for r in manifest['Files']], list(members)); self.assertEqual(result['files'], len(members))
+        for record in manifest['Files']:
+            self.assertEqual(sorted(record), ['Path', 'Sha256', 'Size'])
+            self.assertEqual((record['Size'], record['Sha256']), (len(members[record['Path']]), hashlib.sha256(members[record['Path']]).hexdigest()))
+        self.assertEqual((result['infrastructureVersion'], result['appVersion'], result['sourceCommit']), ('1.0.0', VERSION, SOURCE))
 
-    def test_stale_or_mismatched_service_host_build_identity_is_refused_before_manifest_is_written(self):
-        b = self.base; exe = self.host/'Yahad.ServiceHost.exe'
-        for changed in (dict(applicationVersion='0.5.3'), dict(sourceCommit='b'*40, version='1.0.0+'+'b'*40), dict(artifact='foreign')):
-            with self.subTest(changed=changed):
-                shutil.rmtree(self.output, ignore_errors=True)
-                def describe(path, flag, repo, changed=changed):
-                    value = b.audit(Path(path).stem); return dict(value, **changed) if Path(path) == exe else value
-                with self.assertRaises(ValueError): self.build(describe)
-                self.assertFalse((self.output/'install-manifest.json').exists())
+    def test_bundle_manifest_and_payload_digest_leave_the_install_package(self):
+        self.build(); manifest, members = self.written()
+        self.assertNotIn('PayloadDigest', manifest)
+        self.assertFalse(any(name.rsplit('/', 1)[-1] == 'bundle.json' or name.startswith('payload/') for name in members))
 
-    def test_stale_or_mismatched_platform_build_identity_is_refused_before_manifest_is_written(self):
-        b = self.base; exe = self.platform/'Yahad.Platform.exe'
-        def describe(path, flag, repo):
-            value = b.audit(Path(path).stem); return dict(value, sourceCommit='b'*40, version='1.0.0+'+'b'*40) if Path(path) == exe else value
-        with self.assertRaises(ValueError): self.build(describe)
+    def test_tree_records_list_every_other_member_of_their_tree_exactly_once(self):
+        self.build(); manifest, members = self.written()
+        for record_name, root, version, prefixes in (('infra/infra-tree.json', 'infra/', '1.0.0', full.INFRA_PREFIXES), ('apps/app-tree.json', 'apps/', VERSION, ('app/',))):
+            with self.subTest(tree=record_name):
+                data = members[record_name]; self.assertFalse(data.startswith(b'\xef\xbb\xbf')); value = json.loads(data)
+                self.assertEqual(sorted(value), ['files', 'format', 'sourceCommit', 'version'])
+                self.assertEqual((value['format'], value['version'], value['sourceCommit']), (1, version, SOURCE))
+                paths = [f['path'] for f in value['files']]
+                self.assertEqual(paths, sorted(paths, key=lambda p: p.encode('utf-16-be'))); self.assertEqual(len(paths), len({p.casefold() for p in paths}))
+                self.assertEqual(set(paths), {n[len(root):] for n in members if n.startswith(root) and n != record_name})
+                self.assertNotIn(record_name[len(root):], paths)
+                self.assertTrue(all(p.startswith(prefixes) for p in paths))
+                for f in value['files']: self.assertEqual((f['size'], f['sha256']), (len(members[root+f['path']]), hashlib.sha256(members[root+f['path']]).hexdigest()))
+        self.assertTrue(all(n.startswith(('infra/', 'apps/')) for n in members))
+        self.assertFalse(any(n.casefold().startswith('apps/app/native/') for n in members))
+
+    def test_components_payload_and_engine_land_in_their_trees(self):
+        self.build(); _, members = self.written()
+        for prefix, root in (('infra/host/', self.host), ('infra/updater/', self.updater), ('infra/platform/', self.platform)):
+            self.assertEqual({n for n in members if n.startswith(prefix)}, {prefix+p.name for p in root.iterdir()})
+        self.assertEqual({n for n in members if n.startswith('infra/setup/')}, {'infra/setup/Yahad.Setup.exe'})
+        self.assertEqual(members['infra/setup/Yahad.Setup.exe'], self.engine.read_bytes())
+        self.assertEqual({n for n in members if n.startswith('infra/runtime/')}, {'infra/runtime/node/node.exe', 'infra/runtime/caddy/caddy.exe'})
+        self.assertTrue(full.REQUIRED_MEMBERS <= set(members))
+
+    def test_legal_records_split_between_app_and_infrastructure(self):
+        self.build(); _, members = self.written()
+        self.assertEqual({n for n in members if n.startswith('apps/app/legal/')},
+                         {'apps/app/legal/server-bundle.json', 'apps/app/legal/ThirdPartyNotices-server.txt', 'apps/app/legal/build-inputs.json'})
+        self.assertEqual({n for n in members if n.startswith('infra/legal/')}, {'infra/legal/SBOM.json', 'infra/legal/runtime-lock.json', 'infra/legal/Node-LICENSE.txt'})
+        self.assertEqual(members['apps/app/legal/build-inputs.json'], (self.base.prepared/'legal/build-inputs.json').read_bytes())
+
+    def test_app_contract_must_be_declared_inside_the_infrastructure_range(self):
+        for package in ({'version': VERSION}, {'version': VERSION, 'yahadInfrastructureContract': 2}, {'version': VERSION, 'yahadInfrastructureContract': True}):
+            with self.subTest(package=package):
+                self.base.put(self.base.repo, 'package.json', json.dumps(package))
+                with self.assertRaisesRegex(ValueError, 'infrastructure contract'): self.build()
+                self.assertFalse(self.output.exists())
+
+    def test_engine_is_a_required_input(self):
+        self.engine.unlink()
+        with self.assertRaises(OSError): self.build()
         self.assertFalse((self.output/'install-manifest.json').exists())
+
+    def test_mismatched_describe_identity_is_refused_before_manifest_is_written(self):
+        for artifact in ('Yahad.ServiceHost', 'Yahad.Updater', 'Yahad.Platform', 'Yahad.Setup'):
+            for changed in (dict(infrastructureVersion='1.0.1', version='1.0.1+'+SOURCE), dict(sourceCommit='b'*40, version='1.0.0+'+'b'*40),
+                            dict(applicationVersion=VERSION), dict(artifact='foreign')):
+                with self.subTest(artifact=artifact, changed=changed):
+                    shutil.rmtree(self.output, ignore_errors=True)
+                    def audit(path, flag, repo, artifact=artifact, changed=changed):
+                        stem = Path(path).stem; return describe(stem, **changed) if stem == artifact else describe(stem)
+                    with self.assertRaises(ValueError): self.build(audit)
+                    self.assertFalse((self.output/'install-manifest.json').exists())
 
     def test_platform_closure_must_be_a_complete_private_runtime(self):
         (self.platform/'coreclr.dll').unlink()
@@ -269,12 +380,16 @@ class RuntimeOnlyBuildTests(unittest.TestCase):
         for name in sorted(full.REQUIRED_MEMBERS):
             with self.subTest(name=name), self.assertRaisesRegex(full.PackageError, 'Required package member'): full.require_members(full.REQUIRED_MEMBERS - {name})
 
+    def test_payload_outside_the_declared_namespaces_is_refused(self):
+        b = self.base; b.put(b.prepared, 'extra/file.txt', b'x'); b.refresh_records(); (b.prepared/'bundle.json').write_bytes(full._encode(b.manifest))
+        with self.assertRaisesRegex(full.PackageError, 'payload namespace'): self.build()
+
     def test_output_must_be_new_and_outside_input_closures(self):
         self.output.mkdir()
         with self.assertRaisesRegex(full.PackageError, 'New output'): self.build()
-        for component in (self.host, self.updater, self.platform):
-            self.output = component/'nested-out'
-            with self.subTest(component=component.name), self.assertRaisesRegex(full.PackageError, 'New output'): self.build()
+        for closure in (self.host, self.updater, self.platform, self.engine.parent):
+            self.output = closure/'nested-out'
+            with self.subTest(closure=closure.name), self.assertRaisesRegex(full.PackageError, 'New output'): self.build()
 
     def test_host_change_after_validation_is_refused(self):
         b = self.base; original = full.validate_native
@@ -283,6 +398,13 @@ class RuntimeOnlyBuildTests(unittest.TestCase):
             if args[1] == 'Yahad.ServiceHost': b.put(self.host, 'coreclr.dll', image()+b'changed')
             return files
         with patch.object(full, 'validate_native', side_effect=validated), self.assertRaises(full.PackageError): self.build()
+        self.assertFalse((self.output/'install-manifest.json').exists())
+
+    def test_engine_change_after_validation_is_refused(self):
+        original = full.validate_engine
+        def validated(*args):
+            files = original(*args); self.engine.write_bytes(image()+b'changed'); return files
+        with patch.object(full, 'validate_engine', side_effect=validated), self.assertRaises(full.PackageError): self.build()
         self.assertFalse((self.output/'install-manifest.json').exists())
 
 

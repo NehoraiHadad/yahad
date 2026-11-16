@@ -123,8 +123,8 @@ if(args is ["--version-only",var versionRepo])
     {
         try{await run();observations.Add(new{name,status="PASS"});Console.WriteLine("PASS "+name);}
         catch(Exception failure){failed++;observations.Add(new{name,status="FAIL",reason=failure.GetType().Name});Console.WriteLine("FAIL "+name+" "+failure);}
-    },Package,versionRepo);
-    Console.WriteLine(JsonSerializer.Serialize(new{suite="application-version-pure",ok=failed==0,version=ApplicationRelease.Version,failed,nativeOperations=false,cases=observations}));return failed==0?0:1;
+    },versionRepo);
+    Console.WriteLine(JsonSerializer.Serialize(new{suite="infrastructure-version-pure",ok=failed==0,version=InfrastructureRelease.Version,failed,nativeOperations=false,cases=observations}));return failed==0?0:1;
 }
 if(args is ["--store-schema-only",var schemaRepo])
 {
@@ -169,34 +169,49 @@ if(!storeOnly)
 {
 await FailureDiagnosticTests.RunAsync(Check);
 var owner=new SetupOwner("S-1-5-21-1-2-3-1001",new string('a',64));
-await Check("single installer path performs prepare publish service readiness then browser handoff",async()=>
-{var ops=new FakeHost();var phases=new List<string>();var flow=new InstallFlow(ops);var result=await flow.RunAsync(owner,false,p=>phases.Add(p.Phase),default);Assert(result.Ok&&ops.Calls.SequenceEqual(new[]{"prepare","publish","ready"})&&phases.Last()=="ready"&&result.SetupToken!.Length==43);});
-foreach(var step in new[]{"prepare","publish","ready"})await Check("failed "+step+" never reports ready or removes data",async()=>
-{var ops=new FakeHost{Failure=step};var phases=new List<string>();await Refuse(()=>new InstallFlow(ops).RunAsync(owner,false,p=>phases.Add(p.Phase),default));Assert(!phases.Contains("ready")&&!ops.Calls.Contains("uninstall"));});
+await Check("single installer path performs prepare provision readiness commit then browser handoff",async()=>
+{var ops=new FakeHost();var phases=new List<string>();var flow=new InstallFlow(ops);var result=await flow.RunAsync(owner,false,p=>phases.Add(p.Phase),default);Assert(result.Ok&&ops.Calls.SequenceEqual(new[]{"prepare","provision","ready","commit"})&&phases.Last()=="ready"&&result.SetupToken!.Length==43);});
+foreach(var step in new[]{"prepare","provision","ready","commit"})await Check("failed "+step+" never reports ready, commits after it or removes data",async()=>
+{
+ var ops=new FakeHost{Failure=step};var phases=new List<string>();await Refuse(()=>new InstallFlow(ops).RunAsync(owner,false,p=>phases.Add(p.Phase),default));
+ var full=new[]{"prepare","provision","ready","commit"};Assert(!phases.Contains("ready")&&!ops.Calls.Contains("uninstall")&&ops.Calls.SequenceEqual(full.Take(Array.IndexOf(full,step)+1)));
+});
 await Check("cancel before service publication performs no subsequent host operation",async()=>
 {using var cancel=new CancellationTokenSource();var ops=new FakeHost{AfterPrepare=cancel.Cancel};await Refuse(()=>new InstallFlow(ops).RunAsync(owner,false,_=>{},cancel.Token));Assert(ops.Calls.SequenceEqual(new[]{"prepare"}));});
 await Check("invalid owner fields cannot reach a host operation",async()=>
 {var ops=new FakeHost();await Refuse(()=>new InstallFlow(ops).RunAsync(owner with{Sid="S-1-5-18"},false,_=>{},default));Assert(ops.Calls.Count==0);});
-await Check("failed health result never becomes browser-ready",async()=>
-{var phases=new List<string>();var ops=new FakeHost{Result=new(false,"SERVER_NOT_READY")};var result=await new InstallFlow(ops).RunAsync(owner,false,p=>phases.Add(p.Phase),default);Assert(!result.Ok&&!phases.Contains("ready"));});
+await Check("failed health result never becomes browser-ready or committed",async()=>
+{var phases=new List<string>();var ops=new FakeHost{Result=new(false,"SERVER_NOT_READY")};var result=await new InstallFlow(ops).RunAsync(owner,false,p=>phases.Add(p.Phase),default);Assert(!result.Ok&&!phases.Contains("ready")&&!ops.Calls.Contains("commit"));});
 await Check("uninstall only calls the owned uninstall adapter and reports data preservation",async()=>
 {var ops=new FakeHost();var result=await new InstallFlow(ops).RunAsync(owner,true,_=>{},default);Assert(result.Ok&&result.DataPreserved&&ops.Calls.SequenceEqual(new[]{"uninstall"}));});
-foreach(var path in new[]{"../personal.txt","payload/../../secret","payload/C:/bad","payload/CON","payload/x\\y","host/trailing. ","host//duplicate"})await Check("embedded extraction refuses unsafe path "+path,()=>
+foreach(var path in new[]{"../personal.txt","infra/../../secret","apps/app/C:/bad","infra/host/CON","apps/app/x\\y","infra/host/trailing. ","infra/host//duplicate","payload/app/server/main.mjs","host/Yahad.ServiceHost.exe",
+    "apps/app/native/Yahad.Platform.exe","apps/host/x","infra/app/x","infra/bootstrap/x","apps/apps/app-tree.json"})await Check("embedded extraction refuses unsafe or foreign path "+path,()=>
 {try{InstallPackage.Name(path);}catch(IOException){return Task.CompletedTask;}throw new Exception("unsafe member accepted");});
-await Check("real package reader verifies and extracts exact offline payload bytes",()=>
+await Check("real package reader verifies and extracts both trees as the host verifies them",()=>
 {
- var fixture=Package();using var package=new InstallPackage(new MemoryStream(fixture.Zip),fixture.Manifest);var root=PrivateSession.Create(Path.GetTempPath());package.Extract(root,_=>{},default,FullInstallerIntegrationTests.TestTarget);
- Assert(File.ReadAllText(Path.Combine(root,"payload/app/server/main.mjs"))=="synthetic-app-not-executed");return Task.CompletedTask;
+ using var package=PairFixture.Open(PairFixture.Package());var session=PrivateSession.Create(Path.GetTempPath());
+ try
+ {
+  var app=Path.Combine(session,"apps","1.0.0");var infra=Path.Combine(session,"infra",InfrastructureRelease.Version);
+  package.Extract(TreeKind.App,app,_=>{},default,FullInstallerIntegrationTests.TestTarget);package.Extract(TreeKind.Infrastructure,infra,_=>{},default,FullInstallerIntegrationTests.TestTarget);
+  Assert(File.ReadAllText(Path.Combine(app,"app/server/main.mjs"))=="synthetic-app-not-executed"&&File.Exists(Path.Combine(infra,"setup",InstalledLayout.EngineName)));
+  var pair=package.Pair();pair.Require();
+  TreeRecord.VerifyInstalled(app,TreeKind.App,pair.App.Version,pair.App.TreeSha256);TreeRecord.VerifyInstalled(infra,TreeKind.Infrastructure,pair.Infrastructure.Version,pair.Infrastructure.TreeSha256);
+  Assert(pair.App.DatabaseSchema==7&&package.AcceptsSchema(7)&&package.AcceptsSchema(5)&&!package.AcceptsSchema(4)&&!package.AcceptsSchema(8));
+ }
+ finally{Directory.Delete(session,true);}
+ return Task.CompletedTask;
 });
 await Check("corrupt package digest and duplicate zip entry refuse before extraction",async()=>
 {
- var fixture=Package();var manifest=NativeJson.Read<InstallPackageManifest>(fixture.Manifest);await Refuse(()=>{using var p=new InstallPackage(new MemoryStream(fixture.Zip),JsonSerializer.SerializeToUtf8Bytes(manifest with{ZipSha256=new string('0',64)}));return Task.CompletedTask;});
- fixture=Package(duplicate:true);await Refuse(()=>{using var p=new InstallPackage(new MemoryStream(fixture.Zip),fixture.Manifest);return Task.CompletedTask;});
+ await Refuse(()=>{using var p=PairFixture.Open(PairFixture.Package(change:m=>m with{ZipSha256=new string('0',64)}));return Task.CompletedTask;});
+ await Refuse(()=>{using var p=PairFixture.Open(PairFixture.Package(duplicate:true));return Task.CompletedTask;});
 });
-await Check("wrong member hash fails without overwriting preexisting files",async()=>
+await Check("wrong member bytes fail extraction and leave neither the member nor a partial",async()=>
 {
- var fixture=Package();var document=NativeJson.Read<InstallPackageManifest>(fixture.Manifest);var records=document.Files.Select((x,i)=>i==0?x with{Sha256=new string('0',64)}:x).ToArray();using var p=new InstallPackage(new MemoryStream(fixture.Zip),JsonSerializer.SerializeToUtf8Bytes(document with{Files=records}));
- var root=PrivateSession.Create(Path.GetTempPath());await Refuse(()=>{p.Extract(root,_=>{},default,FullInstallerIntegrationTests.TestTarget);return Task.CompletedTask;});Assert(!File.Exists(Path.Combine(root,"payload/app/server/main.mjs")));
+ using var p=PairFixture.Open(PairFixture.Package(tamper:"apps/app/server/main.mjs"));
+ var root=PrivateSession.Create(Path.GetTempPath());await Refuse(()=>{p.Extract(TreeKind.App,root,_=>{},default,FullInstallerIntegrationTests.TestTarget);return Task.CompletedTask;});
+ Assert(!Directory.EnumerateFiles(Path.Combine(root,"app","server")).Any());Directory.Delete(root,true);
 });
 await Check("user installer enables existing real connector; only explicit test profile uses mock",()=>
 {
@@ -215,9 +230,11 @@ await Check("authenticated flow carries full removal mode and refuses unknown in
 {
  var ops=new FakeHost();var result=await new InstallFlow(ops).RunAsync(owner,true,_=>{},default,UninstallMode.DeleteData);Assert(result.Ok&&!result.DataPreserved&&ops.LastRemoval==UninstallMode.DeleteData);
  var invalid=new FakeHost();await Refuse(()=>new InstallFlow(invalid).RunAsync(owner,true,_=>{},default,(UninstallMode)99));Assert(invalid.Calls.Count==0);
- var s=FullInstallerIntegrationTests.State();
- Assert(UninstallChoice.SameInstallation(s,s with{Phase="removing_all_data",Files=[..s.Files]}));
- foreach(var other in new[]{s with{Port=47124},s with{PayloadDigest=new string('f',64)},s with{SetupSha256=new string('f',64)},s with{Files=[s.Files[0] with{Size=6},..s.Files[1..]]}})Assert(!UninstallChoice.SameInstallation(s,other));
+ var s=PairFixture.State();var copy=NativeJson.Read<InstallerState>(s.Encode());
+ Assert(UninstallChoice.SameInstallation(s,copy with{Phase="removing_all_data"}));
+ var changedApp=s.Active with{App=s.Active.App with{Files=[s.Active.App.Files[0] with{Size=6},..s.Active.App.Files[1..]]}};
+ foreach(var other in new[]{s with{Port=47124},s with{Active=PairFixture.Pair(appSalt:"other")},s with{Active=PairFixture.Pair(infraSalt:"other")},s with{Active=changedApp},s with{Previous=PairFixture.Pair(app:"0.9.0")}})
+  Assert(!UninstallChoice.SameInstallation(s,other));
  Assert(!InstallLocations.RemovalStateFile.StartsWith(InstallLocations.Binaries+System.IO.Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase));
 });
 await Check("full removal deletes only the inspected private synthetic tree and keeps external backup",()=>
@@ -251,7 +268,7 @@ await Check("native RTL window renders at desktop and minimum size without showi
   foreach(var size in new[]{new Size(980,730),new Size(760,620)})foreach(var full in new[]{false,true})
   {
    var window=new MainWindow(true);var keep=(System.Windows.Controls.RadioButton)window.FindName("KeepOption");var remove=(System.Windows.Controls.RadioButton)window.FindName("DeleteOption");var input=(System.Windows.Controls.TextBox)window.FindName("ConfirmationInput");var primary=(System.Windows.Controls.Button)window.FindName("Primary");
-   Assert(((System.Windows.Controls.TextBlock)window.FindName("VersionBadge")).Text==ApplicationRelease.Version+" · Windows");
+   Assert(((System.Windows.Controls.TextBlock)window.FindName("VersionBadge")).Text==(SetupOperation.DisplayVersion() is {} version?version+" · ":"")+"Windows");
    Assert(keep.IsChecked==true&&primary.IsEnabled);if(full){remove.IsChecked=true;Assert(!primary.IsEnabled);input.Text="מחיקה";Assert(primary.IsEnabled);input.Text="";Assert(!primary.IsEnabled);}
    var root=(FrameworkElement)window.Content;root.Width=size.Width;root.Height=size.Height;root.Measure(size);root.Arrange(new Rect(size));root.UpdateLayout();var bitmap=new RenderTargetBitmap((int)size.Width,(int)size.Height,96,96,PixelFormats.Pbgra32);bitmap.Render(root);var png=new PngBitmapEncoder();png.Frames.Add(BitmapFrame.Create(bitmap));using var file=File.Create(Path.Combine(output,"uninstall-"+(full?"delete":"keep")+"-"+size.Width+".png"));png.Save(file);Assert(root.FlowDirection==FlowDirection.RightToLeft);
    if(full)
@@ -267,21 +284,14 @@ await Check("native RTL window renders at desktop and minimum size without showi
 File.WriteAllText(Path.Combine(output,"tests.json"),JsonSerializer.Serialize(new{kind=storeOnly?"first-install-synthetic-store-only":"first-install-synthetic-host-operations",passed=cases.Count-failures-blockedStore,failed=failures,blocked=blockedStore,nativeScmInvoked=false,hostAclProvisioned=false,setupCapabilityProvisioned=false,networkListenersOpened=false,offscreenUiOnly=!storeOnly,tests=cases},new JsonSerializerOptions{WriteIndented=true}));
 Console.WriteLine($"{cases.Count-failures-blockedStore} passed; {failures} failed; {blockedStore} blocked. No native host installation, service, trust or listener.");return failures==0&&blockedStore==0?0:1;
 
-(byte[] Zip,byte[] Manifest) Package(bool duplicate=false)
-{
- var names=new[]{"host/Yahad.ServiceHost.exe","host/Yahad.ServiceHost.runtimeconfig.json","updater/Yahad.Updater.exe","updater/Yahad.Updater.runtimeconfig.json","payload/bundle.json","payload/runtime/node/node.exe","payload/runtime/caddy/caddy.exe","payload/app/server/main.mjs","payload/app/dist/index.html","platform/Yahad.Platform.exe","platform/Yahad.Platform.runtimeconfig.json","payload/legal/build-inputs.json"};
- var records=new List<InstallMember>();using var data=new MemoryStream();string digest="";
- using(var zip=new ZipArchive(data,ZipArchiveMode.Create,true))foreach(var name in names)
- {var bytes=Encoding.UTF8.GetBytes(name=="payload/bundle.json"?JsonSerializer.Serialize(new{version=ApplicationRelease.Version}):name=="payload/app/server/main.mjs"?"synthetic-app-not-executed":"synthetic");if(name=="payload/bundle.json")digest=Convert.ToHexStringLower(SHA256.HashData(bytes));var entry=zip.CreateEntry(name);using(var stream=entry.Open())stream.Write(bytes);records.Add(new(name,bytes.Length,Convert.ToHexStringLower(SHA256.HashData(bytes))));if(duplicate&&name==names[0]){using var stream=zip.CreateEntry(name).Open();stream.Write(bytes);}}
- var archive=data.ToArray();return(archive,JsonSerializer.SerializeToUtf8Bytes(new InstallPackageManifest(1,ApplicationRelease.Version,ApplicationRelease.SourceCommit,Convert.ToHexStringLower(SHA256.HashData(archive)),digest,1,records.ToArray())));
-}
 internal sealed class FakeHost:ISetupHostOperations
 {
  internal UninstallMode? LastRemoval;internal readonly List<string> Calls=[];internal string? Failure;internal Action? AfterPrepare;internal SetupResult Result=new(true,"READY","http://127.0.0.1:47123/",new string('a',43));
  private Task Call(string name,CancellationToken c){c.ThrowIfCancellationRequested();Calls.Add(name);if(Failure==name)throw new IOException("injected");return Task.CompletedTask;}
  public async Task PrepareAsync(SetupOwner o,Action<SetupProgress> p,CancellationToken c){await Call("prepare",c);AfterPrepare?.Invoke();}
- public Task PublishServiceAsync(Action<SetupProgress> p,CancellationToken c)=>Call("publish",c);
+ public Task ProvisionAsync(Action<SetupProgress> p,CancellationToken c)=>Call("provision",c);
  public Task ConfigureLanAsync(LanSetupRequest r,Action<SetupProgress> p,CancellationToken c)=>Call("lan",c);
  public async Task<SetupResult> StartAndObserveAsync(Action<SetupProgress> p,CancellationToken c){await Call("ready",c);return Result;}
+ public Task CommitAsync(Action<SetupProgress> p,CancellationToken c)=>Call("commit",c);
  public async Task<SetupResult> UninstallAsync(Action<SetupProgress> p,CancellationToken c,UninstallMode mode=UninstallMode.KeepData){LastRemoval=mode;await Call("uninstall",c);return new(true,"REMOVED",DataPreserved:mode==UninstallMode.KeepData);}
 }

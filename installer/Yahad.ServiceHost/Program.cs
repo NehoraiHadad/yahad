@@ -7,7 +7,7 @@ if(args is ["--describe"])
 {
     Console.WriteLine(JsonSerializer.Serialize(new{artifact="Yahad.ServiceHost",serviceName=ServiceDefinition.Name,
         version=Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion,
-        applicationVersion=ApplicationRelease.Version,sourceCommit=ApplicationRelease.SourceCommit,
+        infrastructureVersion=InfrastructureRelease.Version,contractMin=InfrastructureRelease.ContractMin,contractMax=InfrastructureRelease.ContractMax,sourceCommit=InfrastructureRelease.SourceCommit,
         scmEntryImplemented=true,canInstallService=false,launchConfiguration=InstalledLaunch.FileName,
         familyInstallationReady=false,releaseReady=false}));return 0;
 }

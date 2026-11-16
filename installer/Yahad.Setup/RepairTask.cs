@@ -3,9 +3,10 @@ using System.Security;
 using Yahad.Install;
 namespace Yahad.Setup;
 
-// Yahad\Repair: SYSTEM runs the retained Setup's --repair after each boot and once a
+// Yahad\Repair: SYSTEM runs the installed engine's --repair after each boot and once a
 // day, which is what finishes an upgrade killed by a power cut with nobody at the
-// machine. The task names one version's Setup; an upgrade's commit re-registers it.
+// machine. The task names one infrastructure tree's payload-free engine; an upgrade's
+// commit re-registers it on the new tree.
 internal static class RepairTask
 {
     private const string Folder="Yahad",Name="Repair";
@@ -19,7 +20,7 @@ internal static class RepairTask
     // The first daily run is tomorrow's: with StartWhenAvailable a boundary already
     // past would fire as soon as the task is registered, in the middle of the Setup
     // that registers it.
-    internal static string Definition(string version,DateTimeOffset now)
+    internal static string Definition(string infrastructure,DateTimeOffset now)
     {
         var first=now.LocalDateTime.Date.AddDays(1).AddHours(3).AddMinutes(30).ToString("yyyy-MM-dd'T'HH:mm:ss");
         return $"""
@@ -39,19 +40,19 @@ internal static class RepairTask
                 <ExecutionTimeLimit>PT30M</ExecutionTimeLimit>
                 <Enabled>true</Enabled>
               </Settings>
-              <Actions Context="System"><Exec><Command>{SecurityElement.Escape(InstallLocations.InstallerImage(version))}</Command><Arguments>{SecurityElement.Escape(Arguments)}</Arguments></Exec></Actions>
+              <Actions Context="System"><Exec><Command>{SecurityElement.Escape(InstalledLayout.EngineImage(infrastructure))}</Command><Arguments>{SecurityElement.Escape(Arguments)}</Arguments></Exec></Actions>
             </Task>
             """;
     }
     // Create-or-update as the service account named in the definition.
-    internal static void Register(string version,DateTimeOffset now)
-    {Scheduler().GetFolder("\\").RegisterTask("\\"+Folder+"\\"+Name,Definition(version,now),6,null,null,5,null);}
-    internal static bool Matches(string version)
+    internal static void Register(string infrastructure,DateTimeOffset now)
+    {Scheduler().GetFolder("\\").RegisterTask("\\"+Folder+"\\"+Name,Definition(infrastructure,now),6,null,null,5,null);}
+    internal static bool Matches(string infrastructure)
     {
         try
         {
             var action=Scheduler().GetFolder("\\"+Folder).GetTask(Name).Definition.Actions.Item(1);
-            return (string)action.Path==InstallLocations.InstallerImage(version)&&(string)action.Arguments==Arguments;
+            return (string)action.Path==InstalledLayout.EngineImage(infrastructure)&&(string)action.Arguments==Arguments;
         }
         catch(Exception error)when(Missing(error)){return false;}
     }

@@ -31,11 +31,26 @@ internal static class QuietSetup
         SetupResult result;var clock=System.Diagnostics.Stopwatch.StartNew();var phases=new List<object>();string? current=null;
         // Phase entry times only, so an operator or CI can see where time goes.
         void Progress(SetupProgress p){lock(phases){if(p.Phase==current)return;current=p.Phase;phases.Add(new{p.Phase,Seconds=Math.Round(clock.Elapsed.TotalSeconds,1)});}}
+        // The private copy runs the same command and writes the result itself; this
+        // process writes one only when the copy never started.
+        int HandOff()
+        {
+            try{return PrivateCopy.Run();}
+            catch(Exception error)
+            {
+                var failed=new SetupResult(false,SetupOperation.Code(error),DataPreserved:request.Mode==UninstallMode.KeepData,Failure:SetupFailureDetail.From(error));
+                File.WriteAllBytes(request.ResultPath,JsonSerializer.SerializeToUtf8Bytes(new{failed.Ok,failed.Code,failed.Url,failed.DataPreserved,failed.Failure,Phases=phases,Seconds=Math.Round(clock.Elapsed.TotalSeconds,1)}));
+                return 1;
+            }
+        }
+        if(request.Uninstall&&PrivateCopy.RemovalDeletes(Environment.ProcessPath??throw new IOException("SETUP_IMAGE")))return HandOff();
         if(request.Repair||request.UpgradeDirectory is not null)
         {
             var outcome=request.Repair?await RepairHost.RunAsync(Progress):await UpgradeHost.RunAsync(request.UpgradeDirectory!,Progress);
             var done=outcome.Result;
-            File.WriteAllBytes(request.ResultPath,JsonSerializer.SerializeToUtf8Bytes(new{done.Ok,done.Code,done.Url,done.DataPreserved,done.Failure,FromVersion=outcome.From,ToVersion=outcome.To,outcome.RolledBack,Phases=phases,Seconds=Math.Round(clock.Elapsed.TotalSeconds,1)}));
+            if(done.Code==RepairHost.HandOff)return HandOff();
+            File.WriteAllBytes(request.ResultPath,JsonSerializer.SerializeToUtf8Bytes(new{done.Ok,done.Code,done.Url,done.DataPreserved,done.Failure,FromVersion=outcome.From?.App.Version,ToVersion=outcome.To?.App.Version,
+                FromInfrastructureVersion=outcome.From?.Infrastructure.Version,ToInfrastructureVersion=outcome.To?.Infrastructure.Version,outcome.RolledBack,Phases=phases,Seconds=Math.Round(clock.Elapsed.TotalSeconds,1)}));
             return outcome.Exit;
         }
         try

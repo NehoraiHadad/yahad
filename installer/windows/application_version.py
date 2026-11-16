@@ -1,11 +1,23 @@
-"""Build-time application identity from the checked-in package and lockfile."""
+"""Build-time release identities of the two tracks (docs/WINDOWS-APP-PACKAGE-PLAN.md 4.3).
+
+The app track is the checked-in package.json and lockfile; the infrastructure
+track is installer/Directory.Build.props, compiled into every native image.
+"""
+from collections import namedtuple
 import json
 import re
 import os
 import subprocess
 from pathlib import Path
+import xml.etree.ElementTree as ElementTree
 
 _STABLE = re.compile(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)', re.ASCII)
+# InfrastructureRelease.IsContract: canonical digits, 1..1024.
+_CONTRACT = re.compile(r'[1-9][0-9]{0,3}', re.ASCII)
+_COMMIT = re.compile(r'[a-f0-9]{40}', re.ASCII)
+PROPS = 'installer/Directory.Build.props'
+
+Infrastructure = namedtuple('Infrastructure', ('version', 'contract_min', 'contract_max'))
 
 
 def _object(pairs):
@@ -16,13 +28,35 @@ def _object(pairs):
     return result
 
 
-def package_release_version(data):
+def _stable(version):
+    return isinstance(version, str) and len(version) <= 40 and _STABLE.fullmatch(version) is not None
+
+
+def _contract(value):
+    return type(value) is int and 1 <= value <= 1024
+
+
+def _package(data):
     if len(data) > 65536: raise ValueError('Package identity too large')
     package = json.loads(data, object_pairs_hook=_object)
-    version = package.get('version') if isinstance(package, dict) else None
-    if not isinstance(version, str) or len(version) > 40 or not _STABLE.fullmatch(version):
-        raise ValueError('Canonical stable application version required')
+    if not isinstance(package, dict): raise ValueError('Package identity object required')
+    return package
+
+
+def package_release_version(data):
+    version = _package(data).get('version')
+    if not _stable(version): raise ValueError('Canonical stable application version required')
     return version
+
+
+def package_infrastructure_contract(data, infrastructure):
+    # The one contract the app is built against (plan section 6): an exact integer
+    # inside the range the infrastructure built from the same source serves.
+    contract = _package(data).get('yahadInfrastructureContract')
+    if not _contract(contract): raise ValueError('Application infrastructure contract required')
+    if not infrastructure.contract_min <= contract <= infrastructure.contract_max:
+        raise ValueError('Application infrastructure contract outside the infrastructure range')
+    return contract
 
 
 def source_release_version(repo):
@@ -43,11 +77,39 @@ def require_source_release_version(version, repo):
     return expected
 
 
-def require_native_build_identity(description, artifact, version, source_commit):
-    if (not isinstance(description, dict) or description.get('artifact') != artifact or
-            description.get('applicationVersion') != version or description.get('sourceCommit') != source_commit or
-            not isinstance(description.get('version'), str) or description['version'].split('+')[-1] != source_commit):
-        raise ValueError('Native artifact release/source identity differs')
+def infrastructure_identity_from_props(data):
+    # The exact MSBuild properties InfrastructureRelease reads back as assembly
+    # metadata: each defined once, literal (no property reference), canonical.
+    if len(data) > 65536 or data.startswith(b'\xef\xbb\xbf'): raise ValueError('Infrastructure identity file')
+    root = ElementTree.fromstring(data)
+    if root.tag != 'Project': raise ValueError('Infrastructure identity file')
+    def value(name):
+        found = [element for element in root.iter(name)]
+        if len(found) != 1 or len(found[0]) or found[0].attrib or not isinstance(found[0].text, str):
+            raise ValueError('Infrastructure identity property: '+name)
+        return found[0].text
+    version, low, high = (value('YahadInfrastructure'+name) for name in ('Version', 'ContractMin', 'ContractMax'))
+    if not _stable(version) or not _CONTRACT.fullmatch(low) or not _CONTRACT.fullmatch(high):
+        raise ValueError('Infrastructure identity value')
+    identity = Infrastructure(version, int(low), int(high))
+    if not _contract(identity.contract_min) or not _contract(identity.contract_max) or identity.contract_min > identity.contract_max:
+        raise ValueError('Infrastructure contract range')
+    return identity
+
+
+def source_infrastructure_identity(repo):
+    return infrastructure_identity_from_props((Path(repo)/PROPS).read_bytes())
+
+
+def require_native_build_identity(description, artifact, infrastructure, source_commit):
+    # Native images are infrastructure: they carry its identity and never the app's.
+    if (not isinstance(description, dict) or description.get('artifact') != artifact or 'applicationVersion' in description or
+            description.get('infrastructureVersion') != infrastructure.version or
+            type(description.get('contractMin')) is not int or description['contractMin'] != infrastructure.contract_min or
+            type(description.get('contractMax')) is not int or description['contractMax'] != infrastructure.contract_max or
+            not isinstance(source_commit, str) or not _COMMIT.fullmatch(source_commit) or description.get('sourceCommit') != source_commit or
+            description.get('version') != infrastructure.version+'+'+source_commit):
+        raise ValueError('Native artifact infrastructure/source identity differs')
     return description
 
 

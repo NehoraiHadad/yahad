@@ -92,7 +92,7 @@ internal static class ServiceStartupFailureTests
         {
             var encoded=ServiceStartupDiagnostic.Encode(StartupDiagnosticRole.Runtime,new IOException("SERVICE_CHILD_PEER",new Win32Exception(5)));
             using var json=JsonDocument.Parse(encoded);var root=json.RootElement;Require(root.GetProperty("Code").GetString()=="SERVICE_CHILD_PEER"&&root.GetProperty("NativeError").GetInt32()==5&&root.GetProperty("Role").GetString()=="Runtime");
-            Require(root.GetProperty("SourceCommit").GetString()==ApplicationRelease.SourceCommit);return Task.CompletedTask;
+            Require(root.GetProperty("SourceCommit").GetString()==InfrastructureRelease.SourceCommit);return Task.CompletedTask;
         });
     }
     private sealed class RefusedStart(Exception cause):IServiceStartAuthorizer

@@ -9,7 +9,7 @@ try
 {
     if (args is ["--describe"])
     {
-        Reply(new { artifact="Yahad.Platform", applicationVersion=ApplicationRelease.Version, sourceCommit=ApplicationRelease.SourceCommit,
+        Reply(new { artifact="Yahad.Platform", infrastructureVersion=InfrastructureRelease.Version, contractMin=InfrastructureRelease.ContractMin, contractMax=InfrastructureRelease.ContractMax, sourceCommit=InfrastructureRelease.SourceCommit,
             version=System.Reflection.Assembly.GetExecutingAssembly().GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute),false).Cast<System.Reflection.AssemblyInformationalVersionAttribute>().Single().InformationalVersion });
         return 0;
     }

@@ -97,7 +97,7 @@ internal static class LanIntegrationTests
         {
             var request = Enable(false); var host = new NetworkHost(); var phases = new List<string>();
             var result = await new InstallFlow(host).RunAsync(Owner, false, p => phases.Add(p.Phase), default, lan: request);
-            Require(host.Calls.SequenceEqual(["prepare", "publish", "lan:Enable", "start"]));
+            Require(host.Calls.SequenceEqual(["prepare", "provision", "lan:Enable", "start", "commit"]));
             Require(ReferenceEquals(host.Request, request) && host.Owner == Owner && !host.Request!.HttpHelp);
             Require(result.Ok && result.Url == "http://127.0.0.1:47123/" && phases.Last() == "ready");
             Require(phases.IndexOf("configuring_lan") > phases.IndexOf("installing_service") && phases.IndexOf("configuring_lan") < phases.IndexOf("starting_server"));
@@ -109,12 +109,12 @@ internal static class LanIntegrationTests
                 lan: Enable() with { FirewallConsent = false }));
             Require(host.Calls.Count == 0 && phases.Count == 0);
         });
-        foreach (var failure in new[] { "prepare", "publish", "lan:Enable", "start" })
+        foreach (var failure in new[] { "prepare", "provision", "lan:Enable", "start", "commit" })
             await check("LAN install failure at " + failure + " cannot reach browser-ready or uninstall", async () =>
             {
                 var host = new NetworkHost { Failure = failure }; var phases = new List<string>();
                 await RefuseAsync(() => new InstallFlow(host).RunAsync(Owner, false, p => phases.Add(p.Phase), default, lan: Enable()));
-                var full = new[] { "prepare", "publish", "lan:Enable", "start" };
+                var full = new[] { "prepare", "provision", "lan:Enable", "start", "commit" };
                 Require(host.Calls.SequenceEqual(full.Take(Array.IndexOf(full, failure) + 1)));
                 Require(!phases.Contains("ready") && !host.Calls.Any(c => c.StartsWith("uninstall", StringComparison.Ordinal)));
             });
@@ -127,10 +127,10 @@ internal static class LanIntegrationTests
         await check("omitted LAN preserves ordinary install while disable is explicitly conveyed", async () =>
         {
             var host = new NetworkHost(); await new InstallFlow(host).RunAsync(Owner, false, _ => { }, default);
-            Require(host.Calls.SequenceEqual(["prepare", "publish", "start"]) && host.Request is null);
+            Require(host.Calls.SequenceEqual(["prepare", "provision", "start", "commit"]) && host.Request is null);
             var disableHost = new NetworkHost();
             await new InstallFlow(disableHost).RunAsync(Owner, false, _ => { }, default, lan: new(LanSetupAction.Disable));
-            Require(disableHost.Calls.SequenceEqual(["prepare", "publish", "lan:Disable", "start"]));
+            Require(disableHost.Calls.SequenceEqual(["prepare", "provision", "lan:Disable", "start", "commit"]));
         });
         await check("uninstall preserves keep/delete mode and never calls LAN configuration", async () =>
         {
@@ -267,12 +267,14 @@ internal static class LanIntegrationTests
         private void Step(string name) { Calls.Add(name); if (Failure == name) throw new IOException("SYNTHETIC_FAILURE"); }
         public Task PrepareAsync(SetupOwner owner, Action<SetupProgress> progress, CancellationToken cancellation)
         { Step("prepare"); Owner = owner; AfterPrepare?.Invoke(); return Task.CompletedTask; }
-        public Task PublishServiceAsync(Action<SetupProgress> progress, CancellationToken cancellation)
-        { Step("publish"); return Task.CompletedTask; }
+        public Task ProvisionAsync(Action<SetupProgress> progress, CancellationToken cancellation)
+        { Step("provision"); return Task.CompletedTask; }
         public Task ConfigureLanAsync(LanSetupRequest request, Action<SetupProgress> progress, CancellationToken cancellation)
         { request.Require(); Step("lan:" + request.Action); Request = request; return Task.CompletedTask; }
         public Task<SetupResult> StartAndObserveAsync(Action<SetupProgress> progress, CancellationToken cancellation)
         { Step("start"); return Task.FromResult(new SetupResult(true, "READY", "http://127.0.0.1:47123/", new string('a', 43))); }
+        public Task CommitAsync(Action<SetupProgress> progress, CancellationToken cancellation)
+        { Step("commit"); return Task.CompletedTask; }
         public Task<SetupResult> UninstallAsync(Action<SetupProgress> progress, CancellationToken cancellation, UninstallMode mode = UninstallMode.KeepData)
         { Step("uninstall:" + mode); Removal = mode; return Task.FromResult(new SetupResult(true, "REMOVED", DataPreserved: mode == UninstallMode.KeepData)); }
     }

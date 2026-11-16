@@ -147,6 +147,43 @@ The wrapper itself has syntax/preflight checks; its complete new entry point sti
 requires a full packaging run. The underlying commands produced earlier candidates,
 but no current successful real installation is claimed.
 
+## Installed layout
+
+Binaries are administrator-owned under `%ProgramFiles%\Yahad.FirstInstall`; state
+lives under `%ProgramData%\Yahad.FirstInstall`
+([plan section 4](../docs/WINDOWS-APP-PACKAGE-PLAN.md)):
+
+```text
+release-key.spki
+active.json                       the active pair: infrastructure and app versions with their tree hashes
+infra\<infrastructure-version>\
+    host\Yahad.ServiceHost.exe    Runtime service (--service) and home-network service (--lan-service)
+    updater\Yahad.Updater.exe     Updater service (--service)
+    platform\Yahad.Platform.exe
+    runtime\node\node.exe, runtime\caddy\caddy.exe
+    legal\
+    setup\Yahad.Setup.exe         payload-free engine: repair, uninstall, Apps & Features
+    infra-tree.json
+apps\<app-version>\
+    app\                          server, web assets, deploy files
+    app-tree.json
+```
+
+`active.json` is camelCase JSON, format 1. The three service images, the firewall
+rule's program (the infrastructure's Caddy), the Repair task and the Apps & Features
+`UninstallString` all point into the active `infra\<version>`. Setup keeps exactly the
+active pair and the previous committed pair; the two pairs may share one
+infrastructure directory. The installer record (`installer-state.json`) is format 7
+with `Active` and `Previous` pairs. An installation recorded in any other format, or
+one that still has a `versions\` directory, is refused with
+`LEGACY_INSTALL_UNSUPPORTED` before anything is written.
+
+Only install, `--verify-package` and `--quiet-upgrade` open the embedded install
+package. Uninstall and `--repair` run the installed engine without it. An upgrade
+whose infrastructure version is newer moves the three images to the new `infra\`
+directory; one with an identical infrastructure tree changes only `apps\` and the
+pointer.
+
 ## Distribution and installation are separate
 
 An unsigned executable can show an unknown publisher in Windows. Keep the existing

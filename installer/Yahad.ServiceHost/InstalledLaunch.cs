@@ -4,8 +4,9 @@ namespace Yahad.Service;
 
 // The single Runtime service's launch configuration. Setup writes it as an
 // administrator-owned, application-read-only file; nothing else selects what
-// the service launches. The binaries are the version directory of this host's own
-// release (the service ImagePath), never a path named by a file.
+// the service launches. The binaries are this host's own infrastructure tree (the
+// service ImagePath) and the app tree of the verified active pointer, never a path
+// named by a file.
 internal sealed record InstalledLaunchConfiguration(int Format,string InstallationId,string DataId,int Port,string Origin);
 internal static class InstalledLaunch
 {
@@ -45,13 +46,16 @@ internal static class InstalledLaunch
 internal sealed class InstalledLaunchResolver:IServiceStartAuthorizer
 {
     // File work and taking the lease must not occupy the SCM entry/control thread.
+    // The pointer and both trees are verified before the lease is taken, so an
+    // ACTIVE_POINTER_INVALID refusal never leaves the data lease held.
     public Task<AuthorizedServiceStart> AuthorizeAsync(CancellationToken cancellation)=>Task.Run(()=>
     {
         cancellation.ThrowIfCancellationRequested();
-        var state=InstalledLayout.StateRoot;var binaries=InstalledLayout.VersionRoot(ApplicationRelease.Version);
+        var state=InstalledLayout.StateRoot;
+        var pointer=ActivePointer.ReadVerified(app:true);
         var config=InstalledLaunch.Parse(NativeInstallFiles.ReadRecord(Path.Combine(state,InstalledLaunch.FileName),4096));
         var origin=InstalledLaunch.Origin(config.Origin,config.Port);
-        var node=Path.Combine(binaries,"payload","runtime","node","node.exe");var app=Path.Combine(binaries,"payload","app");
+        var node=InstalledLayout.Node(InfrastructureRelease.Version);var app=InstalledLayout.AppDirectory(pointer.App.Version);
         // Only temporary/ and data/ are application-writable.
         var dataset=Path.Combine(state,"datasets",config.DataId);var key=Path.Combine(dataset,"master-key");
         var temporary=Path.Combine(state,"temporary");
@@ -67,7 +71,7 @@ internal sealed class InstalledLaunchResolver:IServiceStartAuthorizer
             // is added for bootstrap; remote origins are never inferred here.
             if(origin.Scheme=="https"&&NetworkPlan.IsPrivateLanV4(origin.Host))environment["APP_ADDITIONAL_ORIGINS"]=$"http://127.0.0.1:{config.Port}";
             var spec=new VerifiedProcessSpec(node,["server/main.mjs"],app,temporary,
-                InstalledLayout.PlatformImage(ApplicationRelease.Version),environment,lease);
+                InstalledLayout.PlatformImage(InfrastructureRelease.Version),environment,lease);
             return new AuthorizedServiceStart(new ServiceProcessLauncher(spec,()=>new LocalChildControl()),lease);
         }
         catch{lease.Dispose();throw;}

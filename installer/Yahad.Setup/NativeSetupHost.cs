@@ -9,15 +9,19 @@ using Yahad.Install;
 using Yahad.Service;
 namespace Yahad.Setup;
 
-// The installer: the Runtime service running versions\<version>\host\Yahad.ServiceHost.exe
-// and the Updater service running versions\<version>\updater\Yahad.Updater.exe, both
-// under %ProgramFiles%\Yahad.FirstInstall, and the Yahad\Repair task.
-// No method is entered without the elevated in-process Setup operation, its
-// recorded owner and the global install lock.
-internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? requested):ISetupHostOperations,IDisposable
+// The installer (docs/WINDOWS-APP-PACKAGE-PLAN.md 4.1, 8.3): the Runtime service running
+// infra\<infra>\host\Yahad.ServiceHost.exe and the Updater service running
+// infra\<infra>\updater\Yahad.Updater.exe, with the app in apps\<app>\, all under
+// %ProgramFiles%\Yahad.FirstInstall, active.json naming the pair, and the Yahad\Repair
+// task on the tree's own engine. The package is present only for an install: removal
+// is payload-free (4.4). No method is entered without the elevated in-process Setup
+// operation, its recorded owner and the global install lock.
+internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice? requested):ISetupHostOperations,IDisposable
 {
     private const string RegistryKey=@"Software\Microsoft\Windows\CurrentVersion\Uninstall\Yahad.FirstInstall";
-    private InstallerState? state;private NativeService? service,updater;private string? setupToken;private bool existing;
+    private InstallerState? state;private NativeService? service,updater;private string? setupToken;private int? reportedSchema;
+    // resumed: the services exist and are provisioned. committed: nothing to record.
+    private bool resumed,committed;
     private UninstallPhase operationPhase=UninstallPhase.FullPrepare;
     // The state root and the binary root are read-only to the Runtime service and
     // everything below inherits that; data and temporary are its only writable trees.
@@ -31,76 +35,93 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
     private string Dataset=>Path.Combine(InstallLocations.State,"datasets",state!.DataId);
     private string DataPath=>Path.Combine(Dataset,"data");
     private string MasterKey=>Path.Combine(Dataset,"master-key");
+    // A kept database the new app migrates is copied here before the first start (InstallBackup).
+    private string MigrationBackup=>Path.Combine(Dataset,"install-backup");
     private static string Secrets=>Path.Combine(InstallLocations.State,"Secrets");
     private static string Capability=>Path.Combine(Secrets,"setup-capability.json");
     private string LocalUrl=>"http://127.0.0.1:"+state!.Port+"/";
     private static byte[] Json<T>(T value)=>JsonSerializer.SerializeToUtf8Bytes(value);
+    private InstallPackage Package=>package??throw new IOException("PACKAGE_NOT_EMBEDDED");
+    private string Infrastructure=>state!.Active.Infrastructure.Version;
     internal SetupOperationException ReportFailure(Exception cause)=>new(operationPhase,cause);
 
     internal static InstallerState ReadState()
     {
         InstallLocations.RequireStateRoot();
-        var value=NativeJson.Read<InstallerState>(NativeInstallFiles.ReadRecord(InstallLocations.StateFile));value.Require();return value;
+        return InstallerState.Parse(NativeInstallFiles.ReadRecord(InstallLocations.StateFile));
     }
     private void Save(string phase)
-    {state=state! with{Phase=phase};NativeInstallFiles.Publish(InstallLocations.StateFile,Json(state));}
+    {state=state! with{Phase=phase};NativeInstallFiles.Publish(InstallLocations.StateFile,state.Encode());}
 
     public Task PrepareAsync(SetupOwner owner,Action<SetupProgress> progress,CancellationToken cancellation)=>Task.Run(()=>
     {
-        requested?.Require(DateTimeOffset.UtcNow);
+        requested?.Require(DateTimeOffset.UtcNow);var package=Package;
+        // A pre-pair layout is refused before anything is read further or written.
+        ExistingInstallation.RequireNotLegacy();
+        var recorded=File.Exists(InstallLocations.StateFile)?ReadState():null;
         if(File.Exists(InstallLocations.RemovalStateFile))throw new IOException("UNINSTALL_INCOMPLETE");
         if(File.Exists(InstallLocations.UpgradeStateFile))throw new IOException("UPGRADE_INCOMPLETE");
-        var manifest=package.Manifest;var version=manifest.Version;
-        if(File.Exists(InstallLocations.StateFile))
+        var target=package.Pair();
+        if(recorded is not null)
         {
-            state=ReadState();state.Consent.RequireCompatibleRetry(requested);
+            state=recorded;state.Consent.RequireCompatibleRetry(requested);
             ClearResidue();
             switch(state.Phase)
             {
                 case "committed":
-                    if(ReleaseManifest.Compare(version,state.Version)<0)throw new IOException("INSTALL_DOWNGRADE_REFUSED");
-                    // A newer Setup has already moved this installation (UpgradeHost), so this
-                    // is the same version built differently, which nothing can move between.
-                    if(state.Version!=version||state.PackageDigest!=manifest.ZipSha256)throw new IOException("INSTALL_UPGRADE_REQUIRED");
-                    service=NativeService.Open(version);updater=NativeService.Open(version,ServiceSpec.Updater);
-                    InspectBinaries(Inventory(),true,true,"INSTALL_TARGET_CHANGED");existing=true;return;
+                    // The same pair, byte for byte: a reinstall that only re-checks and restarts.
+                    // Anything newer went through UpgradeHost; anything else is refused by name.
+                    if(!state.Active.SameTrees(target)){_=UpgradeRules.Decide(state.Active,target);throw new IOException("INSTALL_UPGRADE_REQUIRED");}
+                    service=NativeService.Open(Infrastructure);updater=NativeService.Open(Infrastructure,ServiceSpec.Updater);
+                    InspectBinaries(Inventory(),true,true,"INSTALL_TARGET_CHANGED");resumed=committed=true;return;
                 case "uninstalled":
-                    if(ReleaseManifest.Compare(version,state.Version)<0)throw new IOException("INSTALL_DOWNGRADE_REFUSED");
-                    if(AnyServiceExists()||Directory.Exists(InstallLocations.Binaries)||File.Exists(InstallLocations.Binaries))throw new IOException("INSTALL_COLLISION");
-                    // The family, its data, key and identity stay; only the
-                    // release and the image that installs it are new.
-                    state=state with{Version=version,PackageDigest=manifest.ZipSha256,PayloadDigest=manifest.PayloadDigest,SourceCommit=manifest.SourceCommit,SetupSha256=owner.ImageSha256,Files=manifest.Files,ReleaseKeySha256=EmbeddedKeyDigest,Previous=null};
+                    // The family, its data, key and identity stay; only the pair is new. The kept
+                    // database must be one this app opens or migrates from (8.3).
+                    if(ReleaseManifest.Compare(target.App.Version,state.Active.App.Version)<0)throw new IOException("INSTALL_DOWNGRADE_REFUSED");
+                    if(!package.AcceptsSchema(state.Active.App.DatabaseSchema))throw new IOException("RELEASE_UNSUPPORTED_FROM");
+                    if(AnyServiceExists()||Path.Exists(InstallLocations.Binaries))throw new IOException("INSTALL_COLLISION");
+                    // Until the first healthy start the record keeps the schema the data is at.
+                    state=state with{Active=target with{App=target.App with{DatabaseSchema=state.Active.App.DatabaseSchema}},ReleaseKeySha256=EmbeddedKeyDigest,Previous=null};
                     Save("preparing");break;
                 case "preparing":
-                    if(state.PackageDigest!=manifest.ZipSha256||state.Version!=version)throw new IOException("EXISTING_DATA_PRESERVED");break;
+                case "provisioned":
+                    if(!state.Active.SameTrees(target))throw new IOException("EXISTING_DATA_PRESERVED");
+                    resumed=state.Phase=="provisioned";break;
                 default:throw new IOException("INSTALL_STATE_INVALID");
             }
         }
         else
         {
             if(requested is null)throw new IOException("UPDATE_CONSENT_REQUIRED");
-            if(File.Exists(InstallLocations.State)||Directory.Exists(InstallLocations.State)||Directory.Exists(InstallLocations.Binaries)||File.Exists(InstallLocations.Binaries)||AnyServiceExists())throw new IOException("INSTALL_COLLISION");
+            if(Path.Exists(InstallLocations.State)||Path.Exists(InstallLocations.Binaries)||AnyServiceExists())throw new IOException("INSTALL_COLLISION");
             var listeners=IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners();var port=Enumerable.Range(47123,17).FirstOrDefault(p=>!listeners.Any(e=>e.Port==p));if(port==0)throw new IOException("NO_LOCAL_PORT");
             var installation=Guid.NewGuid().ToString("N");
-            state=new(InstallerState.CurrentFormat,installation,Guid.NewGuid().ToString("N"),version,manifest.ZipSha256,manifest.PayloadDigest,manifest.SourceCommit,owner.Sid,port,"preparing",
-                owner.ImageSha256,FirstOwnerBinding.Create(installation,owner.Sid),requested,manifest.Files,InstallLocations.ServiceSid,EmbeddedKeyDigest);
+            state=new(InstallerState.CurrentFormat,installation,Guid.NewGuid().ToString("N"),owner.Sid,port,"preparing",FirstOwnerBinding.Create(installation,owner.Sid),requested,
+                InstallLocations.ServiceSid,target,EmbeddedKeyDigest);
             NativeInstallFiles.NewDirectory(InstallLocations.State,InstallAcl);Save("preparing");
         }
-        if(new DriveInfo(Path.GetPathRoot(InstallLocations.Binaries)!).AvailableFreeSpace<checked(manifest.Files.Sum(f=>f.Size)*3+536870912L))throw new IOException("DISK_SPACE");
+        if(new DriveInfo(Path.GetPathRoot(InstallLocations.Binaries)!).AvailableFreeSpace<checked(package.Manifest.Files.Sum(f=>f.Size)*3+536870912L))throw new IOException("DISK_SPACE");
         if(!Directory.Exists(InstallLocations.Binaries))NativeInstallFiles.NewDirectory(InstallLocations.Binaries,BinaryAcl);
-        // A resumed extraction holds only this package's members and their
-        // uncommitted partials; the partials go, committed members stay.
+        // A resumed extraction holds only this pair's members and their uncommitted
+        // partials; the partials go, committed members stay.
         var (_,partials)=InspectBinaries(Inventory(),false,false,"INSTALL_TARGET_CHANGED");
         foreach(var partial in partials)WindowsFileBoundary.DeleteNoFollow(Path.Combine(InstallLocations.Binaries,partial.Replace('/',Path.DirectorySeparatorChar)),false);
-        var root=InstallLocations.VersionRoot(version);NativeInstallFiles.EnsureDirectoryUnder(InstallLocations.Binaries,root);
-        package.Extract(root,p=>progress(new("extracting",10+p*50/100)),cancellation,new ExtractTarget(
-            directory=>NativeInstallFiles.EnsureDirectoryUnder(root,directory),NativeInstallFiles.CreateNewFile,
-            NativeInstallFiles.CommitNew,VerifyOwned));
+        Extract(package,TreeKind.Infrastructure,InstalledLayout.InfraRoot(Infrastructure),p=>progress(new("extracting",10+p*25/100)),cancellation);
+        Extract(package,TreeKind.App,InstalledLayout.AppRoot(state.Active.App.Version),p=>progress(new("extracting",35+p*25/100)),cancellation);
+        // The pointer comes last: it names two whole trees.
+        var pointer=state.Active.Pointer().Encode();
+        if(File.Exists(InstalledLayout.ActivePointerFile)){if(!VerifyOwned(InstalledLayout.ActivePointerFile,new(InstalledLayout.ActivePointerName,pointer.Length,TreeRecord.Sha256(pointer))))throw new IOException("INSTALL_TARGET_CHANGED");}
+        else NativeInstallFiles.PublishNew(InstalledLayout.ActivePointerFile,pointer);
     },cancellation);
+    private static void Extract(InstallPackage package,TreeKind kind,string root,Action<int> progress,CancellationToken cancellation)
+    {
+        NativeInstallFiles.EnsureDirectoryUnder(InstallLocations.Binaries,root);
+        package.Extract(kind,root,progress,cancellation,new ExtractTarget(directory=>NativeInstallFiles.EnsureDirectoryUnder(root,directory),NativeInstallFiles.CreateNewFile,NativeInstallFiles.CommitNew,VerifyOwned));
+    }
 
     private static bool AnyServiceExists()=>NativeService.Exists()||NativeService.Exists(ServiceSpec.Updater);
     private static string? EmbeddedKeyDigest=>TrustedReleaseKey.Embedded is {} key?TrustedReleaseKey.Digest(key):null;
-    private InstallMember[] Inventory(){var image=InstallLocations.InstallerImage(state!.Version);return RemovalIntent.Inventory(state,File.Exists(image)?new FileInfo(image).Length:0);}
+    private InstallMember[] Inventory()=>RemovalIntent.Inventory(state!);
     private static readonly string EmptySha256=Convert.ToHexStringLower(SHA256.HashData([]));
     // A present immutable member must be byte-identical to its record.
     private static bool VerifyOwned(string path,InstallMember record)
@@ -132,22 +153,21 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
     {foreach(var directory in new[]{InstallLocations.State,Secrets,Dataset})FullInstallerResidue.Clear(directory);}
     private static void EnsureDirectory(string path,string? acl=null){if(!Directory.Exists(path))NativeInstallFiles.NewDirectory(path,acl);}
 
-    public Task PublishServiceAsync(Action<SetupProgress> progress,CancellationToken cancellation)=>Task.Run(()=>
+    public Task ProvisionAsync(Action<SetupProgress> progress,CancellationToken cancellation)=>Task.Run(()=>
     {
         operationPhase=UninstallPhase.FullProvision;
-        if(existing)return;
+        if(resumed)
+        {
+            service??=NativeService.Open(Infrastructure);updater??=NativeService.Open(Infrastructure,ServiceSpec.Updater);return;
+        }
         EnsureDirectory(Path.Combine(InstallLocations.State,"datasets"));EnsureDirectory(Dataset);EnsureDirectory(DataPath,DataAcl);
         EnsureDirectory(Path.Combine(InstallLocations.State,"temporary"),DataAcl);EnsureDirectory(Secrets);
         if(!File.Exists(MasterKey))NativeInstallFiles.PublishNew(MasterKey,Encoding.UTF8.GetBytes(Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))));
         // A kept installation keeps its launch file.
         if(!File.Exists(InstallLocations.LaunchFile))NativeInstallFiles.PublishNew(InstallLocations.LaunchFile,InstalledLaunch.Encode(new(1,state!.InstallationId,state.DataId,state.Port,"http://127.0.0.1:"+state.Port)));
         RenewCapability();
-        var image=InstallLocations.InstallerImage(state!.Version);
-        var setup=new InstallMember(RemovalIntent.SetupMember(state.Version),new FileInfo(Environment.ProcessPath!).Length,state.SetupSha256);
-        if(File.Exists(image)){if(!VerifyOwned(image,setup))throw new IOException("INSTALL_TARGET_CHANGED");}
-        else CopyVerified(Environment.ProcessPath!,image,setup);
         // The root of trust for every later upgrade. A build without a key writes none.
-        if(state.ReleaseKeySha256 is {} digest)
+        if(state!.ReleaseKeySha256 is {} digest)
         {
             var record=new InstallMember(TrustedReleaseKey.InstalledName,TrustedReleaseKey.SpkiBytes,digest);
             if(File.Exists(InstallLocations.ReleaseKeyFile)){if(!VerifyOwned(InstallLocations.ReleaseKeyFile,record))throw new IOException("INSTALL_TARGET_CHANGED");}
@@ -156,25 +176,12 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
         progress(new("installing_service",75));
         UpgradeFiles.EnsureUpdaterState(state.Consent.Automatic);
         // The Runtime first: the Updater's service ACL names the Runtime's account.
-        service??=NativeService.Exists()?NativeService.OpenForProvisioning(state.Version,state.OwnerSid):NativeService.Create(state.Version,state.OwnerSid);
-        updater??=NativeService.Exists(ServiceSpec.Updater)?NativeService.OpenForProvisioning(state.Version,state.OwnerSid,ServiceSpec.Updater):NativeService.Create(state.Version,state.OwnerSid,ServiceSpec.Updater);
-        RepairTask.Register(state.Version,DateTimeOffset.Now);
-        Register(state);Save("committed");progress(new("installing_service",80));
+        service??=NativeService.Exists()?NativeService.OpenForProvisioning(Infrastructure,state.OwnerSid):NativeService.Create(Infrastructure,state.OwnerSid);
+        updater??=NativeService.Exists(ServiceSpec.Updater)?NativeService.OpenForProvisioning(Infrastructure,state.OwnerSid,ServiceSpec.Updater):NativeService.Create(Infrastructure,state.OwnerSid,ServiceSpec.Updater);
+        // Repair and removal run the installed tree's own payload-free engine.
+        RepairTask.Register(Infrastructure,DateTimeOffset.Now);Register(state);
+        Save("provisioned");progress(new("installing_service",80));
     },cancellation);
-    internal static void CopyVerified(string source,string target,InstallMember record)
-    {
-        var partial=target+".partial-"+Guid.NewGuid().ToString("N");
-        try
-        {
-            using(var input=new FileStream(source,FileMode.Open,FileAccess.Read,FileShare.Read))using(var output=NativeInstallFiles.CreateNewFile(partial))
-            {
-                if(input.Length!=record.Size||Convert.ToHexStringLower(SHA256.HashData(input))!=record.Sha256)throw new IOException("INSTALL_TARGET_CHANGED");
-                input.Position=0;input.CopyTo(output);output.Flush(true);
-            }
-            NativeInstallFiles.CommitNew(partial,target);
-        }
-        catch{try{File.Delete(partial);}catch(IOException){}catch(UnauthorizedAccessException){}throw;}
-    }
     private void RenewCapability()
     {
         setupToken=Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+','-').Replace('/','_');
@@ -182,8 +189,8 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
     }
     internal static void Register(InstallerState state)
     {
-        using var key=Registry.LocalMachine.CreateSubKey(RegistryKey,true);key.SetValue("DisplayName","יחד");key.SetValue("DisplayVersion",state.Version);key.SetValue("Publisher","Yahad");
-        key.SetValue("InstallLocation",InstallLocations.Binaries);key.SetValue("UninstallString","\""+InstallLocations.InstallerImage(state.Version)+"\" --uninstall");
+        using var key=Registry.LocalMachine.CreateSubKey(RegistryKey,true);key.SetValue("DisplayName","יחד");key.SetValue("DisplayVersion",state.Active.App.Version);key.SetValue("Publisher","Yahad");
+        key.SetValue("InstallLocation",InstallLocations.Binaries);key.SetValue("UninstallString","\""+InstalledLayout.EngineImage(state.Active.Infrastructure.Version)+"\" --uninstall");
         key.SetValue("NoModify",1,RegistryValueKind.DWord);key.SetValue("NoRepair",1,RegistryValueKind.DWord);
     }
 
@@ -194,18 +201,34 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
         // The launch file changes only while the Runtime is stopped.
         await service!.StopAsync(cancellation);network.RecoverWebJournal();await network.ConfigureAsync(request,progress,cancellation);
     }
+    // A kept database the new app migrates (8.3): copied whole before the first start,
+    // and put back before any later start of this same attempt, so a start that failed
+    // halfway through a migration never leaves the next start a half-migrated database.
+    // A copy bound to anything but this attempt is replaced, never restored.
+    private async Task PrepareDataAsync(CancellationToken cancellation)
+    {
+        if(state!.Active.App.DatabaseSchema==Package.Manifest.App.DatabaseSchema)return;
+        await service!.StopAsync(cancellation);service.ConfirmStopped();
+        if(InstallBackup.BoundTo(MigrationBackup,state))DatabaseBackup.Restore(DataPath,MigrationBackup);
+        else InstallBackup.Create(DataPath,MigrationBackup,state);
+    }
     public async Task<SetupResult> StartAndObserveAsync(Action<SetupProgress> progress,CancellationToken cancellation)
     {
         operationPhase=UninstallPhase.FullStart;
         var network=new NativeLanInstall(state!);
-        if(existing){await service!.StopAsync(cancellation);network.RecoverWebJournal();}
+        if(resumed){await service!.StopAsync(cancellation);network.RecoverWebJournal();}
+        await PrepareDataAsync(cancellation);
         service!.EnableStartup();updater!.EnableStartup();progress(new("starting_server",85));await service.StartAsync(cancellation);
-        // RUNNING is reported only after the application answered its own health check.
+        // RUNNING is reported only after the application answered its own health check
+        // as this app, at the schema this app writes.
         using var client=new HttpClient(new HttpClientHandler{UseProxy=false,AllowAutoRedirect=false}){Timeout=TimeSpan.FromSeconds(10)};
         using(var health=await client.GetAsync(LocalUrl+"health/ready",cancellation))
         {
-            health.EnsureSuccessStatusCode();var bytes=await health.Content.ReadAsByteArrayAsync(cancellation);
-            if(bytes.Length>16384||!NativeJson.Read<JsonElement>(bytes).GetProperty("ok").GetBoolean())throw new IOException("SERVER_NOT_READY");
+            health.EnsureSuccessStatusCode();var bytes=await health.Content.ReadAsByteArrayAsync(cancellation);if(bytes.Length>16384)throw new IOException("SERVER_NOT_READY");
+            var seen=NativeJson.Read<JsonElement>(bytes);var target=Package.Manifest.App;
+            if(!UpgradeRules.HealthPasses(new(seen.GetProperty("ok").GetBoolean(),seen.GetProperty("version").GetString(),seen.GetProperty("databaseSchema").GetInt32()),target.Version,target.DatabaseSchema))
+                throw new IOException("SERVER_NOT_READY");
+            reportedSchema=target.DatabaseSchema;
         }
         async Task<string?> SetupState()
         {
@@ -215,18 +238,26 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
         }
         var setup=await SetupState();
         if(setup=="complete")setupToken=null;
-        else if(existing&&setup=="closed")
+        else if(resumed&&setup=="closed")
         {
             // An expired first-owner capability is renewed only while stopped.
             await service.StopAsync(cancellation);RenewCapability();await service.StartAsync(cancellation);
             if(await SetupState()!="ready")throw new IOException("SERVER_NOT_READY");
         }
-        else if(existing&&setup=="ready")setupToken=NativeJson.Read<JsonElement>(NativeInstallFiles.ReadRecord(Capability)).GetProperty("token").GetString();
+        else if(resumed&&setup=="ready")setupToken=NativeJson.Read<JsonElement>(NativeInstallFiles.ReadRecord(Capability)).GetProperty("token").GetString();
         else if(setup!="ready")throw new IOException("SERVER_NOT_READY");
         await updater.StartAsync(cancellation);
         var lan=await network.ObserveAsync(cancellation);
         return new(true,"READY",LocalUrl,setupToken,Lan:lan);
     }
+    // The only place a first install records "committed", with the schema the Runtime
+    // reported healthy. The migration copy is no longer the data's only safe state.
+    public Task CommitAsync(Action<SetupProgress> progress,CancellationToken cancellation)=>Task.Run(()=>
+    {
+        var schema=reportedSchema??throw new IOException("SERVER_NOT_READY");
+        if(!committed){state=state! with{Active=state.Active with{App=state.Active.App with{DatabaseSchema=schema}}};Save("committed");}
+        UpgradeFiles.Remove(MigrationBackup);
+    },cancellation);
 
     private static void SaveRemoval(RemovalIntent intent)
     {
@@ -237,17 +268,20 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
     public async Task<SetupResult> UninstallAsync(Action<SetupProgress> progress,CancellationToken cancellation,UninstallMode mode=UninstallMode.KeepData)
     {
         operationPhase=UninstallPhase.FullUninstall;
+        // Payload-free (4.4): everything removed is named by the record or the receipt.
+        // A pre-pair layout is refused before anything is written.
+        ExistingInstallation.RequireNotLegacy();
         if(!File.Exists(InstallLocations.RemovalStateFile)&&!File.Exists(InstallLocations.StateFile))throw new IOException("INSTALL_STATE_INVALID");
+        RemovalIntent? intent=File.Exists(InstallLocations.RemovalStateFile)?RemovalIntent.Parse(NativeInstallFiles.ReadRecord(InstallLocations.RemovalStateFile)):null;
+        var recorded=File.Exists(InstallLocations.StateFile)?ReadState():null;
         if(File.Exists(InstallLocations.UpgradeStateFile))throw new IOException("UPGRADE_INCOMPLETE");
-        RemovalIntent? intent=null;
-        if(File.Exists(InstallLocations.RemovalStateFile))
+        if(intent is not null)
         {
-            intent=NativeJson.Read<RemovalIntent>(NativeInstallFiles.ReadRecord(InstallLocations.RemovalStateFile));
-            intent.Require();state=intent.State;
+            state=intent.State;
             if(intent.Mode!=mode)throw new IOException("UNINSTALL_MODE_CHANGED");
-            if(File.Exists(InstallLocations.StateFile))intent.RequireSameInstallation(ReadState());
+            if(recorded is not null)intent.RequireSameInstallation(recorded);
         }
-        else state=ReadState();
+        else state=recorded!;
         if(intent is null&&state.Phase.StartsWith("removing_",StringComparison.Ordinal))throw new IOException("INSTALL_STATE_INVALID");
         if(intent is null&&state.Phase=="uninstalled")
         {
@@ -258,8 +292,8 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
         if(intent?.AtLeast("services_removed")==true){if(AnyServiceExists())throw new IOException("UNINSTALL_SERVICE_REAPPEARED");}
         else
         {
-            service=await NativeService.OpenForRemovalAsync(state.Version,cancellation);
-            updater=await NativeService.OpenForRemovalAsync(state.Version,cancellation,ServiceSpec.Updater);
+            service=await NativeService.OpenForRemovalAsync(Infrastructure,cancellation);
+            updater=await NativeService.OpenForRemovalAsync(Infrastructure,cancellation,ServiceSpec.Updater);
             operationPhase=UninstallPhase.StopService;
             // The Updater first, so nothing can start an upgrade behind the removal.
             if(updater is not null){updater.FenceForRemoval();await updater.StopAsync(cancellation);}
@@ -274,7 +308,7 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
                 if(intent is null)
                 {
                     operationPhase=UninstallPhase.InspectData;
-                    var inventory=Inventory();_=InspectBinaries(inventory,state.Phase=="committed",true,"UNINSTALL_UNOWNED_FILE_PRESERVED");
+                    var inventory=Inventory();_=InspectBinaries(inventory,state.Phase is "committed" or "provisioned",true,"UNINSTALL_UNOWNED_FILE_PRESERVED");
                     if(mode==UninstallMode.DeleteData&&Directory.Exists(InstallLocations.State))_=RemovalTree.Inspect(InstallLocations.State,WindowsFileBoundary.RequireNoLink);
                     operationPhase=UninstallPhase.WriteRemovalReceipt;
                     state=state with{Phase=UninstallChoice.Phase(mode)};intent=new(InstallerState.CurrentFormat,state,mode,inventory,"prepared");SaveRemoval(intent);Save(state.Phase);
@@ -299,13 +333,17 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
             {
                 operationPhase=UninstallPhase.DeleteData;
                 var tree=RemovalTree.Inspect(InstallLocations.State,WindowsFileBoundary.RequireNoLink);
-                tree.DeleteContents(WindowsFileBoundary.DeleteNoFollow,p=>progress(new("deleting_data",25+p*50/100)),cancellation);
+                tree.DeleteContents(PrivateCopy.DeleteMember,p=>progress(new("deleting_data",25+p*50/100)),cancellation);
                 operationPhase=UninstallPhase.DeleteDataRoot;WindowsFileBoundary.DeleteNoFollow(InstallLocations.State,true);
             }
             else if(mode==UninstallMode.KeepData)
             {
-                // The mode stays with the data; a downloaded release does not.
-                operationPhase=UninstallPhase.SavePreservedState;UpgradeFiles.Remove(Path.Combine(InstalledLayout.UpdaterRoot,"staging"));Save("uninstalled");
+                // The mode stays with the data; a downloaded release does not. An uncommitted
+                // reinstall may have begun a migration while its record still names the kept
+                // schema: the data goes back to that attempt's copy, then no copy is kept.
+                operationPhase=UninstallPhase.SavePreservedState;UpgradeFiles.Remove(Path.Combine(InstalledLayout.UpdaterRoot,"staging"));
+                if(InstallBackup.BoundTo(MigrationBackup,state))DatabaseBackup.Restore(DataPath,MigrationBackup);
+                UpgradeFiles.Remove(MigrationBackup);Save("uninstalled");
             }
             intent=intent with{Stage="data_removed"};SaveRemoval(intent);
         }
@@ -315,7 +353,7 @@ internal sealed class NativeSetupHost(InstallPackage package,UpdateSetupChoice? 
             var(tree,_)=InspectBinaries(intent.Binaries,false,true,"UNINSTALL_UNOWNED_FILE_PRESERVED");
             if(tree is not null)
             {
-                tree.DeleteContents(WindowsFileBoundary.DeleteNoFollow,p=>progress(new("deleting_files",75+p*20/100)),cancellation);
+                tree.DeleteContents(PrivateCopy.DeleteMember,p=>progress(new("deleting_files",75+p*20/100)),cancellation);
                 WindowsFileBoundary.DeleteNoFollow(InstallLocations.Binaries,true);
             }
             intent=intent with{Stage="binaries_removed"};SaveRemoval(intent);

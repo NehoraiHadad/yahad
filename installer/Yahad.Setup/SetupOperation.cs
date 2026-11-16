@@ -42,9 +42,11 @@ internal static class SetupOperation
             using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancellation);deadline.CancelAfter(OperationTimeout(uninstall?"uninstall":"install"));
             void Progress(SetupProgress p){deadline.Token.ThrowIfCancellationRequested();progress(p);}
             Progress(new("checking",0));
-            using var installLock=new SetupInstallLock();using var payload=InstallPackage.Embedded();
+            // Only an install opens the package; removal is payload-free (4.4) and runs from
+            // the installed engine or a private copy of it.
+            using var installLock=new SetupInstallLock();using var payload=uninstall?null:InstallPackage.Embedded();
             // Moved first, so the rest is this release's own run: home network and first-family link included.
-            if(!uninstall&&UpgradeHost.Applies(payload))
+            if(payload is not null&&UpgradeHost.Applies(payload))
             {
                 var upgrade=await UpgradeHost.FromThisSetupAsync(payload,Progress);
                 if(!upgrade.Result.Ok)return upgrade.Result;
@@ -66,26 +68,34 @@ internal static class SetupOperation
         IOException io when KnownCodes.Contains(io.Message)||LanCodes.Contains(io.Message)||UpdateCodes.Contains(io.Message)||UpgradeCodes.Contains(io.Message)=>io.Message,
         _=>"INSTALL_FAILED"
     };
-    private static readonly HashSet<string> UpgradeCodes=new(StringComparer.Ordinal){"RELEASE_SIGNATURE_INVALID","RELEASE_KEY_UNTRUSTED","RELEASE_NOT_NEWER","RELEASE_SETUP_MISMATCH","RELEASE_MANIFEST_INVALID","RELEASE_UNSUPPORTED_FROM","UPGRADE_LOCKED","UPGRADE_INCOMPLETE","UPGRADE_BACKUP_INVALID","NOT_INSTALLED","INSTALL_INCOMPLETE","REPAIR_RUNNING_FROM_TARGET"};
+    private static readonly HashSet<string> UpgradeCodes=new(StringComparer.Ordinal){"RELEASE_SIGNATURE_INVALID","RELEASE_KEY_UNTRUSTED","RELEASE_NOT_NEWER","RELEASE_SETUP_MISMATCH","RELEASE_MANIFEST_INVALID","RELEASE_UNSUPPORTED_FROM","UPGRADE_LOCKED","UPGRADE_INCOMPLETE","UPGRADE_BACKUP_INVALID","NOT_INSTALLED","INSTALL_INCOMPLETE",
+        "LEGACY_INSTALL_UNSUPPORTED","INFRA_IDENTITY_MISMATCH","APP_IDENTITY_MISMATCH","ACTIVE_POINTER_INVALID","TREE_RECORD_INVALID"};
     private static readonly HashSet<string> UpdateCodes=new(StringComparer.Ordinal){"UPDATE_CONSENT_REQUIRED","UPDATE_CONSENT_ALREADY_CAPTURED","UPDATE_OWNER_BINDING","UNINSTALL_SERVICE_REAPPEARED"};
     private static readonly HashSet<string> LanCodes=new(StringComparer.Ordinal){"LAN_ACTION_INVALID","LAN_CONSENT_REQUIRED","LAN_PAYLOAD_NOT_SUPPORTED","LAN_PAYLOAD_CHANGED","LAN_SETUP_PAUSED","NETWORK_SELECTION_CHANGED","LAN_PRIVATE_PROFILE_REQUIRED","LAN_NETWORK_PROFILE_UNAVAILABLE","LAN_FIREWALL_UNAVAILABLE","LAN_FIREWALL_CHANGED","LAN_FIREWALL_DUPLICATE","LAN_FIREWALL_REPAIR_REQUIRED","LAN_PREPARATION_CHANGED","LAN_OWNERSHIP_MISSING","LAN_INSTALL_COLLISION","LAN_UNINSTALL_INCOMPLETE","LAN_CA_CHANGED","LAN_CA_STORAGE_DAMAGED","LAN_CERTIFICATE_INVALID","LAN_HTTPS_CONNECTION_FAILED","LAN_QUIESCENCE_UNCONFIRMED"};
-    private static readonly HashSet<string> KnownCodes=new(StringComparer.Ordinal){"PACKAGE_NOT_EMBEDDED","PACKAGE_HASH","PACKAGE_MEMBER_HASH","PACKAGE_FORMAT","PACKAGE_SOURCE","PACKAGE_PAYLOAD_ANCHOR","PAYLOAD_VERSION","INSTALL_COLLISION","EXISTING_DATA_PRESERVED","INSTALL_UPGRADE_REQUIRED","INSTALL_DOWNGRADE_REFUSED","INSTALL_SERVICE_STOP_STALLED","INSTALL_SERVICE_GENERATION_CHANGED","INSTALL_TARGET_CHANGED","DISK_SPACE","NO_LOCAL_PORT","SERVICE_START_FAILED","SERVER_NOT_READY","SERVICE_NOT_OWNED","UNINSTALL_UNOWNED_FILE_PRESERVED","INSTALL_STATE_INVALID","ADMIN_REQUIRED","INSTALL_BUSY","UNINSTALL_MODE_INVALID","UNINSTALL_MODE_CHANGED","UNINSTALL_INCOMPLETE","UNINSTALL_INTENT_INVALID","UNINSTALL_QUIESCENCE_UNCONFIRMED","UNINSTALL_SERVICE_REMOVAL_PENDING","UNINSTALL_LINK_PRESERVED","UNINSTALL_ROOT_NOT_EMPTY","UNINSTALL_TREE_LIMIT"};
+    private static readonly HashSet<string> KnownCodes=new(StringComparer.Ordinal){"PACKAGE_NOT_EMBEDDED","PACKAGE_HASH","PACKAGE_MEMBER_HASH","PACKAGE_FORMAT","PACKAGE_SOURCE","PACKAGE_CONTRACT","PACKAGE_TREE_MISMATCH","PACKAGE_PATH","PACKAGE_MISSING","PACKAGE_MEMBERS","PAYLOAD_VERSION","INSTALL_COLLISION","EXISTING_DATA_PRESERVED","INSTALL_UPGRADE_REQUIRED","INSTALL_DOWNGRADE_REFUSED","INSTALL_SERVICE_STOP_STALLED","INSTALL_SERVICE_GENERATION_CHANGED","INSTALL_TARGET_CHANGED","DISK_SPACE","NO_LOCAL_PORT","SERVICE_START_FAILED","SERVER_NOT_READY","SERVICE_NOT_OWNED","UNINSTALL_UNOWNED_FILE_PRESERVED","INSTALL_STATE_INVALID","ADMIN_REQUIRED","INSTALL_BUSY","UNINSTALL_MODE_INVALID","UNINSTALL_MODE_CHANGED","UNINSTALL_INCOMPLETE","UNINSTALL_INTENT_INVALID","UNINSTALL_QUIESCENCE_UNCONFIRMED","UNINSTALL_SERVICE_REMOVAL_PENDING","UNINSTALL_LINK_PRESERVED","UNINSTALL_ROOT_NOT_EMPTY","UNINSTALL_TREE_LIMIT"};
     internal static string HashFile(string path){using var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read);return Convert.ToHexStringLower(SHA256.HashData(file));}
-    // Removal deletes the installed trees, and a process cannot delete its own
-    // running image. Started from inside them (the Apps & Features entry), the
-    // removal window reopens from a private copy and this process exits.
-    internal static bool RunsFromInstallation()=>Environment.ProcessPath is {} image&&(Within(image,InstallLocations.Binaries)||Within(image,InstallLocations.State));
-    internal static void OpenRemoval()
+    // The app version the window names: the one this image installs or, for the
+    // payload-free engine, the active app the installer record (or, mid-removal, its
+    // receipt) names. Without a readable record there is no version to name; the
+    // operation itself reports why.
+    internal static string? DisplayVersion()
     {
-        var image=Environment.ProcessPath??throw new IOException("SETUP_IMAGE");
-        if(RunsFromInstallation())
+        if(InstallPackage.IsEmbedded)return InstallPackage.DisplayVersion();
+        try
         {
-            var directory=Path.Combine(Path.GetTempPath(),"yahad-removal-"+Guid.NewGuid().ToString("N"));
-            NativeInstallFiles.NewDirectory(directory,"O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)");
-            var copy=Path.Combine(directory,"Yahad.Setup.exe");File.Copy(image,copy,false);image=copy;
+            if(File.Exists(InstallLocations.RemovalStateFile))return RemovalIntent.Parse(NativeInstallFiles.ReadRecord(InstallLocations.RemovalStateFile)).State.Active.App.Version;
+            return File.Exists(InstallLocations.StateFile)?NativeSetupHost.ReadState().Active.App.Version:null;
         }
-        // This process is already elevated; the child inherits its token, so no second prompt.
-        using var started=Process.Start(new ProcessStartInfo(image){UseShellExecute=false,ArgumentList={"--uninstall"}})??throw new IOException("SETUP_NOT_STARTED");
+        catch(Exception error)when(error is IOException or UnauthorizedAccessException or JsonException){return null;}
+    }
+    // The removal window opens as its own process, which applies the private-copy rule
+    // (PrivateCopy) when it runs from the installation.
+    internal static void OpenRemoval()=>Start(Environment.ProcessPath??throw new IOException("SETUP_IMAGE"),["--uninstall"]);
+    // This process is already elevated; the child inherits its token, so no second prompt.
+    private static void Start(string image,string[] arguments)
+    {
+        var start=new ProcessStartInfo(image){UseShellExecute=false};foreach(var argument in arguments)start.ArgumentList.Add(argument);
+        using var started=Process.Start(start)??throw new IOException("SETUP_NOT_STARTED");
     }
     internal static bool Within(string path,string root)
     {var full=Path.GetFullPath(path);var parent=Path.TrimEndingDirectorySeparator(Path.GetFullPath(root))+Path.DirectorySeparatorChar;return full.StartsWith(parent,StringComparison.OrdinalIgnoreCase);}

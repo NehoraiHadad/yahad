@@ -60,7 +60,7 @@ internal static class InstallAclTests
             var parent=PrivateSession.Create(Path.GetTempPath());var root=Path.Combine(parent,"root");var user=WindowsIdentity.GetCurrent().User!.Value;
             var earlier=$"O:{user}D:P(A;OICI;FA;;;{user})(A;OICI;FA;;;SY)";
             NativeInstallFiles.NewDirectory(root,earlier);
-            var folder=Path.Combine(root,"versions");NativeInstallFiles.NewDirectory(folder);
+            var folder=Path.Combine(root,"infra");NativeInstallFiles.NewDirectory(folder);
             var image=Path.Combine(folder,"image.exe");NativeInstallFiles.Publish(image,"image"u8.ToArray());
             bool NamesUsers(FileSystemSecurity security)=>security.GetAccessRules(true,true,typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>().Any(r=>r.IdentityReference.Value=="S-1-5-32-545"&&r.FileSystemRights.HasFlag(FileSystemRights.ReadAndExecute));
             Require(!NamesUsers(new FileInfo(image).GetAccessControl()));

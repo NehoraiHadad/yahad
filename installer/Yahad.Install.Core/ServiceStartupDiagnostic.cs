@@ -25,7 +25,7 @@ internal static class ServiceStartupDiagnostic
             if(cause is ChildExitedException exited)exit??=exited.ExitCode;
             if(cause is Win32Exception win32){native=win32.NativeErrorCode;break;}if(cause.InnerException is not{} inner)break;cause=inner;
         }
-        return JsonSerializer.Serialize(new{Format=1,Role=role.ToString(),SourceCommit=ApplicationRelease.SourceCommit,ProcessId=Environment.ProcessId,
+        return JsonSerializer.Serialize(new{Format=1,Role=role.ToString(),SourceCommit=InfrastructureRelease.SourceCommit,ProcessId=Environment.ProcessId,
             Code=KnownCode(error.Message),HResult=error.HResult,NativeError=native,ExitCode=exit,Sites=Sites(error),
             Steps=steps?.TakeLast(16).Select(step=>new{step.Stage,Ms=step.ElapsedMilliseconds,step.Failure}).ToArray()});
     }

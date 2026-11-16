@@ -102,7 +102,7 @@ internal static class UpdaterClient
         if(service.Command!=InstalledLayout.UpdaterCommand(version))throw new UpdaterRefusal("SERVER_IMAGE");
     }
     internal static Task<UpdaterReply> AskAsync(UpdaterRequest request,CancellationToken cancellation)
-        =>AskAsync(UpdaterProtocol.PipeName,process=>RequireServer(process,Observe(ServiceDefinition.UpdaterName),ApplicationRelease.Version),request,cancellation);
+        =>AskAsync(UpdaterProtocol.PipeName,process=>RequireServer(process,Observe(ServiceDefinition.UpdaterName),InfrastructureRelease.Version),request,cancellation);
     internal static async Task<UpdaterReply> AskAsync(string name,Action<uint> verify,UpdaterRequest request,CancellationToken cancellation)
     {
         // Identification: enough for the service to name this client, never to act as it.
