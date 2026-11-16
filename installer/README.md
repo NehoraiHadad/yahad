@@ -56,7 +56,7 @@ From a **clean committed checkout**, with npm development dependencies installed
 
 ```powershell
 $inputs = @{
-    NodeDirectory = 'C:/build-tools/node-v24.x.x-win-x64'
+    NodeDirectory = 'C:/build-tools/node-v24.22.2-win-x64' # the archive pinned in installer/windows/dependency-pins.json
     DotNet = 'C:/build-tools/dotnet/dotnet.exe'
     Python = 'python'
     NpmCache = 'C:/build-cache/npm'

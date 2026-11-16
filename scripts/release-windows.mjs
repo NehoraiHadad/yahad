@@ -264,10 +264,10 @@ function parse(argv, { flags = [], positional: wanted = 0 } = {}) {
 // Build inputs come from the checkout that runs the command, never from a throwaway clone.
 export function resolveInputs(home, options) {
   const local = (...parts) => join(home, '.local', ...parts);
-  const tools = existsSync(local('tools')) ? readdirSync(local('tools')) : [];
-  const node24 = tools.filter((name) => /^node-v24\..*-win-x64$/.test(name)).sort().at(-1);
-  const nodeDirectory = options['node-dir'] ?? (node24 && local('tools', node24));
-  if (!nodeDirectory) refuse('No Node 24 directory found under .local/tools; pass --node-dir.');
+  // The one Node pin (installer/windows/dependency-pins.json), extracted under .local/tools.
+  const pinned = JSON.parse(readFileSync(join(home, 'installer', 'windows', 'dependency-pins.json'), 'utf8')).node.archive.name.replace(/\.zip$/, '');
+  const nodeDirectory = options['node-dir'] ?? local('tools', pinned);
+  if (!existsSync(join(nodeDirectory, 'node.exe'))) refuse(`No node.exe in ${nodeDirectory}; extract the pinned ${pinned} there or pass --node-dir.`);
   return {
     pwsh: options.pwsh ?? (existsSync(local('tools', 'pwsh', 'pwsh.exe')) ? local('tools', 'pwsh', 'pwsh.exe') : 'pwsh'),
     NodeDirectory: resolve(nodeDirectory),
