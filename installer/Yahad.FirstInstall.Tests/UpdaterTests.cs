@@ -397,7 +397,7 @@ internal static class UpdaterTests
         {
             foreach(var (code,phase,error,succeeded,refused) in new[]{("UPGRADED","healthy",(string?)null,true,false),("ROLLED_BACK_UNHEALTHY","rolled_back","health",false,true),("RELEASE_UNSUPPORTED_FROM","incompatible","incompatible",false,true),
                 ("APP_NEEDS_INFRASTRUCTURE","incompatible","incompatible",false,true),("RELEASE_SIGNATURE_INVALID","failed","signature",false,true),("ROLLBACK_FAILED","available","rollback",false,false),("DISK_SPACE","available","storage",false,false),
-                ("RELEASE_APP_HASH","available","archive",false,false),("APP_PACKAGE_MEMBER_FORBIDDEN","available","archive",false,false),("INFRA_IDENTITY_MISMATCH","available","internal",false,false),("SOMETHING_NEW","available","internal",false,false)})
+                ("RELEASE_APP_HASH","available","archive",false,false),("APP_PACKAGE_FORBIDDEN","available","archive",false,false),("INFRA_IDENTITY_MISMATCH","available","internal",false,false),("SOMETHING_NEW","available","internal",false,false)})
             {
                 using var bed=new Bed();bed.Good();var engine=bed.Engine();var target=(await Bed.CheckAsync(engine)).InstallTarget!;
                 Assert(engine.Handle(new(1,"install",Id(),target.Version,target.Fingerprint)).Ok,"install refused");
@@ -472,8 +472,10 @@ internal static class UpdaterTests
                 Assert(UpdaterRules.CheckError(error)==new CheckFailure(expected,refuse)&&words.Contains(expected),error.Message+" maps to "+UpdaterRules.CheckError(error));
             foreach(var (code,phase,error,refuse) in new (string?,string,string?,bool)[]{("UPGRADED","healthy",null,false),("ROLLED_BACK_UNHEALTHY","rolled_back","health",true),("ROLLBACK_FAILED","failed","rollback",false),("DISK_SPACE","failed","storage",false),
                 ("RELEASE_UNSUPPORTED_FROM","incompatible","incompatible",true),("APP_NEEDS_INFRASTRUCTURE","incompatible","incompatible",true),("RELEASE_APP_SIZE","failed","archive",false),("RELEASE_APP_HASH","failed","archive",false),
-                ("APP_PACKAGE_MEMBER_FORBIDDEN","failed","archive",false),("APP_PACKAGE_TREE_MISMATCH","failed","archive",false),("RELEASE_SIGNATURE_INVALID","failed","signature",true),("RELEASE_KEY_UNTRUSTED","failed","signature",true),
-                ("RELEASE_MANIFEST_INVALID","failed","signature",true),("INFRA_IDENTITY_MISMATCH","failed","internal",false),("UPGRADE_COMMIT_INCOMPLETE","failed","internal",false),("APP_PACKAGE","failed","internal",false),(null,"failed","internal",false)})
+                ("APP_PACKAGE_FORBIDDEN","failed","archive",false),("APP_PACKAGE_TREE_MISMATCH","failed","archive",false),("RELEASE_SIGNATURE_INVALID","failed","signature",true),("RELEASE_KEY_UNTRUSTED","failed","signature",true),
+                ("RELEASE_MANIFEST_INVALID","failed","signature",true),("RELEASE_NOT_NEWER","failed","signature",true),("RELEASE_SETUP_MISMATCH","failed","signature",true),
+                ("INFRA_IDENTITY_MISMATCH","failed","internal",false),("APP_IDENTITY_MISMATCH","failed","internal",false),("RELEASE_TRACK_MISMATCH","failed","internal",false),("UPGRADE_PREPARE_FAILED","failed","internal",false),
+                ("UPGRADE_COMMIT_INCOMPLETE","failed","internal",false),("UPGRADE_LOCKED","failed","internal",false),("UPGRADE_INCOMPLETE","failed","internal",false),("APP_PACKAGE","failed","internal",false),(null,"failed","internal",false)})
             {
                 var ending=UpdaterRules.Ending(code);
                 Assert(ending==new UpgradeEnding(code=="UPGRADED",phase,error,refuse)&&(error is null||words.Contains(error)),code+" ends "+ending);
@@ -600,7 +602,10 @@ internal static class UpdaterTests
                 Deny("UPDATER_LAUNCH_PATH",()=>UpdateLauncher.CommandLine(setup with{Image=bad},"C:\\r"));Deny("UPDATER_LAUNCH_PATH",()=>UpdateLauncher.CommandLine(setup with{Directory=bad},"C:\\r"));
                 Deny("UPDATER_LAUNCH_PATH",()=>UpdateLauncher.CommandLine(setup,bad));
             }
-            Assert(QuietSetupAccepts(UpdateLauncher.CommandLine(setup with{Image="s",Directory="C:\\d"},"C:\\r.json")),"Setup refuses the Updater's command line");
+            var upgrade=SetupParses(UpdateLauncher.CommandLine(setup with{Image="s",Directory="C:\\d"},"C:\\r.json"));
+            Assert(upgrade?.UpgradeDirectory=="C:\\d"&&upgrade.AppStage is null&&upgrade.ResultPath=="C:\\r.json","Setup refuses the Updater's Setup-track command line");
+            var apply=SetupParses(UpdateLauncher.CommandLine(app,@"C:\P D\r.json"));
+            Assert(apply?.AppStage==@"C:\P D\9.9.9"&&apply.UpgradeDirectory is null&&!apply.Repair&&!apply.Uninstall&&apply.ResultPath==@"C:\P D\r.json","Setup refuses the Updater's app-track command line");
             return Task.CompletedTask;
         });
         await check("repair task: SYSTEM runs this infrastructure's payload-free engine at boot and daily, and the Task Scheduler accepts the definition",()=>
@@ -638,10 +643,11 @@ internal static class UpdaterTests
             return Task.CompletedTask;
         });
     }
-    // The Updater and Setup agree on the shape of --quiet-upgrade.
-    private static bool QuietSetupAccepts(string line)
+    // The Updater and Setup agree on the shape of --quiet-upgrade and --apply-app: the
+    // Updater's command line, split at its quotes, as Setup parses it.
+    private static QuietSetup.Request? SetupParses(string line)
     {
         var tokens=System.Text.RegularExpressions.Regex.Matches(line,"\"([^\"]*)\"|(\\S+)").Select(m=>m.Groups[1].Success?m.Groups[1].Value:m.Groups[2].Value).Skip(1).ToArray();
-        return QuietSetup.Parse(tokens)?.UpgradeDirectory=="C:\\d";
+        return QuietSetup.Parse(tokens);
     }
 }
