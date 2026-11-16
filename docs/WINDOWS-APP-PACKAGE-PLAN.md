@@ -421,8 +421,8 @@ that engine can resume or undo every phase.
 | 1 | `admitting` | Require admin, the install lock, record phase `committed`, and no upgrade state (`UpgradeHost.cs:112-115`). Verify the signature over raw bytes, then the strict parse. Read the **exact** file `yahad-windows-release-<v>.json`, never a glob (`UpgradeHost.cs:141`). Check the archive size and hash. Require app version > active, `requiresContract` in the installed contract range (section 6), and that `infrastructure.version` equals the installed one (otherwise this is a Setup-track release). Require that the **recorded schema** (4.5) is the target or is in `databaseMigrationsFrom`. This needs no running Runtime, so an app that fixes a startup failure is still admitted. Check free disk for the tree and a database copy. | Refuse. Nothing has changed. |
 | 2 | `preparing` | Extract to `apps\<v>.partial` with `AppPackage` and no-replace commits. Check `app-tree.json` against `treeSha256`. Rename to `apps\<v>`. | Discard: remove the partial and the target. |
 | 3 | `fencing` | Clear Runtime failure actions (`ClearFailureActions`, as `UpgradeHost.cs:169`), so the SCM cannot restart the old app behind the engine. | Discard: restore failure actions. |
-| 4 | `stopping` | Stop the LAN proxy if present (`StopForUpgradeAsync`, as `:170`), then the Runtime. The Updater keeps running: it holds no app file, and the engine is detached. | Discard: start the Runtime and the proxy, then restore failure actions. |
-| 5 | `stopped` | Take the **data lease** (`WindowsFileBoundary.AcquireDataLease`). It proves no process holds the database, and the engine holds it until step 8. The backup runs under this held lease. `DatabaseBackup.Create/Restore` (`DatabaseBackup.cs:23,38`) gain an overload that takes it instead of acquiring their own. If the schema changes, take the backup. | Discard (pointer unchanged): release the lease, start the Runtime and the proxy, then restore failure actions. |
+| 4 | `stopping` | Stop the LAN proxy if present (`StopForUpgradeAsync`, as `:170`), then the Runtime. The Updater keeps running: it holds no app file, and the engine is detached. | Discard: restore failure actions and remove the target, then start the Runtime and the proxy. |
+| 5 | `stopped` | Take the **data lease** (`WindowsFileBoundary.AcquireDataLease`). It proves no process holds the database, and the engine holds it until step 8. The backup runs under this held lease. `DatabaseBackup.Create/Restore` (`DatabaseBackup.cs:23,38`) gain an overload that takes it instead of acquiring their own. If the schema changes, take the backup. | Discard (pointer unchanged): release the lease, restore failure actions and remove the target, then start the Runtime and the proxy. |
 | 6 | `switching` | Atomically replace `active.json` with the to-pair. Regenerate the LAN help page from the **new** app (6a). | Roll back. |
 | 7 | `started` | Release the lease (the host takes it at start: `InstalledLaunch.cs:60`). Start the Runtime. Gate on health: version = new app, schema = target, 3 consecutive passes within 300 s (`UpgradeHost.cs:53-64`). | Roll back. |
 | 8 | `healthy` | Start the proxy (as `:178`), then restore failure actions (`EnableStartup`). | Roll back. |
@@ -438,7 +438,11 @@ failure reports `ROLLBACK_FAILED`, and repair retries, as today
 
 Every exit path, whether discard, rollback or commit, ends with failure actions
 restored and the lease released. Repair replays the same rule from the persisted
-phase.
+phase. A discard resolves the attempt (failure actions, target tree, backup,
+upgrade state) before it starts what it stopped: the old app may be the one that
+cannot start, which an app update is allowed to fix (step 1). Its start failing
+then reports `ROLLBACK_FAILED` with no upgrade state left, so repair's health pass
+retries the start and the next apply is admitted.
 
 **6a. LAN served files.** Today `RefreshServedFiles` writes both the help page
 and the Caddyfile (`NativeLanInstall.cs:230-236`), and it reads the template
