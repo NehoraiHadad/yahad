@@ -144,14 +144,15 @@ try {
         }
         # The payload-free engine (plan 4.4), installed as infra\<version>\setup\.
         RunStep 'engine-publish' $dotnetExe (@('publish',$setupProject) + $common + $singleFile + @('-o',(Join-Path $published 'engine'))) | Out-Null
-        RunStep 'infra-build' $pythonExe @('-m','installer.windows.infra_package','build','--cache',$cacheRoot,'--source',$infraSourceRoot,'--release-key-id',$keyArgument,
+        $infra = RunStep 'infra-build' $pythonExe @('-m','installer.windows.infra_package','build','--cache',$cacheRoot,'--source',$infraSourceRoot,'--release-key-id',$keyArgument,
             '--host',(Join-Path $published 'Yahad.ServiceHost'),'--updater',(Join-Path $published 'Yahad.Updater'),'--platform',(Join-Path $published 'Yahad.Platform'),
-            '--engine',(Join-Path $published 'engine/Yahad.Setup.exe'),'--node',$nodeRoot,'--dotnet',$dotnetRoot,'--vendors',$vendorRoot) | Out-Null
-    }
+            '--engine',(Join-Path $published 'engine/Yahad.Setup.exe'),'--node',$nodeRoot,'--dotnet',$dotnetRoot,'--vendors',$vendorRoot) | ConvertFrom-Json
+    } else { $infra = $plan }
     $entryPath = Join-Path $cacheRoot $plan.infrastructureVersion
-    # Reused or new, the entry is audited by bytes before anything embeds it.
-    $infra = PythonLine @('-m','installer.windows.infra_package','verify','--entry',$entryPath) | ConvertFrom-Json
-    if ($infra.sourceCommit -ne $infraHead -or $infra.inputDigest -ne $infraDigest -or $infra.releaseKeyId -ne $releaseKeyId) { throw 'Cached infrastructure identity mismatch' }
+    # Reused or new, the entry's identity is the one its byte audit reported: plan's
+    # for a reused entry, build's for a new one. system-package audits it again by
+    # bytes right before it embeds it, and proves every embedded member while writing.
+    if ($infra.infrastructureVersion -ne $plan.infrastructureVersion -or $infra.sourceCommit -ne $infraHead -or $infra.inputDigest -ne $infraDigest -or $infra.releaseKeyId -ne $releaseKeyId) { throw 'Cached infrastructure identity mismatch' }
     # The release's one lockfile-exact offline restore, web build and server bundle,
     # in a private build root: never the checkout's node_modules or a previous dist/.
     $stage = Join-Path $output 'app-stage'
