@@ -55,47 +55,62 @@ internal static class UpdaterTests
         private readonly ECDsa signing=ECDsa.Create(ECCurve.NamedCurves.nistP256);
         internal readonly Feed Network=new();internal readonly GitHubReleaseSource Source;
         internal readonly UpdaterPaths Paths;
-        internal readonly List<(StagedRelease Release,string Result)> Launched=[];
+        internal readonly List<(UpdateLaunch Launch,string Result)> Launched=[];
         internal DateTimeOffset Now=new(DateTime.Today.AddHours(12));
         internal Exception? LaunchFailure;
+        // The live active.json every decision reads: change it and the next decision sees it.
+        internal ActivePointer Pointer=Installed("1.0.0");
+        internal byte[] SetupBytes=[1,2,3,4],AppBytes=[5,6,7,8,9];
         internal byte[] Spki=>signing.ExportSubjectPublicKeyInfo();
         internal Bed()
         {
             var root=Path.Combine(Path.GetTempPath(),"yahad-updater-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
             Paths=new(root);Source=new(Network);
         }
-        internal UpdaterEngine Engine(string current="1.0.0",bool key=true)
+        internal static readonly string InfraTree=new('c',64);
+        internal static ActivePointer Installed(string app,string infra="1.0.0",string? tree=null)=>new(1,new(infra,1,1,tree??InfraTree),new(app,1,new string('a',64)));
+        // A restarted Updater; given an app version, the pair it finds installed.
+        internal UpdaterEngine Engine(string? current=null,bool key=true)
         {
-            var engine=new UpdaterEngine(Paths,current,()=>key?Spki:null,key?Spki:null,Source,(release,result)=>{if(LaunchFailure is not null)throw LaunchFailure;Launched.Add((release,result));},()=>Now);
+            if(current is not null)Pointer=Installed(current,Pointer.Infrastructure.Version,Pointer.Infrastructure.TreeSha256);
+            var engine=new UpdaterEngine(Paths,()=>Pointer,()=>key?Spki:null,key?Spki:null,Source,(launch,result)=>{if(LaunchFailure is not null)throw LaunchFailure;Launched.Add((launch,result));},()=>Now);
             engine.Start();return engine;
         }
-        internal byte[] Sign(byte[] manifest)=>signing.SignData((byte[])[..Encoding.ASCII.GetBytes(ReleaseSignature.Prefix),..manifest],HashAlgorithmName.SHA256,DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
-        internal JsonObject Fields(string version,byte[] setup,string minimum="0.0.0")=>new()
+        internal byte[] Sign(byte[] manifest,string prefix=ReleaseSignature.Prefix)=>signing.SignData((byte[])[..Encoding.ASCII.GetBytes(prefix),..manifest],HashAlgorithmName.SHA256,DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
+        // A format-2 release naming both payloads. The Setup track is a newer
+        // infrastructure; the app track the installed one, tree and range included.
+        internal JsonObject Fields(string version,ReleaseTrack track,string minimum="0.0.0",int requires=1,string? tree=null)=>new()
         {
-            ["format"]=1,["product"]="yahad-windows",["version"]=version,["sourceCommit"]=new string('a',40),
-            ["setup"]=new JsonObject{["name"]="Yahad.Setup-"+version+".exe",["sha256"]=Hash(setup),["bytes"]=setup.Length},
-            ["databaseSchema"]=7,["minimumFromVersion"]=minimum,["keyId"]=TrustedReleaseKey.Id(Spki),["createdUnix"]=1700000000
+            ["format"]=2,["product"]="yahad-windows-release",["version"]=version,["sourceCommit"]=new string('a',40),["keyId"]=TrustedReleaseKey.Id(Spki),["createdUnix"]=1700000000,
+            ["infrastructure"]=new JsonObject{["version"]=track==ReleaseTrack.Setup?"2.0.0":Pointer.Infrastructure.Version,["contractMin"]=1,["contractMax"]=1,["sourceCommit"]=new string('b',40),["treeSha256"]=tree??Pointer.Infrastructure.TreeSha256,
+                ["setup"]=new JsonObject{["name"]=ReleaseManifest.SetupName(version),["sha256"]=Hash(SetupBytes),["bytes"]=SetupBytes.Length}},
+            ["app"]=new JsonObject{["archive"]=new JsonObject{["name"]=ReleaseManifest.AppArchiveName(version),["sha256"]=Hash(AppBytes),["bytes"]=AppBytes.Length},
+                ["treeSha256"]=new string('d',64),["requiresContract"]=requires,["databaseSchema"]=7,["databaseMigrationsFrom"]=new JsonArray(6)},
+            ["minimumFrom"]=new JsonObject{["app"]=minimum,["infrastructure"]="0.0.0"}
         };
         internal static byte[] Encode(JsonObject value)=>Encoding.UTF8.GetBytes(value.ToJsonString());
-        internal static string ManifestUrl(string version)=>Repo+"v"+version+"/yahad-windows-"+version+".json";
-        internal static string SetupUrl(string version)=>Repo+"v"+version+"/Yahad.Setup-"+version+".exe";
-        // Publishes what GitHub's list would say and what its assets would answer.
-        internal void List(string tag,bool draft=false,bool prerelease=false,long? manifestSize=null,long? signatureSize=null,long? setupSize=null,byte[]? manifest=null,byte[]? signature=null,byte[]? setup=null,string? digest=null)
+        internal static string ManifestUrl(string version)=>Repo+"v"+version+"/"+ReleaseManifest.ManifestName(version);
+        internal static string SetupUrl(string version)=>Repo+"v"+version+"/"+ReleaseManifest.SetupName(version);
+        internal static string AppUrl(string version)=>Repo+"v"+version+"/"+ReleaseManifest.AppArchiveName(version);
+        internal static string PayloadUrl(string version,ReleaseTrack track)=>track==ReleaseTrack.Setup?SetupUrl(version):AppUrl(version);
+        internal static string PayloadName(string version,ReleaseTrack track)=>track==ReleaseTrack.Setup?ReleaseManifest.SetupName(version):ReleaseManifest.AppArchiveName(version);
+        // Publishes what GitHub's list would say and what its assets would answer: the
+        // release's manifest, signature and both payloads, as a real release carries them.
+        internal void List(string tag,bool draft=false,bool prerelease=false,long? manifestSize=null,long? signatureSize=null,long? setupSize=null,long? appSize=null,byte[]? manifest=null,byte[]? signature=null,string? setupDigest=null,string? appDigest=null)
         {
             var version=tag.TrimStart('v');var assets=new JsonArray();
             void Asset(string name,long size,string url,string? sum=null)=>assets.Add(new JsonObject{["name"]=name,["size"]=size,["browser_download_url"]=url,["digest"]=sum,["uploader"]=new JsonObject{["login"]="x"}});
-            if(manifest is not null&&signature is not null&&setup is not null)
+            if(manifest is not null&&signature is not null)
             {
-                var name="yahad-windows-"+version+".json";
-                Asset(name,manifestSize??manifest.Length,ManifestUrl(version),null);Asset(name+".sig",signatureSize??signature.Length,ManifestUrl(version)+".sig");
-                Asset("Yahad.Setup-"+version+".exe",setupSize??setup.Length,SetupUrl(version),digest);
-                Network.Bytes(ManifestUrl(version),manifest);Network.Bytes(ManifestUrl(version)+".sig",signature);Network.Bytes(SetupUrl(version),setup);
+                Asset(ReleaseManifest.ManifestName(version),manifestSize??manifest.Length,ManifestUrl(version));Asset(ReleaseManifest.SignatureName(version),signatureSize??signature.Length,ManifestUrl(version)+".sig");
+                Asset(ReleaseManifest.SetupName(version),setupSize??SetupBytes.Length,SetupUrl(version),setupDigest);Asset(ReleaseManifest.AppArchiveName(version),appSize??AppBytes.Length,AppUrl(version),appDigest);
+                Network.Bytes(ManifestUrl(version),manifest);Network.Bytes(ManifestUrl(version)+".sig",signature);Network.Bytes(SetupUrl(version),SetupBytes);Network.Bytes(AppUrl(version),AppBytes);
             }
             Network.Bytes(GitHubReleaseSource.Latest,Encode(new JsonObject{["tag_name"]=tag,["draft"]=draft,["prerelease"]=prerelease,["assets"]=assets,["body"]="notes"}));
         }
-        internal void Good(string version="9.9.9",byte[]? setup=null)
+        internal byte[] Good(string version="9.9.9",ReleaseTrack track=ReleaseTrack.App)
         {
-            setup??=[1,2,3,4];var manifest=Encode(Fields(version,setup));List("v"+version,manifest:manifest,signature:Sign(manifest),setup:setup);
+            var manifest=Encode(Fields(version,track));List("v"+version,manifest:manifest,signature:Sign(manifest));return manifest;
         }
         internal static async Task<UpdaterStatus> CheckAsync(UpdaterEngine engine)
         {
@@ -104,7 +119,9 @@ internal static class UpdaterTests
         }
         internal static UpdaterStatus Status(UpdaterEngine engine)=>engine.Handle(new(1,"status")).Status!;
         internal bool Asked(string url){lock(Network.Requests)return Network.Requests.Contains(url);}
-        internal string[] Staged(string version="9.9.9")=>Directory.Exists(Paths.Stage(version))?Directory.GetFiles(Paths.Stage(version)).Select(name=>Path.GetFileName(name)!).ToArray():[];
+        internal bool AskedPayload(string version="9.9.9")=>Asked(SetupUrl(version))||Asked(AppUrl(version));
+        internal string[] Staged(string version="9.9.9")=>Directory.Exists(Paths.Stage(version))?Directory.GetFileSystemEntries(Paths.Stage(version)).Select(name=>Path.GetFileName(name)!).Order(StringComparer.Ordinal).ToArray():[];
+        internal static string[] Expected(string version,ReleaseTrack track)=>new[]{ReleaseManifest.ManifestName(version),ReleaseManifest.SignatureName(version),PayloadName(version,track)}.Order(StringComparer.Ordinal).ToArray();
         public void Dispose(){Source.Dispose();signing.Dispose();Directory.Delete(Paths.Root,true);}
     }
     private sealed class FakeScm:IScmApi
@@ -183,10 +200,10 @@ internal static class UpdaterTests
             Assert(bed.Network.Requests.Count==0&&bed.Launched.Count==0&&!Directory.Exists(bed.Paths.Staging),"acted without a key");
             // A staged folder is not offered either, and an installed key the image does
             // not carry counts as no key at all.
-            using var other=new Bed();var foreign=new UpdaterEngine(bed.Paths,"1.0.0",()=>bed.Spki,other.Spki,bed.Source,(_,_)=>throw new Exception("LAUNCHED"),()=>bed.Now);foreign.Start();
+            using var other=new Bed();var foreign=new UpdaterEngine(bed.Paths,()=>bed.Pointer,()=>bed.Spki,other.Spki,bed.Source,(_,_)=>throw new Exception("LAUNCHED"),()=>bed.Now);foreign.Start();
             Assert(!Bed.Status(foreign).Enabled,"a mismatched key enabled updates");
         });
-        await check("updater: a release that is not newer, not final or not for Windows fetches nothing",async()=>
+        await check("updater: a release that is not newer, not final or without the format-2 manifest fetches nothing",async()=>
         {
             foreach(var (tag,draft,prerelease) in new[]{("v1.0.0",false,false),("v0.5.3",false,false),("v9.9.9",true,false),("v9.9.9",false,true),("nightly",false,false),("v9.9.9",false,false)})
             {
@@ -194,89 +211,200 @@ internal static class UpdaterTests
                 Assert(status.Error is null&&status.Phase=="idle"&&status.LatestVersion is null&&status.LastRequest is {State:"succeeded"}&&status.CheckedAt is not null,tag+" status");
                 Assert(bed.Network.Requests is [GitHubReleaseSource.Latest],tag+" fetched more than the list");
             }
+            // Today's format-1 names, or only half of the format-2 pair, are not a release for this machine.
+            foreach(var names in new[]{new[]{"yahad-windows-9.9.9.json","yahad-windows-9.9.9.json.sig","Yahad.Setup-9.9.9.exe"},[ReleaseManifest.ManifestName("9.9.9"),ReleaseManifest.AppArchiveName("9.9.9")],[ReleaseManifest.SignatureName("9.9.9"),ReleaseManifest.SetupName("9.9.9")]})
+            {
+                using var bed=new Bed();var assets=new JsonArray();foreach(var name in names)assets.Add(new JsonObject{["name"]=name,["size"]=64,["browser_download_url"]=Repo+"v9.9.9/"+name});
+                bed.Network.Bytes(GitHubReleaseSource.Latest,Bed.Encode(new JsonObject{["tag_name"]="v9.9.9",["draft"]=false,["prerelease"]=false,["assets"]=assets}));
+                var status=await Bed.CheckAsync(bed.Engine());
+                Assert(status is {Error:null,Phase:"idle",LatestVersion:null}&&bed.Network.Requests is [GitHubReleaseSource.Latest],names[0]+" was read as a release");
+            }
         });
-        await check("updater: the manifest's signature is checked over raw bytes before it is parsed, and no Setup is fetched before that",async()=>
+        await check("updater: the manifest's signature is checked over raw bytes before it is parsed, and no payload is fetched before that",async()=>
         {
-            var setup=new byte[]{1,2,3};
-            async Task Refused(Action<Bed> arrange,string error)
+            // Refused for good: a later check reads only the list. Anything else is asked again.
+            async Task Refused(Action<Bed> arrange,string error,bool refused=true)
             {
                 using var bed=new Bed();arrange(bed);var engine=bed.Engine();var status=await Bed.CheckAsync(engine);
                 Assert(status.Error==error&&status.Phase==(error=="incompatible"?"incompatible":"failed")&&status.InstallTarget is null&&status.LastRequest is {State:"failed"},"check ended "+status.Error+"/"+status.Phase);
-                Assert(!bed.Asked(Bed.SetupUrl("9.9.9"))&&!Directory.Exists(bed.Paths.Staging),"the Setup was fetched before verification");
+                Assert(!bed.AskedPayload()&&!Directory.Exists(bed.Paths.Staging),"a payload was fetched before verification");
+                bed.Network.Requests.Clear();status=await Bed.CheckAsync(engine);
+                Assert((bed.Network.Requests is [GitHubReleaseSource.Latest])==refused&&status.InstallTarget is null,error+(refused?" was asked again":" was refused for good"));
             }
+            byte[] Signed(Bed bed,JsonObject fields,out byte[] signature){var manifest=Bed.Encode(fields);signature=bed.Sign(manifest);return manifest;}
             // Signed by someone else, and not even JSON: refused as a signature, unparsed.
-            await Refused(bed=>{using var other=new Bed();var manifest=Bed.Encode(bed.Fields("9.9.9",setup));bed.List("v9.9.9",manifest:manifest,signature:other.Sign(manifest),setup:setup);},"signature");
-            await Refused(bed=>{using var other=new Bed();var manifest=Encoding.UTF8.GetBytes("{{{ not json");bed.List("v9.9.9",manifest:manifest,signature:other.Sign(manifest),setup:setup);},"signature");
-            await Refused(bed=>{var manifest=Bed.Encode(bed.Fields("9.9.9",setup));var signature=bed.Sign(manifest);manifest[10]^=1;bed.List("v9.9.9",manifest:manifest,signature:signature,setup:setup);},"signature");
+            await Refused(bed=>{using var other=new Bed();var manifest=Bed.Encode(bed.Fields("9.9.9",ReleaseTrack.App));bed.List("v9.9.9",manifest:manifest,signature:other.Sign(manifest));},"signature");
+            await Refused(bed=>{using var other=new Bed();var manifest=Encoding.UTF8.GetBytes("{{{ not json");bed.List("v9.9.9",manifest:manifest,signature:other.Sign(manifest));},"signature");
+            await Refused(bed=>{var manifest=Signed(bed,bed.Fields("9.9.9",ReleaseTrack.App),out var signature);manifest[10]^=1;bed.List("v9.9.9",manifest:manifest,signature:signature);},"signature");
+            // The v1 message over the same bytes is not a v2 signature.
+            await Refused(bed=>{var manifest=Bed.Encode(bed.Fields("9.9.9",ReleaseTrack.App));bed.List("v9.9.9",manifest:manifest,signature:bed.Sign(manifest,"yahad-release-v1\n"));},"signature");
             // Rightly signed, but not an acceptable release for this tag or this machine.
-            await Refused(bed=>{var manifest=Encoding.UTF8.GetBytes("{{{ not json");bed.List("v9.9.9",manifest:manifest,signature:bed.Sign(manifest),setup:setup);},"signature");
-            await Refused(bed=>{var manifest=Bed.Encode(bed.Fields("9.9.8",setup));bed.Network.Bytes(Bed.ManifestUrl("9.9.9"),manifest);bed.List("v9.9.9",manifest:manifest,signature:bed.Sign(manifest),setup:setup);},"signature");
-            await Refused(bed=>{var manifest=Bed.Encode(bed.Fields("9.9.9",setup,minimum:"5.0.0"));bed.List("v9.9.9",manifest:manifest,signature:bed.Sign(manifest),setup:setup);},"incompatible");
-            await Refused(bed=>{var manifest=Bed.Encode(bed.Fields("9.9.9",setup));bed.List("v9.9.9",manifest:manifest,signature:bed.Sign(manifest),setup:setup,setupSize:setup.Length+1);},"archive");
-            await Refused(bed=>{var manifest=Bed.Encode(bed.Fields("9.9.9",setup));bed.List("v9.9.9",manifest:manifest,signature:bed.Sign(manifest),setup:setup,digest:"sha256:"+new string('0',64));},"archive");
+            await Refused(bed=>{var manifest=Encoding.UTF8.GetBytes("{{{ not json");bed.List("v9.9.9",manifest:manifest,signature:bed.Sign(manifest));},"signature");
+            await Refused(bed=>{var fields=bed.Fields("9.9.9",ReleaseTrack.App);fields["format"]=1;var manifest=Signed(bed,fields,out var signature);bed.List("v9.9.9",manifest:manifest,signature:signature);},"signature");
+            await Refused(bed=>{var manifest=Signed(bed,bed.Fields("9.9.8",ReleaseTrack.App),out var signature);bed.List("v9.9.9",manifest:manifest,signature:signature);},"signature");
+            await Refused(bed=>{var manifest=Signed(bed,bed.Fields("9.9.9",ReleaseTrack.App,minimum:"5.0.0"),out var signature);bed.List("v9.9.9",manifest:manifest,signature:signature);},"incompatible");
+            await Refused(bed=>{var manifest=Signed(bed,bed.Fields("9.9.9",ReleaseTrack.Setup,minimum:"5.0.0"),out var signature);bed.List("v9.9.9",manifest:manifest,signature:signature);},"incompatible");
+            // An app its own infrastructure cannot run is a defective release, on either track.
+            foreach(var track in new[]{ReleaseTrack.App,ReleaseTrack.Setup})
+                await Refused(bed=>{var manifest=Signed(bed,bed.Fields("9.9.9",track,requires:2),out var signature);bed.List("v9.9.9",manifest:manifest,signature:signature);},"incompatible");
+            // Same infrastructure version, other bytes: internal, and asked again.
+            await Refused(bed=>{var manifest=Signed(bed,bed.Fields("9.9.9",ReleaseTrack.App,tree:new string('e',64)),out var signature);bed.List("v9.9.9",manifest:manifest,signature:signature);},"internal",refused:false);
             // Declared sizes that cannot be a release are not even fetched.
-            using var big=new Bed();var manifest=Bed.Encode(big.Fields("9.9.9",setup));big.List("v9.9.9",manifestSize:ReleaseManifest.MaximumBytes+1,manifest:manifest,signature:big.Sign(manifest),setup:setup);
+            using var big=new Bed();var manifest=big.Good();big.List("v9.9.9",manifestSize:ReleaseManifest.MaximumBytes+1,manifest:manifest,signature:big.Sign(manifest));
             Assert((await Bed.CheckAsync(big.Engine())).Error=="signature"&&big.Network.Requests is [GitHubReleaseSource.Latest],"an oversized manifest was fetched");
-            using var longer=new Bed();manifest=Bed.Encode(longer.Fields("9.9.9",setup));longer.List("v9.9.9",signatureSize:65,manifest:manifest,signature:longer.Sign(manifest),setup:setup);
+            using var longer=new Bed();manifest=longer.Good();longer.List("v9.9.9",signatureSize:65,manifest:manifest,signature:longer.Sign(manifest));
             Assert((await Bed.CheckAsync(longer.Engine())).Error=="signature"&&longer.Network.Requests is [GitHubReleaseSource.Latest],"an oversized signature was fetched");
         });
-        await check("updater: a download that differs from the signed size or hash never appears under the Setup's name",async()=>
+        await check("updater: each track fetches only its own payload, against GitHub's size and digest, and retries a mismatch",async()=>
         {
-            var signed=new byte[]{1,2,3,4};
-            foreach(var (served,hidden) in new (byte[],bool)[]{(new byte[]{1,2,3},false),(new byte[]{1,2,3},true),(new byte[]{1,2,3,4,5},false),(new byte[]{1,2,3,4,5},true),(new byte[]{9,9,9,9},false)})
+            foreach(var track in new[]{ReleaseTrack.App,ReleaseTrack.Setup})
             {
-                using var bed=new Bed();var manifest=Bed.Encode(bed.Fields("9.9.9",signed));bed.List("v9.9.9",manifest:manifest,signature:bed.Sign(manifest),setup:signed);
-                bed.Network.Routes[Bed.SetupUrl("9.9.9")]=()=>new(HttpStatusCode.OK){Content=hidden?new Unsized(served):new ByteArrayContent(served)};
-                var status=await Bed.CheckAsync(bed.Engine());
-                Assert(status.Error=="archive"&&status.InstallTarget is null&&bed.Staged().Length==0,"served "+served.Length+" bytes, ended "+status.Error);
+                var setup=track==ReleaseTrack.Setup;
+                foreach(var (size,digest) in new[]{(1L,(string?)null),(0L,"sha256:"+new string('0',64))})
+                {
+                    using var bed=new Bed();var manifest=Bed.Encode(bed.Fields("9.9.9",track));var payload=setup?bed.SetupBytes:bed.AppBytes;
+                    bed.List("v9.9.9",manifest:manifest,signature:bed.Sign(manifest),setupSize:setup?payload.Length+size:null,appSize:setup?null:payload.Length+size,setupDigest:setup?digest:null,appDigest:setup?null:digest);
+                    var engine=bed.Engine();var status=await Bed.CheckAsync(engine);
+                    Assert(status is {Error:"archive",Phase:"failed",InstallTarget:null}&&!bed.AskedPayload()&&!Directory.Exists(bed.Paths.Staging),track+" listed "+size+"/"+digest+" ended "+status.Error);
+                    bed.Network.Requests.Clear();await Bed.CheckAsync(engine);Assert(bed.Asked(Bed.ManifestUrl("9.9.9")),track+" an archive mismatch refused the version");
+                }
+                // The other track's payload, listed wrong, is never looked at.
+                using var other=new Bed();var good=Bed.Encode(other.Fields("9.9.9",track));
+                other.List("v9.9.9",manifest:good,signature:other.Sign(good),setupSize:setup?null:1,appSize:setup?1:null,setupDigest:setup?"sha256:"+Hash(other.SetupBytes):"sha256:"+new string('0',64),appDigest:setup?"sha256:"+new string('0',64):"sha256:"+Hash(other.AppBytes));
+                var offered=await Bed.CheckAsync(other.Engine());
+                Assert(offered.Phase=="available"&&other.Asked(Bed.PayloadUrl("9.9.9",track))&&!other.Asked(Bed.PayloadUrl("9.9.9",setup?ReleaseTrack.App:ReleaseTrack.Setup)),track+" fetched the other payload");
             }
         });
-        await check("updater: a checked release is offered by its manifest's fingerprint and installs only as that target",async()=>
+        await check("updater: a download that differs from the signed size or hash never appears under the payload's name",async()=>
         {
-            using var bed=new Bed();var setup=new byte[]{1,2,3,4};var manifest=Bed.Encode(bed.Fields("9.9.9",setup));var fingerprint=Hash(manifest);
-            bed.List("v9.9.9",manifest:manifest,signature:bed.Sign(manifest),setup:setup,digest:"sha256:"+Hash(setup));var engine=bed.Engine();
-            var status=await Bed.CheckAsync(engine);
-            Assert(status is {Phase:"available",LatestVersion:"9.9.9",Error:null}&&status.InstallTarget==new UpdaterTarget("9.9.9",fingerprint),"offered "+status.Phase);
-            Assert(bed.Staged().OrderBy(n=>n,StringComparer.Ordinal).SequenceEqual(["Yahad.Setup-9.9.9.exe","yahad-windows-9.9.9.json","yahad-windows-9.9.9.json.sig"]),"stage contents");
-            // Refused without running anything.
-            foreach(var (version,print) in new[]{("9.9.9",new string('0',64)),("9.9.8",fingerprint)})Assert(engine.Handle(new(1,"install",Id(),version,print)) is {Ok:false,Code:"STALE_TARGET"},"another target accepted");
-            foreach(var bad in new UpdaterRequest[]{new(2,"status"),new(1,"nope",Id()),new(1,"check"),new(1,"check","x"),new(1,"install",Id(),"9.9.9"),new(1,"install",Id(),"latest",fingerprint),new(1,"install",null,"9.9.9",fingerprint),new(1,"set-mode",Id(),Mode:"always"),new(1,"defer",Id())})
-                Assert(engine.Handle(bad) is {Ok:false,Code:"BAD_REQUEST"},"bad request "+bad.Op);
-            Assert(bed.Launched.Count==0,"launched for a refused request");
-            var id=Id();File.WriteAllText(bed.Paths.LastUpgrade,"{}");
-            Assert(engine.Handle(new(1,"install",id,"9.9.9",fingerprint)).Ok,"install refused");
-            Assert(bed.Launched is [var launched]&&launched.Release.Setup==Path.Combine(bed.Paths.Stage("9.9.9"),"Yahad.Setup-9.9.9.exe")&&launched.Result==bed.Paths.LastUpgrade,"launch");
-            Assert(!File.Exists(bed.Paths.LastUpgrade),"an old result would be read as this install's");
-            status=Bed.Status(engine);Assert(status is {Phase:"activating",LastRequest:{Action:"install",State:"running"}}&&status.LastRequest.Id==id,"activating");
-            foreach(var again in new UpdaterRequest[]{new(1,"install",Id(),"9.9.9",fingerprint),new(1,"check",Id())})Assert(engine.Handle(again) is {Ok:false,Code:"BUSY"},"a second "+again.Op+" while activating");
-            Assert(bed.Launched.Count==1,"launched twice");
+            foreach(var track in new[]{ReleaseTrack.App,ReleaseTrack.Setup})
+                foreach(var (served,hidden) in new (byte[],bool)[]{(new byte[]{1,2,3},false),(new byte[]{1,2,3},true),(new byte[]{1,2,3,4,5,6},false),(new byte[]{1,2,3,4,5,6},true),(new byte[]{9,9,9,9,9},false)})
+                {
+                    using var bed=new Bed();bed.SetupBytes=[1,2,3,4,5];var manifest=Bed.Encode(bed.Fields("9.9.9",track));bed.List("v9.9.9",manifest:manifest,signature:bed.Sign(manifest));
+                    bed.Network.Routes[Bed.PayloadUrl("9.9.9",track)]=()=>new(HttpStatusCode.OK){Content=hidden?new Unsized(served):new ByteArrayContent(served)};
+                    var status=await Bed.CheckAsync(bed.Engine());
+                    Assert(status.Error=="archive"&&status.InstallTarget is null&&bed.Staged().Length==0,track+" served "+served.Length+" bytes, ended "+status.Error);
+                }
         });
-        await check("updater: a staged release is believed only from its bytes each time",async()=>
+        await check("updater: a checked release is offered by its track's fingerprint, staged under exact names, and installs only as that target",async()=>
         {
+            foreach(var track in new[]{ReleaseTrack.App,ReleaseTrack.Setup})
+            {
+                using var bed=new Bed();var manifest=Bed.Encode(bed.Fields("9.9.9",track));var fingerprint=Hash([..Encoding.ASCII.GetBytes(UpdaterRules.TrackName(track)+"\n"),..manifest]);
+                bed.List("v9.9.9",manifest:manifest,signature:bed.Sign(manifest),setupDigest:"sha256:"+Hash(bed.SetupBytes),appDigest:"sha256:"+Hash(bed.AppBytes));var engine=bed.Engine();
+                var status=await Bed.CheckAsync(engine);
+                Assert(status is {Phase:"available",LatestVersion:"9.9.9",Error:null,CurrentVersion:"1.0.0"}&&status.InstallTarget==new UpdaterTarget("9.9.9",fingerprint),track+" offered "+status.Phase);
+                Assert(bed.Staged().SequenceEqual(Bed.Expected("9.9.9",track)),track+" stage contents "+string.Join(",",bed.Staged()));
+                // Refused without running anything: another version, the bare manifest hash, the other track's fingerprint.
+                var otherTrack=UpdaterRules.Fingerprint(track==ReleaseTrack.App?ReleaseTrack.Setup:ReleaseTrack.App,manifest);
+                foreach(var (version,print) in new[]{("9.9.9",new string('0',64)),("9.9.8",fingerprint),("9.9.9",Hash(manifest)),("9.9.9",otherTrack)})
+                    Assert(engine.Handle(new(1,"install",Id(),version,print)) is {Ok:false,Code:"STALE_TARGET"},track+" another target accepted");
+                foreach(var bad in new UpdaterRequest[]{new(2,"status"),new(1,"nope",Id()),new(1,"check"),new(1,"check","x"),new(1,"install",Id(),"9.9.9"),new(1,"install",Id(),"latest",fingerprint),new(1,"install",null,"9.9.9",fingerprint),new(1,"set-mode",Id(),Mode:"always"),new(1,"defer",Id())})
+                    Assert(engine.Handle(bad) is {Ok:false,Code:"BAD_REQUEST"},"bad request "+bad.Op);
+                Assert(bed.Launched.Count==0,"launched for a refused request");
+                var id=Id();File.WriteAllText(bed.Paths.LastUpgrade,"{}");
+                Assert(engine.Handle(new(1,"install",id,"9.9.9",fingerprint)).Ok,track+" install refused");
+                // The Setup track runs the staged Setup; the app track the active infrastructure's installed engine.
+                var image=track==ReleaseTrack.Setup?Path.Combine(bed.Paths.Stage("9.9.9"),ReleaseManifest.SetupName("9.9.9")):InstalledLayout.EngineImage("1.0.0");
+                var launched=bed.Launched.Single();
+                Assert(launched.Launch==new UpdateLaunch(track,image,bed.Paths.Stage("9.9.9"))&&launched.Result==bed.Paths.LastUpgrade,track+" launch "+launched.Launch);
+                Assert(launched.Launch.Verb==(track==ReleaseTrack.Setup?"--quiet-upgrade":"--apply-app"),"verb");
+                Assert(!File.Exists(bed.Paths.LastUpgrade),"an old result would be read as this install's");
+                status=Bed.Status(engine);Assert(status is {Phase:"activating",LastRequest:{Action:"install",State:"running"}}&&status.LastRequest.Id==id,"activating");
+                foreach(var again in new UpdaterRequest[]{new(1,"install",Id(),"9.9.9",fingerprint),new(1,"check",Id())})Assert(engine.Handle(again) is {Ok:false,Code:"BUSY"},"a second "+again.Op+" while activating");
+                // The stage the engine reads stays while it runs.
+                engine.Tick();Assert(bed.Launched.Count==1&&bed.Staged().SequenceEqual(Bed.Expected("9.9.9",track)),"launched twice, or the stage was touched");
+            }
+        });
+        await check("updater: a staged release is believed only from its exact files' bytes each time",async()=>
+        {
+            foreach(var track in new[]{ReleaseTrack.App,ReleaseTrack.Setup})
+            {
+                using var bed=new Bed();bed.Good(track:track);var engine=bed.Engine();var target=(await Bed.CheckAsync(engine)).InstallTarget!;
+                // Another engine, as after a restart, finds it with no record of having staged it.
+                Assert(Bed.Status(bed.Engine()).InstallTarget==target,"not rediscovered");
+                var stage=bed.Paths.Stage("9.9.9");
+                File.WriteAllBytes(Path.Combine(stage,Bed.PayloadName("9.9.9",track)),[9,9,9,9]);
+                Assert(engine.Handle(new(1,"install",Id(),target.Version,target.Fingerprint)) is {Ok:false,Code:"STALE_TARGET"},"a tampered payload was accepted");
+                Assert(!Directory.Exists(stage)&&bed.Launched.Count==0,"a tampered stage stayed");
+                // Staged again by a check, then spoiled one way at a time: never offered, and removed.
+                async Task Spoiled(Action spoil,string what)
+                {
+                    Assert((await Bed.CheckAsync(engine)).InstallTarget==target,what+": not restaged");
+                    spoil();Assert(Bed.Status(bed.Engine()).InstallTarget is null&&!Directory.Exists(stage),what+" was offered or kept");
+                }
+                await Spoiled(()=>File.WriteAllBytes(Path.Combine(stage,ReleaseManifest.SignatureName("9.9.9")),new byte[64]),"an unsigned stage");
+                await Spoiled(()=>File.WriteAllBytes(Path.Combine(stage,"extra.txt"),[1]),"an extra file");
+                await Spoiled(()=>Directory.CreateDirectory(Path.Combine(stage,"extra")),"an extra folder");
+                await Spoiled(()=>File.WriteAllBytes(Path.Combine(stage,Bed.PayloadName("9.9.9",track==ReleaseTrack.App?ReleaseTrack.Setup:ReleaseTrack.App)),[1]),"the other track's payload beside it");
+                await Spoiled(()=>File.Move(Path.Combine(stage,ReleaseManifest.ManifestName("9.9.9")),Path.Combine(stage,"yahad-windows-9.9.9.json")),"a manifest under another name");
+                // Copied here under an older installed version's name: signed for another version.
+                using var moved=new Bed();moved.Good(track:track);await Bed.CheckAsync(moved.Engine());Directory.Move(moved.Paths.Stage("9.9.9"),moved.Paths.Stage("9.9.10"));
+                Assert(Bed.Status(moved.Engine()).InstallTarget is null&&!Directory.Exists(moved.Paths.Stage("9.9.10")),"a stage under another version's name was offered or kept");
+            }
+        });
+        await check("updater: a change of track replaces the stage, and the old target is stale",async()=>
+        {
+            // A Setup release published over a staged app release of the same version.
+            using var bed=new Bed();bed.Good();var engine=bed.Engine();var app=(await Bed.CheckAsync(engine)).InstallTarget!;
+            Assert(bed.Staged().SequenceEqual(Bed.Expected("9.9.9",ReleaseTrack.App)),"app stage");
+            var manifest=bed.Good(track:ReleaseTrack.Setup);var setup=(await Bed.CheckAsync(engine)).InstallTarget!;
+            Assert(setup==new UpdaterTarget("9.9.9",UpdaterRules.Fingerprint(ReleaseTrack.Setup,manifest))&&setup!=app&&bed.Staged().SequenceEqual(Bed.Expected("9.9.9",ReleaseTrack.Setup)),"the stage was not replaced: "+string.Join(",",bed.Staged()));
+            Assert(engine.Handle(new(1,"install",Id(),app.Version,app.Fingerprint)) is {Ok:false,Code:"STALE_TARGET"}&&bed.Launched.Count==0,"the app target installed over a Setup stage");
+            Assert(engine.Handle(new(1,"install",Id(),setup.Version,setup.Fingerprint)).Ok&&bed.Launched is [{Launch.Track:ReleaseTrack.Setup}],"the Setup target");
+            // The installed pair changes under a staged app release so that it now selects
+            // the Setup track: the stage is no release any more, and goes with the target.
+            using var moved=new Bed();var published=moved.Good();var running=moved.Engine();var target=(await Bed.CheckAsync(running)).InstallTarget!;
+            moved.Pointer=Bed.Installed("1.0.0","0.9.0");
+            Assert(running.Handle(new(1,"install",Id(),target.Version,target.Fingerprint)) is {Ok:false,Code:"STALE_TARGET"}&&moved.Launched.Count==0,"a stale track installed");
+            Assert(!Directory.Exists(moved.Paths.Stage("9.9.9")),"the other track's stage stayed");
+            Assert((await Bed.CheckAsync(running)).InstallTarget!.Fingerprint==UpdaterRules.Fingerprint(ReleaseTrack.Setup,published)&&moved.Staged().SequenceEqual(Bed.Expected("9.9.9",ReleaseTrack.Setup)),"restaged for the Setup track");
+        });
+        await check("updater: the installed pair is read live, after a commit, after a rollback and between checks",async()=>
+        {
+            // App track, committed: the same Updater keeps running and now runs 9.9.9.
             using var bed=new Bed();bed.Good();var engine=bed.Engine();var target=(await Bed.CheckAsync(engine)).InstallTarget!;
-            // Another engine, as after a restart, finds it with no record of having staged it.
-            Assert(Bed.Status(bed.Engine()).InstallTarget==target,"not rediscovered");
-            var image=Path.Combine(bed.Paths.Stage("9.9.9"),"Yahad.Setup-9.9.9.exe");var bytes=File.ReadAllBytes(image);
-            File.WriteAllBytes(image,[9,9,9,9]);
-            Assert(engine.Handle(new(1,"install",Id(),target.Version,target.Fingerprint)) is {Ok:false,Code:"STALE_TARGET"},"a tampered Setup was accepted");
-            Assert(Bed.Status(bed.Engine()).InstallTarget is null&&bed.Launched.Count==0,"a tampered Setup was offered");
-            File.WriteAllBytes(image,bytes);File.WriteAllBytes(Path.Combine(bed.Paths.Stage("9.9.9"),"yahad-windows-9.9.9.json.sig"),new byte[64]);
-            Assert(Bed.Status(bed.Engine()).InstallTarget is null,"an unsigned stage was offered");
-            // Copied here under an older installed version's name: signed for another version.
-            using var moved=new Bed();moved.Good();await Bed.CheckAsync(moved.Engine());Directory.Move(moved.Paths.Stage("9.9.9"),moved.Paths.Stage("9.9.10"));
-            Assert(Bed.Status(moved.Engine()).InstallTarget is null,"a stage under another version's name was offered");
+            Assert(engine.Handle(new(1,"install",Id(),target.Version,target.Fingerprint)).Ok,"install refused");
+            bed.Pointer=Bed.Installed("9.9.9");Assert(Bed.Status(engine) is {Phase:"activating",CurrentVersion:"9.9.9"},"current is not live");
+            File.WriteAllText(bed.Paths.LastUpgrade,JsonSerializer.Serialize(new{Code="UPGRADED",Ok=true}));
+            var status=Bed.Status(engine);
+            Assert(status is {Phase:"healthy",CurrentVersion:"9.9.9",InstallTarget:null,LatestVersion:null}&&!Directory.Exists(bed.Paths.Stage("9.9.9")),"after the commit: "+status.Phase+"/"+status.CurrentVersion);
+            bed.Network.Requests.Clear();status=await Bed.CheckAsync(engine);
+            Assert(status is {Phase:"idle",InstallTarget:null}&&bed.Network.Requests is [GitHubReleaseSource.Latest],"the installed release was offered again");
+            bed.Good("9.9.10");status=await Bed.CheckAsync(engine);
+            Assert(status.InstallTarget is {Version:"9.9.10"}&&bed.Staged("9.9.10").SequenceEqual(Bed.Expected("9.9.10",ReleaseTrack.App)),"the next release after a commit");
+            // Rolled back: the pointer moved to the new pair and back during the apply.
+            using var back=new Bed();back.Good();var running=back.Engine();target=(await Bed.CheckAsync(running)).InstallTarget!;
+            Assert(running.Handle(new(1,"install",Id(),target.Version,target.Fingerprint)).Ok,"install refused");
+            back.Pointer=Bed.Installed("9.9.9");Assert(Bed.Status(running).CurrentVersion=="9.9.9","during the apply");
+            // An Updater restarted while the engine applies leaves the stage it reads alone.
+            Assert(Bed.Status(back.Engine()).Phase=="activating"&&back.Staged().SequenceEqual(Bed.Expected("9.9.9",ReleaseTrack.App)),"a restart touched the stage being applied");
+            back.Pointer=Bed.Installed("1.0.0");File.WriteAllText(back.Paths.LastUpgrade,JsonSerializer.Serialize(new{Code="ROLLED_BACK_UNHEALTHY",Ok=false}));
+            status=Bed.Status(running);
+            Assert(status is {Phase:"rolled_back",Error:"health",CurrentVersion:"1.0.0",InstallTarget:null}&&!Directory.Exists(back.Paths.Stage("9.9.9")),"after the rollback: "+status.Phase);
+            // Changed by someone else between checks (a manual Setup): the stage is no update any more.
+            using var manual=new Bed();manual.Good();var idle=manual.Engine();target=(await Bed.CheckAsync(idle)).InstallTarget!;
+            manual.Pointer=Bed.Installed("9.9.9");Assert(Bed.Status(idle).CurrentVersion=="9.9.9","between checks");
+            Assert(idle.Handle(new(1,"install",Id(),target.Version,target.Fingerprint)) is {Ok:false,Code:"STALE_TARGET"}&&manual.Launched.Count==0&&!Directory.Exists(manual.Paths.Stage("9.9.9")),"the installed version was installed again");
+            // An active.json that cannot be read is no answer at all.
+            using var broken=new Bed();var bad=false;
+            var unread=new UpdaterEngine(broken.Paths,()=>bad?throw new IOException("ACTIVE_POINTER_INVALID"):broken.Pointer,()=>broken.Spki,broken.Spki,broken.Source,(_,_)=>throw new Exception("LAUNCHED"),()=>broken.Now);unread.Start();bad=true;
+            Assert(unread.Handle(new(1,"status")) is {Ok:false,Code:"INTERNAL"},"status without a pointer");
+            broken.Good();Assert(unread.Handle(new(1,"check",Id())).Ok,"check refused");await unread.Work;bad=false;
+            Assert(Bed.Status(unread) is {Error:"internal",InstallTarget:null},"a check without a pointer");
         });
-        await check("updater: the launched Setup's result is read by whichever Updater is running",async()=>
+        await check("updater: the launched engine's result is read by whichever Updater is running",async()=>
         {
             foreach(var (code,phase,error,succeeded,refused) in new[]{("UPGRADED","healthy",(string?)null,true,false),("ROLLED_BACK_UNHEALTHY","rolled_back","health",false,true),("RELEASE_UNSUPPORTED_FROM","incompatible","incompatible",false,true),
-                ("RELEASE_SIGNATURE_INVALID","failed","signature",false,true),("ROLLBACK_FAILED","available","rollback",false,false),("DISK_SPACE","available","storage",false,false),("SOMETHING_NEW","available","internal",false,false)})
+                ("APP_NEEDS_INFRASTRUCTURE","incompatible","incompatible",false,true),("RELEASE_SIGNATURE_INVALID","failed","signature",false,true),("ROLLBACK_FAILED","available","rollback",false,false),("DISK_SPACE","available","storage",false,false),
+                ("RELEASE_APP_HASH","available","archive",false,false),("APP_PACKAGE_MEMBER_FORBIDDEN","available","archive",false,false),("INFRA_IDENTITY_MISMATCH","available","internal",false,false),("SOMETHING_NEW","available","internal",false,false)})
             {
                 using var bed=new Bed();bed.Good();var engine=bed.Engine();var target=(await Bed.CheckAsync(engine)).InstallTarget!;
                 Assert(engine.Handle(new(1,"install",Id(),target.Version,target.Fingerprint)).Ok,"install refused");
                 Assert(Bed.Status(engine).Phase=="activating","no result yet");
                 File.WriteAllText(bed.Paths.LastUpgrade,"""{"Code":""");Assert(Bed.Status(engine).Phase=="activating",code+" half-written result");
                 File.WriteAllText(bed.Paths.LastUpgrade,JsonSerializer.Serialize(new{Code=code,Ok=succeeded}));
-                // Success means a new Updater reads it; any other ending, the old one again.
+                // Success means the pair names the new app; any other ending, the old one again.
                 var next=bed.Engine(succeeded?"9.9.9":"1.0.0");var status=Bed.Status(next);
                 Assert(status.Phase==phase&&status.Error==error&&status.LastRequest is {Action:"install"} last&&last.State==(succeeded?"succeeded":"failed")&&last.Error==error,code+" reads "+status.Phase+"/"+status.Error);
                 Assert((status.InstallTarget is null)==(succeeded||refused),code+" offer");
@@ -290,7 +418,7 @@ internal static class UpdaterTests
                 }
             }
         });
-        await check("updater: a Setup that never reports ends the install after the timeout; one that cannot start fails at once",async()=>
+        await check("updater: an engine that never reports ends the install after the timeout; one that cannot start fails at once",async()=>
         {
             using var bed=new Bed();bed.Good();var engine=bed.Engine();var target=(await Bed.CheckAsync(engine)).InstallTarget!;
             Assert(engine.Handle(new(1,"install",Id(),target.Version,target.Fingerprint)).Ok,"install refused");
@@ -333,11 +461,32 @@ internal static class UpdaterTests
             var checkedAt=at.AddMinutes(10).ToUnixTimeMilliseconds();
             Assert(!UpdaterRules.CheckDue(at.AddHours(24),at,checkedAt,default)&&UpdaterRules.CheckDue(at.AddHours(25),at,checkedAt,default)&&!UpdaterRules.CheckDue(at.AddHours(25),at,checkedAt,TimeSpan.FromHours(1)),"daily with jitter");
         });
-        await check("updater: failures reach the parent as the words src/updates.ts accepts",()=>
+        await check("updater: failures reach the parent as the words src/updates.ts accepts, and refuse a version only for a signature or a defective release",()=>
         {
-            foreach(var (error,expected) in new (Exception,string)[]{(new HttpRequestException(),"network"),(new TaskCanceledException(),"network"),(new IOException("GITHUB_URL"),"network"),(new IOException("GITHUB_LIST_INVALID"),"network"),(new IOException("RELEASE_SIGNATURE_INVALID"),"signature"),(new IOException("RELEASE_KEY_UNTRUSTED"),"signature"),
-                (new IOException("RELEASE_UNSUPPORTED_FROM"),"incompatible"),(new IOException("RELEASE_SETUP_HASH"),"archive"),(new IOException("RELEASE_SETUP_SIZE"),"archive"),(new IOException("DISK_SPACE"),"storage"),(new IOException("other"),"internal"),(new InvalidOperationException(),"internal")})
-                Assert(UpdaterRules.CheckError(error)==expected,error.Message+" maps to "+UpdaterRules.CheckError(error));
+            var words=new HashSet<string>{"configuration","network","signature","archive","build","backup","health","rollback","storage","maintenance","incompatible","internal","target_changed"};
+            foreach(var (error,expected,refuse) in new (Exception,string,bool)[]{(new HttpRequestException(),"network",false),(new TaskCanceledException(),"network",false),(new IOException("GITHUB_URL"),"network",false),(new IOException("GITHUB_LIST_INVALID"),"network",false),
+                (new IOException("RELEASE_SIGNATURE_INVALID"),"signature",true),(new IOException("RELEASE_KEY_UNTRUSTED"),"signature",true),(new IOException("RELEASE_MANIFEST_INVALID"),"signature",true),
+                (new IOException("RELEASE_UNSUPPORTED_FROM"),"incompatible",true),(new IOException("APP_NEEDS_INFRASTRUCTURE"),"incompatible",true),
+                (new IOException("RELEASE_SETUP_HASH"),"archive",false),(new IOException("RELEASE_SETUP_SIZE"),"archive",false),(new IOException("RELEASE_APP_HASH"),"archive",false),(new IOException("RELEASE_APP_SIZE"),"archive",false),
+                (new IOException("DISK_SPACE"),"storage",false),(new IOException("INFRA_IDENTITY_MISMATCH"),"internal",false),(new IOException("ACTIVE_POINTER_INVALID"),"internal",false),(new IOException("other"),"internal",false),(new InvalidOperationException(),"internal",false)})
+                Assert(UpdaterRules.CheckError(error)==new CheckFailure(expected,refuse)&&words.Contains(expected),error.Message+" maps to "+UpdaterRules.CheckError(error));
+            foreach(var (code,phase,error,refuse) in new (string?,string,string?,bool)[]{("UPGRADED","healthy",null,false),("ROLLED_BACK_UNHEALTHY","rolled_back","health",true),("ROLLBACK_FAILED","failed","rollback",false),("DISK_SPACE","failed","storage",false),
+                ("RELEASE_UNSUPPORTED_FROM","incompatible","incompatible",true),("APP_NEEDS_INFRASTRUCTURE","incompatible","incompatible",true),("RELEASE_APP_SIZE","failed","archive",false),("RELEASE_APP_HASH","failed","archive",false),
+                ("APP_PACKAGE_MEMBER_FORBIDDEN","failed","archive",false),("APP_PACKAGE_TREE_MISMATCH","failed","archive",false),("RELEASE_SIGNATURE_INVALID","failed","signature",true),("RELEASE_KEY_UNTRUSTED","failed","signature",true),
+                ("RELEASE_MANIFEST_INVALID","failed","signature",true),("INFRA_IDENTITY_MISMATCH","failed","internal",false),("UPGRADE_COMMIT_INCOMPLETE","failed","internal",false),("APP_PACKAGE","failed","internal",false),(null,"failed","internal",false)})
+            {
+                var ending=UpdaterRules.Ending(code);
+                Assert(ending==new UpgradeEnding(code=="UPGRADED",phase,error,refuse)&&(error is null||words.Contains(error)),code+" ends "+ending);
+            }
+            return Task.CompletedTask;
+        });
+        await check("updater: the fingerprint binds the track, and the disk budget is the track's",()=>
+        {
+            var manifest=Encoding.UTF8.GetBytes("{}");
+            Assert(UpdaterRules.Fingerprint(ReleaseTrack.Setup,manifest)==Hash(Encoding.ASCII.GetBytes("setup\n{}"))&&UpdaterRules.Fingerprint(ReleaseTrack.App,manifest)==Hash(Encoding.ASCII.GetBytes("app\n{}")),"fingerprint");
+            using var bed=new Bed();bed.SetupBytes=new byte[1000];bed.AppBytes=new byte[700];var release=ReleaseManifest.Parse(Bed.Encode(bed.Fields("9.9.9",ReleaseTrack.App)));
+            Assert(UpdaterRules.DiskBudget(release,ReleaseTrack.Setup)==1000+UpdaterRules.DiskReserve&&UpdaterRules.DiskBudget(release,ReleaseTrack.App)==2100+UpdaterRules.DiskReserve,"budget");
+            Assert(UpdaterRules.Payload(release,ReleaseTrack.Setup)==release.Infrastructure.Setup&&UpdaterRules.Payload(release,ReleaseTrack.App)==release.App.Archive,"payload");
             return Task.CompletedTask;
         });
         await check("updater: the pipe answers only the allowed account, and a bad client costs only its connection",async()=>
@@ -436,11 +585,22 @@ internal static class UpdaterTests
             Deny("SCM_SERVICE:1060",()=>UpdaterClient.Observe("Yahad.No.Such.Service"));
             return Task.CompletedTask;
         });
-        await check("updater: the Setup is started with its own directory and result, quoted, and nothing else",()=>
+        await check("updater: the engine is started with its stage and result, quoted, and nothing else",()=>
         {
-            Assert(UpdateLauncher.CommandLine(@"C:\P D\Setup.exe",@"C:\P D\9.9.9",@"C:\P D\r.json")==@"""C:\P D\Setup.exe"" --quiet-upgrade ""C:\P D\9.9.9"" --result ""C:\P D\r.json""","command line");
-            foreach(var bad in new[]{"C:\\a\"b","C:\\a\\"})Deny("UPDATER_LAUNCH_PATH",()=>UpdateLauncher.CommandLine(bad,"C:\\d","C:\\r"));
-            Assert(QuietSetupAccepts(UpdateLauncher.CommandLine("s","C:\\d","C:\\r.json")),"Setup refuses the Updater's command line");
+            var setup=new UpdateLaunch(ReleaseTrack.Setup,@"C:\P D\Setup.exe",@"C:\P D\9.9.9");
+            Assert(UpdateLauncher.CommandLine(setup,@"C:\P D\r.json")==@"""C:\P D\Setup.exe"" --quiet-upgrade ""C:\P D\9.9.9"" --result ""C:\P D\r.json""","Setup track command line");
+            // The app track runs the active infrastructure's installed engine, never anything staged.
+            var app=UpdateLaunch.For(new("9.9.9",ReleaseTrack.App,new string('a',64),@"C:\P D\9.9.9",@"C:\P D\9.9.9\"+ReleaseManifest.AppArchiveName("9.9.9")),Bed.Installed("1.0.0","1.2.3"));
+            Assert(app==new UpdateLaunch(ReleaseTrack.App,InstalledLayout.EngineImage("1.2.3"),@"C:\P D\9.9.9")&&app.Image.EndsWith(@"\infra\1.2.3\setup\Yahad.Setup.exe",StringComparison.Ordinal),"app track image "+app.Image);
+            Assert(UpdateLauncher.CommandLine(app,@"C:\P D\r.json")=="\""+InstalledLayout.EngineImage("1.2.3")+@""" --apply-app ""C:\P D\9.9.9"" --result ""C:\P D\r.json""","app track command line");
+            var staged=UpdateLaunch.For(new("9.9.9",ReleaseTrack.Setup,new string('a',64),@"C:\d",@"C:\d\"+ReleaseManifest.SetupName("9.9.9")),Bed.Installed("1.0.0","1.2.3"));
+            Assert(staged==new UpdateLaunch(ReleaseTrack.Setup,@"C:\d\Yahad.Setup-9.9.9.exe",@"C:\d"),"Setup track image");
+            foreach(var bad in new[]{"C:\\a\"b","C:\\a\\"})
+            {
+                Deny("UPDATER_LAUNCH_PATH",()=>UpdateLauncher.CommandLine(setup with{Image=bad},"C:\\r"));Deny("UPDATER_LAUNCH_PATH",()=>UpdateLauncher.CommandLine(setup with{Directory=bad},"C:\\r"));
+                Deny("UPDATER_LAUNCH_PATH",()=>UpdateLauncher.CommandLine(setup,bad));
+            }
+            Assert(QuietSetupAccepts(UpdateLauncher.CommandLine(setup with{Image="s",Directory="C:\\d"},"C:\\r.json")),"Setup refuses the Updater's command line");
             return Task.CompletedTask;
         });
         await check("repair task: SYSTEM runs this infrastructure's payload-free engine at boot and daily, and the Task Scheduler accepts the definition",()=>
