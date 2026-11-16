@@ -22,11 +22,11 @@ internal static class InstalledLaunch
         return ScmController.Dispatch(new NativeScmApi(),ServiceDefinition.Name,Environment.Exit,()=>controller=new ServiceController(new InstalledLaunchResolver(),reportFailure:
             error=>ServiceStartupDiagnostic.TryRecord(StartupDiagnosticRole.Runtime,error,controller!.StartupSteps)));
     }
-    internal static byte[] Encode(InstalledLaunchConfiguration value)=>System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(value);
+    internal static byte[] Encode(InstalledLaunchConfiguration value)=>System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(value,ServiceHostJsonContext.Default.InstalledLaunchConfiguration);
     internal static InstalledLaunchConfiguration Parse(byte[] bytes)
     {
         if(bytes.Length is <1 or >4096)throw new IOException("INSTALLED_LAUNCH_BOUND");
-        var value=NativeJson.Read<InstalledLaunchConfiguration>(bytes);
+        var value=NativeJson.Read(bytes,ServiceHostJsonContext.Default.InstalledLaunchConfiguration);
         if(value.Format!=1)throw new IOException("INSTALLED_LAUNCH_FORMAT");
         Id(value.InstallationId);Id(value.DataId);
         if(value.Port is <1024 or >65535)throw new IOException("INSTALLED_LAUNCH_PORT");

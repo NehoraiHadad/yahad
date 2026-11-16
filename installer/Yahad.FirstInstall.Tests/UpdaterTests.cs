@@ -176,16 +176,16 @@ internal static class UpdaterTests
         {
             static byte[] Frame(int length,byte[]? body=null)=>[..BitConverter.GetBytes(length),..body??[]];
             foreach(var length in new[]{0,-1,int.MinValue,UpdaterProtocol.MaximumFrame+1,int.MaxValue})
-                await DenyAsync("UPDATER_FRAME",()=>UpdaterProtocol.ReadAsync<UpdaterRequest>(new MemoryStream(Frame(length)),default));
+                await DenyAsync("UPDATER_FRAME",()=>UpdaterProtocol.ReadAsync(new MemoryStream(Frame(length)),UpdaterJsonContext.Default.UpdaterRequest,default));
             foreach(var body in new[]{"not json","""{"v":1,"op":"status","extra":1}""","""{"v":1,"op":"status","op":"check"}""","null"})
-            {var bytes=Encoding.UTF8.GetBytes(body);await DenyAsync("UPDATER_FRAME",()=>UpdaterProtocol.ReadAsync<UpdaterRequest>(new MemoryStream(Frame(bytes.Length,bytes)),default));}
-            try{await UpdaterProtocol.ReadAsync<UpdaterRequest>(new MemoryStream(Frame(10,[1,2])),default);throw new Exception("SHORT_FRAME_ACCEPTED");}catch(EndOfStreamException){}
-            await DenyAsync("UPDATER_FRAME",()=>UpdaterProtocol.WriteAsync(new MemoryStream(),new UpdaterRequest(1,new string('x',UpdaterProtocol.MaximumFrame)),default));
-            var round=new MemoryStream();await UpdaterProtocol.WriteAsync(round,new UpdaterRequest(1,"status"),default);round.Position=0;
-            Assert((await UpdaterProtocol.ReadAsync<UpdaterRequest>(round,default)).Op=="status","round trip");
+            {var bytes=Encoding.UTF8.GetBytes(body);await DenyAsync("UPDATER_FRAME",()=>UpdaterProtocol.ReadAsync(new MemoryStream(Frame(bytes.Length,bytes)),UpdaterJsonContext.Default.UpdaterRequest,default));}
+            try{await UpdaterProtocol.ReadAsync(new MemoryStream(Frame(10,[1,2])),UpdaterJsonContext.Default.UpdaterRequest,default);throw new Exception("SHORT_FRAME_ACCEPTED");}catch(EndOfStreamException){}
+            await DenyAsync("UPDATER_FRAME",()=>UpdaterProtocol.WriteAsync(new MemoryStream(),new UpdaterRequest(1,new string('x',UpdaterProtocol.MaximumFrame)),UpdaterJsonContext.Default.UpdaterRequest,default));
+            var round=new MemoryStream();await UpdaterProtocol.WriteAsync(round,new UpdaterRequest(1,"status"),UpdaterJsonContext.Default.UpdaterRequest,default);round.Position=0;
+            Assert((await UpdaterProtocol.ReadAsync(round,UpdaterJsonContext.Default.UpdaterRequest,default)).Op=="status","round trip");
             // The deepest reply there is: what every status says after the first install.
-            var fullest=new UpdaterReply(1,true,Status:SampleStatus());var deep=new MemoryStream();await UpdaterProtocol.WriteAsync(deep,fullest,default);deep.Position=0;
-            var deepReply=await UpdaterProtocol.ReadAsync<UpdaterReply>(deep,default);
+            var fullest=new UpdaterReply(1,true,Status:SampleStatus());var deep=new MemoryStream();await UpdaterProtocol.WriteAsync(deep,fullest,UpdaterJsonContext.Default.UpdaterReply,default);deep.Position=0;
+            var deepReply=await UpdaterProtocol.ReadAsync(deep,UpdaterJsonContext.Default.UpdaterReply,default);
             Assert(deepReply.Status?.LastRequest?.Target==fullest.Status!.LastRequest!.Target&&deepReply.Status!.InstallTarget==fullest.Status.InstallTarget,"the deepest reply");
             Assert(UpdaterProtocol.IsId(Id())&&!UpdaterProtocol.IsId(null)&&!UpdaterProtocol.IsId(Id().ToUpperInvariant())&&!UpdaterProtocol.IsId("x"),"id shape");
             Assert(UpdaterProtocol.IsFingerprint(new string('a',64))&&!UpdaterProtocol.IsFingerprint(new string('A',64))&&!UpdaterProtocol.IsFingerprint(new string('a',64)+"\n"),"fingerprint shape");

@@ -234,7 +234,7 @@ await Check("authenticated flow carries full removal mode and refuses unknown in
 {
  var ops=new FakeHost();var result=await new InstallFlow(ops).RunAsync(owner,true,_=>{},default,UninstallMode.DeleteData);Assert(result.Ok&&!result.DataPreserved&&ops.LastRemoval==UninstallMode.DeleteData);
  var invalid=new FakeHost();await Refuse(()=>new InstallFlow(invalid).RunAsync(owner,true,_=>{},default,(UninstallMode)99));Assert(invalid.Calls.Count==0);
- var s=PairFixture.State();var copy=NativeJson.Read<InstallerState>(s.Encode());
+ var s=PairFixture.State();var copy=NativeJson.Read(s.Encode(),SetupJsonContext.Default.InstallerState);
  Assert(UninstallChoice.SameInstallation(s,copy with{Phase="removing_all_data"}));
  var changedApp=s.Active with{App=s.Active.App with{Files=[s.Active.App.Files[0] with{Size=6},..s.Active.App.Files[1..]]}};
  foreach(var other in new[]{s with{Port=47124},s with{Active=PairFixture.Pair(appSalt:"other")},s with{Active=PairFixture.Pair(infraSalt:"other")},s with{Active=changedApp},s with{Previous=PairFixture.Pair(app:"0.9.0")}})

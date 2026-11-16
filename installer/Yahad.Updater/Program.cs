@@ -6,9 +6,10 @@ using Yahad.Updater;
 
 if(args is ["--describe"])
 {
-    Console.WriteLine(JsonSerializer.Serialize(new{artifact="Yahad.Updater",serviceName=ServiceDefinition.UpdaterName,
-        version=Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion,
-        infrastructureVersion=InfrastructureRelease.Version,contractMin=InfrastructureRelease.ContractMin,contractMax=InfrastructureRelease.ContractMax,sourceCommit=InfrastructureRelease.SourceCommit}));return 0;
+    Console.WriteLine(JsonSerializer.Serialize(new UpdaterDescription("Yahad.Updater",ServiceDefinition.UpdaterName,
+        Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion,
+        InfrastructureRelease.Version,InfrastructureRelease.ContractMin,InfrastructureRelease.ContractMax,InfrastructureRelease.SourceCommit),
+        UpdaterDescriptionJsonContext.Default.UpdaterDescription));return 0;
 }
 if(args is not ["--service"]){Console.Error.WriteLine("YAHAD_SERVICE_ARGUMENTS_REFUSED");return 2;}
 try{return new UpdaterService(new NativeScmApi(),UpdaterService.WorkAsync).Run();}

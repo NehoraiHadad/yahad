@@ -225,7 +225,7 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
         using(var health=await client.GetAsync(LocalUrl+"health/ready",cancellation))
         {
             health.EnsureSuccessStatusCode();var bytes=await health.Content.ReadAsByteArrayAsync(cancellation);if(bytes.Length>16384)throw new IOException("SERVER_NOT_READY");
-            var seen=NativeJson.Read<JsonElement>(bytes);var target=Package.Manifest.App;
+            var seen=NativeJson.Read(bytes,SetupJsonContext.Default.JsonElement);var target=Package.Manifest.App;
             if(!UpgradeRules.HealthPasses(new(seen.GetProperty("ok").GetBoolean(),seen.GetProperty("version").GetString(),seen.GetProperty("databaseSchema").GetInt32()),target.Version,target.DatabaseSchema))
                 throw new IOException("SERVER_NOT_READY");
             reportedSchema=target.DatabaseSchema;
@@ -234,7 +234,7 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
         {
             using var response=await client.GetAsync(LocalUrl+"api/setup/status",cancellation);response.EnsureSuccessStatusCode();
             var result=await response.Content.ReadAsByteArrayAsync(cancellation);if(result.Length>16384)throw new IOException("SERVER_NOT_READY");
-            return NativeJson.Read<JsonElement>(result).GetProperty("state").GetString();
+            return NativeJson.Read(result,SetupJsonContext.Default.JsonElement).GetProperty("state").GetString();
         }
         var setup=await SetupState();
         if(setup=="complete")setupToken=null;
@@ -244,7 +244,7 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
             await service.StopAsync(cancellation);RenewCapability();await service.StartAsync(cancellation);
             if(await SetupState()!="ready")throw new IOException("SERVER_NOT_READY");
         }
-        else if(resumed&&setup=="ready")setupToken=NativeJson.Read<JsonElement>(NativeInstallFiles.ReadRecord(Capability)).GetProperty("token").GetString();
+        else if(resumed&&setup=="ready")setupToken=NativeJson.Read(NativeInstallFiles.ReadRecord(Capability),SetupJsonContext.Default.JsonElement).GetProperty("token").GetString();
         else if(setup!="ready")throw new IOException("SERVER_NOT_READY");
         await updater.StartAsync(cancellation);
         var lan=await network.ObserveAsync(cancellation);

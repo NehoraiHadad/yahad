@@ -42,7 +42,7 @@ internal sealed record UpgradeState(int Format,string Id,string Kind,InstalledPa
     {
         if(RecordFormat.Of(bytes,"INSTALL_STATE_INVALID")!=CurrentFormat)throw new IOException("LEGACY_INSTALL_UNSUPPORTED");
         UpgradeState value;
-        try{value=NativeJson.Read<UpgradeState>(bytes);}catch(JsonException){throw new IOException("INSTALL_STATE_INVALID");}
+        try{value=NativeJson.Read(bytes,SetupJsonContext.Default.UpgradeState);}catch(JsonException){throw new IOException("INSTALL_STATE_INVALID");}
         value.Require();return value;
     }
 }

@@ -173,7 +173,11 @@ def legal_records(identity, commit, node, caddy):
     supplements = json.loads(Path(__file__).with_name('licenses').joinpath('sources.json').read_text(encoding='utf-8'))
     sbom = dict(format='yahad-infrastructure-inventory', schema=1, infrastructureVersion=identity.version, sourceCommit=commit,
                 runtimes=[node, caddy],
-                dotnet=dict(runtimeVersion=RUNTIME_VERSION, selfContained=True, license='MIT',
+                # The runtime is compiled into each host/updater/platform image (NativeAOT);
+                # the WPF Setup engine carries it in its self-contained single file.
+                dotnet=dict(runtimeVersion=RUNTIME_VERSION, license='MIT',
+                            deployment={'host/Yahad.ServiceHost.exe':'native-aot', 'updater/Yahad.Updater.exe':'native-aot',
+                                        'platform/Yahad.Platform.exe':'native-aot', 'setup/'+ENGINE:'self-contained-single-file'},
                             images=['host/Yahad.ServiceHost.exe', 'updater/Yahad.Updater.exe', 'platform/Yahad.Platform.exe', 'setup/'+ENGINE],
                             notices=['legal/DotNet-LICENSE.txt', 'legal/DotNet-ThirdPartyNotices.txt']),
                 supplements=supplements, distributionLegalReview='pending-corresponding-sources-and-transitive-notices')

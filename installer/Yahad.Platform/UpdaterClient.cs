@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using Yahad.Install;
 using Yahad.Service;
 namespace Yahad.Platform;
@@ -14,13 +15,18 @@ internal readonly record struct UpdaterObservation(uint State,uint ProcessId,str
 internal readonly record struct UpdaterOperator(string FamilyId,string UserId);
 // A refusal's reason: a fixed stage and at most a Windows error number, for support.
 internal sealed class UpdaterRefusal(string reason):IOException(reason);
+// The app's request: shallow, and a repeated name is refused.
+[JsonSourceGenerationOptions(MaxDepth=4,AllowDuplicateProperties=false)][JsonSerializable(typeof(JsonElement))]
+internal sealed partial class UpdaterInputJsonContext:JsonSerializerContext;
+// setup-capability.json, read with the serializer's defaults.
+[JsonSerializable(typeof(JsonElement))]
+internal sealed partial class SetupCapabilityJsonContext:JsonSerializerContext;
 // The app's windows-updates transport: one request from stdin, one reply on stdout.
 // Anything that goes wrong is the same refusal, which the app shows as unavailable;
 // its reason says where it stopped and never carries a path, a value or a message.
 internal static class UpdaterClient
 {
     private static readonly TimeSpan Limit=TimeSpan.FromSeconds(14);
-    private static readonly JsonSerializerOptions Input=new(){MaxDepth=4,AllowDuplicateProperties=false};
     private static JsonObject Refusal(string reason)=>new(){["schema"]=1,["ok"]=false,["code"]="UPDATES_UNAVAILABLE",["reason"]=reason};
     internal static string Reason(string stage,Exception error)
     {
@@ -43,12 +49,12 @@ internal static class UpdaterClient
         var stage="REQUEST";
         try
         {
-            var message=JsonSerializer.Deserialize<JsonElement>(input,Input);var kind=message.GetProperty("kind").GetString();
+            var message=JsonSerializer.Deserialize(input,UpdaterInputJsonContext.Default.JsonElement);var kind=message.GetProperty("kind").GetString();
             stage="OWNER";var owner=reader();stage="REQUEST";
             if(kind=="status")
             {
                 stage="UPDATER";var reply=await ask(new(1,"status"),cancellation);if(!reply.Ok||reply.Status is null)return Refusal("UPDATER_"+(reply.Code??"NO_STATUS"));
-                var status=JsonSerializer.SerializeToNode(reply.Status,UpdaterProtocol.Options)!.AsObject();
+                var status=JsonSerializer.SerializeToNode(reply.Status,UpdaterJsonContext.Default.UpdaterStatus)!.AsObject();
                 status["operator"]=new JsonObject{["familyId"]=owner.FamilyId,["userId"]=owner.UserId};status["modeControlAllowed"]=true;
                 return Result(status);
             }
@@ -85,7 +91,7 @@ internal static class UpdaterClient
         var bytes=NativeInstallFiles.ReadRecord(Path.Combine(InstalledLayout.StateRoot,"Secrets","setup-capability.json"),1024);
         try
         {
-            var owner=JsonSerializer.Deserialize<JsonElement>(bytes).GetProperty("firstOwner");
+            var owner=JsonSerializer.Deserialize(bytes,SetupCapabilityJsonContext.Default.JsonElement).GetProperty("firstOwner");
             return new(owner.GetProperty("familyId").GetString()!,owner.GetProperty("parentUserId").GetString()!);
         }
         finally{CryptographicOperations.ZeroMemory(bytes);}
@@ -114,8 +120,8 @@ internal static class UpdaterClient
         // An account the Updater does not accept sees its connection closed here.
         try
         {
-            await UpdaterProtocol.WriteAsync(pipe,request,cancellation);
-            return await UpdaterProtocol.ReadAsync<UpdaterReply>(pipe,cancellation);
+            await UpdaterProtocol.WriteAsync(pipe,request,UpdaterJsonContext.Default.UpdaterRequest,cancellation);
+            return await UpdaterProtocol.ReadAsync(pipe,UpdaterJsonContext.Default.UpdaterReply,cancellation);
         }
         catch(Exception error)when(error is IOException or OperationCanceledException){throw new UpdaterRefusal(Reason("EXCHANGE",error));}
     }

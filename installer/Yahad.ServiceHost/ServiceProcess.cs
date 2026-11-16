@@ -96,7 +96,7 @@ internal sealed class ServiceProcessLauncher(VerifiedProcessSpec spec,Func<IChil
         internal void Publish(WindowsFileBoundary.DataLease lease,Microsoft.Win32.SafeHandles.SafeProcessHandle child,int pid,string data)
         {
             var remote=lease.DuplicateTo(child);
-            var bytes=JsonSerializer.SerializeToUtf8Bytes(new HostLeaseGrant(1,pid,remote,data,nonce));
+            var bytes=JsonSerializer.SerializeToUtf8Bytes(new HostLeaseGrant(1,pid,remote,data,nonce),NativeJsonContext.Default.HostLeaseGrant);
             using(var output=new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.None,4096,FileOptions.WriteThrough)){output.Write(bytes);output.Flush(true);}
         }
         public void Dispose(){if(File.Exists(path))File.Delete(path);Directory.Delete(directory,false);}

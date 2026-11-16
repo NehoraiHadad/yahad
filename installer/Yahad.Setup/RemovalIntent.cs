@@ -26,7 +26,7 @@ internal sealed record RemovalIntent(int Format,InstallerState State,UninstallMo
     {
         if(RecordFormat.Of(bytes,"UNINSTALL_INTENT_INVALID")!=InstallerState.CurrentFormat)throw new IOException("LEGACY_INSTALL_UNSUPPORTED");
         RemovalIntent intent;
-        try{intent=NativeJson.Read<RemovalIntent>(bytes);}catch(JsonException){throw new IOException("UNINSTALL_INTENT_INVALID");}
+        try{intent=NativeJson.Read(bytes,SetupJsonContext.Default.RemovalIntent);}catch(JsonException){throw new IOException("UNINSTALL_INTENT_INVALID");}
         intent.Require();return intent;
     }
     internal static string InfraMember(string infrastructure,string member){InstallLocations.RequireVersion(infrastructure);return "infra/"+infrastructure+"/"+member;}

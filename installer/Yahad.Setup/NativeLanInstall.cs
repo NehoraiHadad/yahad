@@ -37,7 +37,7 @@ internal sealed class NativeLanInstall(InstallerState application,InstalledPair 
     private bool PreparationMatches(LanSetupRequest request,bool requireSameSelection)
     {
         if(!File.Exists(PreparationFile))return false;
-        var prepared=NativeJson.Read<LanSetupRequest>(NativeInstallFiles.ReadRecord(PreparationFile,8192));
+        var prepared=NativeJson.Read(NativeInstallFiles.ReadRecord(PreparationFile,8192),SetupJsonContext.Default.LanSetupRequest);
         if(requireSameSelection)RequireSameSelection(prepared,request);
         return true;
     }
@@ -48,18 +48,18 @@ internal sealed class NativeLanInstall(InstallerState application,InstalledPair 
         if(File.Exists(RemovalFile))
         {
             if(!removing)throw new IOException("LAN_UNINSTALL_INCOMPLETE");
-            return NativeJson.Read<LanRemovalIntent>(NativeInstallFiles.ReadRecord(RemovalFile,1048576)).State;
+            return NativeJson.Read(NativeInstallFiles.ReadRecord(RemovalFile,1048576),SetupJsonContext.Default.LanRemovalIntent).State;
         }
         if(removing&&!File.Exists(StateFile)&&File.Exists(PreparationFile))
         {
-            var pending=NativeJson.Read<LanSetupRequest>(NativeInstallFiles.ReadRecord(PreparationFile,8192));
+            var pending=NativeJson.Read(NativeInstallFiles.ReadRecord(PreparationFile,8192),SetupJsonContext.Default.LanSetupRequest);
             if(!NativeService.Exists(ServiceSpec.Lan)&&!Directory.Exists(LanProxyPaths.State))return null;
             return new("preparing",pending.AdapterId!,pending.Address!,pending.HttpHelp,"");
         }
         if(!Directory.Exists(LanProxyPaths.State))return null;
         WindowsFileBoundary.RequireAdministratorOwned(LanProxyPaths.State);
         if(!File.Exists(StateFile)){if(preparing)return null;throw new IOException("LAN_OWNERSHIP_MISSING");}
-        return NativeJson.Read<LanOwnedState>(NativeInstallFiles.ReadRecord(StateFile,1048576));
+        return NativeJson.Read(NativeInstallFiles.ReadRecord(StateFile,1048576),SetupJsonContext.Default.LanOwnedState);
     }
     private LanDeploymentPlan Plan(LanOwnedState state)=>LanDeployment.Create(application.InstallationId,
         [new(state.AdapterId,"selected",state.Address)],state.AdapterId,state.Address,application.Port,
@@ -102,7 +102,7 @@ internal sealed class NativeLanInstall(InstallerState application,InstalledPair 
     }
     private static string RequirePayload(AppRecord app)
     {
-        var marker=NativeJson.Read<JsonElement>(AppBytes(app,"app/deploy/lan-capabilities.json",4096));
+        var marker=NativeJson.Read(AppBytes(app,"app/deploy/lan-capabilities.json",4096),SetupJsonContext.Default.JsonElement);
         if(marker.GetProperty("format").GetInt32()!=1||!marker.GetProperty("localHttps").GetBoolean()||
             !marker.GetProperty("exactAdditionalOrigins").GetBoolean()||!marker.GetProperty("ownerLoopbackBootstrap").GetBoolean()||
             marker.GetProperty("publicHelpTemplate").GetString()!="deploy/lan-help.html")throw new IOException("LAN_PAYLOAD_NOT_SUPPORTED");
@@ -250,7 +250,7 @@ internal sealed class NativeLanInstall(InstallerState application,InstalledPair 
     }
     private static bool ShouldRun(NativeService proxy)
     {
-        var receipt=File.Exists(LanProxyPaths.Receipt)?NativeJson.Read<LanProxyReceipt>(NativeInstallFiles.ReadRecord(LanProxyPaths.Receipt,4096)):null;
+        var receipt=File.Exists(LanProxyPaths.Receipt)?NativeJson.Read(NativeInstallFiles.ReadRecord(LanProxyPaths.Receipt,4096),SetupJsonContext.Default.LanProxyReceipt):null;
         return LanProxyPolicy.ShouldRun(proxy.StartType(),receipt,LanProxyPolicy.Addresses());
     }
     // Serving TLS under the family's own authority, not merely a running process.
@@ -284,7 +284,7 @@ internal sealed class NativeLanInstall(InstallerState application,InstalledPair 
     internal async Task UninstallAsync(UninstallMode mode,CancellationToken cancellation)
     {
         var owned=Read(removing:true);if(owned is null){RemovePreparation();return;}
-        if(File.Exists(RemovalFile))RequireRemovalMode(NativeJson.Read<LanRemovalIntent>(NativeInstallFiles.ReadRecord(RemovalFile,1048576)),mode);
+        if(File.Exists(RemovalFile))RequireRemovalMode(NativeJson.Read(NativeInstallFiles.ReadRecord(RemovalFile,1048576),SetupJsonContext.Default.LanRemovalIntent),mode);
         else Record(RemovalFile,Json(new LanRemovalIntent(mode,owned)));
         // A partially removed state may no longer contain owner.json or the CA.
         // The external receipt above remains until both removable roots are gone.

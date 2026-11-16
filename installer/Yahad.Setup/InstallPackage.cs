@@ -28,15 +28,15 @@ internal sealed class InstallPackage:IDisposable
     internal const int Format=2;
     internal const string InfraPrefix="infra/",AppPrefix="apps/",ManifestResource="Yahad.Install.Manifest",PayloadResource="Yahad.Install.Payload";
     private const string Codes="PACKAGE_";
-    internal static readonly string[] Required=["infra/host/Yahad.ServiceHost.exe","infra/host/Yahad.ServiceHost.runtimeconfig.json","infra/updater/Yahad.Updater.exe","infra/updater/Yahad.Updater.runtimeconfig.json",
-        "infra/platform/Yahad.Platform.exe","infra/platform/Yahad.Platform.runtimeconfig.json","infra/runtime/node/node.exe","infra/runtime/caddy/caddy.exe","infra/"+Setup.InfrastructureRecord.EngineMember,
+    internal static readonly string[] Required=["infra/host/Yahad.ServiceHost.exe","infra/updater/Yahad.Updater.exe",
+        "infra/platform/Yahad.Platform.exe","infra/runtime/node/node.exe","infra/runtime/caddy/caddy.exe","infra/"+Setup.InfrastructureRecord.EngineMember,
         ..AppMemberPolicy.Required.Select(m=>AppPrefix+m)];
     private readonly Stream stream;private readonly ZipArchive archive;
     internal InstallPackageManifest Manifest{get;}
     internal InstallPackage(Stream zip,byte[] manifest)
     {
         stream=zip;
-        try{Manifest=NativeJson.Read<InstallPackageManifest>(manifest);}catch(JsonException){throw new IOException("PACKAGE_FORMAT");}
+        try{Manifest=NativeJson.Read(manifest,SetupJsonContext.Default.InstallPackageManifest);}catch(JsonException){throw new IOException("PACKAGE_FORMAT");}
         var infra=Manifest.Infrastructure;var app=Manifest.App;var minimum=Manifest.MinimumFrom;
         if(Manifest.Format!=Format||infra is null||app is null||minimum is null||Manifest.Files is not {Length:>=16 and <=2*TreeRecord.MaximumMembers+2}||app.DatabaseMigrationsFrom is null||
             !SemVer.IsVersion(infra.Version)||!SemVer.IsVersion(app.Version)||!TreeRecord.IsCommit(infra.SourceCommit)||!TreeRecord.IsCommit(app.SourceCommit)||
@@ -83,7 +83,7 @@ internal sealed class InstallPackage:IDisposable
     {
         using var metadata=Assembly.GetExecutingAssembly().GetManifestResourceStream(ManifestResource)??throw new IOException("PACKAGE_NOT_EMBEDDED");
         if(metadata.Length>16777216)throw new IOException("PACKAGE_METADATA_BOUND");using var buffer=new MemoryStream();metadata.CopyTo(buffer);
-        var version=NativeJson.Read<InstallPackageManifest>(buffer.ToArray()).App?.Version;
+        var version=NativeJson.Read(buffer.ToArray(),SetupJsonContext.Default.InstallPackageManifest).App?.Version;
         return version is not null&&SemVer.IsVersion(version)?version:throw new IOException("PACKAGE_FORMAT");
     }
     internal static InstallPackage Embedded()

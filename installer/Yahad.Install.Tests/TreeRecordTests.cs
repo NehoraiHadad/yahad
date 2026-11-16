@@ -12,7 +12,7 @@ internal static class TreeRecordTests
         { try { action(); } catch (IOException error) when (error.Message == "ACTIVE_POINTER_INVALID") { return; } throw new Exception("expected ACTIVE_POINTER_INVALID"); }
         var digest = new string('c', 64); var commit = new string('d', 40);
         TreeMember M(string path, long size = 1, string? sha = null) => new(path, size, sha ?? digest);
-        byte[] Bytes(params TreeMember[] files) => NativeJson.WriteCamel(new TreeRecord(1, "1.2.3", commit, files));
+        byte[] Bytes(params TreeMember[] files) => NativeJson.WriteCamel(new TreeRecord(1, "1.2.3", commit, files), NativeCamelJsonContext.Default.TreeRecord);
         string RawText(string version = "1.2.3", string? sourceCommit = null, string format = "1", string? files = null) =>
             "{\"format\":" + format + ",\"version\":\"" + version + "\",\"sourceCommit\":\"" + (sourceCommit ?? commit) + "\",\"files\":[" +
             (files ?? "{\"path\":\"host/a\",\"size\":1,\"sha256\":\"" + digest + "\"}") + "]}";

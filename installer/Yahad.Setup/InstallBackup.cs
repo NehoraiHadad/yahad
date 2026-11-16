@@ -17,7 +17,7 @@ internal static class InstallBackup
     internal static byte[] Encode(InstallerState state)=>JsonSerializer.SerializeToUtf8Bytes(Of(state));
     internal static bool Matches(byte[] binding,InstallerState state)
     {
-        try{return NativeJson.Read<Binding>(binding)==Of(state);}
+        try{return NativeJson.Read(binding,SetupJsonContext.Default.Binding)==Of(state);}
         catch(JsonException){return false;}
     }
     internal static bool BoundTo(string backup,InstallerState state)

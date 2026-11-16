@@ -84,7 +84,7 @@ internal static class UpgradeFiles
         {
             using var response=await client.GetAsync("http://127.0.0.1:"+port+"/health/ready");if(!response.IsSuccessStatusCode)return new(false,null,null);
             var bytes=await response.Content.ReadAsByteArrayAsync();if(bytes.Length>16384)return null;
-            var value=NativeJson.Read<JsonElement>(bytes);return new(value.GetProperty("ok").GetBoolean(),value.GetProperty("version").GetString(),value.GetProperty("databaseSchema").GetInt32());
+            var value=NativeJson.Read(bytes,SetupJsonContext.Default.JsonElement);return new(value.GetProperty("ok").GetBoolean(),value.GetProperty("version").GetString(),value.GetProperty("databaseSchema").GetInt32());
         }
         catch(Exception error)when(error is HttpRequestException or TaskCanceledException or JsonException or KeyNotFoundException or InvalidOperationException or IOException){return null;}
     }

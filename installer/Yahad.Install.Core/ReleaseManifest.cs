@@ -33,11 +33,6 @@ internal sealed record ReleaseManifest(int Format,string Product,string Version,
     internal const int CurrentFormat=2,MaximumBytes=4096,MaximumMigrationSources=32;
     internal const string ProductName="yahad-windows-release";
     internal const long MaximumSetupBytes=536870912,MaximumAppArchiveBytes=2147483648;
-    private static readonly JsonSerializerOptions Options=new()
-    {
-        MaxDepth=5,PropertyNamingPolicy=JsonNamingPolicy.CamelCase,UnmappedMemberHandling=JsonUnmappedMemberHandling.Disallow,
-        RespectRequiredConstructorParameters=true,RespectNullableAnnotations=true,AllowDuplicateProperties=false
-    };
     internal static string ManifestName(string version)=>"yahad-windows-release-"+version+".json";
     internal static string SignatureName(string version)=>ManifestName(version)+".sig";
     internal static string SetupName(string version)=>"Yahad.Setup-"+version+".exe";
@@ -46,7 +41,7 @@ internal sealed record ReleaseManifest(int Format,string Product,string Version,
     {
         if(bytes.Length is <1 or >MaximumBytes)throw new IOException("RELEASE_MANIFEST_INVALID");
         ReleaseManifest? value;
-        try{value=JsonSerializer.Deserialize<ReleaseManifest>(bytes,Options);}catch(JsonException){throw new IOException("RELEASE_MANIFEST_INVALID");}
+        try{value=JsonSerializer.Deserialize(bytes,ReleaseManifestJsonContext.Default.ReleaseManifest);}catch(JsonException){throw new IOException("RELEASE_MANIFEST_INVALID");}
         if(value is null||!value.Valid())throw new IOException("RELEASE_MANIFEST_INVALID");
         return value;
     }
@@ -69,6 +64,10 @@ internal sealed record ReleaseManifest(int Format,string Product,string Version,
     private static bool File(ReleaseFile file,string name,long maximum)=>file.Name==name&&TreeRecord.IsDigest(file.Sha256)&&file.Bytes>=1&&file.Bytes<=maximum;
     internal bool AcceptsSchema(int recordedSchema)=>recordedSchema==App.DatabaseSchema||App.DatabaseMigrationsFrom.Contains(recordedSchema);
 }
+[JsonSourceGenerationOptions(MaxDepth=5,PropertyNamingPolicy=JsonKnownNamingPolicy.CamelCase,UnmappedMemberHandling=JsonUnmappedMemberHandling.Disallow,
+    RespectRequiredConstructorParameters=true,RespectNullableAnnotations=true,AllowDuplicateProperties=false)]
+[JsonSerializable(typeof(ReleaseManifest))]
+internal sealed partial class ReleaseManifestJsonContext:JsonSerializerContext;
 internal static class ReleaseSignature
 {
     internal const string Prefix="yahad-release-v2\n";

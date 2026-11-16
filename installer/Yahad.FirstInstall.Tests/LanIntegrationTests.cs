@@ -148,7 +148,7 @@ internal static class LanIntegrationTests
         await check("LAN preparation resumes only the owner's exact selection", () =>
         {
             var request = Enable();
-            var prepared = NativeJson.Read<LanSetupRequest>(Json(request));
+            var prepared = NativeJson.Read(Json(request),SetupJsonContext.Default.LanSetupRequest);
             NativeLanInstall.RequireSameSelection(prepared, request);
             Refuse(() => NativeLanInstall.RequireSameSelection(prepared, request with { Address = "192.168.4.6" }));
             Refuse(() => NativeLanInstall.RequireSameSelection(prepared, request with { HttpHelp = false }));
@@ -161,7 +161,7 @@ internal static class LanIntegrationTests
             {
                 // No owner.json read callback exists here: this is exactly the
                 // surviving external receipt, serialized and read on its own.
-                var receipt = NativeJson.Read<LanRemovalIntent>(Json(new LanRemovalIntent(mode, owned)));
+                var receipt = NativeJson.Read(Json(new LanRemovalIntent(mode, owned)),SetupJsonContext.Default.LanRemovalIntent);
                 Require(receipt.State.Address == owned.Address && receipt.State.RootSha256 == owned.RootSha256);
                 NativeLanInstall.RequireRemovalMode(receipt, mode);
                 Refuse(() => NativeLanInstall.RequireRemovalMode(receipt, mode == UninstallMode.KeepData ? UninstallMode.DeleteData : UninstallMode.KeepData));

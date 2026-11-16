@@ -20,14 +20,14 @@ internal sealed record ActivePointer(int Format,ActiveInfrastructure Infrastruct
     }
     internal byte[] Encode()
     {
-        Require();var bytes=NativeJson.WriteCamel(this);
+        Require();var bytes=NativeJson.WriteCamel(this,NativeCamelJsonContext.Default.ActivePointer);
         if(bytes.Length>MaximumBytes)throw new IOException("ACTIVE_POINTER_INVALID");return bytes;
     }
     internal static ActivePointer Parse(byte[] bytes)
     {
         if(bytes.Length is <1 or >MaximumBytes)throw new IOException("ACTIVE_POINTER_INVALID");
         ActivePointer value;
-        try{value=NativeJson.ReadCamel<ActivePointer>(bytes);}catch(Exception error)when(error is JsonException or IOException){throw new IOException("ACTIVE_POINTER_INVALID");}
+        try{value=NativeJson.ReadCamel(bytes,NativeCamelJsonContext.Default.ActivePointer);}catch(Exception error)when(error is JsonException or IOException){throw new IOException("ACTIVE_POINTER_INVALID");}
         value.Require();return value;
     }
     internal static ActivePointer Read()
