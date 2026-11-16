@@ -11,6 +11,8 @@ Windows Settings starts the registered `Yahad.Setup.exe --uninstall` from an
 unelevated shell. That is the payload-free Setup engine of the active infrastructure,
 `C:\Program Files\Yahad.FirstInstall\infra\<infrastructure-version>\setup\Yahad.Setup.exe`:
 it carries no install package, and neither uninstall nor `--repair` ever opens one.
+An app-only update (`--apply-app`) keeps the active infrastructure, so this registered
+engine stays the same; only an infrastructure upgrade moves it to the new `infra\<version>`.
 The binary tree grants Users read and execute; without that Windows refuses with
 "cannot access the specified device, path, or file" before any UAC prompt.
 An installation made under the older ACL gains this entry on its next upgrade;

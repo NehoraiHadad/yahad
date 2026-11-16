@@ -15,8 +15,7 @@ internal static class PairFixture
     internal static readonly string AppCommit=new('a',40);
     internal static readonly string[] InfraMembers=["host/Yahad.ServiceHost.exe","host/Yahad.ServiceHost.runtimeconfig.json","updater/Yahad.Updater.exe","updater/Yahad.Updater.runtimeconfig.json",
         "platform/Yahad.Platform.exe","platform/Yahad.Platform.runtimeconfig.json","runtime/node/node.exe","runtime/caddy/caddy.exe","legal/fixture.json",InfrastructureRecord.EngineMember];
-    internal static readonly string[] AppMembers=["app/package.json","app/server/main.mjs","app/dist/index.html","app/deploy/lan-capabilities.json","app/deploy/lan-help.html",
-        "app/legal/server-bundle.json","app/legal/ThirdPartyNotices-server.txt","app/legal/build-inputs.json"];
+    internal static readonly string[] AppMembers=AppMemberPolicy.Required;
     internal sealed record Tree(TreeKind Kind,string Version,string SourceCommit,(string Path,byte[] Bytes)[] Members,byte[] Record)
     {
         internal string Sha256=>TreeRecord.Sha256(Record);
@@ -24,10 +23,12 @@ internal static class PairFixture
         internal InstallMember[] Files=>[..Members.Select(m=>new InstallMember(m.Path,m.Bytes.Length,TreeRecord.Sha256(m.Bytes))),new(TreeRecord.RecordName(Kind),Record.Length,Sha256)];
     }
     private static byte[] Content(string member,string salt)=>Encoding.UTF8.GetBytes(member=="app/server/main.mjs"?"synthetic-app-not-executed"+salt:"synthetic "+member+salt);
+    // The record escapes as setup_package.py's json.dumps does: only what JSON requires.
+    private static readonly JsonSerializerOptions Builder=new(){Encoder=System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping};
     internal static Tree Build(TreeKind kind,string version,string commit,IEnumerable<string> names,string salt="")
     {
         var members=names.Order(StringComparer.Ordinal).Select(n=>(n,Content(n,salt))).ToArray();
-        var record=JsonSerializer.SerializeToUtf8Bytes(new{format=TreeRecord.CurrentFormat,version,sourceCommit=commit,files=members.Select(m=>new{path=m.Item1,size=(long)m.Item2.Length,sha256=TreeRecord.Sha256(m.Item2)})});
+        var record=JsonSerializer.SerializeToUtf8Bytes(new{format=TreeRecord.CurrentFormat,version,sourceCommit=commit,files=members.Select(m=>new{path=m.Item1,size=(long)m.Item2.Length,sha256=TreeRecord.Sha256(m.Item2)})},Builder);
         return new(kind,version,commit,members,record);
     }
     internal static Tree Infra(string? version=null,string salt="")=>Build(TreeKind.Infrastructure,version??InfrastructureRelease.Version,InfrastructureRelease.SourceCommit,InfraMembers,salt);
@@ -47,7 +48,7 @@ internal static class PairFixture
     // archive and the manifest together; tamper changes only the archive's bytes of
     // one member; change rewrites the manifest after it is built.
     internal static (byte[] Zip,byte[] Manifest) Package(bool duplicate=false,string? extra=null,string? omit=null,Func<InstallPackageManifest,InstallPackageManifest>? change=null,
-        Tree? infra=null,Tree? app=null,int schema=7,int[]? migrations=null,string? tamper=null)
+        Tree? infra=null,Tree? app=null,int schema=7,int[]? migrations=null,string? tamper=null,PackageMinimumFrom? minimum=null)
     {
         infra??=Infra();app??=App();var entries=new List<(string Path,byte[] Bytes)>();
         foreach(var tree in new[]{infra,app})
@@ -63,7 +64,7 @@ internal static class PairFixture
         }
         var archive=data.ToArray();
         var manifest=new InstallPackageManifest(InstallPackage.Format,new(infra.Version,InfrastructureRelease.ContractMin,InfrastructureRelease.ContractMax,infra.SourceCommit,infra.Sha256),
-            new(app.Version,app.SourceCommit,InfrastructureRelease.ContractMin,app.Sha256,schema,migrations??[5,6]),TreeRecord.Sha256(archive),
+            new(app.Version,app.SourceCommit,InfrastructureRelease.ContractMin,app.Sha256,schema,migrations??[5,6]),minimum??new("0.0.0","0.0.0"),TreeRecord.Sha256(archive),
             entries.Select(e=>new InstallMember(e.Path,e.Bytes.Length,TreeRecord.Sha256(e.Bytes))).ToArray());
         return(archive,JsonSerializer.SerializeToUtf8Bytes(change?.Invoke(manifest)??manifest));
     }

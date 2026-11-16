@@ -56,7 +56,7 @@ From a **clean committed checkout**, with npm development dependencies installed
 
 ```powershell
 $inputs = @{
-    NodeDirectory = 'C:/build-tools/node-v24.x.x-win-x64'
+    NodeDirectory = 'C:/build-tools/node-v24.22.2-win-x64' # the archive pinned in installer/windows/dependency-pins.json
     DotNet = 'C:/build-tools/dotnet/dotnet.exe'
     Python = 'python'
     NpmCache = 'C:/build-cache/npm'
@@ -64,13 +64,48 @@ $inputs = @{
     VendorDirectory = '.local/vendors'
 }
 ./installer/package.ps1 @inputs -CheckOnly
-./installer/package.ps1 @inputs
+./installer/package.ps1 @inputs -InfraCache C:/build-cache/yahad-infra
 ```
+
+#### Infrastructure cache and the bump rule
+
+A release has two halves with separate identities
+([plan section 10](../docs/WINDOWS-APP-PACKAGE-PLAN.md#10-release-tooling)):
+the **infrastructure** (service host, Updater, Platform helper, Setup engine,
+Node, Caddy and the .NET runtime), versioned by `<YahadInfrastructureVersion>` in
+`installer/Directory.Build.props` with its `ContractMin`/`ContractMax` range, and the
+**app** (server, web assets, deploy files), versioned by `package.json` and requiring
+the contract in `package.json` `yahadInfrastructureContract`.
+
+`-InfraCache <dir>` keeps each infrastructure build in `<dir>/<infrastructure-version>/`
+with `infra-build.json` (version, source commit, input digest, tree hash). A later
+package whose infrastructure input digest equals the cached one reuses those exact
+bytes; the audit checks them against `infra-tree.json`. `-InfraSource <checkout>` names
+the checkout at the infrastructure's source commit that the distributable Setup is
+published from (default: the current checkout). The release commands
+(`scripts/release-windows.mjs build`, `install`, `publish`) pass it themselves when the
+cache entry for HEAD's infrastructure version was built at another commit: a git worktree
+at that commit (docs/WINDOWS-APP-PACKAGE-PLAN.md section 10).
+
+The digest is `python installer/windows/infra_inputs.py digest [--commit <sha>]`: it
+covers the infrastructure projects (not their tests), `Directory.Build.props`,
+`NuGet.Config`, `package.ps1`, `installer/windows/*`, the Node and Caddy pins and the
+committed release key. The rule is strict both ways: a digest that differs from the
+latest release's infrastructure commit requires a newer infrastructure version, and an
+equal digest requires the same version. A cached version whose digest differs is refused
+with `INFRA_BUMP_REQUIRED`. Changing the contract range is a separate, reviewed decision.
 
 ### Release signing
 
-The Updater's upgrades (`Yahad.Setup.exe --quiet-upgrade <dir>`) accept only a release signed
-by the key the installation trusts. Running a newer Setup by hand over an older
+A Windows release is one format-2 manifest, `yahad-windows-release-<v>.json`, signed
+over the prefix `yahad-release-v2\n` plus its raw bytes into `yahad-windows-release-<v>.json.sig`.
+The Updater picks a track from it: a newer infrastructure version takes the **Setup
+track** (the staged `Yahad.Setup-<v>.exe --quiet-upgrade <dir>`, which carries the app
+too); the same infrastructure with a newer app takes the **app track** (the installed
+engine's `--apply-app <dir>` with `yahad-windows-app-<v>.zip`, leaving services,
+firewall and Caddy untouched); an app that needs a contract the release's own
+infrastructure does not offer is refused with `APP_NEEDS_INFRASTRUCTURE`. Both tracks
+accept only a release signed by the key the installation trusts. Running a newer Setup by hand over an older
 installation makes the same move: the administrator elevated that image, and it must carry the same key. There is no override switch, environment
 variable or registry value. The private key stays on the maintainer's PC: it is
 never committed, never uploaded and never a CI or GitHub secret, and CI signs
@@ -115,17 +150,34 @@ certificate (Windows SmartScreen warns on the first install; that is accepted).
    unmerged branch. Everything happens in a throwaway clone: bump the patch version (refused unless above
    the latest release), commit, `npm ci`, build the app, package the Linux assets with
    `scripts/release.mjs package-https`, package the root updater with
-   `scripts/release-updater.mjs package-github`, build and sign Windows, and check the full set of eight assets.
+   `scripts/release-updater.mjs package-github`, build and sign Windows (reusing the cached
+   infrastructure when the bump rule above says it is unchanged), and check the full set of nine assets.
    It prints version, commit, key id and asset sizes, and you type the version to confirm. Only then does
    it push the commit and tag atomically and run `gh release create ... --latest` (needs `gh auth login`);
    afterwards run `git pull --ff-only`. Nothing is pushed or published before the confirmation.
 
 One release carries both platforms (`yachad-release.json`, `yachad-app.zip`, `yachad-updater.json` and
 `yachad-updater.zip` for the Pi;
-`yahad-windows-<v>.json`, `.json.sig` and `Yahad.Setup-<v>.exe` for Windows, and the same Setup as `Yahad.Setup.exe` for the landing page's fixed link), because both updaters read
-GitHub's single `/releases/latest`; see [GITHUB-RUNTIME-UPDATES.md](../docs/GITHUB-RUNTIME-UPDATES.md).
+`yahad-windows-release-<v>.json`, `yahad-windows-release-<v>.json.sig`, `yahad-windows-app-<v>.zip`
+and `Yahad.Setup-<v>.exe` for Windows, and the same Setup as `Yahad.Setup.exe` for the landing page's
+fixed link), because both updaters read GitHub's single `/releases/latest`; see
+[GITHUB-RUNTIME-UPDATES.md](../docs/GITHUB-RUNTIME-UPDATES.md). Before publishing, the command checks the
+signature against the committed key, that the manifest names this version, the Setup bytes and the app
+zip's size and hash, that the zip's `app-tree.json` matches `app.treeSha256`, and that the
+package embedded in the Setup is the one the manifest signs: it runs that Setup's
+`--verify-package` (which checks the embedded zip, its members and both tree records against its
+own install manifest) and compares the reported infrastructure and app identity, contract,
+schema, migrations, minimum-from pair and release key with the signed manifest. The Setup is a
+compressed single-file bundle, so its embedded bytes are not visible from outside it.
 Building Windows alone from a clean checkout is `node scripts/release-windows.mjs build <key.pem> --out <new-dir>`,
-which writes the three Windows files and never publishes.
+which writes the four Windows files and never publishes.
+
+CI never sees this key. `installer/ci-build-upgrade-set.ps1` generates a throwaway key in the
+job, builds the acceptance upgrade set from the exact commit with one shared `-InfraCache`
+(base `n`, app-only `app`, an app that exits after migrating, an infrastructure bump `n1`, a
+broken app on `n1`, a contract-too-high manifest, `n1`'s manifest naming another Setup's bytes
+and foreign, unsigned and tampered manifests on both tracks, each staged in a directory named
+by its version), signs it with `scripts/windows-release-key.mjs sign` and destroys the key with the job.
 
 Installation writes the build's key to `%ProgramFiles%\Yahad.FirstInstall\release-key.spki`,
 and that file is the trust root from then on. A machine installed from a keyless
@@ -135,8 +187,9 @@ Replace the example tool paths with your actual extracted tools. The Node direct
 must contain `node.exe`, `LICENSE` and `node_modules/npm/bin/npm-cli.js`; a path to
 node.exe alone is insufficient. The dotnet directory must include its legal files.
 
-Output: `.local/packages/<12-character-source-commit>/setup/Yahad.Setup.exe`,
-the project LICENSE, native/system manifests, package hashes and local step logs.
+Output: `.local/packages/<12-character-source-commit>/setup/Yahad.Setup.exe`; under
+`release/`, the unsigned `yahad-windows-release-<v>.json`, `yahad-windows-app-<v>.zip` and
+`Yahad.Setup-<v>.exe`; the project LICENSE, native/system manifests, package hashes and local step logs.
 The Platform helper is published into the package output beside the service host
 and the Updater and packaged as infrastructure (`platform/`); the app payload never
 carries it. The script refuses a pre-existing package output to avoid mixing
@@ -179,10 +232,10 @@ one that still has a `versions\` directory, is refused with
 `LEGACY_INSTALL_UNSUPPORTED` before anything is written.
 
 Only install, `--verify-package` and `--quiet-upgrade` open the embedded install
-package. Uninstall and `--repair` run the installed engine without it. An upgrade
-whose infrastructure version is newer moves the three images to the new `infra\`
-directory; one with an identical infrastructure tree changes only `apps\` and the
-pointer.
+package. Uninstall, `--repair` and `--apply-app` run the installed engine without it.
+An upgrade whose infrastructure version is newer moves the three images to the new
+`infra\` directory; one with an identical infrastructure tree, whether the app track's
+`--apply-app` or a newer Setup run by hand, changes only `apps\` and the pointer.
 
 ## Distribution and installation are separate
 

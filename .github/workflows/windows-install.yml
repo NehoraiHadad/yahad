@@ -1,12 +1,19 @@
 name: Windows install acceptance
 
-# Runs the synthetic C# suites, then builds Yahad.Setup.exe from the exact
-# commit and runs real machine acceptance on a disposable Windows runner:
-# install, readiness, first family over HTTP, repair, refused releases, upgrade
-# with a schema change, health rollback, interrupted-upgrade recovery, keep-data
-# uninstall, reinstall with the family intact, and full removal
-# (installer/machine-acceptance.ps1). The releases are signed by a key generated
-# in this job and destroyed with it; the real signing key never touches CI.
+# Runs the synthetic C# suites, then builds an upgrade set from the exact commit
+# (installer/ci-build-upgrade-set.ps1: n, app-only n+app, an app that exits
+# after migrating, an infrastructure bump n1, a broken n1 app, a contract-too-high
+# manifest, a release naming another Setup and refused manifests on both tracks,
+# all sharing one infrastructure cache) and
+# runs real machine acceptance on a disposable Windows runner
+# (installer/machine-acceptance.ps1): install, readiness, first family over
+# HTTP, repair, refused releases, app-only update through the Updater with LAN
+# untouched, app health rollback, Setup-track health rollback and interrupted-
+# upgrade recovery, infrastructure upgrade, replay refusal, keep-data
+# uninstall, reinstall with the family intact, full removal, same-infrastructure
+# manual Setup, and removal of a moved install. The releases are signed by a
+# key generated in this job and destroyed with it; the real signing key never
+# touches CI.
 on:
   push:
     branches: [main, windows-install-acceptance]
@@ -36,8 +43,6 @@ jobs:
     permissions:
       contents: read
     env:
-      NODE_VERSION: v24.22.2
-      NODE_ZIP_SHA256: ca1bff5d8ead13c9f2ea404a176db46bd430704d5b5113734049fa365e7799e2
       DOTNET_SDK_VERSION: 10.0.403
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
     steps:
@@ -52,23 +57,28 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force .local/tools, .local/downloads | Out-Null
-          $zip = ".local/downloads/node-$env:NODE_VERSION-win-x64.zip"
-          Invoke-WebRequest "https://nodejs.org/dist/$env:NODE_VERSION/node-$env:NODE_VERSION-win-x64.zip" -OutFile $zip
-          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $env:NODE_ZIP_SHA256) { throw 'Node archive checksum' }
+          # The one Node pin: the same archive the release payload vendors.
+          $node = (Get-Content installer/windows/dependency-pins.json -Raw | ConvertFrom-Json).node
+          $zip = ".local/downloads/$($node.archive.name)"
+          Invoke-WebRequest $node.archive.url -OutFile $zip
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $node.archive.sha256) { throw 'Node archive checksum' }
           Expand-Archive $zip .local/tools
+          $root = ($node.files | Where-Object directoryPath -eq 'node.exe').archivePath -replace '/node\.exe$', ''
+          if (!(Test-Path -LiteralPath ".local/tools/$root/node.exe" -PathType Leaf)) { throw "The Node archive has no $root/node.exe" }
+          "NODE_DIRECTORY=.local/tools/$root" >> $env:GITHUB_ENV
           Invoke-WebRequest 'https://builds.dotnet.microsoft.com/dotnet/scripts/v1/dotnet-install.ps1' -OutFile .local/downloads/dotnet-install.ps1
           & .local/downloads/dotnet-install.ps1 -Version $env:DOTNET_SDK_VERSION -InstallDir .local/tools/dotnet -NoPath
       - name: Yahad.Install.Tests
         shell: pwsh
-        run: ./installer/ci-test-suites.ps1 -Suite Install -DotNet .local/tools/dotnet/dotnet.exe -Node ".local/tools/node-$env:NODE_VERSION-win-x64/node.exe" -PackageCache .local/nuget-cache -Output .local/suites
+        run: ./installer/ci-test-suites.ps1 -Suite Install -DotNet .local/tools/dotnet/dotnet.exe -Node "$env:NODE_DIRECTORY/node.exe" -PackageCache .local/nuget-cache -Output .local/suites
       - name: Yahad.FirstInstall.Tests --full-installer-only
         if: success() || failure()
         shell: pwsh
-        run: ./installer/ci-test-suites.ps1 -Suite FirstInstall -DotNet .local/tools/dotnet/dotnet.exe -Node ".local/tools/node-$env:NODE_VERSION-win-x64/node.exe" -PackageCache .local/nuget-cache -Output .local/suites
+        run: ./installer/ci-test-suites.ps1 -Suite FirstInstall -DotNet .local/tools/dotnet/dotnet.exe -Node "$env:NODE_DIRECTORY/node.exe" -PackageCache .local/nuget-cache -Output .local/suites
       - name: Yahad.ServiceHost.Tests
         if: success() || failure()
         shell: pwsh
-        run: ./installer/ci-test-suites.ps1 -Suite ServiceHost -DotNet .local/tools/dotnet/dotnet.exe -Node ".local/tools/node-$env:NODE_VERSION-win-x64/node.exe" -PackageCache .local/nuget-cache -Output .local/suites
+        run: ./installer/ci-test-suites.ps1 -Suite ServiceHost -DotNet .local/tools/dotnet/dotnet.exe -Node "$env:NODE_DIRECTORY/node.exe" -PackageCache .local/nuget-cache -Output .local/suites
       - name: Keep suite results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -85,8 +95,6 @@ jobs:
     permissions:
       contents: read
     env:
-      NODE_VERSION: v24.22.2
-      NODE_ZIP_SHA256: ca1bff5d8ead13c9f2ea404a176db46bd430704d5b5113734049fa365e7799e2
       DOTNET_SDK_VERSION: 10.0.403
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
     steps:
@@ -104,10 +112,15 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force .local/tools, .local/downloads | Out-Null
-          $zip = ".local/downloads/node-$env:NODE_VERSION-win-x64.zip"
-          Invoke-WebRequest "https://nodejs.org/dist/$env:NODE_VERSION/node-$env:NODE_VERSION-win-x64.zip" -OutFile $zip
-          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $env:NODE_ZIP_SHA256) { throw 'Node archive checksum' }
+          # The one Node pin: the same archive the release payload vendors.
+          $node = (Get-Content installer/windows/dependency-pins.json -Raw | ConvertFrom-Json).node
+          $zip = ".local/downloads/$($node.archive.name)"
+          Invoke-WebRequest $node.archive.url -OutFile $zip
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $node.archive.sha256) { throw 'Node archive checksum' }
           Expand-Archive $zip .local/tools
+          $root = ($node.files | Where-Object directoryPath -eq 'node.exe').archivePath -replace '/node\.exe$', ''
+          if (!(Test-Path -LiteralPath ".local/tools/$root/node.exe" -PathType Leaf)) { throw "The Node archive has no $root/node.exe" }
+          "NODE_DIRECTORY=.local/tools/$root" >> $env:GITHUB_ENV
           Invoke-WebRequest 'https://builds.dotnet.microsoft.com/dotnet/scripts/v1/dotnet-install.ps1' -OutFile .local/downloads/dotnet-install.ps1
           & .local/downloads/dotnet-install.ps1 -Version $env:DOTNET_SDK_VERSION -InstallDir .local/tools/dotnet -NoPath
       - name: Fetch pinned vendors
@@ -124,22 +137,20 @@ jobs:
       - name: Install locked npm dependencies
         shell: pwsh
         run: |
-          $node = ".local/tools/node-$env:NODE_VERSION-win-x64"
+          $node = $env:NODE_DIRECTORY
           & "$node/node.exe" "$node/node_modules/npm/bin/npm-cli.js" ci --cache .local/npm-cache --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
       - name: Generate an ephemeral release key
         shell: pwsh
         run: |
-          & ".local/tools/node-$env:NODE_VERSION-win-x64/node.exe" scripts/windows-release-key.mjs keygen "$env:RUNNER_TEMP/release-key"
+          & "$env:NODE_DIRECTORY/node.exe" scripts/windows-release-key.mjs keygen "$env:RUNNER_TEMP/release-key"
           if ($LASTEXITCODE -ne 0) { throw 'Key generation failed' }
-      - name: Build the N, N+1 and broken releases
+      - name: Build the upgrade set (n, app, unhealthy, n1, broken, contract, mismatch, refused)
         shell: pwsh
-        run: ./installer/ci-build-upgrade-set.ps1 -Key "$env:RUNNER_TEMP/release-key" -NodeDirectory ".local/tools/node-$env:NODE_VERSION-win-x64" -NpmCache .local/npm-cache -VendorDirectory .local/vendors -DotNet .local/tools/dotnet/dotnet.exe -PackageCache .local/nuget-cache -Output .local/packages/set
-      - name: Machine acceptance (install, repair, upgrade, rollback, reinstall, removal)
+        run: ./installer/ci-build-upgrade-set.ps1 -Key "$env:RUNNER_TEMP/release-key" -NodeDirectory "$env:NODE_DIRECTORY" -NpmCache .local/npm-cache -VendorDirectory .local/vendors -DotNet .local/tools/dotnet/dotnet.exe -PackageCache .local/nuget-cache -InfraCache .local/packages/infra-cache -Output .local/packages/set
+      - name: Machine acceptance (install, app update, rollbacks, infrastructure upgrade, reinstall, removal)
         shell: pwsh
-        run: |
-          $set = '.local/packages/set'
-          ./installer/machine-acceptance.ps1 -Setup "$set/n/setup/Yahad.Setup.exe" -Base "$set/n/release" -Upgrade "$set/n1/release" -Broken "$set/broken/release" -Refused "$set/refused" -Output .local/acceptance -Disposable
+        run: ./installer/machine-acceptance.ps1 -Set .local/packages/set -Output .local/acceptance -DotNet .local/tools/dotnet/dotnet.exe -PackageCache .local/nuget-cache -Disposable
       - name: Destroy the ephemeral release key
         if: always()
         shell: pwsh
@@ -151,7 +162,10 @@ jobs:
           name: install-acceptance-${{ github.sha }}
           path: |
             .local/acceptance/
+            .local/packages/set/upgrade-set.json
             .local/packages/set/*/*.log
             .local/packages/set/*/package-build.json
+            .local/packages/infra-cache/*/*.log
+            .local/packages/infra-cache/*/*.json
           retention-days: 14
           if-no-files-found: warn

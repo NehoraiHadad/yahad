@@ -287,6 +287,18 @@ differs after migration (`src/store.ts:84-85`; `src/db.ts:14-18`).
 There is no format-6 reader. No 0.6.x install exists (section 11), so a format-6
 record is refused like any unknown format.
 
+**Size.** The member lists are the payload-free uninstall inventory (8.4), so
+the record keeps them, and its size has one bound derived from the tree bound.
+Each of the four lists, encoded as the record encodes it, is at most 16 MiB
+(the tree record's own bound), and every package that installs a tree checks
+this when it is opened (`PACKAGE_BOUND`, `APP_PACKAGE_BOUND`). Everything else
+is validated identifiers, under 64 KiB. So a record is at most 4 × 16 MiB +
+64 KiB, the one bound every reader reads with (`InstallerState.MaximumBytes`).
+The upgrade record holds two pairs and has the same bound. Admission also
+encodes the exact record its commit will write, so an oversized record is
+refused before anything changes. A move never writes a record that a later
+read refuses.
+
 ## 5. Release format
 
 ### 5.1 Manifests
@@ -338,8 +350,10 @@ and requires runtimes and services (`:37,99`):
 - **Required members:** `app/package.json`, `app/server/main.mjs`,
   `app/dist/index.html`, `app/deploy/lan-capabilities.json` and
   `app/deploy/lan-help.html` (`NativeLanInstall.cs:102-106`), plus
-  `app/legal/server-bundle.json` and `app/legal/ThirdPartyNotices-server.txt`
-  (section 10).
+  the app's legal records `app/legal/server-bundle.json`,
+  `app/legal/ThirdPartyNotices-server.txt`, `app/legal/build-inputs.json`,
+  `app/legal/SBOM.json` and `app/legal/Yahad-LICENSE.txt` (section 10;
+  `bundle.py` `REQUIRED`).
 - **Forbidden:**
   - `app/src/`, `app/node_modules/`, `app/package-lock.json`
     (`installer/windows/setup_package.py:160-162`);
@@ -353,6 +367,12 @@ and requires runtimes and services (`:37,99`):
   extracted (as `InstallPackage.cs:69-71`).
 - **Exact match:** the archive's member set must equal `app-tree.json`'s list
   exactly.
+
+The required and forbidden rules are the app member policy, one rule for app
+members whichever package carries them (`AppMemberPolicy`): the app archive and
+the `apps/` namespace of a Setup's install package, which a first install, the
+Setup track and a manual Setup over the same infrastructure (8.2) install. The
+builder's `bundle.py` `REQUIRED` and `refused_member` are the same lists.
 
 ### 5.3 `app-tree.json` (and `infra-tree.json`)
 
@@ -421,8 +441,8 @@ that engine can resume or undo every phase.
 | 1 | `admitting` | Require admin, the install lock, record phase `committed`, and no upgrade state (`UpgradeHost.cs:112-115`). Verify the signature over raw bytes, then the strict parse. Read the **exact** file `yahad-windows-release-<v>.json`, never a glob (`UpgradeHost.cs:141`). Check the archive size and hash. Require app version > active, `requiresContract` in the installed contract range (section 6), and that `infrastructure.version` equals the installed one (otherwise this is a Setup-track release). Require that the **recorded schema** (4.5) is the target or is in `databaseMigrationsFrom`. This needs no running Runtime, so an app that fixes a startup failure is still admitted. Check free disk for the tree and a database copy. | Refuse. Nothing has changed. |
 | 2 | `preparing` | Extract to `apps\<v>.partial` with `AppPackage` and no-replace commits. Check `app-tree.json` against `treeSha256`. Rename to `apps\<v>`. | Discard: remove the partial and the target. |
 | 3 | `fencing` | Clear Runtime failure actions (`ClearFailureActions`, as `UpgradeHost.cs:169`), so the SCM cannot restart the old app behind the engine. | Discard: restore failure actions. |
-| 4 | `stopping` | Stop the LAN proxy if present (`StopForUpgradeAsync`, as `:170`), then the Runtime. The Updater keeps running: it holds no app file, and the engine is detached. | Discard: start the Runtime and the proxy, then restore failure actions. |
-| 5 | `stopped` | Take the **data lease** (`WindowsFileBoundary.AcquireDataLease`). It proves no process holds the database, and the engine holds it until step 8. The backup runs under this held lease. `DatabaseBackup.Create/Restore` (`DatabaseBackup.cs:23,38`) gain an overload that takes it instead of acquiring their own. If the schema changes, take the backup. | Discard (pointer unchanged): release the lease, start the Runtime and the proxy, then restore failure actions. |
+| 4 | `stopping` | Stop the LAN proxy if present (`StopForUpgradeAsync`, as `:170`), then the Runtime. The Updater keeps running: it holds no app file, and the engine is detached. | Discard: restore failure actions and remove the target, then start the Runtime and the proxy. |
+| 5 | `stopped` | Take the **data lease** (`WindowsFileBoundary.AcquireDataLease`). It proves no process holds the database, and the engine holds it until step 8. The backup runs under this held lease. `DatabaseBackup.Create/Restore` (`DatabaseBackup.cs:23,38`) gain an overload that takes it instead of acquiring their own. If the schema changes, take the backup. | Discard (pointer unchanged): release the lease, restore failure actions and remove the target, then start the Runtime and the proxy. |
 | 6 | `switching` | Atomically replace `active.json` with the to-pair. Regenerate the LAN help page from the **new** app (6a). | Roll back. |
 | 7 | `started` | Release the lease (the host takes it at start: `InstalledLaunch.cs:60`). Start the Runtime. Gate on health: version = new app, schema = target, 3 consecutive passes within 300 s (`UpgradeHost.cs:53-64`). | Roll back. |
 | 8 | `healthy` | Start the proxy (as `:178`), then restore failure actions (`EnableStartup`). | Roll back. |
@@ -438,7 +458,11 @@ failure reports `ROLLBACK_FAILED`, and repair retries, as today
 
 Every exit path, whether discard, rollback or commit, ends with failure actions
 restored and the lease released. Repair replays the same rule from the persisted
-phase.
+phase. A discard resolves the attempt (failure actions, target tree, backup,
+upgrade state) before it starts what it stopped: the old app may be the one that
+cannot start, which an app update is allowed to fix (step 1). Its start failing
+then reports `ROLLBACK_FAILED` with no upgrade state left, so repair's health pass
+retries the start and the next apply is admitted.
 
 **6a. LAN served files.** Today `RefreshServedFiles` writes both the help page
 and the Caddyfile (`NativeLanInstall.cs:230-236`), and it reads the template
@@ -538,8 +562,10 @@ inventory becomes:
 - every member of the active and `Previous` `infra-tree.json` and `app-tree.json`;
 - the installed engine.
 
-The receipt and the `Inspect` rules stay unchanged. The uninstall string points
-at the installed engine.
+The `Inspect` rules stay unchanged. The receipt carries the record, its mode
+and its stage, and derives the inventory from the record. It does not store
+the inventory a second time, so its bound is the record's plus 64 KiB. The
+uninstall string points at the installed engine.
 
 ## 9. Updater
 
@@ -549,9 +575,11 @@ The Updater reads only the format-2 manifest. A newer tag
 without it is "not an update for this machine", as today for a tag without
 Windows assets (`UpdaterEngine.cs:135-138`). After the signature and parse:
 
-1. If `infrastructure.version` is newer than the installed one, take the **Setup
-   track**. Its Setup carries the new app too, so infrastructure fixes such as a
-   Node security update are never skipped.
+1. If `infrastructure.version` is newer than the installed one and the app is
+   newer, take the **Setup track**. Its Setup carries the new app too, so
+   infrastructure fixes such as a Node security update are never skipped. Every
+   release carries an app, so a release whose app is not newer is not an update on
+   either track: the Setup track would downgrade or replay the app.
 2. Otherwise, if the app is newer, `infrastructure.version` equals the installed
    one, and `requiresContract` is in its contract range, take the **app track**.
 3. Otherwise, if the app needs a contract outside the release's own
@@ -620,7 +648,10 @@ It moves to this exact set of nine names, and checks:
 - that the manifest names this version and the Setup bytes;
 - that the app zip matches its size and hash, and that the `app-tree.json` inside
   it matches `treeSha256`;
-- that `infrastructure.treeSha256` matches the Setup's embedded `infra-tree.json`.
+- that the package embedded in the Setup is the one the manifest signs. The Setup is a
+  compressed single-file bundle, so the check runs the release's own Setup with
+  `--verify-package` (which verifies the embedded zip, its members and both tree records)
+  and compares its reported identity field by field with the signed manifest.
 
 **Signing stays local.** `windows-release-key.mjs sign` always uses
 `yahad-release-v1\n` (`scripts/windows-release-key.mjs:11,36`). It switches to
@@ -645,6 +676,30 @@ release's app version and commit (`installer/windows/application_version.py:46-5
 version's first release, from that commit. It is cached by
 `infra-tree.json` digest. Later releases reuse it and build only the app
 and the distributable Setup (decision 7).
+
+**One infrastructure source for every build.** `infra_package.py plan()` reuses a
+cache entry only when the Setup is published from a checkout of the entry's own
+source commit (`-InfraSource`), and refuses `INFRA_SOURCE_MISMATCH` otherwise. So
+every command of `scripts/release-windows.mjs` that builds (`build`, `install`,
+`publish`) resolves that commit the same way (`resolveInfrastructure`), from the
+cache entry for HEAD's `YahadInfrastructureVersion`, read through
+`infra_package.py cached`:
+- an entry with HEAD's input digest: its `sourceCommit`;
+- an entry with another digest: refused early, `INFRA_BUMP_REQUIRED`;
+- no entry: the commit being built, except a `publish` that reuses the latest
+  release's infrastructure, which takes that release's commit. A `publish` reuse
+  whose released commit differs from an existing entry's commit is refused.
+
+The resolved commit must be the commit being built or one of its ancestors
+(`git merge-base --is-ancestor`), for every command; otherwise the command refuses
+`INFRA_SOURCE_OUTSIDE_HISTORY` and names the cache entry to remove. Because `publish`
+builds only from a HEAD equal to `origin/main`, a release's infrastructure commit is
+always on `origin/main`.
+
+A commit other than the one being built is checked out as a git worktree under the
+git-ignored `.local/infra-source/` and removed afterwards. `buildSigned` then
+requires the manifest's `infrastructure.sourceCommit` and the build's recorded
+input digest to be the resolved ones.
 
 **Version bump rule, per component.** "Anything under `installer/`" is not the
 right test, because infra inputs also live outside it. The release command

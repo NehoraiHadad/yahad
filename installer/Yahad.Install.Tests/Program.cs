@@ -168,6 +168,7 @@ await AppLifecycleTests.Run(Check);
 await LifecycleCleanupTests.Run(root,Check);
 await InfrastructureReleaseTests.Run(Check);
 await ActivePointerTests.Run(Check);
+await ReleaseManifestTests.Run(Check);
 await TreeRecordTests.Run(root,Check);
 var report = JsonSerializer.Serialize(new { platform = "Windows x64", kind = "synthetic-nonprivileged", passed = results.Count - failed, failed, tests = results }, new JsonSerializerOptions { WriteIndented = true });
 if (args is ["--report", var reportPath]) File.WriteAllText(reportPath, report);

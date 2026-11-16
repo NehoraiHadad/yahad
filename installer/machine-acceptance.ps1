@@ -1,15 +1,25 @@
-# Real machine acceptance for a built Yahad.Setup.exe. Every check is what a
-# person or administrator observes (Setup results, services, HTTP answers, the
-# account they created), so it keeps gating when the mechanism behind it changes:
-#   install -> ready, with the two ACLs proven by Windows -> create the first family over the app's own HTTP API ->
+# Real machine acceptance for the upgrade set of installer/ci-build-upgrade-set.ps1
+# (n, app, unhealthy, n1, broken, contract, mismatch, refused). Every check is what a person
+# or administrator observes (Setup results, services, HTTP answers, the account they
+# created), so it keeps gating when the mechanism behind it changes. One installation
+# is carried through every move; pairs are (infrastructure, app):
+#   install n (I, A) -> ready, with the two ACLs proven by Windows -> create the first family over the app's own HTTP API ->
 #   the parent reads and changes update settings through app, Platform and the
 #   Updater's pipe -> restart the service and time it -> repair stopped services
 #   and a missing task -> the Repair task repairs as SYSTEM -> refuse foreign,
-#   unsigned and tampered releases -> a home-network proxy is placed -> the parent installs a signed staged release
-#   with a schema change through the Updater, the ACLs proven again -> refuse a replay -> a broken release
-#   rolls both services back with the data restored, leaving the paused proxy stopped -> an upgrade killed mid-way is
-#   undone by repair -> uninstall keeping data -> reinstall -> the same account signs
-#   in -> uninstall deleting data -> nothing remains.
+#   unsigned and tampered releases on both tracks, another release's Setup, and an app
+#   whose contract its own infrastructure does not serve -> a home-network proxy is placed ->
+#   the parent installs app (I, A+1) on the app track through the Updater, which keeps
+#   running and reports the new app; firewall rule and Caddyfile untouched, help page from
+#   A+1 -> the parent installs unhealthy (I, A+2), which rolls back to (I, A+1) with the
+#   data restored and the help page from A+1 again -> broken (I+1, A+4) on the Setup track
+#   rolls everything back to (I, A+1), leaving the paused proxy stopped -> the same upgrade
+#   killed mid-way is undone by repair -> the parent installs n1 (I+1, A+3) on the Setup
+#   track through the Updater, the ACLs proven again -> refuse replays on both tracks ->
+#   uninstall keeping data -> reinstall -> the same account signs in -> uninstall deleting
+#   data -> nothing remains -> install n again and run app's Setup by hand: the same
+#   infrastructure, so only the app moves -> refuse the older Setup -> uninstall deleting
+#   data -> nothing remains.
 # Only the Updater's download from GitHub into its staging folder is not driven
 # here: GitHub carries no release signed by CI's throwaway key and the source URL is
 # fixed by design. The Updater's real check against GitHub does run; the download
@@ -24,18 +34,17 @@
 # password live only in this process's memory; neither is written or printed.
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory=$true)][string]$Setup,
-    # Signed release directories from installer/ci-build-upgrade-set.ps1.
-    [Parameter(Mandatory=$true)][string]$Base,
-    [Parameter(Mandatory=$true)][string]$Upgrade,
-    [Parameter(Mandatory=$true)][string]$Broken,
-    [Parameter(Mandatory=$true)][string]$Refused,
+    # The signed upgrade set from installer/ci-build-upgrade-set.ps1.
+    [Parameter(Mandatory=$true)][string]$Set,
     [Parameter(Mandatory=$true)][string]$Output,
+    # The SDK and package cache the set was built with: PlaceLanProxy compiles
+    # LanDeployment to write the Caddyfile enable writes.
+    [Parameter(Mandatory=$true)][string]$DotNet,
+    [Parameter(Mandatory=$true)][string]$PackageCache,
     [switch]$Disposable
 )
 $ErrorActionPreference = 'Stop'
 if (!$Disposable) { throw 'Machine acceptance changes services and machine folders; pass -Disposable on a throwaway machine only' }
-$setupPath = (Resolve-Path -LiteralPath $Setup).Path
 New-Item -ItemType Directory -Force -Path $Output | Out-Null
 $out = (Resolve-Path -LiteralPath $Output).Path
 $started = Get-Date
@@ -62,32 +71,51 @@ $upgradeSeconds = $null
 $rollbackSeconds = $null
 $repairSeconds = $null
 $resumeSeconds = $null
-$baseDirectory = (Resolve-Path -LiteralPath $Base).Path
-$upgradeDirectory = (Resolve-Path -LiteralPath $Upgrade).Path
-$brokenDirectory = (Resolve-Path -LiteralPath $Broken).Path
-$refusedDirectory = (Resolve-Path -LiteralPath $Refused).Path
-function ReleaseOf([string]$Directory) {
-    $file = @(Get-ChildItem -LiteralPath $Directory -Filter 'yahad-windows-*.json')
-    if ($file.Count -ne 1) { throw "Expected one release manifest in $Directory" }
-    return Get-Content -LiteralPath $file[0].FullName -Raw | ConvertFrom-Json
+$appUpdateSeconds = $null
+$appRollbackSeconds = $null
+$setDirectory = (Resolve-Path -LiteralPath $Set).Path
+$index = Get-Content -LiteralPath (Join-Path $setDirectory 'upgrade-set.json') -Raw | ConvertFrom-Json
+if ($index.format -ne 1) { throw "upgrade-set.json is format $($index.format), expected 1" }
+# A release in the set, by the exact names of plan 5.1: its manifest, the version it
+# names, both tracks' files and what its infrastructure and app say of themselves.
+function ReleaseIn([string]$Directory, [string]$Version) {
+    if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "upgrade-set.json names no valid version for $Directory" }
+    $manifest = Join-Path $Directory "yahad-windows-release-$Version.json"
+    $value = Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json
+    if ($value.format -ne 2 -or $value.product -ne 'yahad-windows-release' -or $value.version -ne $Version) { throw "$manifest is not the format-2 release $Version" }
+    if ($value.infrastructure.setup.name -ne "Yahad.Setup-$Version.exe" -or $value.app.archive.name -ne "yahad-windows-app-$Version.zip") { throw "$manifest names other files" }
+    return [pscustomobject]@{
+        Version=$Version; Directory=$Directory; Manifest=$manifest; Value=$value
+        Infra=$value.infrastructure.version; Schema=[int]$value.app.databaseSchema
+        SetupName=$value.infrastructure.setup.name; ArchiveName=$value.app.archive.name
+        Setup=(Join-Path $Directory $value.infrastructure.setup.name)
+    }
 }
-$baseRelease = ReleaseOf $baseDirectory
-$upgradeRelease = ReleaseOf $upgradeDirectory
-$brokenRelease = ReleaseOf $brokenDirectory
-# The infrastructure version a release dir was built with: package.ps1 writes it to
-# package-build.json beside the release dir (<set>\<name>\release, <set>\<name>\package-build.json).
-function InfrastructureOf([string]$ReleaseDirectory) {
-    $build = Join-Path (Split-Path -Parent $ReleaseDirectory) 'package-build.json'
-    if (!(Test-Path -LiteralPath $build)) { throw "No package-build.json beside $ReleaseDirectory" }
-    $value = (Get-Content -LiteralPath $build -Raw | ConvertFrom-Json).infrastructureVersion
-    if ($value -isnot [string] -or $value -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') { throw "package-build.json beside $ReleaseDirectory has no valid infrastructureVersion" }
-    return $value
-}
-$baseInfra = InfrastructureOf $baseDirectory
-$upgradeInfra = InfrastructureOf $upgradeDirectory
-$upgradeSetup = Join-Path $upgradeDirectory $upgradeRelease.setup.name
-$brokenSetup = Join-Path $brokenDirectory $brokenRelease.setup.name
-$baseSetup = Join-Path $baseDirectory $baseRelease.setup.name
+function Variant([string]$Name) { ReleaseIn (Join-Path $setDirectory "$Name\release") $index.releases.$Name }
+$n = Variant 'n'
+$app = Variant 'app'
+$unhealthy = Variant 'unhealthy'
+$n1 = Variant 'n1'
+$broken = Variant 'broken'
+# Every stage below is named by its version, as the Updater stages one (plan 9.3):
+# --apply-app reads the release's version from its stage directory's name.
+$contract = ReleaseIn (Join-Path $setDirectory "contract\$($index.contract)") $index.contract
+$mismatch = ReleaseIn (Join-Path $setDirectory "mismatch\$($index.mismatch)") $index.mismatch
+$refusedDirectory = Join-Path $setDirectory 'refused'
+if ($index.refused.app -ne $app.Version -or $index.refused.setup -ne $n1.Version) { throw 'The refused stages are not of app and n1' }
+# What each move below means, from the signed manifests themselves.
+if ($app.Infra -ne $n.Infra -or $app.Value.infrastructure.treeSha256 -ne $n.Value.infrastructure.treeSha256 -or $unhealthy.Value.infrastructure.treeSha256 -ne $n.Value.infrastructure.treeSha256) { throw 'app and unhealthy are not on n''s infrastructure' }
+if ($broken.Value.infrastructure.treeSha256 -ne $n1.Value.infrastructure.treeSha256 -or $n1.Infra -eq $n.Infra) { throw 'broken is not on n1''s new infrastructure' }
+if ($app.Schema -ne $n.Schema + 1 -or $unhealthy.Schema -ne $app.Schema + 1 -or $n1.Schema -ne $app.Schema + 1) { throw 'The app and Setup moves do not each change the schema' }
+if ($contract.Value.app.requiresContract -le $contract.Value.infrastructure.contractMax) { throw 'The contract release needs a contract its infrastructure serves' }
+if ($mismatch.Version -ne $n1.Version -or $mismatch.Value.infrastructure.setup.sha256 -eq $n1.Value.infrastructure.setup.sha256 -or
+    (Get-FileHash -LiteralPath $mismatch.Setup -Algorithm SHA256).Hash.ToLowerInvariant() -ne $n1.Value.infrastructure.setup.sha256) { throw 'The mismatch release does not pair n1''s Setup with another Setup''s bytes' }
+# Setup runs for installation; from the reinstall on, the newer release's.
+$setupPath = $n.Setup
+# Stages for runs that are not the Updater's, in exactly the Updater's shape. Setup
+# reads its stage only; nothing here is a product location.
+$stageRoot = Join-Path ([IO.Path]::GetTempPath()) ('yahad-acceptance-stages-' + [Guid]::NewGuid().ToString('N'))
+$stages = @{}
 $upgradeState = Join-Path $programData 'upgrade-state.json'
 $updaterRoot = Join-Path $programData 'updater'
 $lastUpgrade = Join-Path $updaterRoot 'last-upgrade.json'
@@ -103,6 +131,34 @@ function EngineOf([string]$Infra) { Join-Path (InfraRoot $Infra) 'setup\Yahad.Se
 function HostImage([string]$Infra) { Join-Path (InfraRoot $Infra) 'host\Yahad.ServiceHost.exe' }
 function UpdaterCommand([string]$Infra) { '"' + (Join-Path (InfraRoot $Infra) 'updater\Yahad.Updater.exe') + '" --service' }
 $activePointer = Join-Path $programFiles 'active.json'
+# A stage holds exactly one track's files by their exact names (plan 9.3): the
+# manifest, its signature and the app archive (app) or the Setup (setup).
+function NewStage($Release, [string]$Track, [string]$Path) {
+    $file = switch ($Track) { 'app' { $Release.ArchiveName } 'setup' { $Release.SetupName } default { throw "Unknown track $Track" } }
+    if (Test-Path -LiteralPath $Path) { throw "$Path already exists" }
+    New-Item -ItemType Directory -Force -Path $Path | Out-Null
+    foreach ($name in (Split-Path $Release.Manifest -Leaf), ((Split-Path $Release.Manifest -Leaf) + '.sig'), $file) {
+        Copy-Item -LiteralPath (Join-Path $Release.Directory $name) -Destination (Join-Path $Path $name)
+    }
+}
+function StageOf($Release, [string]$Track) {
+    $key = "$($Release.Version)/$Track"
+    if (!$stages.ContainsKey($key)) { $stages[$key] = Join-Path $stageRoot "$Track\$($Release.Version)"; NewStage $Release $Track $stages[$key] }
+    return $stages[$key]
+}
+# The staged release's identity as the Updater offers it (plan 9.3): SHA-256 of the
+# track, a line feed and the raw manifest bytes.
+function Fingerprint($Release, [string]$Track) {
+    $bytes = [byte[]]@([Text.Encoding]::ASCII.GetBytes("$Track`n")) + [IO.File]::ReadAllBytes($Release.Manifest)
+    [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+}
+function UpdaterProcess { (Get-CimInstance -ClassName Win32_Service -Filter "Name='$updater'").ProcessId }
+# Every file of an infrastructure tree with its size and last write: a tree nobody
+# extracted, replaced or rewrote again reads the same.
+function InfraSnapshot([string]$Infra) {
+    $root = InfraRoot $Infra
+    (@(Get-ChildItem -LiteralPath $root -Recurse -Force -File | ForEach-Object { '{0}|{1}|{2}' -f $_.FullName.Substring($root.Length), $_.Length, $_.LastWriteTimeUtc.Ticks }) | Sort-Object) -join "`n"
+}
 
 function Phase([string]$Name, [scriptblock]$Body) {
     $timer = [Diagnostics.Stopwatch]::StartNew()
@@ -164,6 +220,62 @@ function UpdatesStatus {
 function UpdatesRequest($Body) {
     $csrf = (Invoke-RestMethod -Uri "$origin/api/me" -WebSession $parentSession -TimeoutSec 30).csrf
     Invoke-RestMethod -Method Post -Uri "$origin/api/parent/updates" -Body (Json $Body) -ContentType 'application/json' -WebSession $parentSession -TimeoutSec 30 -Headers @{ Origin=$origin; 'X-CSRF-Token'=$csrf }
+}
+# The Updater's own install path from the parent's click on. The release is placed
+# where the Updater's download would leave it (the staging folder only administrators
+# can write), holding only its track's files and nothing vouching for it but its
+# signature: the Updater re-verifies it, selects its track, offers it, and launches
+# the installed engine (app) or the staged Setup (setup) detached. $Prepare runs once
+# the stage exists, before the Updater looks. Returns the Updater's process id at the
+# click and the result the launched engine or Setup wrote.
+function InstallThroughUpdater($Release, [string]$Track, [string]$Name, [scriptblock]$Prepare = {}) {
+    $stage = Join-Path $updaterRoot "staging\$($Release.Version)"
+    NewStage $Release $Track $stage
+    & $Prepare
+    Restart-Service -Name $updater
+    $status = UpdatesStatus
+    $fingerprint = Fingerprint $Release $Track
+    if ($status.phase -ne 'available' -or $status.latestVersion -ne $Release.Version -or $status.installTarget.fingerprint -ne $fingerprint) { throw "The Updater offers $($status.phase)/$($status.latestVersion)/$($status.installTarget.fingerprint), expected $($Release.Version)/$fingerprint" }
+    # A target that is not the staged release is refused before anything runs.
+    $stale = $false
+    try { UpdatesRequest @{ action='install'; target=@{ version=$Release.Version; fingerprint=('0' * 64) } } | Out-Null } catch { $stale = [int]$_.Exception.Response.StatusCode -eq 409 }
+    if (!$stale) { throw 'An install of another target was not refused' }
+    $process = UpdaterProcess
+    UpdatesRequest @{ action='install'; target=@{ version=$Release.Version; fingerprint=$fingerprint } } | Out-Null
+    $deadline = [Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        $result = $null
+        # The engine or Setup may still be writing it.
+        try { if (Test-Path -LiteralPath $lastUpgrade) { $result = Get-Content -LiteralPath $lastUpgrade -Raw | ConvertFrom-Json } } catch { }
+        if ($result) { break }
+        if ($deadline.Elapsed -ge [TimeSpan]::FromMinutes(10)) { throw "The $Track install the Updater launched wrote no result" }
+        Start-Sleep -Seconds 1
+    }
+    Copy-Item -LiteralPath $lastUpgrade -Destination (Join-Path $out "$Name-result.json")
+    return [pscustomobject]@{ Process=$process; Result=$result }
+}
+# What the result says of the move, in the person's terms: from which pair to which.
+function RequireMove($Result, [string]$Code, $From, $To, [bool]$RolledBack) {
+    if ($Result.Code -ne $Code) { throw "The move to $($To.Version) ended with $($Result.Code), expected $Code" }
+    if ($Result.FromVersion -ne $From.Version -or $Result.ToVersion -ne $To.Version -or $Result.FromInfrastructureVersion -ne $From.Infra -or $Result.ToInfrastructureVersion -ne $To.Infra) {
+        throw "The result reports $($Result.FromInfrastructureVersion)/$($Result.FromVersion) -> $($Result.ToInfrastructureVersion)/$($Result.ToVersion), expected $($From.Infra)/$($From.Version) -> $($To.Infra)/$($To.Version)"
+    }
+    if ([bool]$Result.RolledBack -ne $RolledBack) { throw "The result reports RolledBack=$($Result.RolledBack), expected $RolledBack" }
+}
+function RollbackSecondsOf($Result) {
+    $began = @($Result.Phases | Where-Object Phase -eq 'rolling_back')
+    if ($began.Count -ne 1) { throw 'The result does not show the rollback' }
+    return [math]::Round($Result.Seconds - $began[0].Seconds, 1)
+}
+# The staged release leaves once the Updater has read the result; a Setup still
+# exiting holds its image, and the next minute's pass takes the folder.
+function RequireStageGone($Release) {
+    $stage = Join-Path $updaterRoot "staging\$($Release.Version)"
+    $deadline = [Diagnostics.Stopwatch]::StartNew()
+    while (Test-Path -LiteralPath $stage) {
+        if ($deadline.Elapsed -ge [TimeSpan]::FromMinutes(3)) { throw "Release $($Release.Version) stayed in the staging folder" }
+        Start-Sleep -Seconds 5
+    }
 }
 # What a person sees of a whole installation at one release: it answers as that
 # release, the family is theirs, the service points at it and nothing is pending.
@@ -284,6 +396,18 @@ function NewLanDirectory([string]$Path, [string]$Descriptor) {
     $security.SetSecurityDescriptorSddlForm($Descriptor)
     [IO.FileSystemAclExtensions]::Create([IO.DirectoryInfo]::new($Path), $security)
 }
+# The Caddyfile is LanDeployment's own, as enable writes it (HTTPS only, as placed).
+function WriteLanCaddyfile($Installation, $Choice, [string]$Infra) {
+    $dotnetExe = (Resolve-Path -LiteralPath $DotNet).Path
+    $env:DOTNET_ROOT = Split-Path $dotnetExe
+    $env:DOTNET_CLI_HOME = Join-Path $out 'dotnet-home'
+    $env:NUGET_PACKAGES = (Resolve-Path -LiteralPath $PackageCache).Path
+    $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'; $env:DOTNET_NOLOGO = '1'
+    & $dotnetExe run (Join-Path $PSScriptRoot 'lan-caddyfile.cs') ('-p:RestoreConfigFile=' + (Join-Path $PSScriptRoot 'NuGet.Config')) -- `
+        (Join-Path $lanRoot 'Caddyfile') $Installation.InstallationId $Choice.Id $Choice.Address ([string]$Installation.Port) (LanCaddy $Infra) `
+        (Join-Path $lanRoot 'data') (Join-Path $lanRoot 'join-public') 'false' *> (Join-Path $out 'lan-caddyfile.log')
+    if ($LASTEXITCODE -ne 0) { throw "lan-caddyfile ended $LASTEXITCODE; see lan-caddyfile.log" }
+}
 # What a finished home-network enable leaves: the two ACLs of NativeLanInstall, its
 # records, LanDeployment's Caddyfile and firewall rule, and the service. A machine
 # without a private address fails here, naming what it has.
@@ -311,17 +435,9 @@ function PlaceLanProxy([string]$Infra) {
     $records = @{
         'proxy.json' = Json @{ AdapterId=$choice.Id; Address=$choice.Address }
         'owner.json' = Json @{ Phase='enabled'; AdapterId=$choice.Id; Address=$choice.Address; HttpHelp=$false; RootSha256='' }
-        'Caddyfile' = @(
-            '{', '    admin off', '    persist_config off', '    skip_install_trust', '    auto_https disable_redirects',
-            '    log {', '        output discard', '    }',
-            '    storage file_system {', ('        root "' + (Join-Path $lanRoot 'data').Replace('\', '/') + '"'), '    }',
-            '    servers {', '        protocols h1 h2', '    }', '}',
-            "https://$($choice.Address) {", "    bind $($choice.Address)", '    tls internal',
-            '    @ownerOnly path /health /health/* /api/setup /api/setup/*', '    respond @ownerOnly 404',
-            "    reverse_proxy 127.0.0.1:$($installation.Port) {", '        flush_interval -1', '    }', '}', ''
-        ) -join "`n"
     }
     foreach ($name in $records.Keys) { [IO.File]::WriteAllText((Join-Path $lanRoot $name), $records[$name], [Text.UTF8Encoding]::new($false)) }
+    WriteLanCaddyfile $installation $choice $Infra
 
     $rule = New-Object -ComObject HNetCfg.FWRule
     $rule.Name = $lanRuleName
@@ -359,13 +475,35 @@ function PublishLanRoot {
     $owner.RootSha256 = $lanRootSha256
     [IO.File]::WriteAllText((Join-Path $lanRoot 'owner.json'), (Json $owner), [Text.UTF8Encoding]::new($false))
 }
-# A device that opens HTTPS directly reaches the help page and the certificate, and the
-# application, the owner's paths and the public files' methods stay what they were.
-function RequireLanHelpOverHttps {
+# Each app of the set marks its help page template with its version; the page must
+# come from the active app, and only from it.
+function RequireHelpPageOf([string]$Text, [string]$Version) {
+    $marks = [regex]::Matches($Text, '<meta name="yahad-ci-app" content="([^"]*)">')
+    if ($marks.Count -ne 1 -or $marks[0].Groups[1].Value -ne $Version) { throw "The help page comes from app $(@($marks | ForEach-Object { $_.Groups[1].Value }) -join ','), expected $Version" }
+}
+function RequireHelpPageFile([string]$Version) { RequireHelpPageOf ([IO.File]::ReadAllText((Join-Path $lanRoot 'join-public\index.html'))) $Version }
+# What the app track may never touch (plan 7, 6a): the proxy configuration and the
+# installation's firewall rules, byte for byte and field for field.
+function LanServedState {
+    $rules = foreach ($rule in (New-Object -ComObject HNetCfg.FwPolicy2).Rules) {
+        if ("$($rule.Grouping)" -like 'Yahad.LAN.*') {
+            (@('Name', 'Description', 'Grouping', 'ApplicationName', 'Protocol', 'Direction', 'LocalPorts', 'RemotePorts', 'LocalAddresses', 'RemoteAddresses', 'InterfaceTypes', 'Profiles', 'Action', 'EdgeTraversal', 'Enabled') | ForEach-Object { "$_=$($rule.$_)" }) -join ';'
+        }
+    }
+    if (!@($rules).Count) { throw 'The installation has no home-network firewall rule' }
+    return ((Get-FileHash -LiteralPath (Join-Path $lanRoot 'Caddyfile') -Algorithm SHA256).Hash + "`n" + ((@($rules) | Sort-Object) -join "`n"))
+}
+function RequireLanServedUnchanged([string]$Before) { if ((LanServedState) -cne $Before) { throw 'The Caddyfile or the home-network firewall rules changed' } }
+# A device that opens HTTPS directly reaches the active app's help page and the
+# certificate, and the application, the owner's paths and the public files' methods
+# stay what they were.
+function RequireLanHelpOverHttps([string]$Version) {
     function LanGet([string]$Path, [string]$Method = 'GET') { Invoke-WebRequest -Uri "https://$lanAddress$Path" -Method $Method -SkipCertificateCheck -SkipHttpErrorCheck -UseBasicParsing -TimeoutSec 15 }
     $page = LanGet '/home-network'
     if ($page.StatusCode -ne 200 -or "$($page.Headers['Content-Type'])" -notmatch '^text/html') { throw "The help page answered $($page.StatusCode) $($page.Headers['Content-Type'])" }
     if (!$page.Content.Contains($lanRootSha256) -or !$page.Content.Contains("https://$lanAddress") -or $page.Content.Contains('__LAN_HTTPS_ORIGIN__')) { throw 'The help page is not this release''s page for this installation' }
+    RequireHelpPageOf $page.Content $Version
+    RequireHelpPageFile $Version
     if ("$($page.Headers['Content-Security-Policy'])" -notmatch "default-src 'none'") { throw 'The help page lost its content policy' }
     $certificate = LanGet '/certificate.crt'
     if ($certificate.StatusCode -ne 200 -or "$($certificate.Headers['Content-Type'])" -ne 'application/pkix-cert') { throw "The certificate answered $($certificate.StatusCode) $($certificate.Headers['Content-Type'])" }
@@ -616,7 +754,7 @@ try {
     Phase 'ready' {
         RequireInstalledAndReady $install.Result
         RequireServiceConfiguration
-        RequireAccessBoundaries $baseInfra $baseRelease.version
+        RequireAccessBoundaries $n.Infra $n.Version
         if ((SetupState) -ne 'ready') { throw 'Fresh install does not offer first-family setup' }
     }
     Phase 'expired-link' {
@@ -655,7 +793,7 @@ try {
         $status = UpdatesStatus
         if ($status.enabled -ne $true) { throw 'A build with a release key reports updates as unavailable' }
         if ($status.mode -ne 'notify') { throw "The Updater's mode is $($status.mode), expected the administrator's choice" }
-        if ($status.currentVersion -ne $baseRelease.version) { throw "The Updater reports $($status.currentVersion), expected $($baseRelease.version)" }
+        if ($status.currentVersion -ne $n.Version) { throw "The Updater reports $($status.currentVersion), expected $($n.Version)" }
         if ($status.modeControlAllowed -ne $true) { throw 'The parent cannot change the update mode' }
         # The mode goes through the pipe and survives the Updater's own restart.
         foreach ($mode in 'auto', 'notify') {
@@ -702,8 +840,6 @@ try {
         RequireInstalledAndReady $install.Result
         if ((SetupState) -ne 'complete') { throw 'Family is missing after restart' }
     }
-    $version = $baseRelease.version
-    $schema = $baseRelease.databaseSchema
     Phase 'repair' {
         # Services an administrator (or a crash loop) left stopped and unconfigured,
         # and a task someone deleted.
@@ -715,15 +851,15 @@ try {
             if ($LASTEXITCODE -ne 0) { throw 'Could not clear the failure flag' }
         }
         Unregister-ScheduledTask -TaskPath $taskPath -TaskName $taskName -Confirm:$false
-        $repair = RunSetupExpecting (EngineOf $baseInfra) @('--repair') (Join-Path $out 'repair-result.json') 'REPAIRED' 0
+        $repair = RunSetupExpecting (EngineOf $n.Infra) @('--repair') (Join-Path $out 'repair-result.json') 'REPAIRED' 0
         $script:repairSeconds = $repair.Seconds
-        RequireInstalled $version $schema $baseInfra
-        $null = RunSetupExpecting (EngineOf $baseInfra) @('--repair') (Join-Path $out 'repair-again-result.json') 'NOTHING_TO_REPAIR' 0
+        RequireInstalled $n.Version $n.Schema $n.Infra
+        $null = RunSetupExpecting (EngineOf $n.Infra) @('--repair') (Join-Path $out 'repair-again-result.json') 'NOTHING_TO_REPAIR' 0
     }
     Phase 'repair-task' {
         # The task itself, in the session and token it has at 3 a.m.: SYSTEM runs the
         # infrastructure's payload-free engine, which finds nothing to do and says so.
-        RequireRepairTask $baseInfra
+        RequireRepairTask $n.Infra
         $taskResult = Join-Path $updaterRoot 'repair-result.json'
         Remove-Item -LiteralPath $taskResult -Force -ErrorAction SilentlyContinue
         Start-ScheduledTask -TaskPath $taskPath -TaskName $taskName
@@ -738,99 +874,95 @@ try {
         if ($value.Code -ne 'NOTHING_TO_REPAIR') { throw "The Repair task ended with $($value.Code)" }
     }
     Phase 'refuse-release' {
+        # Stages of the next release on each track, each wrong only in its signature: the
+        # installed engine refuses the app stage, n1's own Setup refuses its Setup stage.
         foreach ($case in 'foreign', 'unsigned', 'tampered') {
-            $null = RunSetupExpecting $upgradeSetup @('--quiet-upgrade', (Join-Path $refusedDirectory $case)) (Join-Path $out "refuse-$case-result.json") 'RELEASE_SIGNATURE_INVALID' 2
+            $null = RunSetupExpecting (EngineOf $n.Infra) @('--apply-app', (Join-Path $refusedDirectory "app\$case\$($app.Version)")) (Join-Path $out "refuse-app-$case-result.json") 'RELEASE_SIGNATURE_INVALID' 2
+            $stage = Join-Path $refusedDirectory "setup\$case\$($n1.Version)"
+            $null = RunSetupExpecting (Join-Path $stage $n1.SetupName) @('--quiet-upgrade', $stage) (Join-Path $out "refuse-setup-$case-result.json") 'RELEASE_SIGNATURE_INVALID' 2
         }
-        # A valid release is installed only by its own signed Setup.
-        $null = RunSetupExpecting $baseSetup @('--quiet-upgrade', $upgradeDirectory) (Join-Path $out 'refuse-mismatch-result.json') 'RELEASE_SETUP_MISMATCH' 2
-        RequireInstalled $version $schema $baseInfra
+        # A signed release installs only through the Setup it names: n1's Setup refuses
+        # n1's release re-signed naming another Setup's bytes.
+        $null = RunSetupExpecting $mismatch.Setup @('--quiet-upgrade', $mismatch.Directory) (Join-Path $out 'refuse-mismatch-result.json') 'RELEASE_SETUP_MISMATCH' 2
+        # An app needing a contract its own infrastructure does not serve is a defect of
+        # the release on every machine (plan 9.1), never an app-track update.
+        $null = RunSetupExpecting (EngineOf $n.Infra) @('--apply-app', $contract.Directory) (Join-Path $out 'refuse-contract-result.json') 'APP_NEEDS_INFRASTRUCTURE' 2
+        RequireInstalled $n.Version $n.Schema $n.Infra
     }
+    $lanServed = $null
     Phase 'lan-proxy' {
-        PlaceLanProxy $baseInfra
-        RequireLanProxyAt $baseInfra $true
+        PlaceLanProxy $n.Infra
+        RequireLanProxyAt $n.Infra $true
         PublishLanRoot
+        $script:lanServed = LanServedState
     }
-    Phase 'upgrade' {
-        # The Updater's own install path from the parent's click on. The release is
-        # placed where the Updater's download would leave it (the staging folder only
-        # administrators can write) with nothing vouching for it but its signature: the
-        # Updater re-verifies it, offers it, launches its Setup detached, and is itself
-        # stopped and replaced by that Setup.
-        $stage = Join-Path $updaterRoot "staging\$($upgradeRelease.version)"
-        New-Item -ItemType Directory -Force -Path $stage | Out-Null
-        Copy-Item -Path (Join-Path $upgradeDirectory '*') -Destination $stage
-        # The folder exists only while it holds a release, so it is checked now.
-        RequireAccessBoundaries $baseInfra $version
-        # An installation from before Users could read the binaries: the upgrade below
-        # has to bring it to the current ACL, which the check after it requires.
-        & icacls.exe $programFiles /remove:g '*S-1-5-32-545' /Q | Out-Null
-        if ($LASTEXITCODE -ne 0 -or ((EffectiveRights $programFiles @('S-1-5-21-1-2-3-1001', 'S-1-5-32-545')) -ne 0)) { throw 'Could not recreate the older binary ACL' }
-        Restart-Service -Name $updater
+    $updaterBefore = $null
+    $infraBefore = $null
+    Phase 'app-update' {
+        $script:infraBefore = InfraSnapshot $n.Infra
+        # The staging folder exists only while it holds a release, so it is checked now.
+        $move = InstallThroughUpdater $app 'app' 'app-update' { RequireAccessBoundaries $n.Infra $n.Version }
+        RequireMove $move.Result 'UPGRADED' $n $app $false
+        $script:updaterBefore = $move.Process
+        $script:appUpdateSeconds = $move.Result.Seconds
+    }
+    Phase 'app-updated' {
+        # The Updater was never stopped (plan 7): it reads the result the engine left and
+        # reports the pair now active, not the one it started with (plan 9.2).
         $status = UpdatesStatus
-        $manifest = Join-Path $upgradeDirectory "yahad-windows-$($upgradeRelease.version).json"
-        $fingerprint = (Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($status.phase -ne 'available' -or $status.latestVersion -ne $upgradeRelease.version -or $status.installTarget.fingerprint -ne $fingerprint) { throw "The Updater offers $($status.phase)/$($status.latestVersion)/$($status.installTarget.fingerprint), expected $($upgradeRelease.version)/$fingerprint" }
-        # A target that is not the staged release is refused before anything runs.
-        $stale = $false
-        try { UpdatesRequest @{ action='install'; target=@{ version=$upgradeRelease.version; fingerprint=('0' * 64) } } | Out-Null } catch { $stale = [int]$_.Exception.Response.StatusCode -eq 409 }
-        if (!$stale) { throw 'An install of another target was not refused' }
-        UpdatesRequest @{ action='install'; target=@{ version=$upgradeRelease.version; fingerprint=$fingerprint } } | Out-Null
-        $deadline = [Diagnostics.Stopwatch]::StartNew()
-        while ($true) {
-            $result = $null
-            # The Setup may still be writing it.
-            try { if (Test-Path -LiteralPath $lastUpgrade) { $result = Get-Content -LiteralPath $lastUpgrade -Raw | ConvertFrom-Json } } catch { }
-            if ($result) { break }
-            if ($deadline.Elapsed -ge [TimeSpan]::FromMinutes(10)) { throw 'The Setup the Updater launched wrote no result' }
-            Start-Sleep -Seconds 1
-        }
-        Copy-Item -LiteralPath $lastUpgrade -Destination (Join-Path $out 'upgrade-result.json')
-        if ($result.Code -ne 'UPGRADED') { throw "The Updater's install ended with $($result.Code)" }
-        if ($result.FromVersion -ne $version -or $result.ToVersion -ne $upgradeRelease.version -or $result.RolledBack) { throw 'Upgrade reported the wrong versions' }
-        $script:upgradeSeconds = $result.Seconds
+        if ($status.phase -ne 'healthy' -or $status.lastRequest.action -ne 'install' -or $status.lastRequest.state -ne 'succeeded') { throw "After the app install the Updater reports $($status.phase)/$($status.lastRequest.action)/$($status.lastRequest.state)" }
+        if ((UpdaterProcess) -ne $updaterBefore) { throw 'An app update restarted the Updater' }
+        RequireStageGone $app
+        RequireInstalled $app.Version $app.Schema $n.Infra $n.Version $n.Infra
+        if ((InfraSnapshot $n.Infra) -cne $infraBefore) { throw 'An app update changed the infrastructure tree' }
+        RequireAccessBoundaries $n.Infra $app.Version
+        RequireLanProxyAt $n.Infra $true
+        RequireLanServedUnchanged $lanServed
+        RequireLanHelpOverHttps $app.Version
     }
-    Phase 'upgraded' {
-        # The new Updater reads what the Setup left and tells the parent, whose session
-        # a real upgrade leaves signed in.
+    Phase 'app-unhealthy' {
+        # The app migrates the database, then exits before it ever serves.
+        $move = InstallThroughUpdater $unhealthy 'app' 'app-unhealthy'
+        RequireMove $move.Result 'ROLLED_BACK_UNHEALTHY' $app $unhealthy $true
+        $script:appRollbackSeconds = RollbackSecondsOf $move.Result
+        $script:updaterBefore = $move.Process
+    }
+    Phase 'app-rolled-back' {
         $status = UpdatesStatus
-        if ($status.phase -ne 'healthy' -or $status.lastRequest.action -ne 'install' -or $status.lastRequest.state -ne 'succeeded') { throw "After the install the Updater reports $($status.phase)/$($status.lastRequest.action)/$($status.lastRequest.state)" }
-        # The Setup image may be finishing its exit; the next minute's pass takes the folder.
-        $stage = Join-Path $updaterRoot "staging\$($upgradeRelease.version)"
-        $deadline = [Diagnostics.Stopwatch]::StartNew()
-        while (Test-Path -LiteralPath $stage) {
-            if ($deadline.Elapsed -ge [TimeSpan]::FromMinutes(3)) { throw 'The installed release stayed in the staging folder' }
-            Start-Sleep -Seconds 5
-        }
-        if ($upgradeRelease.databaseSchema -ne $schema + 1) { throw 'The upgrade fixture does not change the schema' }
-        if ($upgradeInfra -eq $baseInfra) { throw 'The upgrade fixture does not change the infrastructure' }
-        RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema $upgradeInfra $version $baseInfra
-        RequireAccessBoundaries $upgradeInfra $upgradeRelease.version
-        RequireLanProxyAt $upgradeInfra $true
-        RequireLanHelpOverHttps
-    }
-    Phase 'refuse-replay' {
-        $null = RunSetupExpecting $baseSetup @('--quiet-upgrade', $baseDirectory) (Join-Path $out 'refuse-downgrade-result.json') 'RELEASE_NOT_NEWER' 2
-        $null = RunSetupExpecting $upgradeSetup @('--quiet-upgrade', $upgradeDirectory) (Join-Path $out 'refuse-same-result.json') 'RELEASE_NOT_NEWER' 2
+        if ($status.phase -ne 'rolled_back' -or $status.lastRequest.action -ne 'install' -or $status.lastRequest.state -ne 'failed' -or $status.lastRequest.error -ne 'health') { throw "After the unhealthy app the Updater reports $($status.phase)/$($status.lastRequest.action)/$($status.lastRequest.state)/$($status.lastRequest.error)" }
+        if ((UpdaterProcess) -ne $updaterBefore) { throw 'An app rollback restarted the Updater' }
+        # Refused, so neither kept nor offered again.
+        RequireStageGone $unhealthy
+        if ($status.installTarget) { throw "The Updater still offers $($status.installTarget.version)" }
+        # The earlier app, with the data it had before the unhealthy app migrated it.
+        RequireInstalled $app.Version $app.Schema $n.Infra $n.Version $n.Infra
+        if ((InfraSnapshot $n.Infra) -cne $infraBefore) { throw 'An app rollback changed the infrastructure tree' }
+        RequireLanProxyAt $n.Infra $true
+        RequireLanServedUnchanged $lanServed
+        RequireLanHelpOverHttps $app.Version
     }
     Phase 'broken-upgrade' {
-        # A paused proxy moves with the release and is not started by it.
+        # The Setup track from (I, A+1) to (I+1, A+4), whose app never becomes ready. A
+        # paused proxy moves with the release and is not started by it.
         PauseLanProxy
-        $result = RunSetupExpecting $brokenSetup @('--quiet-upgrade', $brokenDirectory) (Join-Path $out 'broken-result.json') 'ROLLED_BACK_UNHEALTHY' 4
-        if (!$result.RolledBack) { throw 'A broken release did not report its rollback' }
-        $began = @($result.Phases | Where-Object Phase -eq 'rolling_back')
-        if ($began.Count -ne 1) { throw 'The result does not show the rollback' }
-        $script:rollbackSeconds = [math]::Round($result.Seconds - $began[0].Seconds, 1)
+        $stage = StageOf $broken 'setup'
+        $result = RunSetupExpecting (Join-Path $stage $broken.SetupName) @('--quiet-upgrade', $stage) (Join-Path $out 'broken-result.json') 'ROLLED_BACK_UNHEALTHY' 4
+        RequireMove $result 'ROLLED_BACK_UNHEALTHY' $app $broken $true
+        $script:rollbackSeconds = RollbackSecondsOf $result
     }
     Phase 'rolled-back' {
-        RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema $upgradeInfra $version $baseInfra
-        RequireLanProxyAt $upgradeInfra $false
+        # Images, firewall rule, pointer, data and help page are the earlier pair's again.
+        RequireInstalled $app.Version $app.Schema $n.Infra $n.Version $n.Infra
+        RequireLanProxyAt $n.Infra $false
+        RequireHelpPageFile $app.Version
     }
     Phase 'repair-resume' {
         ResumeLanProxy
-        RequireLanProxyAt $upgradeInfra $true
+        RequireLanProxyAt $n.Infra $true
         # A real kill, with no help from the product: the broken release has migrated
         # the database and is failing health when its Setup disappears.
-        $killed = Start-Process -FilePath $brokenSetup -ArgumentList @('--quiet-upgrade', ('"' + $brokenDirectory + '"'), '--result', ('"' + (Join-Path $out 'killed-result.json') + '"')) -PassThru -WindowStyle Hidden
+        $stage = StageOf $broken 'setup'
+        $killed = Start-Process -FilePath (Join-Path $stage $broken.SetupName) -ArgumentList @('--quiet-upgrade', ('"' + $stage + '"'), '--result', ('"' + (Join-Path $out 'killed-result.json') + '"')) -PassThru -WindowStyle Hidden
         try {
             $deadline = [Diagnostics.Stopwatch]::StartNew()
             while ($true) {
@@ -854,18 +986,52 @@ try {
         } finally { if (!$killed.HasExited) { $killed.Kill() }; $killed.WaitForExit() }
         if (!(Test-Path -LiteralPath $upgradeState)) { throw 'A killed upgrade left no record' }
         if ((Test-Path -LiteralPath (Join-Path $out 'killed-result.json'))) { throw 'The killed Setup finished before it was killed' }
-        $result = RunSetupExpecting (EngineOf $upgradeInfra) @('--repair') (Join-Path $out 'resume-result.json') 'REPAIRED' 0
+        # Until commit the Repair task stays on the from-pair's engine (plan 8.1).
+        RequireRepairTask $n.Infra
+        $result = RunSetupExpecting (EngineOf $n.Infra) @('--repair') (Join-Path $out 'resume-result.json') 'REPAIRED' 0
         if (!$result.RolledBack) { throw 'Repair did not roll back the interrupted upgrade' }
         $script:resumeSeconds = $result.Seconds
     }
     Phase 'resumed' {
-        RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema $upgradeInfra $version $baseInfra
-        RequireLanProxyAt $upgradeInfra $true
+        RequireInstalled $app.Version $app.Schema $n.Infra $n.Version $n.Infra
+        RequireLanProxyAt $n.Infra $true
     }
-    # Reinstall from here belongs to the upgraded release; removal runs its installed, payload-free engine.
-    $setupPath = $upgradeSetup
+    Phase 'upgrade' {
+        $move = InstallThroughUpdater $n1 'setup' 'upgrade' {
+            RequireAccessBoundaries $n.Infra $app.Version
+            # An installation from before Users could read the binaries: the Setup track
+            # has to bring it to the current ACL, which the check after it requires.
+            & icacls.exe $programFiles /remove:g '*S-1-5-32-545' /Q | Out-Null
+            if ($LASTEXITCODE -ne 0 -or ((EffectiveRights $programFiles @('S-1-5-21-1-2-3-1001', 'S-1-5-32-545')) -ne 0)) { throw 'Could not recreate the older binary ACL' }
+        }
+        RequireMove $move.Result 'UPGRADED' $app $n1 $false
+        $script:upgradeSeconds = $move.Result.Seconds
+    }
+    Phase 'upgraded' {
+        # The new Updater reads what the Setup left and tells the parent, whose session
+        # a real upgrade leaves signed in.
+        $status = UpdatesStatus
+        if ($status.phase -ne 'healthy' -or $status.lastRequest.action -ne 'install' -or $status.lastRequest.state -ne 'succeeded') { throw "After the install the Updater reports $($status.phase)/$($status.lastRequest.action)/$($status.lastRequest.state)" }
+        RequireStageGone $n1
+        RequireInstalled $n1.Version $n1.Schema $n1.Infra $app.Version $n.Infra
+        RequireAccessBoundaries $n1.Infra $n1.Version
+        RequireLanProxyAt $n1.Infra $true
+        RequireLanHelpOverHttps $n1.Version
+    }
+    Phase 'refuse-replay' {
+        # Releases this installation has moved past, on both tracks: not an update for it.
+        $stage = StageOf $n 'setup'
+        $null = RunSetupExpecting (Join-Path $stage $n.SetupName) @('--quiet-upgrade', $stage) (Join-Path $out 'refuse-downgrade-result.json') 'RELEASE_NOT_NEWER' 2
+        $stage = StageOf $n1 'setup'
+        $null = RunSetupExpecting (Join-Path $stage $n1.SetupName) @('--quiet-upgrade', $stage) (Join-Path $out 'refuse-same-result.json') 'RELEASE_NOT_NEWER' 2
+        $null = RunSetupExpecting (EngineOf $n1.Infra) @('--apply-app', (StageOf $app 'app')) (Join-Path $out 'refuse-app-replay-result.json') 'RELEASE_NOT_NEWER' 2
+        RequireInstalled $n1.Version $n1.Schema $n1.Infra $app.Version $n.Infra
+    }
+    # Reinstall from here belongs to n1; removal runs its installed, payload-free engine.
+    # The trees removed include the previous pair's, which an app update made.
+    $setupPath = $n1.Setup
     Phase 'uninstall-keep' {
-        $removed = RunSetup @('--quiet-uninstall', '--data', 'keep') (Join-Path $out 'uninstall-keep-result.json') @() (EngineOf $upgradeInfra)
+        $removed = RunSetup @('--quiet-uninstall', '--data', 'keep') (Join-Path $out 'uninstall-keep-result.json') @() (EngineOf $n1.Infra)
         if ($removed.Result.DataPreserved -ne $true) { throw 'Keep-data removal did not report preserved data' }
     }
     Phase 'kept' {
@@ -887,14 +1053,16 @@ try {
         RequireServiceConfiguration
         if ($reinstall.Stdout.Trim()) { throw 'Reinstall offered a new setup link over kept data' }
         if ((SetupState) -ne 'complete') { throw 'Kept family is missing after reinstall' }
-        RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema $upgradeInfra
+        RequireInstalled $n1.Version $n1.Schema $n1.Infra
     }
-    Phase 'uninstall' { RunSetup @('--quiet-uninstall', '--data', 'delete') (Join-Path $out 'uninstall-result.json') @() (EngineOf $upgradeInfra) | Out-Null }
+    Phase 'uninstall' { RunSetup @('--quiet-uninstall', '--data', 'delete') (Join-Path $out 'uninstall-result.json') @() (EngineOf $n1.Infra) | Out-Null }
     Phase 'removed' { RequireNothingLeft }
     # What someone with an older release gets from the landing page: the downloaded Setup,
-    # run by hand, moves it in place. Its setup link expired meanwhile.
+    # run by hand. Its infrastructure is the installed one byte for byte, so only its app
+    # moves (plan 8.2): the Updater keeps running and infra\ is not touched. The older
+    # install's setup link expired meanwhile.
     Phase 'setup-over-older' {
-        $older = RunSetup @('--quiet-install', '--updates', 'notify') (Join-Path $out 'older-install-result.json') @('--setup-link', 'stdout') $baseSetup
+        $older = RunSetup @('--quiet-install', '--updates', 'notify') (Join-Path $out 'older-install-result.json') @('--setup-link', 'stdout') $n.Setup
         $script:origin = ([Uri]$older.Result.Url).GetLeftPart([UriPartial]::Authority)
         $capability = Join-Path $programData 'Secrets\setup-capability.json'
         Stop-Service -Name $runtime
@@ -903,8 +1071,12 @@ try {
         [IO.File]::WriteAllBytes($capability, [Text.UTF8Encoding]::new($false).GetBytes(($record | ConvertTo-Json -Compress -Depth 5)))
         Start-Service -Name $runtime
         if ((SetupState) -ne 'closed') { throw 'An expired setup link still reports setup as open' }
-        $moved = RunSetup @('--quiet-install', '--updates', 'notify') (Join-Path $out 'setup-over-older-result.json') @('--setup-link', 'stdout') $upgradeSetup
-        if ((Health).version -ne $upgradeRelease.version) { throw "Setup over an older release left $((Health).version) running" }
+        $process = UpdaterProcess
+        $infra = InfraSnapshot $n.Infra
+        $moved = RunSetup @('--quiet-install', '--updates', 'notify') (Join-Path $out 'setup-over-older-result.json') @('--setup-link', 'stdout') $app.Setup
+        if ((UpdaterProcess) -ne $process) { throw 'A Setup on the installed infrastructure restarted the Updater' }
+        if ((InfraSnapshot $n.Infra) -cne $infra) { throw 'A Setup on the installed infrastructure changed its tree' }
+        if ((Health).version -ne $app.Version) { throw "Setup over an older release left $((Health).version) running" }
         if ((SetupState) -ne 'ready') { throw 'Setup over an older release did not reopen first-family setup' }
         $match = [regex]::Match($moved.Stdout.Trim(), '^(http://127\.0\.0\.1:\d+/)#setup=([A-Za-z0-9_-]{43})$')
         if (!$match.Success) { throw 'Setup over an older release did not hand back a setup link' }
@@ -916,18 +1088,20 @@ try {
             -Headers @{ Origin=$origin; 'X-Setup-Token'=$match.Groups[2].Value } | Out-Null
         $script:familyId = RequireSignedInAccount $created
         $older = $null; $moved = $null; $match = $null; $body = $null
-        RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema $upgradeInfra $baseRelease.version $baseInfra
-        $null = RunSetupExpecting $baseSetup @('--quiet-install', '--updates', 'notify') (Join-Path $out 'refuse-older-setup-result.json') 'INSTALL_DOWNGRADE_REFUSED' 1
-        RequireInstalled $upgradeRelease.version $upgradeRelease.databaseSchema $upgradeInfra $baseRelease.version $baseInfra
+        RequireInstalled $app.Version $app.Schema $n.Infra $n.Version $n.Infra
+        $null = RunSetupExpecting $n.Setup @('--quiet-install', '--updates', 'notify') (Join-Path $out 'refuse-older-setup-result.json') 'INSTALL_DOWNGRADE_REFUSED' 1
+        RequireInstalled $app.Version $app.Schema $n.Infra $n.Version $n.Infra
     }
-    Phase 'uninstall-moved' { RunSetup @('--quiet-uninstall', '--data', 'delete') (Join-Path $out 'uninstall-moved-result.json') @() (EngineOf $upgradeInfra) | Out-Null }
+    # Removal after an app-only move: the previous pair shares the infrastructure.
+    Phase 'uninstall-moved' { RunSetup @('--quiet-uninstall', '--data', 'delete') (Join-Path $out 'uninstall-moved-result.json') @() (EngineOf $n.Infra) | Out-Null }
     Phase 'removed-moved' { RequireNothingLeft }
     $state = 'Passed'
 }
 catch { $state = 'Failed'; Write-Output "FAILED $($_.Exception.Message)"; throw }
 finally {
     $account = $null
+    Remove-Item -LiteralPath $stageRoot -Recurse -Force -ErrorAction SilentlyContinue
     try { Collect } catch { Write-Output "COLLECTION_FAILED $($_.Exception.Message)" }
-    [ordered]@{ State=$state; FailedPhase=$failedPhase; Phases=$phases; StartSeconds=$startSeconds; UpgradeSeconds=$upgradeSeconds; RollbackSeconds=$rollbackSeconds; RepairSeconds=$repairSeconds; ResumeSeconds=$resumeSeconds; LiveCheck=$liveCheck; TotalSeconds=[math]::Round(((Get-Date)-$started).TotalSeconds, 1) } |
+    [ordered]@{ State=$state; FailedPhase=$failedPhase; Phases=$phases; StartSeconds=$startSeconds; AppUpdateSeconds=$appUpdateSeconds; AppRollbackSeconds=$appRollbackSeconds; UpgradeSeconds=$upgradeSeconds; RollbackSeconds=$rollbackSeconds; RepairSeconds=$repairSeconds; ResumeSeconds=$resumeSeconds; LiveCheck=$liveCheck; TotalSeconds=[math]::Round(((Get-Date)-$started).TotalSeconds, 1) } |
         ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8NoBOM (Join-Path $out 'summary.json')
 }

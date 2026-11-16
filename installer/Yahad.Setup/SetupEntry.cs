@@ -37,11 +37,17 @@ internal static class SetupEntry
         Console.WriteLine(JsonSerializer.Serialize(new{artifact="Yahad.Setup",infrastructureVersion=InfrastructureRelease.Version,contractMin=InfrastructureRelease.ContractMin,
             contractMax=InfrastructureRelease.ContractMax,sourceCommit=commit,version=InfrastructureRelease.Version+"+"+commit,embeddedPackage=InstallPackage.IsEmbedded}));
     }
+    // The embedded package as this image verified it (zip hash, members, both tree
+    // records): every field a signed release manifest must agree on (UpgradeHost.RequireAgrees),
+    // so the build and the release command check a Setup's own bytes, not a file beside it.
     private static void VerifyPackage()
     {
-        using var package=InstallPackage.Embedded();var m=package.Manifest;var key=TrustedReleaseKey.Embedded;
-        Console.WriteLine(JsonSerializer.Serialize(new{artifact="Yahad.Setup",infrastructureVersion=m.Infrastructure.Version,infrastructureSourceCommit=m.Infrastructure.SourceCommit,
-            appVersion=m.App.Version,appSourceCommit=m.App.SourceCommit,setupSourceCommit=InfrastructureRelease.CompiledSourceCommit(typeof(SetupEntry).Assembly),coreSourceCommit=InfrastructureRelease.SourceCommit,
+        using var package=InstallPackage.Embedded();var m=package.Manifest;var i=m.Infrastructure;var a=m.App;var key=TrustedReleaseKey.Embedded;
+        Console.WriteLine(JsonSerializer.Serialize(new{artifact="Yahad.Setup",
+            infrastructure=new{version=i.Version,contractMin=i.ContractMin,contractMax=i.ContractMax,sourceCommit=i.SourceCommit,treeSha256=i.TreeSha256},
+            app=new{version=a.Version,sourceCommit=a.SourceCommit,requiresContract=a.RequiresContract,treeSha256=a.TreeSha256,databaseSchema=a.DatabaseSchema,databaseMigrationsFrom=a.DatabaseMigrationsFrom},
+            minimumFrom=new{app=m.MinimumFrom.App,infrastructure=m.MinimumFrom.Infrastructure},
+            setupSourceCommit=InfrastructureRelease.CompiledSourceCommit(typeof(SetupEntry).Assembly),coreSourceCommit=InfrastructureRelease.SourceCommit,
             files=m.Files.Length,embeddedZip=m.ZipSha256,service=Yahad.Service.ServiceDefinition.Name,serviceInstallerImplemented=true,
             releaseKeyId=key is null?null:TrustedReleaseKey.Id(key),upgrades=key is null?"refused: built without a release key":"signed releases of this key",windowingLoaded=WindowingLoaded(),systemOperationsInvoked=false,machineAcceptance=false}));
     }

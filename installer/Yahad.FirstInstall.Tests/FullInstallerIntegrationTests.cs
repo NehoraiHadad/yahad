@@ -143,20 +143,47 @@ internal static class FullInstallerIntegrationTests
             Assert(inventory.Count(f=>f.Path==RemovalIntent.EngineMember(infra.Version)&&f.Sha256==infra.EngineSha256)==1);
             Assert(inventory.Skip(1).All(f=>f.Path.StartsWith("infra/"+infra.Version+"/",StringComparison.Ordinal)||f.Path.StartsWith("apps/"+app.Version+"/",StringComparison.Ordinal)));
             Assert(inventory.Any(f=>f.Path=="infra/"+infra.Version+"/"+InstalledLayout.InfraTreeName)&&inventory.Any(f=>f.Path=="apps/"+app.Version+"/"+InstalledLayout.AppTreeName));
-            var intent=new RemovalIntent(InstallerState.CurrentFormat,state with{Phase="removing_all_data"},UninstallMode.DeleteData,inventory,"prepared");
+            var intent=new RemovalIntent(InstallerState.CurrentFormat,state with{Phase="removing_all_data"},UninstallMode.DeleteData,"prepared");
+            // The receipt's inventory is the one its record implies, never a second copy.
+            Assert(intent.Binaries.SequenceEqual(inventory)&&!JsonDocument.Parse(intent.Encode()).RootElement.TryGetProperty("Binaries",out _));
+            DenyCode("UNINSTALL_INTENT_INVALID",()=>RemovalIntent.Parse(JsonSerializer.SerializeToUtf8Bytes(new{intent.Format,intent.State,intent.Mode,Binaries=inventory,intent.Stage})));
             foreach(var stage in RemovalIntent.Stages){var replay=RemovalIntent.Parse(Json(intent with{Stage=stage}));replay.RequireSameInstallation(state);Assert(replay.AtLeast(stage)&&replay.AtLeast("prepared"));}
             Assert(!intent.AtLeast("lan_removed"));Deny(()=>intent.AtLeast("invented"));
             (intent with{Mode=UninstallMode.KeepData,State=state with{Phase="removing_keep_data"}}).Require();
             Deny(()=>(intent with{Mode=UninstallMode.KeepData}).Require());Deny(()=>(intent with{Stage="invented"}).Require());Deny(()=>(intent with{Format=6}).Require());
             Deny(()=>intent.RequireSameInstallation(state with{InstallationId=Guid.NewGuid().ToString("N")}));Deny(()=>intent.RequireSameInstallation(state with{Active=PairFixture.Pair(appSalt:"other")}));
-            intent.RequireSameInstallation(state with{Phase="uninstalled"});
-            foreach(var path in new[]{"../unrelated.txt","infra/9.9.9/host/Yahad.ServiceHost.exe","versions/"+app.Version+"/host/Yahad.ServiceHost.exe","apps/"+app.Version+"/app/native/a.dll","payloads/x/bundle.json"})
-            {var changed=inventory.ToArray();changed[1]=changed[1] with{Path=path};DenyCode("UNINSTALL_INTENT_INVALID",()=>(intent with{Binaries=changed}).Require());}
-            // The pointer's bytes are the active pair's exact encoding.
-            {var changed=inventory.ToArray();changed[0]=changed[0] with{Size=changed[0].Size+1};DenyCode("UNINSTALL_INTENT_INVALID",()=>(intent with{Binaries=changed}).Require());}
-            foreach(var omitted in new[]{InstalledLayout.ActivePointerName,RemovalIntent.EngineMember(infra.Version)})
-                DenyCode("UNINSTALL_INTENT_INVALID",()=>(intent with{Binaries=inventory.Where(f=>f.Path!=omitted).ToArray()}).Require());
-            DenyCode("UNINSTALL_INTENT_INVALID",()=>(intent with{Binaries=[..inventory,inventory[1]]}).Require());return Task.CompletedTask;
+            intent.RequireSameInstallation(state with{Phase="uninstalled"});return Task.CompletedTask;
+        });
+        await check("every record two maximal pairs make is readable: lists are bounded at admission, records at their writer, readers at the derived bound",()=>
+        {
+            // About 30,000 members each: two such pairs make a record past 16 MiB that a 16 MiB
+            // reader refused after the commit had changed the install.
+            var names=Enumerable.Range(0,30000).Select(i=>"app/dist/assets/"+i.ToString("D6")+"-"+new string('x',200)+".js").Concat(PairFixture.AppMembers).ToArray();
+            var infra=PairFixture.Infra();
+            InstalledPair Big(string version)=>new(PairFixture.InfraRecord(infra),PairFixture.AppRecordOf(PairFixture.Build(TreeKind.App,version,PairFixture.AppCommit,names),6));
+            var state=PairFixture.State(active:Big("1.0.1"),previous:Big("1.0.0"));var bytes=state.Encode();
+            Assert(bytes.Length>TreeRecord.MaximumBytes&&bytes.Length<=InstallerState.MaximumBytes);
+            var receipt=new RemovalIntent(InstallerState.CurrentFormat,state with{Phase="removing_keep_data"},UninstallMode.KeepData,"prepared");
+            var upgrade=UpgradeState.Begin(UpgradeState.AppKind,state.Previous!,state.Active,1);
+            var root=Path.Combine(Path.GetTempPath(),"yahad-record-bound-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
+            try
+            {
+                string Write(string name,byte[] content){var path=Path.Combine(root,name);File.WriteAllBytes(path,content);return path;}
+                Assert(InstallerState.Read(Write("installer-state.json",bytes)).Active.App.Files.Length==names.Length+1);
+                Assert(RemovalIntent.Read(Write("receipt.json",receipt.Encode())).Binaries.Length==receipt.Binaries.Length);
+                Assert(UpgradeState.Parse(NativeInstallFiles.ReadRecord(Write("upgrade-state.json",upgrade.Encode()),UpgradeState.MaximumBytes)).To.App.Version=="1.0.1");
+            }
+            finally{Directory.Delete(root,true);}
+            Assert(InstallerState.MaximumBytes==4*InstallerState.TreeListMaximumBytes+InstallerState.FixedMaximumBytes&&UpgradeState.MaximumBytes==InstallerState.MaximumBytes&&
+                RemovalIntent.MaximumBytes==InstallerState.MaximumBytes+InstallerState.FixedMaximumBytes);
+            // A list past its bound never reaches a record: a name System.Text.Json escapes
+            // ('+' is six bytes) can pass the tree record's own bound and not this one.
+            var escaped=Enumerable.Range(0,13000).Select(i=>"app/dist/"+i.ToString("D6")+new string('+',200)).Concat(PairFixture.AppMembers).ToArray();
+            var wide=PairFixture.Build(TreeKind.App,"1.0.2",PairFixture.AppCommit,escaped);
+            Assert(wide.Record.Length<=TreeRecord.MaximumBytes&&!InstallerState.WithinListBound(wide.Files));
+            DenyCode("INSTALL_STATE_INVALID",()=>(state with{Previous=null,Active=new(PairFixture.InfraRecord(infra),PairFixture.AppRecordOf(wide,6))}).Encode());
+            {var fixture=PairFixture.Package(app:wide);DenyCode("PACKAGE_BOUND",()=>{using var p=PairFixture.Open(fixture);});}
+            return Task.CompletedTask;
         });
         await check("install package accepts only Format 2 of this infrastructure with exact infra/ and apps/ trees",()=>
         {
@@ -169,7 +196,7 @@ internal static class FullInstallerIntegrationTests
             Refused("PACKAGE_FORMAT",()=>PairFixture.Package(schema:0,migrations:[]));
             foreach(var migrations in new[]{new[]{6,5},[5,5],[7],[0,6],[8]})Refused("PACKAGE_FORMAT",()=>PairFixture.Package(migrations:migrations));
             foreach(var extra in new[]{"infra/bootstrap/authority/Yahad.Authority.exe","system-manifest.json","payload/app/server/main.mjs","host/Yahad.ServiceHost.exe",
-                "apps/app/native/Yahad.Platform.exe","apps/app/Native/coreclr.dll","apps/host/x","infra/app/x"})Refused("PACKAGE_PATH",()=>PairFixture.Package(extra:extra));
+                "apps/host/x","infra/app/x"})Refused("PACKAGE_PATH",()=>PairFixture.Package(extra:extra));
             foreach(var required in InstallPackage.Required)Refused("PACKAGE_MISSING",()=>PairFixture.Package(omit:required));
             foreach(var record in new[]{"infra/"+InstalledLayout.InfraTreeName,"apps/"+InstalledLayout.AppTreeName})Refused("PACKAGE_MISSING",()=>PairFixture.Package(omit:record));
             Refused("PACKAGE_SOURCE",()=>PairFixture.Package(change:m=>m with{Infrastructure=m.Infrastructure with{ContractMax=m.Infrastructure.ContractMax+1}}));
@@ -183,10 +210,13 @@ internal static class FullInstallerIntegrationTests
             Refused("PACKAGE_MEMBERS",()=>PairFixture.Package(duplicate:true));
             Refused("PACKAGE_BOUND",()=>PairFixture.Package(change:m=>m with{Files=[..m.Files,m.Files[0]]}));
             // The writer's required members (setup_package.py REQUIRED_MEMBERS), the app's own legal records included.
-            foreach(var legal in new[]{"server-bundle.json","ThirdPartyNotices-server.txt","build-inputs.json"})Assert(InstallPackage.Required.Contains("apps/app/legal/"+legal));
-            // The bundle ships, never the source, the lockfile or node_modules, in any case.
-            foreach(var extra in new[]{"apps/app/src/main.ts","apps/app/node_modules/x/index.js","apps/app/package-lock.json","apps/app/SRC/main.ts","apps/app/Node_Modules/x.js","apps/app/Package-Lock.json"})
-                Refused("PACKAGE_PATH",()=>PairFixture.Package(extra:extra));
+            foreach(var legal in new[]{"server-bundle.json","ThirdPartyNotices-server.txt","build-inputs.json","SBOM.json","Yahad-LICENSE.txt"})Assert(InstallPackage.Required.Contains("apps/app/legal/"+legal));
+            Assert(InstallPackage.Required.Where(r=>r.StartsWith("apps/",StringComparison.Ordinal)).SequenceEqual(AppMemberPolicy.Required.Select(r=>"apps/"+r)));
+            // The bundle ships, never the source, the lockfile, node_modules, native code or an
+            // executable, in any case: the app archive's own policy (AppMemberPolicy).
+            foreach(var extra in new[]{"apps/app/src/main.ts","apps/app/node_modules/x/index.js","apps/app/package-lock.json","apps/app/SRC/main.ts","apps/app/Node_Modules/x.js","apps/app/Package-Lock.json",
+                "apps/app/native/Yahad.Platform.exe","apps/app/Native/coreclr.dll","apps/app/dist/plugin.node","apps/app/dist/a.exe","apps/app/a.DLL","apps/app/tools/a.ps1","apps/app/a.cmd","apps/app/a.Bat"})
+                Refused("PACKAGE_FORBIDDEN",()=>PairFixture.Package(extra:extra));
             // One archive entry per manifest path, exactly: a case-only difference is no match,
             // and two manifest paths that are one Windows path are refused.
             Refused("PACKAGE_MEMBER_TYPE",()=>PairFixture.Package(change:m=>m with{Files=m.Files.Select(f=>f.Path=="infra/legal/fixture.json"?f with{Path="infra/legal/FIXTURE.json"}:f).ToArray()}));

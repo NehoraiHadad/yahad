@@ -33,12 +33,13 @@ internal sealed class UpdaterService(IScmApi scm,Func<Action,CancellationToken,T
         var expected=WindowsFileBoundary.CanonicalLocalPath(Path.GetDirectoryName(InstalledLayout.UpdaterImage(InfrastructureRelease.Version))!);
         var actual=WindowsFileBoundary.CanonicalLocalPath(Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory)));
         if(!string.Equals(actual,expected,StringComparison.OrdinalIgnoreCase))throw new IOException("UPDATER_IMAGE_LOCATION");
-        // The app version the engine compares against is read once, at service start; section 9.2 (phase 4) makes it live.
-        var pointer=ActivePointer.Read();pointer.RequireThisInfrastructure();
+        // The installed pair is read again for every decision (9.2); one this image is not
+        // the infrastructure of stops the service here, as at every later read.
+        Live();
         var runtime=(SecurityIdentifier)new NTAccount(ServiceDefinition.Account).Translate(typeof(SecurityIdentifier));
         var key=Path.Combine(InstalledLayout.BinaryRoot,TrustedReleaseKey.InstalledName);
         using var source=new GitHubReleaseSource();
-        var engine=new UpdaterEngine(UpdaterPaths.Installed,pointer.App.Version,
+        var engine=new UpdaterEngine(UpdaterPaths.Installed,Live,
             ()=>File.Exists(key)?NativeInstallFiles.ReadRecord(key):null,TrustedReleaseKey.Embedded,source,UpdateLauncher.Launch,()=>DateTimeOffset.UtcNow);
         engine.Start(cancellation);
         using var linked=CancellationTokenSource.CreateLinkedTokenSource(cancellation);
@@ -49,4 +50,5 @@ internal sealed class UpdaterService(IScmApi scm,Func<Action,CancellationToken,T
         await Task.WhenAny(serving,scheduled);linked.Cancel();
         await Task.WhenAll(serving,scheduled);
     }
+    private static ActivePointer Live(){var pointer=ActivePointer.Read();pointer.RequireThisInfrastructure();return pointer;}
 }

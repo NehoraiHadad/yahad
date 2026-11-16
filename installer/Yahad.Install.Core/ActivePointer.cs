@@ -13,7 +13,7 @@ internal sealed record ActivePointer(int Format,ActiveInfrastructure Infrastruct
     internal const int CurrentFormat=1,MaximumBytes=4096;
     internal void Require()
     {
-        if(Format!=CurrentFormat||Infrastructure is null||App is null||!ReleaseManifest.IsVersion(Infrastructure.Version)||!ReleaseManifest.IsVersion(App.Version)||
+        if(Format!=CurrentFormat||Infrastructure is null||App is null||!SemVer.IsVersion(Infrastructure.Version)||!SemVer.IsVersion(App.Version)||
             !InfrastructureRelease.IsContract(Infrastructure.ContractMin)||!InfrastructureRelease.IsContract(Infrastructure.ContractMax)||Infrastructure.ContractMin>Infrastructure.ContractMax||
             App.RequiresContract<Infrastructure.ContractMin||App.RequiresContract>Infrastructure.ContractMax||
             !TreeRecord.IsDigest(Infrastructure.TreeSha256)||!TreeRecord.IsDigest(App.TreeSha256))throw new IOException("ACTIVE_POINTER_INVALID");

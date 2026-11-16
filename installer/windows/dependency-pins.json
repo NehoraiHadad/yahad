@@ -42,5 +42,38 @@
         }
       ]
     }
+  },
+  "node": {
+    "publisher": "nodejs/node",
+    "origin": "official-vendor",
+    "upstreamLink": "https://nodejs.org/en/download",
+    "version": "24.22.2",
+    "license": "MIT",
+    "archive": {
+      "name": "node-v24.22.2-win-x64.zip",
+      "url": "https://nodejs.org/dist/v24.22.2/node-v24.22.2-win-x64.zip",
+      "sha256": "ca1bff5d8ead13c9f2ea404a176db46bd430704d5b5113734049fa365e7799e2"
+    },
+    "checksums": {
+      "name": "SHASUMS256.txt",
+      "url": "https://nodejs.org/dist/v24.22.2/SHASUMS256.txt",
+      "algorithm": "sha256"
+    },
+    "files": [
+      {
+        "archivePath": "node-v24.22.2-win-x64/node.exe",
+        "directoryPath": "node.exe",
+        "path": "runtime/node/node.exe",
+        "size": 93922624,
+        "sha256": "1c331340fa6cac5e4294725959070a143fa0507195a78ad77eed7943f719aac9"
+      },
+      {
+        "archivePath": "node-v24.22.2-win-x64/LICENSE",
+        "directoryPath": "LICENSE",
+        "path": "legal/Node-LICENSE.txt",
+        "size": 160555,
+        "sha256": "ed34dd8e3f0a78dbaf00d0444ce8e285b015b765379c2e17880455f70370f8e9"
+      }
+    ]
   }
 }

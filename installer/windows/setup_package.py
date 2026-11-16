@@ -1,18 +1,20 @@
-"""Offline build-machine packager for the single-service Windows installer.
+"""Offline build-machine packager of one release's two Windows artifacts.
 
-Produces the Format 2 install package the distributable Setup embeds
-(docs/WINDOWS-APP-PACKAGE-PLAN.md 4.1, 5.3): install.zip holding two trees,
-each with the builder's member record of itself:
-  infra/infra-tree.json, infra/host/ (Yahad.ServiceHost), infra/updater/
-  (Yahad.Updater), infra/platform/ (Yahad.Platform), infra/runtime/{node,caddy}/,
-  infra/legal/ and infra/setup/Yahad.Setup.exe (the payload-free engine, 4.4);
-  apps/app-tree.json, apps/app/ (the verified application, with its own
-  server-bundle record, notices and build inputs under apps/app/legal/).
-install-manifest.json is written last. Phase 2 builds both tracks from one
-commit: the infrastructure identity is installer/Directory.Build.props, the app
-identity package.json, and both name the same source commit.
-Never installs or fabricates release receipts; only audit-only --describe entry
-points of verified local project builds run. Outputs remain private candidates.
+From a verified cached infrastructure tree (infra_package.py) and this checkout's
+staged app tree (prepare_core_fixture.py) it writes:
+- install.zip and install-manifest.json, the Format 2 package the distributable
+  Setup embeds (docs/WINDOWS-APP-PACKAGE-PLAN.md 4.1, 5.3): infra/infra-tree.json
+  and the infrastructure members exactly as cached (host/, updater/, platform/,
+  runtime/, legal/, setup/), and apps/app-tree.json with apps/app/...;
+- yahad-windows-app-<v>.zip, the app-only release asset (5.2): exactly
+  app-tree.json and app/..., its app-tree.json the same bytes as the install
+  package's apps/app-tree.json.
+Each half carries its own identity: the infrastructure its version, contract
+range and infra source commit (from the cache record); the app package.json's
+version, its contract and the release commit (this checkout's HEAD).
+install-manifest.json is written last. Never installs or fabricates release
+receipts; only audit-only --describe entry points of verified local project
+builds run. Outputs remain private candidates.
 """
 import argparse
 import hashlib
@@ -22,12 +24,12 @@ from pathlib import Path, PurePosixPath
 import re
 import stat
 import subprocess
-import tempfile
 import zipfile
 
-from . import bundle, pe, verify_archive
+from . import bundle, pe
 from .application_version import (source_release_version, source_infrastructure_identity, package_infrastructure_contract,
-    require_native_build_identity, describe_build_artifact)
+    package_minimum_from, require_native_build_identity, describe_build_artifact)
+from .database_schema import require_build_schema
 
 
 class PackageError(ValueError): pass
@@ -47,22 +49,21 @@ class _VerifiedFiles(dict):
 
 RUNTIME_VERSION = '10.0.14'
 INFRA, APPS = 'infra/', 'apps/'
-INFRA_TREE, APP_TREE = INFRA+'infra-tree.json', APPS+'app-tree.json'
+INFRA_TREE_NAME, APP_TREE_NAME = 'infra-tree.json', 'app-tree.json'
+INFRA_TREE, APP_TREE = INFRA+INFRA_TREE_NAME, APPS+APP_TREE_NAME
 # TreeRecord.InfrastructurePrefixes / AppPrefixes, relative to each tree root.
 INFRA_PREFIXES = ('host/', 'updater/', 'platform/', 'runtime/', 'legal/', 'setup/')
 APP_PREFIXES = ('app/',)
 ENGINE = 'Yahad.Setup.exe'
-# The app's own legal records; the rest of the payload's legal/ is infrastructure
-# until the per-track SBOM split (phase 3).
-APP_LEGAL = ('legal/server-bundle.json', 'legal/ThirdPartyNotices-server.txt', 'legal/build-inputs.json')
-REQUIRED_MEMBERS = frozenset({INFRA_TREE, APP_TREE,
-    'infra/host/Yahad.ServiceHost.exe','infra/host/Yahad.ServiceHost.runtimeconfig.json',
-    'infra/updater/Yahad.Updater.exe','infra/updater/Yahad.Updater.runtimeconfig.json',
-    'infra/platform/Yahad.Platform.exe','infra/platform/Yahad.Platform.runtimeconfig.json',
-    'infra/runtime/node/node.exe','infra/runtime/caddy/caddy.exe','infra/setup/'+ENGINE,
-    'apps/app/package.json','apps/app/server/main.mjs','apps/app/dist/index.html',
-    'apps/app/deploy/lan-capabilities.json','apps/app/deploy/lan-help.html',
-    *('apps/app/'+name for name in APP_LEGAL)})
+# The infrastructure tree's own legal records (infra_package.py) and the app's (bundle.APP_LEGAL).
+INFRA_LEGAL = ('legal/runtime-lock.json', 'legal/SBOM.json', 'legal/Node-LICENSE.txt', 'legal/DotNet-LICENSE.txt',
+               'legal/DotNet-ThirdPartyNotices.txt', 'legal/Caddy-LICENSE.txt', 'legal/Yahad-LICENSE.txt')
+INFRA_REQUIRED = frozenset({'host/Yahad.ServiceHost.exe','host/Yahad.ServiceHost.runtimeconfig.json',
+    'updater/Yahad.Updater.exe','updater/Yahad.Updater.runtimeconfig.json',
+    'platform/Yahad.Platform.exe','platform/Yahad.Platform.runtimeconfig.json',
+    'runtime/node/node.exe','runtime/caddy/caddy.exe','setup/'+ENGINE, *INFRA_LEGAL})
+APP_REQUIRED = frozenset(bundle.REQUIRED)
+REQUIRED_MEMBERS = frozenset({INFRA_TREE, APP_TREE, *(INFRA+name for name in INFRA_REQUIRED), *(APPS+name for name in APP_REQUIRED)})
 COMPONENTS = (('host/','Yahad.ServiceHost'), ('updater/','Yahad.Updater'), ('platform/','Yahad.Platform'))
 MAX_FILE, MAX_TOTAL, MAX_FILES = 512 * 1024**2, 2 * 1024**3, 50000
 PRIVATE = {'.git', '.local', '.agents', '.codex', '.authority', 'data', 'datasets', 'backups', 'secrets',
@@ -151,18 +152,6 @@ def _record(name, value):
     return dict(path=name, size=path.stat().st_size, sha256=bundle.digest(path))
 
 
-def release_identity(repo):
-    """(app version, infrastructure identity, the app's required contract) of one source tree."""
-    repo = _unlinked(repo)
-    infrastructure = source_infrastructure_identity(repo)
-    contract = package_infrastructure_contract(_unlinked(repo/'package.json', file=True).read_bytes(), infrastructure)
-    return source_release_version(repo), infrastructure, contract
-
-
-def _source_identity(repo):
-    return (*release_identity(repo), *_committed_source(repo))
-
-
 def _committed_source(repo):
     repo = _unlinked(repo)
     def git(*args): return subprocess.check_output(['git', '-C', str(repo), *args])
@@ -176,40 +165,36 @@ def _committed_source(repo):
     return source, [name for name in tracked if name]
 
 
-def source_schema(repo):
-    text = _unlinked(Path(repo)/'src/database-schema.ts', file=True).read_text(encoding='utf-8')
-    schema = re.findall(r'^export const DATABASE_SCHEMA\s*=\s*([0-9]+);', text, re.M)
-    sources = re.findall(r'^export const DATABASE_MIGRATIONS_FROM\s*=\s*\[([0-9,\s]*)\]\s*as const;', text, re.M)
-    if len(schema)!=1 or len(sources)!=1: raise PackageError('Source schema declaration required')
-    target = int(schema[0]); migrations = [int(v.strip()) for v in sources[0].split(',') if v.strip()]
-    if not 1<=target<=64 or len(migrations)>1024 or migrations!=sorted(set(migrations)) or any(not 1<=v<target for v in migrations):
-        raise PackageError('Source migration declaration invalid')
-    return target, migrations
+def app_identity(repo, infrastructure):
+    """(app version, its required contract, minimumFrom) of one checkout, against the
+    infrastructure it ships with; that infrastructure must be the checkout's own."""
+    repo = _unlinked(repo)
+    if source_infrastructure_identity(repo) != infrastructure: raise PackageError('Infrastructure identity differs from the checkout')
+    package = _unlinked(repo/'package.json', file=True).read_bytes()
+    version = source_release_version(repo)
+    return version, package_infrastructure_contract(package, infrastructure), package_minimum_from(package, version, infrastructure.version)
 
 
-def validate_payload_source(repo, prepared, manifest, version, source, tracked):
+def _source_identity(repo, infrastructure):
+    return (*app_identity(repo, infrastructure), *_committed_source(repo))
+
+
+def validate_payload_source(repo, prepared, records, version, source, tracked):
+    """The staged app tree is this checkout's: its package.json bytes, its build
+    record's commits and schema, and the bundler's record of tracked source bytes
+    and locked production packages. Returns (schema, migrations)."""
     repo, prepared = Path(repo), Path(prepared)
-    if (type(manifest.get('schema')) is not int or manifest['schema']!=1 or manifest.get('version')!=version or manifest.get('profile')!='full' or manifest.get('target')!='win-x64' or
-            manifest.get('kind')!='windows-runtime-candidate'):
-        raise PackageError('Application identity differs')
-    records = {r['path']:r for r in manifest.get('files', [])}; _closed_names(records)
-    # The payload runs the bundle only: no source tree, lockfile or node_modules ships.
-    if any(name.startswith(('app/src/', 'app/node_modules/')) or name=='app/package-lock.json' for name in records):
-        raise PackageError('Application source or dependency tree in payload')
-    if any(name.casefold().startswith('app/native/') for name in records):
-        raise PackageError('Native helper in application payload')
+    records = {r['path']:r for r in records}; _closed_names(records)
     if _unlinked(repo/'package.json', file=True).read_bytes()!=_unlinked(prepared/'app/package.json', file=True).read_bytes():
         raise PackageError('Application package bytes differ')
-    build = _json((prepared/'legal/build-inputs.json').read_bytes(), 65536)
+    if bundle.object_file(prepared/'app/package.json').get('version')!=version: raise PackageError('Application identity differs')
+    build = _json((prepared/'app/legal/build-inputs.json').read_bytes(), 65536)
     if any(build.get(field)!=source for field in ('appSourceCommit', 'packagerSourceCommit')):
         raise PackageError('Mixed source build inputs')
-    schema, migrations = source_schema(repo)
-    if (type(build.get('databaseSchema')) is not int or build['databaseSchema']!=schema or
-            build.get('databaseMigrationsFrom')!=migrations or any(type(v) is not int for v in build['databaseMigrationsFrom'])):
-        raise PackageError('Mixed source database schema')
+    schema, migrations = require_build_schema(build, repo)
     # The bundler's record ties every shipped entry to tracked source bytes and to
-    # non-development lockfile packages; the payload records pin the entry bytes.
-    server = _json((prepared/'legal/server-bundle.json').read_bytes())
+    # non-development lockfile packages; the tree records pin the entry bytes.
+    server = _json((prepared/'app/legal/server-bundle.json').read_bytes())
     lock = _json(_unlinked(repo/'package-lock.json', file=True).read_bytes(), 64*1024**2).get('packages', {})
     sources, packages = server.get('sources'), server.get('packages')
     if not isinstance(sources, dict) or not sources or not isinstance(packages, list): raise PackageError('Server bundle record')
@@ -283,32 +268,73 @@ def _inspect(files, *, native_entry=None):
             if not pe.is_system(imported) and sibling not in folded: raise PackageError('Missing private native dependency: '+name+' -> '+imported)
 
 
+def _app_member(member):
+    # One app tree member by name (5.2): under app/, never a refused path or name.
+    if not member.startswith('app/'): raise PackageError('Undeclared archive namespace')
+    _safe_path(member[len('app/'):], component=True)
+    reason = bundle.refused_member(member, b'')
+    if reason: raise PackageError(reason)
+    return member
+
+
 def _tree_member(name):
-    # The tree-relative member a zip name maps to; None for a tree record itself.
+    # The tree-relative member an install.zip name maps to; None for a tree record itself.
     if name in (INFRA_TREE, APP_TREE): return None
-    for root, prefixes in ((INFRA, INFRA_PREFIXES), (APPS, APP_PREFIXES)):
-        if name.startswith(root):
-            member = name[len(root):]
-            prefix = next((p for p in prefixes if member.startswith(p)), None)
-            if prefix is None or member.casefold().startswith('app/native/'): break
+    if name.startswith(INFRA):
+        member = name[len(INFRA):]
+        prefix = next((p for p in INFRA_PREFIXES if member.startswith(p)), None)
+        if prefix is not None:
             _safe_path(member[len(prefix):], component=True)
             return member
+    elif name.startswith(APPS):
+        return _app_member(name[len(APPS):])
     raise PackageError('Undeclared archive namespace')
 
 
-def tree_record(version, source, members):
+def _app_archive_member(name):
+    # yahad-windows-app-<v>.zip: exactly app-tree.json and app/... (5.2).
+    return None if name==APP_TREE_NAME else _app_member(name)
+
+
+def tree_record(version, source, members, prefixes):
     """infra-tree.json / app-tree.json (TreeRecord format 1): every member of the
-    tree except the record itself, tree-relative, in ordinal path order."""
+    tree except the record itself, tree-relative, in ordinal path order. The
+    writer refuses what the reader (parse_tree_record) would."""
     files = [dict(path=name, size=record['size'], sha256=record['sha256'])
              for name, record in sorted(members.items(), key=lambda item:_ordinal(item[0]))]
     data = _encode(dict(format=1, version=version, sourceCommit=source, files=files))
     if not files or len(data) > 16*1024**2: raise PackageError('Tree record bound')
+    parse_tree_record(data, prefixes)
     return data
 
 
-def _write_archive(output, entries, expected=None):
+def parse_tree_record(data, prefixes):
+    """TreeRecord.Parse: strict, no BOM, ordinal order, unique ignoring case, bound."""
+    if not 1<=len(data)<=16*1024**2 or data.startswith(b'\xef\xbb\xbf'): raise PackageError('Tree record invalid')
+    value = _json(data, 16*1024**2)
+    if not isinstance(value, dict) or sorted(value)!=['files', 'format', 'sourceCommit', 'version']: raise PackageError('Tree record invalid')
+    files = value['files']
+    if (type(value['format']) is not int or value['format']!=1 or not isinstance(value['version'], str) or
+            not re.fullmatch(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)', value['version']) or
+            not isinstance(value['sourceCommit'], str) or not re.fullmatch('[a-f0-9]{40}', value['sourceCommit']) or
+            not isinstance(files, list) or not 1<=len(files)<=MAX_FILES):
+        raise PackageError('Tree record invalid')
+    previous, total = None, 0
+    for item in files:
+        if (not isinstance(item, dict) or sorted(item)!=['path', 'sha256', 'size'] or not isinstance(item['path'], str) or
+                not item['path'].startswith(prefixes) or type(item['size']) is not int or not 0<=item['size']<=MAX_FILE or
+                not isinstance(item['sha256'], str) or not re.fullmatch('[a-f0-9]{64}', item['sha256']) or
+                previous is not None and _ordinal(previous)>=_ordinal(item['path'])):
+            raise PackageError('Tree record invalid')
+        previous = item['path']; total += item['size']
+    _closed_names([item['path'] for item in files])
+    if total>MAX_TOTAL: raise PackageError('Tree record invalid')
+    return value
+
+
+def _write_archive(output, entries, expected=None, member=_tree_member):
     _closed_names(entries)
-    for name in entries: _tree_member(name)
+    for name in entries: member(name)
     expected=expected if expected is not None else {name:_record(name,value) for name,value in entries.items()}
     if set(expected)!=set(entries) or len(entries)>MAX_FILES or any(not 0<=r['size']<=MAX_FILE for r in expected.values()) or sum(r['size'] for r in expected.values())>MAX_TOTAL:
         raise PackageError('Archive bound')
@@ -345,65 +371,60 @@ def require_members(names):
     if not REQUIRED_MEMBERS<=names: raise PackageError('Required package member missing')
 
 
-def _payload_member(path):
-    # The verified payload's app/ is the app tree; its runtime/ and its legal/ are
-    # infrastructure, except the app's own bundle record, notices and build inputs.
-    if path.startswith('app/'): return APPS+path
-    if path in APP_LEGAL: return APPS+'app/'+path
-    if path.startswith(('runtime/', 'legal/')): return INFRA+path
-    raise PackageError('Undeclared payload namespace')
+def app_archive_name(version): return 'yahad-windows-app-'+version+'.zip'
 
 
-def build(repo, payload_zip, runtime_host, updater, platform, engine, output):
-    repo, payload_zip, runtime_host, updater, platform, engine = map(_unlinked,(repo,payload_zip,runtime_host,updater,platform,engine))
-    output = Path(output).absolute()
-    if output.exists() or output==repo or any(output.is_relative_to(closure) for closure in (runtime_host,updater,platform,engine.parent)):
+def build(repo, app_stage, infra_entry, output, app_archive):
+    from . import infra_package
+    repo, app_stage, infra_entry = map(_unlinked,(repo,app_stage,infra_entry))
+    output, app_archive = Path(output).absolute(), Path(app_archive).absolute()
+    if (output.exists() or app_archive.exists() or output==repo or
+            any(path.is_relative_to(closure) for path in (output, app_archive) for closure in (app_stage, infra_entry))):
         raise PackageError('New output outside input closures required')
-    for ancestor in output.parents:
+    for ancestor in (*output.parents, *app_archive.parents):
         if ancestor.exists(): _unlinked(ancestor)
-    identity = _source_identity(repo); version, infrastructure, contract, source, tracked = identity
+    infra = infra_package.verify(infra_entry)
+    identity = _source_identity(repo, infra.identity); version, contract, minimum, source, tracked = identity
+    if app_archive.name!=app_archive_name(version): raise PackageError('App archive name')
     bound = r'(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})'
-    if not re.fullmatch(bound,version) or not re.fullmatch(bound,infrastructure.version): raise PackageError('Package version bound')
+    if not re.fullmatch(bound,version) or not re.fullmatch(bound,infra.identity.version): raise PackageError('Package version bound')
+    app = bundle.validate(app_stage)
+    if app['version']!=version: raise PackageError('Application identity differs')
+    schema,migrations=validate_payload_source(repo,app_stage,app['files'],version,source,tracked)
+    app_files=_VerifiedFiles({record['path']:app_stage/record['path'] for record in app['files']},root=app_stage)
+    if [app_files.records[r['path']] for r in app['files']]!=app['files']: raise PackageError('Verified closure changed')
+    app_tree=tree_record(version,source,app_files.records,APP_PREFIXES)
+    entries,expected={INFRA_TREE:infra.tree},{INFRA_TREE:_record(INFRA_TREE,infra.tree)}
+    for name,path in infra.files.items(): entries[INFRA+name]=path;expected[INFRA+name]=dict(infra.files.records[name],path=INFRA+name)
+    entries[APP_TREE]=app_tree;expected[APP_TREE]=_record(APP_TREE,app_tree)
+    for name,path in app_files.items(): entries[APPS+name]=path;expected[APPS+name]=dict(app_files.records[name],path=APPS+name)
+    require_members(entries)
     output.mkdir(parents=True,exist_ok=False)
-    with tempfile.TemporaryDirectory(prefix='yahad-install-inputs-', dir=output) as scratch:
-        prepared=Path(scratch)/'payload';verify_archive.verify(_unlinked(payload_zip,file=True),prepared,retain_manifest=True)
-        manifest=_json((prepared/'bundle.json').read_bytes())
-        schema,migrations=validate_payload_source(repo,prepared,manifest,version,source,tracked)
-        components=[(INFRA+prefix,validate_native(root,artifact,infrastructure,source,repo))
-                    for (prefix,artifact),root in zip(COMPONENTS,(runtime_host,updater,platform))]
-        components.append((INFRA+'setup/',validate_engine(engine,infrastructure,source,repo)))
-        entries,expected={},{}
-        for record in manifest['files']:
-            name=_payload_member(record['path']);entries[name]=prepared/record['path'];expected[name]=dict(record,path=name)
-        for prefix,component in components:
-            for name,path in component.items():
-                entries[prefix+name]=path;expected[prefix+name]=dict(component.records[name],path=prefix+name)
-        trees={}
-        for record_name,root,tree_version in ((INFRA_TREE,INFRA,infrastructure.version),(APP_TREE,APPS,version)):
-            members={name[len(root):]:record for name,record in expected.items() if name.startswith(root)}
-            data=tree_record(tree_version,source,members);trees[record_name]=_hash(data)
-            entries[record_name]=data;expected[record_name]=_record(record_name,data)
-        require_members(entries)
-        archive=output/'install.zip';records=_write_archive(archive,entries,expected)
-        saved=dict(Format=2,
-                   Infrastructure=dict(Version=infrastructure.version,ContractMin=infrastructure.contract_min,ContractMax=infrastructure.contract_max,
-                                       SourceCommit=source,TreeSha256=trees[INFRA_TREE]),
-                   App=dict(Version=version,SourceCommit=source,RequiresContract=contract,TreeSha256=trees[APP_TREE],
-                            DatabaseSchema=schema,DatabaseMigrationsFrom=migrations),
-                   ZipSha256=bundle.digest(archive),Files=records)
-        metadata=_encode(saved)
-        if len(metadata)>16*1024**2: raise PackageError('Installer manifest bound')
-        for _,component in components: component.require_unchanged()
-        if _source_identity(repo)!=identity: raise PackageError('Build source changed')
-        # Last output is the success prerequisite for Setup's embedded input.
-        with (output/'install-manifest.json').open('xb') as destination: destination.write(metadata)
-    return dict(output=str(output),infrastructureVersion=infrastructure.version,appVersion=version,sourceCommit=source,
+    archive=output/'install.zip';records=_write_archive(archive,entries,expected)
+    # The app-only asset: the same verified members and the same app-tree.json bytes.
+    shipped={APP_TREE_NAME:app_tree,**app_files}
+    _write_archive(app_archive,shipped,{APP_TREE_NAME:_record(APP_TREE_NAME,app_tree),**app_files.records},member=_app_archive_member)
+    saved=dict(Format=2,
+               Infrastructure=dict(Version=infra.identity.version,ContractMin=infra.identity.contract_min,ContractMax=infra.identity.contract_max,
+                                   SourceCommit=infra.source_commit,TreeSha256=infra.tree_sha256),
+               App=dict(Version=version,SourceCommit=source,RequiresContract=contract,TreeSha256=_hash(app_tree),
+                        DatabaseSchema=schema,DatabaseMigrationsFrom=migrations),
+               MinimumFrom=dict(App=minimum['app'],Infrastructure=minimum['infrastructure']),
+               ZipSha256=bundle.digest(archive),Files=records)
+    metadata=_encode(saved)
+    if len(metadata)>16*1024**2: raise PackageError('Installer manifest bound')
+    app_files.require_unchanged();infra.files.require_unchanged()
+    if _source_identity(repo,infra.identity)!=identity: raise PackageError('Build source changed')
+    # Last output is the success prerequisite for Setup's embedded input.
+    with (output/'install-manifest.json').open('xb') as destination: destination.write(metadata)
+    return dict(output=str(output),appArchive=str(app_archive),infrastructureVersion=infra.identity.version,infraSourceCommit=infra.source_commit,
+                infraTreeSha256=infra.tree_sha256,appVersion=version,sourceCommit=source,appTreeSha256=saved['App']['TreeSha256'],
                 installSha256=saved['ZipSha256'],files=len(records),machineAcceptance=False,releaseSignatureVerified=False)
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('repo','payload-zip','runtime-host','updater','platform','engine','output'):
+    for name in ('repo','app-stage','infra-entry','output','app-archive'):
         parser.add_argument('--'+name,required=True,type=Path)
     try: print(json.dumps(build(**{k.replace('-','_'):v for k,v in vars(parser.parse_args()).items()}),sort_keys=True))
     except (ValueError,OSError,TypeError,KeyError,AttributeError,subprocess.SubprocessError,zipfile.BadZipFile,zipfile.LargeZipFile) as error:

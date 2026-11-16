@@ -287,24 +287,34 @@ checked by `Yahad.Updater` (a service of the native installer).
   Pi needs `yachad-release.json` and `yachad-app.zip` (`deploy/updater-transport.py` `APP_ASSETS`,
   `deploy/updater.py` `release_assets`); an enrolled Pi also takes its worker from the `yachad-updater.*`
   pair, which every release carries (see "Release publication and update order"). Windows needs
-  `yahad-windows-<version>.json`, `yahad-windows-<version>.json.sig` and `Yahad.Setup-<version>.exe`.
+  `yahad-windows-release-<version>.json`, `yahad-windows-release-<version>.json.sig`,
+  `yahad-windows-app-<version>.zip` and `Yahad.Setup-<version>.exe`, plus the same Setup as
+  `Yahad.Setup.exe` for the landing page's fixed link: nine assets in all.
   The maintainer runs `npm run release:publish` (runbook:
   [installer/README.md](../installer/README.md#release-signing)), which builds and signs both sets locally
   and, after a typed confirmation, pushes `main` and the tag and creates the release. The
   private key stays on the maintainer's PC: no GitHub secret, no Authenticode certificate.
 - **Discovery.** The Updater reads only GitHub's `/releases/latest` for the fixed
   repository (`NehoraiHadad/yahad`); drafts, prereleases and non-newer versions are ignored.
-- **Verification.** The ECDSA P-256 signature is checked over a fixed prefix plus the
-  **raw manifest bytes** with the installed key before the manifest is parsed. Then
-  the strict parse, the key id, the version order and the minimum-from-version and
-  database-schema rules. The Setup is downloaded only up to the signed size and
-  accepted only if its SHA-256 matches.
-- **Upgrade.** Setup runs `--quiet-upgrade`, with no prompt. The database is migrated
-  as the app starts; the application health check decides whether the release stays.
+- **Verification.** The ECDSA P-256 signature is checked over the prefix
+  `yahad-release-v2\n` plus the **raw manifest bytes** with the installed key before the
+  manifest is parsed. Then the strict format-2 parse, the key id, the version order and
+  the minimum-from-version and database-schema rules. A newer release without
+  `yahad-windows-release-<version>.json` is not an update for Windows.
+- **Track.** A newer infrastructure version takes the Setup track: the Updater
+  downloads `Yahad.Setup-<version>.exe`, which carries the app too. The same
+  infrastructure with a newer app takes the app track: it downloads only
+  `yahad-windows-app-<version>.zip`. An app that needs a contract its release's own
+  infrastructure does not offer is refused (`APP_NEEDS_INFRASTRUCTURE`). The selected
+  file is downloaded only up to its signed size and accepted only if its SHA-256 matches.
+- **Upgrade.** The Setup track runs the staged Setup with `--quiet-upgrade`; the app
+  track runs the installed engine with `--apply-app`, which leaves the services,
+  firewall rules and Caddy configuration as they are. Neither prompts. The database is
+  migrated as the app starts; the application health check decides whether the release stays.
 - **Rollback.** If the new version does not become healthy, the previous version and
   its pre-upgrade data are restored automatically.
 - **Fail closed.** The trusted key is the one installed at
-  `%ProgramFiles%\Yahad.FirstInstallelease-key.spki`, and the running Setup must carry
+  `%ProgramFiles%\Yahad.FirstInstall\release-key.spki`, and the running Setup must carry
   the same one. A build without a key installs but refuses every upgrade; a missing,
   foreign, unsigned or tampered signature is refused and nothing falls back to HTTPS trust.
   Losing the private key means installed machines can only be reinstalled, not upgraded.

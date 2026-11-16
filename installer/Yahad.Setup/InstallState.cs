@@ -55,10 +55,19 @@ internal sealed record InstalledPair(InfrastructureRecord Infrastructure,AppReco
 }
 // The administrator-owned installer record (format 7). It is installer metadata
 // only: the binaries read active.json and installed.json, never this file.
+//
+// Its size is bounded by construction (4.4). It carries the member list of each tree
+// of its two pairs, the payload-free uninstall inventory; each list encodes, as this
+// record encodes it, to at most TreeListMaximumBytes, which every package that
+// installs a tree checks before anything changes. Everything else is validated
+// identifiers, far inside FixedMaximumBytes. So every record a valid move writes is at
+// most MaximumBytes, the one bound every reader reads with, and Encode refuses a
+// record past it before anything is written.
 internal sealed record InstallerState(int Format,string InstallationId,string DataId,string OwnerSid,int Port,string Phase,FirstOwnerBinding FirstOwner,UpdateSetupChoice Consent,
     string ServiceSid,InstalledPair Active,string? ReleaseKeySha256=null,InstalledPair? Previous=null)
 {
     internal const int CurrentFormat=7;
+    internal const int TreeListMaximumBytes=TreeRecord.MaximumBytes,FixedMaximumBytes=65536,MaximumBytes=4*TreeListMaximumBytes+FixedMaximumBytes;
     internal static readonly string[] Phases=["preparing","provisioned","committed","uninstalled","removing_keep_data","removing_all_data"];
     internal void Require()
     {
@@ -74,7 +83,7 @@ internal sealed record InstallerState(int Format,string InstallationId,string Da
             // A retained pair is never newer than the active one on either track, is
             // never the active pair itself, and a version shared with the active pair
             // is the very same tree (one directory per version).
-            if(ReleaseManifest.Compare(previous.Infrastructure.Version,Active.Infrastructure.Version)>0||ReleaseManifest.Compare(previous.App.Version,Active.App.Version)>0||
+            if(SemVer.Compare(previous.Infrastructure.Version,Active.Infrastructure.Version)>0||SemVer.Compare(previous.App.Version,Active.App.Version)>0||
                 previous.Infrastructure.Version==Active.Infrastructure.Version&&!previous.SameInfrastructure(Active)||
                 previous.App.Version==Active.App.Version&&!previous.SameApp(Active)||previous.SameTrees(Active))throw new IOException("INSTALL_STATE_INVALID");
         }
@@ -87,7 +96,14 @@ internal sealed record InstallerState(int Format,string InstallationId,string Da
         try{state=NativeJson.Read<InstallerState>(bytes);}catch(JsonException){throw new IOException("INSTALL_STATE_INVALID");}
         state.Require();return state;
     }
-    internal byte[] Encode(){Require();return JsonSerializer.SerializeToUtf8Bytes(this);}
+    internal byte[] Encode(){Require();return Bounded(JsonSerializer.SerializeToUtf8Bytes(this),MaximumBytes);}
+    internal static InstallerState Read(string path)=>Parse(NativeInstallFiles.ReadRecord(path,MaximumBytes));
+    internal static byte[] Bounded(byte[] bytes,int maximum)=>bytes.Length<=maximum?bytes:throw new IOException("INSTALL_STATE_INVALID");
+    // The record a move to that pair commits: the same one whether admission checks it
+    // or the commit writes it.
+    internal InstallerState After(InstalledPair to)=>this with{Active=to,Previous=Active};
+    // One tree's member list as this record encodes it.
+    internal static bool WithinListBound(InstallMember[] files)=>JsonSerializer.SerializeToUtf8Bytes(files).Length<=TreeListMaximumBytes;
     // Members of one tree, relative to its root: every name is in that tree or is its
     // record, unique ignoring case, and the record's digest is the recorded tree digest.
     internal static void RequireTree(TreeKind kind,InstallMember[] files,string treeSha256)
@@ -99,7 +115,7 @@ internal sealed record InstallerState(int Format,string InstallationId,string Da
             if(f is null||!MemberNames.Valid(f.Path)||f.Path!=record&&!TreeRecord.InTree(kind,f.Path)||f.Size is <0 or >TreeRecord.MaximumMemberBytes||!names.Add(f.Path))throw new IOException("INSTALL_STATE_INVALID");
             InstallLocations.RequireDigest(f.Sha256);
         }
-        if(!files.Any(f=>f.Path==record&&f.Sha256==treeSha256))throw new IOException("INSTALL_STATE_INVALID");
+        if(!files.Any(f=>f.Path==record&&f.Sha256==treeSha256)||!WithinListBound(files))throw new IOException("INSTALL_STATE_INVALID");
     }
 }
 // The one field read before a record's own strict reader: its integer Format. A
@@ -147,6 +163,6 @@ internal static class InstallLocations
         return "S-1-5-80-"+string.Join('-',Enumerable.Range(0,5).Select(i=>BitConverter.ToUInt32(hash,i*4).ToString(System.Globalization.CultureInfo.InvariantCulture)));
     }
     internal static void RequireVersion(string version)
-    {if(!ReleaseManifest.IsVersion(version))throw new IOException("PAYLOAD_VERSION");}
+    {if(!SemVer.IsVersion(version))throw new IOException("PAYLOAD_VERSION");}
     internal static void RequireDigest(string? value){if(value is null||!Regex.IsMatch(value,"^[a-f0-9]{64}$"))throw new IOException("INSTALL_STATE_INVALID");}
 }

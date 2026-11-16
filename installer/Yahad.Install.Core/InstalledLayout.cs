@@ -37,5 +37,5 @@ internal static class InstalledLayout
     // The payload-free Setup engine of this infrastructure (4.4): repair, uninstall,
     // the Apps & Features entry and app applies run it.
     internal static string EngineImage(string infrastructure)=>Path.Combine(InfraRoot(infrastructure),"setup",EngineName);
-    internal static string Version(string value)=>ReleaseManifest.IsVersion(value)?value:throw new IOException("PAYLOAD_VERSION");
+    internal static string Version(string value)=>SemVer.IsVersion(value)?value:throw new IOException("PAYLOAD_VERSION");
 }

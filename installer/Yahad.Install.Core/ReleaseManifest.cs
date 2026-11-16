@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -6,34 +5,10 @@ using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 namespace Yahad.Install;
 
-// A release is yahad-windows-<v>.json plus its detached signature. The signed
-// message is a fixed prefix and the raw manifest bytes, so nothing is parsed
-// until the bytes are authenticated.
-internal sealed record ReleaseSetupFile(string Name,string Sha256,long Bytes);
-internal sealed record ReleaseManifest(int Format,string Product,string Version,string SourceCommit,ReleaseSetupFile Setup,int DatabaseSchema,string MinimumFromVersion,string KeyId,long CreatedUnix)
+// Canonical semver core: no leading zeros, a longer component is the larger one.
+internal static class SemVer
 {
-    internal const int MaximumBytes=4096;
-    internal const long MaximumSetupBytes=536870912;
-    private static readonly JsonSerializerOptions Options=new()
-    {
-        MaxDepth=4,PropertyNamingPolicy=JsonNamingPolicy.CamelCase,UnmappedMemberHandling=JsonUnmappedMemberHandling.Disallow,
-        RespectRequiredConstructorParameters=true,RespectNullableAnnotations=true,AllowDuplicateProperties=false
-    };
-    internal static ReleaseManifest Parse(byte[] bytes)
-    {
-        if(bytes.Length is <1 or >MaximumBytes)throw new IOException("RELEASE_MANIFEST_INVALID");
-        ReleaseManifest? value;
-        try{value=JsonSerializer.Deserialize<ReleaseManifest>(bytes,Options);}catch(JsonException){throw new IOException("RELEASE_MANIFEST_INVALID");}
-        if(value is null||value.Format!=1||value.Product!="yahad-windows"||!IsVersion(value.Version)||!IsVersion(value.MinimumFromVersion)||
-            !Regex.IsMatch(value.SourceCommit,@"\A[a-f0-9]{40}\z")||!Regex.IsMatch(value.KeyId,@"\A[a-f0-9]{16}\z")||value.Setup.Name!=SetupName(value.Version)||
-            !Regex.IsMatch(value.Setup.Sha256,@"\A[a-f0-9]{64}\z")||value.Setup.Bytes is <1 or >MaximumSetupBytes||value.DatabaseSchema is <1 or >1024||value.CreatedUnix<1)
-            throw new IOException("RELEASE_MANIFEST_INVALID");
-        return value;
-    }
-    internal static string ManifestName(string version)=>"yahad-windows-"+version+".json";
-    internal static string SetupName(string version)=>"Yahad.Setup-"+version+".exe";
     internal static bool IsVersion(string value)=>value.Length<=40&&Regex.IsMatch(value,@"\A(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\z",RegexOptions.CultureInvariant);
-    // Canonical digits: a longer component is the larger one, whatever its size.
     internal static int Compare(string left,string right)
     {
         if(!IsVersion(left)||!IsVersion(right))throw new IOException("RELEASE_MANIFEST_INVALID");
@@ -42,9 +17,61 @@ internal sealed record ReleaseManifest(int Format,string Product,string Version,
         return 0;
     }
 }
+
+// docs/WINDOWS-APP-PACKAGE-PLAN.md 5.1: one signed manifest for both tracks,
+// yahad-windows-release-<v>.json plus a detached signature. The release version is
+// the app version and SourceCommit the app's commit; the infrastructure half names
+// its own version, contract range, commit and tree. The signed message is a fixed
+// prefix and the raw manifest bytes, so nothing is parsed before authentication.
+internal sealed record ReleaseFile(string Name,string Sha256,long Bytes);
+internal sealed record ReleaseInfrastructure(string Version,int ContractMin,int ContractMax,string SourceCommit,string TreeSha256,ReleaseFile Setup);
+internal sealed record ReleaseApp(ReleaseFile Archive,string TreeSha256,int RequiresContract,int DatabaseSchema,int[] DatabaseMigrationsFrom);
+internal sealed record ReleaseMinimumFrom(string App,string Infrastructure);
+internal sealed record ReleaseManifest(int Format,string Product,string Version,string SourceCommit,string KeyId,long CreatedUnix,
+    ReleaseInfrastructure Infrastructure,ReleaseApp App,ReleaseMinimumFrom MinimumFrom)
+{
+    internal const int CurrentFormat=2,MaximumBytes=4096,MaximumMigrationSources=32;
+    internal const string ProductName="yahad-windows-release";
+    internal const long MaximumSetupBytes=536870912,MaximumAppArchiveBytes=2147483648;
+    private static readonly JsonSerializerOptions Options=new()
+    {
+        MaxDepth=5,PropertyNamingPolicy=JsonNamingPolicy.CamelCase,UnmappedMemberHandling=JsonUnmappedMemberHandling.Disallow,
+        RespectRequiredConstructorParameters=true,RespectNullableAnnotations=true,AllowDuplicateProperties=false
+    };
+    internal static string ManifestName(string version)=>"yahad-windows-release-"+version+".json";
+    internal static string SignatureName(string version)=>ManifestName(version)+".sig";
+    internal static string SetupName(string version)=>"Yahad.Setup-"+version+".exe";
+    internal static string AppArchiveName(string version)=>"yahad-windows-app-"+version+".zip";
+    internal static ReleaseManifest Parse(byte[] bytes)
+    {
+        if(bytes.Length is <1 or >MaximumBytes)throw new IOException("RELEASE_MANIFEST_INVALID");
+        ReleaseManifest? value;
+        try{value=JsonSerializer.Deserialize<ReleaseManifest>(bytes,Options);}catch(JsonException){throw new IOException("RELEASE_MANIFEST_INVALID");}
+        if(value is null||!value.Valid())throw new IOException("RELEASE_MANIFEST_INVALID");
+        return value;
+    }
+    // Shape only. Whether the app's contract fits the release's own infrastructure is a
+    // release defect reported by selection (APP_NEEDS_INFRASTRUCTURE, 9.1), not a parse
+    // failure, so it is not checked here.
+    private bool Valid()
+    {
+        var i=Infrastructure;var a=App;var m=MinimumFrom;
+        if(Format!=CurrentFormat||Product!=ProductName||!SemVer.IsVersion(Version)||!IsCommit(SourceCommit)||!Regex.IsMatch(KeyId,@"\A[a-f0-9]{16}\z")||CreatedUnix<1)return false;
+        if(!SemVer.IsVersion(i.Version)||!InfrastructureRelease.IsContract(i.ContractMin)||!InfrastructureRelease.IsContract(i.ContractMax)||i.ContractMin>i.ContractMax||
+            !IsCommit(i.SourceCommit)||!TreeRecord.IsDigest(i.TreeSha256)||!File(i.Setup,SetupName(Version),MaximumSetupBytes))return false;
+        if(!File(a.Archive,AppArchiveName(Version),MaximumAppArchiveBytes)||!TreeRecord.IsDigest(a.TreeSha256)||!InfrastructureRelease.IsContract(a.RequiresContract)||
+            a.DatabaseSchema is <1 or >1024||a.DatabaseMigrationsFrom.Length>MaximumMigrationSources||
+            a.DatabaseMigrationsFrom.Any(s=>s<1||s>=a.DatabaseSchema)||a.DatabaseMigrationsFrom.Distinct().Count()!=a.DatabaseMigrationsFrom.Length)return false;
+        // A release may not admit a source newer than itself.
+        return SemVer.IsVersion(m.App)&&SemVer.IsVersion(m.Infrastructure)&&SemVer.Compare(m.App,Version)<=0&&SemVer.Compare(m.Infrastructure,i.Version)<=0;
+    }
+    private static bool IsCommit(string value)=>Regex.IsMatch(value,@"\A[a-f0-9]{40}\z");
+    private static bool File(ReleaseFile file,string name,long maximum)=>file.Name==name&&TreeRecord.IsDigest(file.Sha256)&&file.Bytes>=1&&file.Bytes<=maximum;
+    internal bool AcceptsSchema(int recordedSchema)=>recordedSchema==App.DatabaseSchema||App.DatabaseMigrationsFrom.Contains(recordedSchema);
+}
 internal static class ReleaseSignature
 {
-    internal const string Prefix="yahad-release-v1\n";
+    internal const string Prefix="yahad-release-v2\n";
     private const string NistP256="1.2.840.10045.3.1.7";
     // ECDSA P-256 over SHA-256 with the 64-byte IEEE P1363 r||s form. Anything
     // malformed is simply not a valid signature.
@@ -87,16 +114,40 @@ internal static class TrustedReleaseKey
 }
 internal static class ReleaseVerification
 {
-    // Signature first, on raw bytes; then the strict parse; then what the
-    // authenticated fields say about this installation. installedSchema is
-    // null when the running application could not be asked.
-    internal static ReleaseManifest Verify(byte[] trustedKey,byte[] manifest,byte[]? signature,string installedVersion,int? installedSchema)
+    // Signature first, on raw bytes; then the strict parse; then the key id. What the
+    // authenticated release means for this machine is ReleaseSelection's question.
+    internal static ReleaseManifest Verify(byte[] trustedKey,byte[] manifest,byte[]? signature)
     {
         if(manifest.Length is <1 or >ReleaseManifest.MaximumBytes||signature is null||!ReleaseSignature.Verify(trustedKey,manifest,signature))throw new IOException("RELEASE_SIGNATURE_INVALID");
         var value=ReleaseManifest.Parse(manifest);
         if(value.KeyId!=TrustedReleaseKey.Id(trustedKey))throw new IOException("RELEASE_KEY_UNTRUSTED");
-        if(ReleaseManifest.Compare(value.Version,installedVersion)<=0)throw new IOException("RELEASE_NOT_NEWER");
-        if(ReleaseManifest.Compare(installedVersion,value.MinimumFromVersion)<0||installedSchema>value.DatabaseSchema)throw new IOException("RELEASE_UNSUPPORTED_FROM");
         return value;
+    }
+}
+
+internal enum ReleaseTrack{Setup,App}
+// docs/WINDOWS-APP-PACKAGE-PLAN.md 9.1, shared by the Updater (which track to stage)
+// and the engine (which track it is being asked to apply). null: not an update for
+// this machine. Throws the release-defect and admission codes of 9.4.
+internal static class ReleaseSelection
+{
+    internal static ReleaseTrack? Select(ReleaseManifest release,ActivePointer installed)
+    {
+        var i=release.Infrastructure;
+        // A release whose app cannot run on its own infrastructure is defective on every machine.
+        if(release.App.RequiresContract<i.ContractMin||release.App.RequiresContract>i.ContractMax)throw new IOException("APP_NEEDS_INFRASTRUCTURE");
+        // Every release carries an app, so neither track may install an app that is not newer.
+        var infra=SemVer.Compare(i.Version,installed.Infrastructure.Version);
+        if(infra<0||SemVer.Compare(release.Version,installed.App.Version)<=0)return null;
+        if(infra>0){RequireFrom(release,installed);return ReleaseTrack.Setup;}
+        // One infrastructure version names exactly one tree (8.1).
+        if(i.TreeSha256!=installed.Infrastructure.TreeSha256||i.ContractMin!=installed.Infrastructure.ContractMin||i.ContractMax!=installed.Infrastructure.ContractMax)
+            throw new IOException("INFRA_IDENTITY_MISMATCH");
+        RequireFrom(release,installed);return ReleaseTrack.App;
+    }
+    internal static void RequireFrom(ReleaseManifest release,ActivePointer installed)
+    {
+        if(SemVer.Compare(installed.App.Version,release.MinimumFrom.App)<0||SemVer.Compare(installed.Infrastructure.Version,release.MinimumFrom.Infrastructure)<0)
+            throw new IOException("RELEASE_UNSUPPORTED_FROM");
     }
 }

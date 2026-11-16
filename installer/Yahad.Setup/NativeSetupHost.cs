@@ -48,7 +48,7 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
     internal static InstallerState ReadState()
     {
         InstallLocations.RequireStateRoot();
-        return InstallerState.Parse(NativeInstallFiles.ReadRecord(InstallLocations.StateFile));
+        return InstallerState.Read(InstallLocations.StateFile);
     }
     private void Save(string phase)
     {state=state! with{Phase=phase};NativeInstallFiles.Publish(InstallLocations.StateFile,state.Encode());}
@@ -77,8 +77,8 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
                 case "uninstalled":
                     // The family, its data, key and identity stay; only the pair is new. The kept
                     // database must be one this app opens or migrates from (8.3).
-                    if(ReleaseManifest.Compare(target.App.Version,state.Active.App.Version)<0)throw new IOException("INSTALL_DOWNGRADE_REFUSED");
-                    if(!package.AcceptsSchema(state.Active.App.DatabaseSchema))throw new IOException("RELEASE_UNSUPPORTED_FROM");
+                    if(SemVer.Compare(target.App.Version,state.Active.App.Version)<0)throw new IOException("INSTALL_DOWNGRADE_REFUSED");
+                    package.RequireFrom(state.Active);if(!package.AcceptsSchema(state.Active.App.DatabaseSchema))throw new IOException("RELEASE_UNSUPPORTED_FROM");
                     if(AnyServiceExists()||Path.Exists(InstallLocations.Binaries))throw new IOException("INSTALL_COLLISION");
                     // Until the first healthy start the record keeps the schema the data is at.
                     state=state with{Active=target with{App=target.App with{DatabaseSchema=state.Active.App.DatabaseSchema}},ReleaseKeySha256=EmbeddedKeyDigest,Previous=null};
@@ -263,7 +263,7 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
     {
         var path=InstallLocations.RemovalStateFile;
         foreach(var partial in Directory.EnumerateFiles(Path.GetDirectoryName(path)!,Path.GetFileName(path)+".partial-*"))File.Delete(partial);
-        NativeInstallFiles.Publish(path,Json(intent));
+        NativeInstallFiles.Publish(path,intent.Encode());
     }
     public async Task<SetupResult> UninstallAsync(Action<SetupProgress> progress,CancellationToken cancellation,UninstallMode mode=UninstallMode.KeepData)
     {
@@ -272,7 +272,7 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
         // A pre-pair layout is refused before anything is written.
         ExistingInstallation.RequireNotLegacy();
         if(!File.Exists(InstallLocations.RemovalStateFile)&&!File.Exists(InstallLocations.StateFile))throw new IOException("INSTALL_STATE_INVALID");
-        RemovalIntent? intent=File.Exists(InstallLocations.RemovalStateFile)?RemovalIntent.Parse(NativeInstallFiles.ReadRecord(InstallLocations.RemovalStateFile)):null;
+        RemovalIntent? intent=File.Exists(InstallLocations.RemovalStateFile)?RemovalIntent.Read(InstallLocations.RemovalStateFile):null;
         var recorded=File.Exists(InstallLocations.StateFile)?ReadState():null;
         if(File.Exists(InstallLocations.UpgradeStateFile))throw new IOException("UPGRADE_INCOMPLETE");
         if(intent is not null)
@@ -308,10 +308,10 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
                 if(intent is null)
                 {
                     operationPhase=UninstallPhase.InspectData;
-                    var inventory=Inventory();_=InspectBinaries(inventory,state.Phase is "committed" or "provisioned",true,"UNINSTALL_UNOWNED_FILE_PRESERVED");
+                    _=InspectBinaries(Inventory(),state.Phase is "committed" or "provisioned",true,"UNINSTALL_UNOWNED_FILE_PRESERVED");
                     if(mode==UninstallMode.DeleteData&&Directory.Exists(InstallLocations.State))_=RemovalTree.Inspect(InstallLocations.State,WindowsFileBoundary.RequireNoLink);
                     operationPhase=UninstallPhase.WriteRemovalReceipt;
-                    state=state with{Phase=UninstallChoice.Phase(mode)};intent=new(InstallerState.CurrentFormat,state,mode,inventory,"prepared");SaveRemoval(intent);Save(state.Phase);
+                    state=state with{Phase=UninstallChoice.Phase(mode)};intent=new(InstallerState.CurrentFormat,state,mode,"prepared");SaveRemoval(intent);Save(state.Phase);
                 }
                 if(!intent.AtLeast("lan_removed"))
                 {

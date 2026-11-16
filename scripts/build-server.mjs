@@ -5,8 +5,10 @@
 //
 // Use: node scripts/build-server.mjs --payload NEW_DIR [--root CHECKOUT]
 // --root holds src/, tsconfig.json and a lockfile-restored node_modules (default:
-// this checkout). Writes NEW_DIR/app/server/*.mjs, NEW_DIR/legal/server-bundle.json
-// (provenance + third-party inventory) and NEW_DIR/legal/ThirdPartyNotices-server.txt.
+// this checkout). NEW_DIR is an app tree root (docs/WINDOWS-APP-PACKAGE-PLAN.md 4.1):
+// writes NEW_DIR/app/server/*.mjs and, beside the app they describe,
+// NEW_DIR/app/legal/server-bundle.json (provenance + third-party inventory) and
+// NEW_DIR/app/legal/ThirdPartyNotices-server.txt.
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createRequire, isBuiltin } from 'node:module';
@@ -51,8 +53,8 @@ const esbuild = args => {
 const version = esbuild(['--version']).trim();
 const pinned = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).devDependencies?.esbuild;
 if (version !== pinned) fail(`esbuild ${version} is not the pinned ${pinned}`);
-const app = resolve(payload, 'app'), legal = resolve(payload, 'legal');
-if (existsSync(join(app, 'server'))) fail('app/server already exists');
+const app = resolve(payload, 'app'), legal = resolve(app, 'legal');
+if (existsSync(join(app, 'server')) || existsSync(legal)) fail('app/server or app/legal already exists');
 const staging = mkdtempSync(join(tmpdir(), 'yahad-server-bundle-'));
 try {
 esbuild([...Object.entries(ENTRIES).map(([source, stem]) => `${stem}=${source}`),
@@ -115,7 +117,7 @@ writeFileSync(join(legal, 'server-bundle.json'), JSON.stringify({
   format: 'yahad-server-bundle', schema: 1, bundler: { name: 'esbuild', version }, external: EXTERNAL, outputs: outputs.map(({ contents, ...output }) => output),
   sources: Object.fromEntries([...sources].sort()),
   packages: inventory.map(({ notices, ...item }) => ({ ...item, noticeFiles: notices.map(({ name, sha256 }) => ({ name, sha256 })) })),
-  notices: 'legal/ThirdPartyNotices-server.txt', completeLicenseReview: false,
+  notices: 'app/legal/ThirdPartyNotices-server.txt', completeLicenseReview: false,
   scope: 'Every npm package with code in the server bundle, with its package-root legal files; not a complete transitive legal audit.',
 }, null, 2) + '\n', { flag: 'wx' });
 console.log(JSON.stringify({ outputs: outputs.map(o => ({ path: o.path, size: o.size })), sources: sources.size, packages: inventory.length }));
