@@ -12,6 +12,12 @@ import zipfile
 class DependencyError(ValueError): pass
 
 
+# Yahad's own attribution beside the pinned Caddy files (not an upstream file).
+CADDY_NOTICES = ('Yahad packaging attribution; this is not an upstream NOTICE file.\n'
+    'Caddy: https://github.com/caddyserver/caddy — Apache-2.0, included Caddy-LICENSE.txt.\n'
+    'Upstream README is included as Caddy-README.md. Transitive license inventory/review remains required before distribution.\n').encode('utf-8')
+
+
 def digest(path, algorithm='sha256'):
     with Path(path).open('rb') as source: return hashlib.file_digest(source, algorithm).hexdigest()
 
@@ -21,7 +27,10 @@ def pins():
 
 
 def proof(spec):
-    encoded = json.dumps(spec, sort_keys=True, separators=(',', ':')).encode()
+    # The staged vendor closure only: Node is pinned beside it (node_component) but
+    # comes from the build's own Node directory, never from the vendor staging.
+    staged = {key:spec[key] for key in ('schema', 'target', 'sources')}
+    encoded = json.dumps(staged, sort_keys=True, separators=(',', ':')).encode()
     return {'schema':1, 'kind':'pinned-private-dependencies', 'target':'win-x64',
         'sourceSpecSha256':hashlib.sha256(encoded).hexdigest(), 'familyInstallationReady':False,
         'sources':spec['sources']}
@@ -91,7 +100,7 @@ def add_license_texts(output):
         if source.stat().st_size!=record['size'] or digest(source)!=record['sha256']: raise DependencyError('LICENSE_SOURCE_CHECKSUM')
         target=output/record['path']; target.parent.mkdir(parents=True,exist_ok=True)
         with source.open('rb') as source_stream,target.open('xb') as destination: shutil.copyfileobj(source_stream,destination)
-    with (output/'legal/supplement-sources.json').open('x',encoding='utf-8') as destination: json.dump(records,destination,indent=2)
+    with (output/'legal/supplement-sources.json').open('x',encoding='utf-8',newline='\n') as destination: json.dump(records,destination,indent=2)
 
 
 def stage(archives, checksum_files, output, spec=None):
@@ -115,48 +124,57 @@ def stage(archives, checksum_files, output, spec=None):
                         hashed.update(chunk); destination.write(chunk)
                 if size != record['size'] or hashed.hexdigest()!=record['sha256']: raise DependencyError('INPUT_CHANGED')
     legal = output/'legal'
-    (legal/'dependency-proof.json').write_text(json.dumps(proof(spec), indent=2), encoding='utf-8')
-    (legal/'Caddy-NOTICES.txt').write_text('Yahad packaging attribution; this is not an upstream NOTICE file.\n'
-        'Caddy: https://github.com/caddyserver/caddy — Apache-2.0, included Caddy-LICENSE.txt.\n'
-        'Upstream README is included as Caddy-README.md. Transitive license inventory/review remains required before distribution.\n', encoding='utf-8')
+    (legal/'dependency-proof.json').write_text(json.dumps(proof(spec), indent=2), encoding='utf-8', newline='\n')
+    (legal/'Caddy-NOTICES.txt').write_bytes(CADDY_NOTICES)
     add_license_texts(output)
     validate_staged({p.relative_to(output).as_posix():p for p in output.rglob('*') if p.is_file()}, spec)
     return proof(spec)
 
 
-def augment(core, dependencies, output):
-    """New developer candidate only; never overlays an installed app or live data."""
-    from . import bundle
-    core, dependencies, output = (Path(p).absolute() for p in (core, dependencies, output))
-    if output.exists() or output.is_relative_to(core) or output.is_relative_to(dependencies): raise DependencyError('NEW_OUTPUT_REQUIRED')
-    bundle.validate(core, 'core-fixture')
-    dependency_files = bundle.inventory(dependencies)
-    verified_components = validate_staged(dependency_files)
-    shutil.copytree(core, output)
-    for name, source in dependency_files.items():
-        target = output/name
-        if target.exists(): raise DependencyError('NO_OVERLAY')
-        target.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile(source,target)
-    lock_path = output/'legal/runtime-lock.json'; lock = json.loads(lock_path.read_text(encoding='utf-8'))
-    lock['components'] += list(verified_components.values())
-    lock_path.write_text(json.dumps(lock,indent=2),encoding='utf-8')
-    sbom_path = output/'legal/SBOM.json'; sbom = json.loads(sbom_path.read_text(encoding='utf-8'))
-    sbom['privateVendorComponents'] = list(verified_components.values())
-    sbom['distributionLegalReview'] = 'pending-corresponding-sources-and-transitive-notices'
-    sbom_path.write_text(json.dumps(sbom,indent=2),encoding='utf-8')
-    return bundle.validate(output,'full')
+def node_component(spec=None):
+    """The pinned official Node runtime (dependency-pins.json "node"), as runtime-lock lists it."""
+    spec = pins() if spec is None else spec
+    node = spec['node']
+    executable = next(f for f in node['files'] if f['path'] == 'runtime/node/node.exe')
+    return {'id':'node', 'path':executable['path'], 'sha256':executable['sha256'],
+        'version':node['version'], 'origin':node['origin'], 'publisher':node['publisher'],
+        'sourceUrl':node['archive']['url'], 'archiveSha256':node['archive']['sha256'],
+        'license':node['license']}
+
+
+def validate_node(directory, spec=None):
+    """{infrastructure member: file} of the pinned Node in an extracted official
+    distribution: node.exe and its LICENSE, exactly the pinned bytes. The build
+    tool and the shipped runtime are the same pinned image."""
+    spec = pins() if spec is None else spec
+    directory = Path(directory)
+    result = {}
+    try:
+        for record in spec['node']['files']:
+            path = directory/record['directoryPath']
+            if path.is_symlink() or not path.is_file() or path.stat().st_size != record['size'] or digest(path) != record['sha256']:
+                raise DependencyError('NODE_PIN: '+record['directoryPath'])
+            result[record['path']] = path
+    except (KeyError, TypeError, OSError) as error:
+        raise DependencyError('NODE_PIN') from error
+    return result
 
 
 if __name__ == '__main__':
     parser=argparse.ArgumentParser(description=__doc__); sub=parser.add_subparsers(dest='operation',required=True)
     staging=sub.add_parser('stage')
     for name in ('caddy-archive','caddy-checksums','output'): staging.add_argument('--'+name,required=True,type=Path)
-    augmenting=sub.add_parser('augment')
-    for name in ('core','dependencies','output'): augmenting.add_argument('--'+name,required=True,type=Path)
+    # Read-only checks of build inputs (installer/package.ps1).
+    sub.add_parser('verify-node').add_argument('--directory',required=True,type=Path)
+    sub.add_parser('verify-vendors').add_argument('--directory',required=True,type=Path)
     args=parser.parse_args()
-    if args.operation=='stage':
-        result=stage({'caddy':args.caddy_archive}, {'caddy':args.caddy_checksums}, args.output)
-        print(json.dumps({'kind':result['kind'],'familyInstallationReady':False}))
-    else:
-        result=augment(args.core,args.dependencies,args.output)
-        print(json.dumps({'kind':result['kind'],'profile':result['profile'],'files':len(result['files']),'familyInstallationReady':False}))
+    try:
+        if args.operation=='stage':
+            result=stage({'caddy':args.caddy_archive}, {'caddy':args.caddy_checksums}, args.output)
+            print(json.dumps({'kind':result['kind'],'familyInstallationReady':False}))
+        elif args.operation=='verify-node':
+            validate_node(args.directory); print(json.dumps({'node':node_component()['version']}))
+        else:
+            root=args.directory
+            print(json.dumps(validate_staged({p.relative_to(root).as_posix():p for p in root.rglob('*') if p.is_file()}), sort_keys=True))
+    except (DependencyError, OSError) as error: raise SystemExit('Dependency refused: '+str(error))

@@ -3,6 +3,8 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -94,6 +96,54 @@ class DependencyTests(unittest.TestCase):
         self.output.mkdir(); marker=self.output/'preserve'; marker.write_text('fixture')
         with self.assertRaisesRegex(dep.DependencyError,'NEW_OUTPUT_REQUIRED'): self.stage()
         self.assertEqual(marker.read_text(),'fixture')
+
+    def test_shipped_node_pin(self):
+        node=dep.pins()['node']
+        self.assertEqual(node['version'],'24.22.2'); self.assertEqual(node['origin'],'official-vendor')
+        self.assertTrue(node['archive']['url'].startswith('https://nodejs.org/dist/v24.22.2/'))
+        self.assertEqual({f['directoryPath']:f['path'] for f in node['files']},{'node.exe':'runtime/node/node.exe','LICENSE':'legal/Node-LICENSE.txt'})
+        self.assertEqual(set(dep.pins()['sources']),{'caddy'})
+
+    def test_proof_covers_only_the_vendor_closure(self):
+        spec=copy.deepcopy(self.spec); spec['node']={'version':'1'}; base=dep.proof(spec)['sourceSpecSha256']
+        spec['node']={'version':'2'}; self.assertEqual(dep.proof(spec)['sourceSpecSha256'],base)
+        spec['sources']['caddy']['version']='2.0'; self.assertNotEqual(dep.proof(spec)['sourceSpecSha256'],base)
+
+    def node_fixture(self):
+        directory=self.root/'node-dist'; directory.mkdir(); files=[]
+        for source,target,content in (('node.exe','runtime/node/node.exe',b'node-fixture'),('LICENSE','legal/Node-LICENSE.txt',b'node-license')):
+            (directory/source).write_bytes(content); files.append({'directoryPath':source,'path':target,'size':len(content),'sha256':hashlib.sha256(content).hexdigest()})
+        spec=copy.deepcopy(self.spec)
+        spec['node']={'publisher':'node-fixture','origin':'fixture','version':'24.0.0','license':'MIT','archive':{'url':'https://example.invalid/node.zip','sha256':'a'*64},'files':files}
+        return directory,spec
+
+    def test_validate_node_returns_pinned_files(self):
+        directory,spec=self.node_fixture()
+        self.assertEqual(dep.validate_node(directory,spec),{'runtime/node/node.exe':directory/'node.exe','legal/Node-LICENSE.txt':directory/'LICENSE'})
+
+    def test_validate_node_refuses_changed_wrong_size_or_missing(self):
+        directory,spec=self.node_fixture()
+        (directory/'node.exe').write_bytes(b'node-fixturf')
+        with self.assertRaisesRegex(dep.DependencyError,'NODE_PIN'): dep.validate_node(directory,spec)
+        (directory/'node.exe').write_bytes(b'node-fixture-longer')
+        with self.assertRaisesRegex(dep.DependencyError,'NODE_PIN'): dep.validate_node(directory,spec)
+        (directory/'node.exe').unlink()
+        with self.assertRaisesRegex(dep.DependencyError,'NODE_PIN'): dep.validate_node(directory,spec)
+
+    def test_node_component_fields(self):
+        _,spec=self.node_fixture(); executable=spec['node']['files'][0]
+        self.assertEqual(dep.node_component(spec),{'id':'node','path':'runtime/node/node.exe','sha256':executable['sha256'],'version':'24.0.0','origin':'fixture',
+            'publisher':'node-fixture','sourceUrl':'https://example.invalid/node.zip','archiveSha256':'a'*64,'license':'MIT'})
+
+    def test_stage_writes_caddy_notices_and_lf_proof(self):
+        self.stage()
+        self.assertEqual((self.output/'legal/Caddy-NOTICES.txt').read_bytes(),dep.CADDY_NOTICES)
+        self.assertNotIn(b'\r',(self.output/'legal/dependency-proof.json').read_bytes())
+
+    def test_verify_node_cli_refuses_missing_directory(self):
+        worktree=Path(__file__).resolve().parent.parent
+        result=subprocess.run([sys.executable,'-m','installer.windows.dependencies','verify-node','--directory',str(self.root/'missing')],cwd=worktree,capture_output=True,text=True)
+        self.assertNotEqual(result.returncode,0); self.assertIn('Dependency refused',result.stderr)
 
 
 if __name__=='__main__': unittest.main(verbosity=2)

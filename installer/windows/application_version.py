@@ -59,6 +59,22 @@ def package_infrastructure_contract(data, infrastructure):
     return contract
 
 
+def _order(version): return tuple(int(part) for part in version.split('.'))
+
+
+def package_minimum_from(data, app_version, infrastructure_version):
+    # The oldest installed pair a release upgrades (ReleaseManifest.MinimumFrom,
+    # docs/WINDOWS-APP-PACKAGE-PLAN.md 5.1): a release policy declared once, beside
+    # the app version it belongs to. Exactly {app, infrastructure}, each canonical
+    # and never newer than the release's own version of that track.
+    value = _package(data).get('yahadWindowsMinimumFrom')
+    if not isinstance(value, dict) or sorted(value) != ['app', 'infrastructure'] or not all(_stable(v) for v in value.values()):
+        raise ValueError('Windows minimumFrom declaration required')
+    if _order(value['app']) > _order(app_version) or _order(value['infrastructure']) > _order(infrastructure_version):
+        raise ValueError('Windows minimumFrom newer than the release')
+    return dict(app=value['app'], infrastructure=value['infrastructure'])
+
+
 def source_release_version(repo):
     repo = Path(repo)
     version = package_release_version((repo/'package.json').read_bytes())

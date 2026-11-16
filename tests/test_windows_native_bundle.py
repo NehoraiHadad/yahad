@@ -1,12 +1,13 @@
-"""Synthetic PE/package checks. Never executes fixture binaries."""
+"""Staged app tree validation (installer/windows/bundle.py) and bounded PE inspection.
+Synthetic fixtures only; never executes fixture binaries."""
 import hashlib
 import json
 from pathlib import Path
 import struct
 import tempfile
 import unittest
-import zipfile
-from installer.windows import bundle, pe, verify_archive
+from installer.windows import bundle, pe
+
 
 def image(imports=(), machine=0x8664, managed=False):
     data=bytearray(2048); data[:2]=b'MZ'; struct.pack_into('<I',data,0x3c,0x80); data[0x80:0x84]=b'PE\0\0'
@@ -22,170 +23,162 @@ def image(imports=(), machine=0x8664, managed=False):
             struct.pack_into('<I',data,512+i*20+12,0x1000+location-512)
     return bytes(data)
 
-class WindowsBundleTests(unittest.TestCase):
+
+PACKAGES=[{'path':'node_modules/fastify','name':'fastify','version':'5.12.7','noticeFiles':[]}]
+
+
+class StagedAppTreeTests(unittest.TestCase):
     def setUp(self):
         temporary=tempfile.TemporaryDirectory(prefix='yahad-windows-bundle-'); self.addCleanup(temporary.cleanup)
         self.root=Path(temporary.name); self.prepared=self.root/'prepared'; self.prepared.mkdir()
-        for name in (*bundle.BASE_REQUIRED,*bundle.FULL_REQUIRED): self.put(name,'fixture')
-        self.put('app/package.json',json.dumps({'version':'0.5.2','engines':{'node':'>=24.0.0 <25'},'dependencies':{'tsx':'4.20.6'}}))
-        self.put('legal/SBOM.json','{"fixture":true}')
-        for path in self.prepared.rglob('*'):
-            if path.suffix in ('.exe','.dll','.node'): path.write_bytes(image(('kernel32.dll',)))
+        for name in bundle.REQUIRED: self.put(name,'fixture '+name)
+        self.package()
         self.server()
-        self.lock()
+        self.sbom()
 
     def put(self,name,value):
         path=self.prepared/name; path.parent.mkdir(parents=True,exist_ok=True); path.write_bytes(value.encode() if isinstance(value,str) else value)
 
-    def server(self):
+    def remove(self,name):
+        path=self.prepared/name; path.unlink()
+        parent=path.parent
+        while parent!=self.prepared and not any(parent.iterdir()): parent.rmdir(); parent=parent.parent
+
+    def package(self,version='0.6.0',node='>=24.0.0 <25'):
+        self.put('app/package.json',json.dumps({'version':version,'engines':{'node':node}}))
+
+    def server(self,**changes):
         outputs=[{'path':name,'size':(self.prepared/name).stat().st_size,'sha256':hashlib.sha256((self.prepared/name).read_bytes()).hexdigest()} for name in bundle.SERVER]
-        self.put('legal/server-bundle.json',json.dumps({'format':'yahad-server-bundle','schema':1,'outputs':outputs,
-            'packages':[{'path':'node_modules/fastify','name':'fastify','version':'5.12.7','noticeFiles':[{'name':'LICENSE','sha256':'0'*64}]}]}))
+        record={'format':'yahad-server-bundle','schema':1,'notices':'app/legal/ThirdPartyNotices-server.txt','outputs':outputs,'packages':PACKAGES}
+        record.update(changes); self.put('app/legal/server-bundle.json',json.dumps(record))
 
-    def lock(self,profile='full'):
-        components=[{'id':'node','path':'runtime/node/node.exe','version':'24.22.2','sourceUrl':'https://nodejs.org/dist/v24.22.2/node-v24.22.2-win-x64.zip'}]
-        if profile=='full': components += [{'id':'caddy','path':'runtime/caddy/caddy.exe','sourceUrl':'https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_windows_amd64.zip'}]
-        for component in components: component['sha256']=hashlib.sha256((self.prepared/component['path']).read_bytes()).hexdigest()
-        self.put('legal/runtime-lock.json',json.dumps({'schema':1,'target':'win-x64','components':components}))
+    def sbom(self,**changes):
+        record={'format':'yahad-app-inventory','serverBundleDependencies':[{'path':p['path']} for p in PACKAGES]}
+        record.update(changes); self.put('app/legal/SBOM.json',json.dumps(record))
 
-    def test_full_candidate_content_and_no_install_claim(self):
-        result=bundle.build(self.prepared,self.root/'full.zip')
-        self.assertFalse(result['familyInstallationReady']); self.assertEqual(result['profile'],'full')
-        with zipfile.ZipFile(self.root/'full.zip') as archive:
-            saved=json.loads(archive.read('bundle.json')); self.assertEqual(saved['kind'],'windows-runtime-candidate')
-            for record in saved['files']: self.assertEqual(hashlib.sha256(archive.read(record['path'])).hexdigest(),record['sha256'])
+    def test_valid_tree_returns_version_and_sorted_verified_records(self):
+        result=bundle.validate(self.prepared)
+        self.assertEqual(set(result),{'version','files'}); self.assertEqual(result['version'],'0.6.0')
+        paths=[record['path'] for record in result['files']]
+        self.assertEqual(paths,sorted(paths)); self.assertEqual(set(paths),set(bundle.REQUIRED))
+        for record in result['files']:
+            data=(self.prepared/record['path']).read_bytes()
+            self.assertEqual(record['size'],len(data)); self.assertEqual(record['sha256'],hashlib.sha256(data).hexdigest())
 
-    def test_verified_candidate_extracts_and_matches_whole_manifest(self):
-        bundle.build(self.prepared,self.root/'verified.zip')
-        result=verify_archive.verify(self.root/'verified.zip',self.root/'unpacked')
-        self.assertTrue(result['allExtractedFilesVerified']); self.assertFalse(result['releaseSignatureVerified'])
-        self.assertFalse(result['familyInstallationReady'])
-        with self.assertRaisesRegex(bundle.BundleError,'New extraction'): verify_archive.verify(self.root/'verified.zip',self.root/'unpacked')
-
-    def test_installed_manifest_retains_exact_verified_bytes_without_trust_claim(self):
-        path=self.root/'installed.zip';bundle.build(self.prepared,path)
-        result=verify_archive.verify(path,self.root/'installed',retain_manifest=True)
-        with zipfile.ZipFile(path) as archive: raw=archive.read('bundle.json')
-        self.assertEqual((self.root/'installed/bundle.json').read_bytes(),raw)
-        self.assertEqual(result['manifestSha256'],hashlib.sha256(raw).hexdigest())
-        self.assertTrue(result['retainedInstalledManifest'])
-        self.assertFalse(result['releaseSignatureVerified'])
-
-    def test_extra_candidate_archive_entry_is_refused_before_extraction(self):
-        path=self.root/'extra.zip'; bundle.build(self.prepared,path)
-        with zipfile.ZipFile(path,'a') as archive: archive.writestr('../escape',b'fixture')
-        with self.assertRaisesRegex(bundle.BundleError,'member set'): verify_archive.verify(path,self.root/'unpacked')
-        self.assertFalse((self.root/'unpacked').exists())
-
-    def test_deterministic_offline_build(self):
-        bundle.build(self.prepared,self.root/'a.zip'); bundle.build(self.prepared,self.root/'b.zip')
-        self.assertEqual((self.root/'a.zip').read_bytes(),(self.root/'b.zip').read_bytes())
-
-    def test_missing_node_blocks_full_candidate(self):
-        (self.prepared/'runtime/node/node.exe').unlink()
-        with self.assertRaisesRegex(bundle.BundleError,'MISSING_PAYLOAD'): bundle.validate(self.prepared)
-
-    def test_corrupt_runtime_checksum_refused(self):
-        with (self.prepared/'runtime/node/node.exe').open('ab') as stream: stream.write(b'changed')
-        with self.assertRaisesRegex(bundle.BundleError,'checksum'): bundle.validate(self.prepared)
-
-    def test_unbundled_vc_runtime_refused(self):
-        self.put('runtime/node/node.exe',image(('VCRUNTIME140.dll',))); self.lock()
-        with self.assertRaisesRegex(bundle.BundleError,'MISSING_PRIVATE_DLL'): bundle.validate(self.prepared)
-
-    def test_sibling_private_dll_resolves_without_path(self):
-        self.put('runtime/node/node.exe',image(('private.dll',))); self.put('runtime/node/private.dll',image(('kernel32.dll',))); self.lock()
-        bundle.validate(self.prepared)
-
-    def test_unrelated_folder_dll_cannot_mask_dependency(self):
-        self.put('runtime/node/node.exe',image(('private.dll',))); self.put('legal/elsewhere/private.dll',image()); self.lock()
-        with self.assertRaisesRegex(bundle.BundleError,'MISSING_PRIVATE_DLL'): bundle.validate(self.prepared)
-
-    def test_wrong_architecture_refused(self):
-        self.put('runtime/node/node.exe',image(machine=0xaa64)); self.lock()
-        with self.assertRaisesRegex(bundle.BundleError,'PE inspection'): bundle.validate(self.prepared)
-
-    def test_platform_helper_is_infrastructure_not_app_payload(self):
-        # Packaged beside the host by setup_package.py; nothing may remain under app/native/.
-        for name in ('app/native/Yahad.Platform.exe','app/native/Yahad.Platform.runtimeconfig.json','app/Native/coreclr.dll'):
+    def test_each_required_member_is_required(self):
+        for name in bundle.REQUIRED:
             with self.subTest(name=name):
-                self.put(name,image() if name.endswith(('.exe','.dll')) else '{}')
-                with self.assertRaisesRegex(bundle.BundleError,'Undeclared app namespace'): bundle.validate(self.prepared)
-                # Remove the directory too: a leftover app/native/ collides with app/Native/
-                # on a case-sensitive filesystem and would mask the namespace check.
-                (self.prepared/name).unlink(); (self.prepared/name).parent.rmdir()
+                original=(self.prepared/name).read_bytes(); self.remove(name)
+                with self.assertRaisesRegex(bundle.BundleError,'MISSING_PAYLOAD'): bundle.validate(self.prepared)
+                self.put(name,original)
         bundle.validate(self.prepared)
 
-    def test_runtime_lock_names_no_platform_component(self):
-        path=self.prepared/'legal/runtime-lock.json'; value=json.loads(path.read_text())
-        value['components'].append({'id':'platform','path':'runtime/node/node.exe','origin':'project-built','sourceCommit':'a'*40,'sourceUrl':'https://github.com/NehoraiHadad/yahad','sha256':'0'*64}); path.write_text(json.dumps(value))
-        with self.assertRaisesRegex(bundle.BundleError,'Runtime lock contract'): bundle.validate(self.prepared)
+    def test_forbidden_members_are_refused(self):
+        for name in ('app/src/x.ts','app/node_modules/a/index.js','app/native/Yahad.Platform.exe','app/Native/coreclr.dll','app/package-lock.json',
+                     'app/dist/addon.node','app/dist/tool.exe','app/dist/lib.dll','app/dist/run.ps1','app/dist/run.cmd','app/dist/run.bat','app/dist/tool.CMD'):
+            with self.subTest(name=name):
+                self.put(name,'fixture')
+                with self.assertRaises(bundle.BundleError): bundle.validate(self.prepared)
+                self.remove(name)
+        bundle.validate(self.prepared)
 
-    def test_vendor_origin_cannot_be_self_asserted_with_fake_payload(self):
-        path=self.prepared/'legal/runtime-lock.json'; value=json.loads(path.read_text()); item=next(c for c in value['components'] if c['id']=='caddy'); item['origin']='official-vendor'; path.write_text(json.dumps(value))
-        with self.assertRaisesRegex(bundle.BundleError,'Pinned vendor'): bundle.validate(self.prepared)
-
-    def test_private_state_not_packaged(self):
-        self.put('app/.env','fixture only')
-        with self.assertRaises(bundle.BundleError): bundle.validate(self.prepared)
-
-    def test_existing_output_never_replaced(self):
-        path=self.root/'existing.zip'; path.write_bytes(b'preserve')
-        with self.assertRaises(bundle.BundleError): bundle.build(self.prepared,path)
-        self.assertEqual(path.read_bytes(),b'preserve')
-
-    def test_core_fixture_cannot_pass_as_full_package(self):
-        (self.prepared/'runtime/caddy/caddy.exe').unlink(); self.lock('core-fixture')
-        result=bundle.validate(self.prepared,'core-fixture'); self.assertFalse(result['familyInstallationReady'])
-        with self.assertRaisesRegex(bundle.BundleError,'MISSING_PAYLOAD'): bundle.validate(self.prepared,'full')
-
-    def test_undeclared_runtime_namespace_refused(self):
-        self.put('runtime/unknown/tool.exe',image())
-        with self.assertRaisesRegex(bundle.BundleError,'Undeclared runtime namespace: runtime/unknown/tool.exe'): bundle.validate(self.prepared)
-
-    def test_ffmpeg_runtime_refused_in_every_profile(self):
-        # FFmpeg is not part of Yahad: a prepared tree carrying it is refused, never packaged.
-        self.put('runtime/ffmpeg/ffmpeg.exe',image(('kernel32.dll',)))
-        for profile in ('full','core-fixture'):
-            with self.subTest(profile=profile):
-                if profile=='core-fixture': (self.prepared/'runtime/caddy/caddy.exe').unlink(); self.lock(profile)
-                with self.assertRaisesRegex(bundle.BundleError,'Undeclared runtime namespace: runtime/ffmpeg/ffmpeg.exe'): bundle.validate(self.prepared,profile)
-                output=self.root/(profile+'-ffmpeg.zip')
-                with self.assertRaisesRegex(bundle.BundleError,'runtime/ffmpeg/ffmpeg.exe'): bundle.build(self.prepared,output,profile)
-                self.assertFalse(output.exists())
-
-    def test_manifest_launch_map_names_only_shipped_runtimes(self):
-        # No helper entry: Platform is infrastructure, named to the app by the host.
-        self.assertEqual(bundle.validate(self.prepared)['launch'],{'node':'runtime/node/node.exe','entry':'app/server/main.mjs',
-            'caddy':'runtime/caddy/caddy.exe'})
-
-    def test_source_tree_and_node_modules_are_not_payload(self):
-        for name in ('app/src/main.ts','app/node_modules/tsx/package.json','app/package-lock.json','app/server/extra.mjs'):
+    def test_platform_and_source_are_outside_the_app_namespace(self):
+        for name in ('app/src/x.ts','app/native/Yahad.Platform.exe','app/Native/coreclr.dll','app/package-lock.json','app/node_modules/a/index.js'):
             with self.subTest(name=name):
                 self.put(name,'fixture')
                 with self.assertRaisesRegex(bundle.BundleError,'Undeclared app namespace'): bundle.validate(self.prepared)
-                (self.prepared/name).unlink()
-        bundle.validate(self.prepared)
+                self.remove(name)
 
-    def test_server_entries_are_pinned_by_bundle_record(self):
+    def test_executable_or_script_names_are_refused_inside_app_roots(self):
+        for name in ('app/dist/addon.node','app/dist/tool.exe','app/dist/lib.dll','app/dist/run.ps1','app/dist/run.cmd','app/dist/run.bat','app/dist/tool.CMD'):
+            with self.subTest(name=name):
+                self.put(name,'fixture')
+                with self.assertRaisesRegex(bundle.BundleError,'Executable or script member name'): bundle.validate(self.prepared)
+                self.remove(name)
+
+    def test_pe_image_under_innocent_name_is_refused(self):
+        self.put('app/dist/logo.bin',b'MZ'+b'\0'*30)
+        with self.assertRaisesRegex(bundle.BundleError,'PE image member'): bundle.validate(self.prepared)
+
+    def test_refused_member_unit(self):
+        self.assertIsNone(bundle.refused_member('app/dist/index.html',b'<!'))
+        self.assertIsNone(bundle.refused_member('app/dist/empty.txt',b''))
+        self.assertIsNotNone(bundle.refused_member('app/dist/x.bin',b'MZ'))
+        self.assertIsNotNone(bundle.refused_member('app/dist/x.DLL',b'ab'))
+        self.assertIsNotNone(bundle.refused_member('APP/Node_Modules/x.js',b'ab'))
+        self.assertIsNotNone(bundle.refused_member('app/Package-Lock.json',b'{}'))
+
+    def test_nothing_outside_app_is_packaged(self):
+        for name in ('legal/x','runtime/node/node.exe'):
+            with self.subTest(name=name):
+                self.put(name,'fixture')
+                with self.assertRaisesRegex(bundle.BundleError,'Undeclared app namespace'): bundle.validate(self.prepared)
+                self.remove(name)
+
+    def test_server_directory_holds_only_the_bundle(self):
+        self.put('app/server/extra.mjs','fixture')
+        with self.assertRaisesRegex(bundle.BundleError,'Undeclared app namespace'): bundle.validate(self.prepared)
+
+    def test_unknown_app_root_refused(self):
+        self.put('app/other-root/file','fixture')
+        with self.assertRaisesRegex(bundle.BundleError,'Undeclared app namespace'): bundle.validate(self.prepared)
+
+    def test_private_paths_refused(self):
+        for name in ('app/data/x','app/.env','app/dist/secrets/x'):
+            with self.subTest(name=name):
+                self.put(name,'fixture')
+                with self.assertRaisesRegex(bundle.BundleError,'Private or unsafe path'): bundle.validate(self.prepared)
+                self.remove(name)
+        for name in ('app/dist/x.sqlite','app/dist/key.pem'):
+            with self.subTest(name=name):
+                self.put(name,'fixture')
+                with self.assertRaisesRegex(bundle.BundleError,'Unsafe package input'): bundle.validate(self.prepared)
+                self.remove(name)
+
+    def test_server_bundle_is_pinned_by_its_record(self):
         with (self.prepared/'app/server/main.mjs').open('ab') as stream: stream.write(b'changed')
         with self.assertRaisesRegex(bundle.BundleError,'Server bundle checksum'): bundle.validate(self.prepared)
-        self.server(); value=json.loads((self.prepared/'legal/server-bundle.json').read_text()); value['packages'][0]['path']='../escape'
-        self.put('legal/server-bundle.json',json.dumps(value))
-        with self.assertRaisesRegex(bundle.BundleError,'Server bundle contract'): bundle.validate(self.prepared)
 
-    def test_native_addon_has_no_node_host_exception(self):
-        self.put('app/dist/addon.node',image(('node.exe',)))
-        with self.assertRaisesRegex(bundle.BundleError,'MISSING_PRIVATE_DLL'): bundle.validate(self.prepared)
+    def test_server_bundle_record_contract(self):
+        for name,changes in (('notices',{'notices':'app/legal/other.txt'}),('format',{'format':'something-else'}),('schema',{'schema':2}),
+                             ('escaping package path',{'packages':[{**PACKAGES[0],'path':'../escape'}]})):
+            with self.subTest(name=name):
+                self.server(**changes)
+                with self.assertRaisesRegex(bundle.BundleError,'Server bundle contract'): bundle.validate(self.prepared)
+        self.server(); bundle.validate(self.prepared)
 
-    def test_data_folder_never_packaged(self):
-        self.put('app/dist/data/fixture.txt','fixture')
-        with self.assertRaisesRegex(bundle.BundleError,'Private or unsafe'): bundle.validate(self.prepared)
+    def test_sbom_must_match_the_server_bundle(self):
+        self.sbom(format='wrong')
+        with self.assertRaisesRegex(bundle.BundleError,'App SBOM contract'): bundle.validate(self.prepared)
+        self.sbom(serverBundleDependencies=[{'path':'node_modules/other'}])
+        with self.assertRaisesRegex(bundle.BundleError,'App SBOM differs from the server bundle'): bundle.validate(self.prepared)
+        self.sbom(); bundle.validate(self.prepared)
+
+    def test_app_package_identity(self):
+        self.package(node='>=22')
+        with self.assertRaisesRegex(bundle.BundleError,'App package identity'): bundle.validate(self.prepared)
+        self.package(version='0.6')
+        with self.assertRaisesRegex(bundle.BundleError,'App package identity'): bundle.validate(self.prepared)
+
+
+class PETests(unittest.TestCase):
+    def setUp(self):
+        temporary=tempfile.TemporaryDirectory(prefix='yahad-windows-pe-'); self.addCleanup(temporary.cleanup); self.root=Path(temporary.name)
 
     def test_pe_bounds_and_rva_reject_malformed_files(self):
         path=self.root/'bad.exe'; path.write_bytes(b'MZ')
         with self.assertRaises(pe.PEError): pe.inspect(path)
         broken=bytearray(image(('kernel32.dll',))); struct.pack_into('<I',broken,512+12,0xf0000000); path.write_bytes(broken)
         with self.assertRaises(pe.PEError): pe.inspect(path)
+
+    def test_valid_x64_image_reports_its_imports(self):
+        path=self.root/'good.exe'; path.write_bytes(image(('kernel32.dll',)))
+        result=pe.inspect(path)
+        self.assertEqual(result['machine'],'x64'); self.assertFalse(result['managed']); self.assertIn('kernel32.dll',result['imports'])
+
+    def test_other_architecture_is_not_inspected_as_x64(self):
+        path=self.root/'arm64.exe'; path.write_bytes(image(machine=0xaa64))
+        with self.assertRaisesRegex(pe.PEError,'not x64'): pe.inspect(path)
+
 
 if __name__=='__main__': unittest.main(verbosity=2)
