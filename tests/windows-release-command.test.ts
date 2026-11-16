@@ -541,6 +541,12 @@ test('the infrastructure source is the cache entry of HEAD\'s version, else HEAD
   assert.deepEqual(resolveInfrastructure({ built: head, inHistory, state: state(null), plan: { mode: 'build', digest } }), { sourceCommit: head, digest });
   assert.deepEqual(resolveInfrastructure({ built: head, inHistory, state: state(null), plan: { mode: 'first', digest } }), { sourceCommit: head, digest });
   assert.deepEqual(resolveInfrastructure({ built: head, inHistory, state: state(null), plan: reuse }), { sourceCommit: released, digest });
+  // publish builds an unpushed release commit on top of HEAD: a new build comes from HEAD, never from the release commit.
+  const release = 'e'.repeat(40);
+  for (const mode of ['build', 'first'] as const) {
+    assert.deepEqual(resolveInfrastructure({ built: release, head, inHistory, state: state(null), plan: { mode, digest } }), { sourceCommit: head, digest });
+  }
+  assert.deepEqual(resolveInfrastructure({ built: release, head, inHistory, state: state(null), plan: reuse }), { sourceCommit: released, digest });
 });
 
 test('the infrastructure source must be in the history of the commit being built', () => {
@@ -560,7 +566,7 @@ test('the infrastructure source must be in the history of the commit being built
     const head = git(repo, 'rev-parse', 'HEAD').trim();
     const digest = 'd'.repeat(64);
     const state = (cached: any) => ({ version: '1.0.0', digest, cache: join(repo, '.local', 'infra-cache'), cached });
-    const resolveAt = (built: string, cached: any, plan: any = null) => resolveInfrastructure({ built, state: state(cached), plan, inHistory: historyOf(repo, built) });
+    const resolveAt = (built: string, cached: any, plan: any = null) => resolveInfrastructure({ built, head, state: state(cached), plan, inHistory: historyOf(repo, built) });
     assert.deepEqual(resolveAt(head, cacheRecord(base, digest)), { sourceCommit: base, digest });
     assert.deepEqual(resolveAt(head, cacheRecord(head, digest)), { sourceCommit: head, digest });
     // A cache entry built on a side branch: refused, naming the entry to remove.
@@ -572,10 +578,13 @@ test('the infrastructure source must be in the history of the commit being built
     // publish builds a release commit on top of HEAD: ancestry is asked of HEAD, the release commit itself is in its history.
     const release = 'e'.repeat(40);
     assert.deepEqual(resolveAt(release, cacheRecord(head, digest), { mode: 'build', digest }), { sourceCommit: head, digest });
-    assert.deepEqual(resolveAt(release, null, { mode: 'build', digest }), { sourceCommit: release, digest });
+    assert.deepEqual(resolveAt(release, null, { mode: 'build', digest }), { sourceCommit: head, digest });
     assert.throws(() => resolveAt(release, cacheRecord(side, digest), { mode: 'build', digest }), /INFRA_SOURCE_OUTSIDE_HISTORY/);
-    // A commit this checkout does not have.
-    assert.throws(() => resolveAt(head, cacheRecord('f'.repeat(40), digest)), /is not in this checkout; fetch origin/);
+    // A commit this checkout does not have is no ancestor of HEAD: the entry is refused, naming it for removal.
+    // An earlier publish that was dry-run or not confirmed left such entries, naming its discarded release commit.
+    const discarded = 'f'.repeat(40);
+    assert.throws(() => resolveAt(head, cacheRecord(discarded, digest)), new RegExp(`INFRA_SOURCE_OUTSIDE_HISTORY: the infra cache holds 1\\.0\\.0 built at ${discarded}, a commit outside the history of ${head}\\. Remove .*infra-cache[\\\\/]1\\.0\\.0`));
+    assert.throws(() => resolveAt(release, cacheRecord(discarded, digest), { mode: 'build', digest }), /INFRA_SOURCE_OUTSIDE_HISTORY/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -701,14 +710,19 @@ test('release:publish packages the infrastructure the cache names and refuses a 
     assert.equal(result.seen.sourceCommit, head);
     assert.equal(result.seen.worktreeHead, head, 'the release commit is not the cached commit, so HEAD is checked out');
     assert.match(result.logs, new RegExp(`infra    new version, packaged from ${head}`));
-    // No cache entry: a reuse packages the released commit, a new version the release commit itself.
+    // No cache entry: a reuse packages the released commit, a new version HEAD, which is on origin/main.
+    // Never the release commit: a dry run discards it, and the cache entry the build leaves would name it.
     result = await run({ mode: 'reuse', digest, sourceCommit: older }, null);
     assert.equal(result.seen.sourceCommit, older);
     assert.equal(result.seen.worktreeHead, older);
-    result = await run({ mode: 'build', digest }, null);
-    assert.equal(result.seen.sourceCommit, result.done.commit);
-    assert.equal(result.seen.source, undefined);
-    assert.match(result.logs, /infra    new version, built from this commit/);
+    for (const mode of ['build', 'first'] as const) {
+      result = await run({ mode, digest }, null);
+      assert.notEqual(result.done.commit, head);
+      assert.equal(result.seen.sourceCommit, head);
+      assert.equal(result.seen.worktreeHead, head);
+      assert.equal(git(w.repo, 'rev-parse', 'origin/main').trim(), head);
+      assert.match(result.logs, new RegExp(`infra    (new version|first Windows release), packaged from ${head}`));
+    }
     // A reuse whose released commit is not the cached build of that version, and a cache of other inputs.
     await assert.rejects(run({ mode: 'reuse', digest, sourceCommit: older }, cacheRecord(head, digest)), /INFRA_SOURCE_MISMATCH: the latest release's infrastructure 1\.0\.0 comes from/);
     await assert.rejects(run({ mode: 'build', digest }, cacheRecord(head, 'f'.repeat(64))), /INFRA_BUMP_REQUIRED/);
