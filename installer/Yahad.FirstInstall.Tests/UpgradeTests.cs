@@ -15,9 +15,11 @@ internal static class UpgradeTests
 {
     // Made once by Node's crypto (scripts/windows-release-key.mjs's algorithm); the
     // private key was discarded. Proves the two implementations agree byte for byte.
-    private const string VectorKey="MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEZHSdqiSk121+ZjQy3v9Gdbwg1Aly6F4Yrq16FKzffkeJJdJlc6Tu2TFqdkPo+GWVcdnrkK0LtHMzdOOPIcLNIw==";
-    private const string VectorManifest="eyJmb3JtYXQiOjEsInByb2R1Y3QiOiJ5YWhhZC13aW5kb3dzIiwidmVyc2lvbiI6IjkuOS45Iiwic291cmNlQ29tbWl0IjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsInNldHVwIjp7Im5hbWUiOiJZYWhhZC5TZXR1cC05LjkuOS5leGUiLCJzaGEyNTYiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwiYnl0ZXMiOjEyMzR9LCJkYXRhYmFzZVNjaGVtYSI6NywibWluaW11bUZyb21WZXJzaW9uIjoiMC4wLjAiLCJrZXlJZCI6ImFkNjdhNTFmYzFlNjkxZTAiLCJjcmVhdGVkVW5peCI6MTcwMDAwMDAwMH0=";
-    private const string VectorSignature="dZkCj3sKWi0br785aKOse0fyyXUI3Sahw7YlkpAwySqX58Uu/rgQOp5rLSc8v8bRecVXsppBJ3N6YBGegO/WHw==";
+    private const string VectorKey="MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEBEv1AprOt1IqiC0BbPzhce175wrBgiHvkFiyLgHadqkx5VA5+txplrRS/0ZfLlljVGVVtPh/ajpQYqqetm0nxw==";
+    private const string VectorManifest="""{"format":2,"product":"yahad-windows-release","version":"9.9.9","sourceCommit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","keyId":"a7e004b7c8eb8171","createdUnix":1700000000,"infrastructure":{"version":"1.0.0","contractMin":1,"contractMax":1,"sourceCommit":"cccccccccccccccccccccccccccccccccccccccc","treeSha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","setup":{"name":"Yahad.Setup-9.9.9.exe","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","bytes":1234}},"app":{"archive":{"name":"yahad-windows-app-9.9.9.zip","sha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","bytes":5678},"treeSha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","requiresContract":1,"databaseSchema":7,"databaseMigrationsFrom":[5,6]},"minimumFrom":{"app":"0.0.0","infrastructure":"0.0.0"}}""";
+    private const string VectorSignature="53/fJbBNKYACQtMw1Q9pO9V7Xz8WCas1F8L3VzwfeAV2t8chdg6136tO85+EghxC+A3I4+m3QStWW8ztcC/1vg==";
+    // The same bytes signed under the retired v1 prefix: never a v2 signature.
+    private const string VectorV1Signature="QA2FhOuo9mhONFF10f/lp22uNQnn+Kw7mcFeKDAo1z2jesU+7r6bbQ4PwSceBq7WQ4v6WSS8NRaocXHMaSS1tA==";
     private static void Assert(bool value,string what){if(!value)throw new Exception("UPGRADE_ASSERTION "+what);}
     private static void DenyCode(string code,Action action)
     {
@@ -30,27 +32,41 @@ internal static class UpgradeTests
         internal byte[] Spki=>key.ExportSubjectPublicKeyInfo();
         internal byte[] Sign(byte[] manifest,string prefix=ReleaseSignature.Prefix)
             =>key.SignData((byte[])[..Encoding.ASCII.GetBytes(prefix),..manifest],HashAlgorithmName.SHA256,DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
-        internal JsonObject Fields(string version="9.9.9",int schema=7,string minimum="0.0.0")=>new()
-        {
-            ["format"]=1,["product"]="yahad-windows",["version"]=version,["sourceCommit"]=new string('a',40),
-            ["setup"]=new JsonObject{["name"]="Yahad.Setup-"+version+".exe",["sha256"]=new string('b',64),["bytes"]=1234},
-            ["databaseSchema"]=schema,["minimumFromVersion"]=minimum,["keyId"]=TrustedReleaseKey.Id(Spki),["createdUnix"]=1700000000
-        };
+        internal JsonObject Fields(string version="9.9.9",int schema=7,string minimum="0.0.0")=>Format2(TrustedReleaseKey.Id(Spki),version,schema,minimum);
         public void Dispose()=>key.Dispose();
     }
+    // A format-2 manifest (5.1). Its infrastructure is the one this build compiles and
+    // the fixture's trees describe, unless a case changes it.
+    private static JsonObject Format2(string keyId,string version="9.9.9",int schema=7,string minimum="0.0.0",string? infra=null,string? infraTree=null,string? appTree=null,int contract=1)=>new()
+    {
+        ["format"]=2,["product"]="yahad-windows-release",["version"]=version,["sourceCommit"]=PairFixture.AppCommit,["keyId"]=keyId,["createdUnix"]=1700000000,
+        ["infrastructure"]=new JsonObject{["version"]=infra??InfrastructureRelease.Version,["contractMin"]=InfrastructureRelease.ContractMin,["contractMax"]=InfrastructureRelease.ContractMax,
+            ["sourceCommit"]=InfrastructureRelease.SourceCommit,["treeSha256"]=infraTree??PairFixture.Infra(infra).Sha256,
+            ["setup"]=new JsonObject{["name"]="Yahad.Setup-"+version+".exe",["sha256"]=new string('b',64),["bytes"]=1234}},
+        ["app"]=new JsonObject{["archive"]=new JsonObject{["name"]="yahad-windows-app-"+version+".zip",["sha256"]=new string('e',64),["bytes"]=5678},
+            ["treeSha256"]=appTree??new string('f',64),["requiresContract"]=contract,["databaseSchema"]=schema,["databaseMigrationsFrom"]=new JsonArray(5,6)},
+        ["minimumFrom"]=new JsonObject{["app"]=minimum,["infrastructure"]="0.0.0"}
+    };
     private static byte[] Bytes(JsonObject value)=>Encoding.UTF8.GetBytes(value.ToJsonString());
     private static byte[] Text(string value)=>Encoding.UTF8.GetBytes(value);
     private static JsonObject With(JsonObject value,Action<JsonObject> change){var copy=value.DeepClone().AsObject();change(copy);return copy;}
-    // An app-track apply: the same infrastructure tree, app 1.0.0 to 1.0.1.
-    private static UpgradeState Upgrade(string phase="started",int fromSchema=6,int toSchema=7,bool restore=false,int attempts=0)
-        =>UpgradeState.Begin(PairFixture.Pair(app:"1.0.0",schema:fromSchema),PairFixture.Pair(app:"1.0.1",schema:toSchema),1700000000) with{Phase=phase,RestoreData=restore,Attempts=attempts};
+    // A Setup-track move (infrastructure and app 1.0.0 to 1.0.1) or an app-track apply
+    // (the same infrastructure tree, app 1.0.0 to 1.0.1).
+    private static UpgradeState Upgrade(string phase="started",int fromSchema=6,int toSchema=7,bool restore=false,int attempts=0,string kind=UpgradeState.SetupKind)
+        =>UpgradeState.Begin(kind,PairFixture.Pair(app:"1.0.0",schema:fromSchema),PairFixture.Pair(kind==UpgradeState.AppKind?"1.0.0":"1.0.1","1.0.1",schema:toSchema),1700000000)
+            with{Phase=phase,RestoreData=restore,Attempts=attempts};
     internal static async Task RunAsync(Func<string,Func<Task>,Task> check)
     {
         await check("release signature agrees with the Node signing tool",()=>
         {
-            var key=Convert.FromBase64String(VectorKey);var manifest=Convert.FromBase64String(VectorManifest);var signature=Convert.FromBase64String(VectorSignature);
+            var key=Convert.FromBase64String(VectorKey);var manifest=Text(VectorManifest);var signature=Convert.FromBase64String(VectorSignature);
             Assert(ReleaseSignature.Verify(key,manifest,signature),"vector");
-            Assert(ReleaseVerification.Verify(key,manifest,signature,"1.0.0",6).Version=="9.9.9","vector admitted");
+            var release=ReleaseVerification.Verify(key,manifest,signature);
+            Assert(release.Version=="9.9.9"&&release.Infrastructure.Setup.Bytes==1234&&release.App.Archive.Bytes==5678&&release.App.DatabaseMigrationsFrom.SequenceEqual([5,6]),"vector parsed");
+            // The retired v1 domain never verifies, over the very same bytes and key.
+            var v1=Convert.FromBase64String(VectorV1Signature);
+            Assert(!ReleaseSignature.Verify(key,manifest,v1),"v1 prefix");
+            DenyCode("RELEASE_SIGNATURE_INVALID",()=>ReleaseVerification.Verify(key,manifest,v1));
             return Task.CompletedTask;
         });
         await check("release signature refuses tampering, other keys and malformed input",()=>
@@ -73,17 +89,27 @@ internal static class UpgradeTests
         await check("release manifest is strict",()=>
         {
             using var release=new Release();var good=release.Fields();
-            Assert(ReleaseManifest.Parse(Bytes(good)).Setup.Bytes==1234,"good");
-            var text=good.ToJsonString();var bad=new List<byte[]>
+            Assert(ReleaseManifest.Parse(Bytes(good)).Infrastructure.Setup.Bytes==1234,"good");
+            // The largest legal manifest fits the 4096-byte bound with room to spare.
+            var largest=With(good,v=>{v["app"]!["databaseMigrationsFrom"]=new JsonArray([..Enumerable.Range(1000-ReleaseManifest.MaximumMigrationSources,ReleaseManifest.MaximumMigrationSources).Select(s=>(JsonNode?)s)]);v["app"]!["databaseSchema"]=1000;});
+            Assert(Bytes(largest).Length<=ReleaseManifest.MaximumBytes&&ReleaseManifest.Parse(Bytes(largest)).App.DatabaseMigrationsFrom.Length==ReleaseManifest.MaximumMigrationSources,"largest");
+            var text=good.ToJsonString();JsonNode Infra(JsonObject v)=>v["infrastructure"]!;JsonNode App(JsonObject v)=>v["app"]!;
+            var bad=new List<byte[]>
             {
-                Bytes(With(good,v=>v["unknown"]=1)),Bytes(With(good,v=>v["setup"]!["unknown"]=1)),
-                (byte[])[0xef,0xbb,0xbf,..Text(text)],Text(text+"x"),Text("{\"format\":1,"+text[1..]),Text(""),Text("null"),
+                Bytes(With(good,v=>v["unknown"]=1)),Bytes(With(good,v=>Infra(v)["setup"]!["unknown"]=1)),Bytes(With(good,v=>App(v)["unknown"]=1)),Bytes(With(good,v=>v["minimumFrom"]!["unknown"]=1)),
+                (byte[])[0xef,0xbb,0xbf,..Text(text)],Text(text+"x"),Text("{\"format\":2,"+text[1..]),Text(""),Text("null"),Text(text.Replace("\"format\"","\"Format\"")),
                 new byte[ReleaseManifest.MaximumBytes+1],Bytes(With(good,v=>v["ballast"]=new JsonObject{["a"]=new JsonObject{["b"]=new JsonObject{["c"]=new JsonObject()}}})),
-                Bytes(With(good,v=>v["format"]=2)),Bytes(With(good,v=>v["product"]="yahad")),Bytes(With(good,v=>v["version"]="1.0")),Bytes(With(good,v=>v["version"]="01.0.0")),
-                Bytes(With(good,v=>v["version"]="1.0.0-rc")),Bytes(With(good,v=>v["minimumFromVersion"]="x")),Bytes(With(good,v=>v["sourceCommit"]="abc")),Bytes(With(good,v=>v["keyId"]="ABC")),
-                Bytes(With(good,v=>v["setup"]!["name"]="other.exe")),Bytes(With(good,v=>v["setup"]!["name"]="..\\Yahad.Setup-9.9.9.exe")),Bytes(With(good,v=>v["setup"]!["sha256"]="ab")),
-                Bytes(With(good,v=>v["setup"]!["bytes"]=0)),Bytes(With(good,v=>v["setup"]!["bytes"]=ReleaseManifest.MaximumSetupBytes+1)),Bytes(With(good,v=>v["databaseSchema"]=0)),Bytes(With(good,v=>v["createdUnix"]=0)),
-                Bytes(With(good,v=>v.Remove("keyId"))),Bytes(With(good,v=>v.Remove("setup"))),Bytes(With(good,v=>v["sourceCommit"]=null)),Bytes(With(good,v=>v["setup"]=null))
+                Bytes(With(good,v=>v["format"]=1)),Bytes(With(good,v=>v["product"]="yahad-windows")),Bytes(With(good,v=>v["version"]="1.0")),Bytes(With(good,v=>v["version"]="01.0.0")),
+                Bytes(With(good,v=>v["version"]="1.0.0-rc")),Bytes(With(good,v=>v["sourceCommit"]="abc")),Bytes(With(good,v=>v["keyId"]="ABC")),Bytes(With(good,v=>v["createdUnix"]=0)),
+                Bytes(With(good,v=>Infra(v)["version"]="x")),Bytes(With(good,v=>Infra(v)["contractMin"]=2)),Bytes(With(good,v=>Infra(v)["treeSha256"]="ab")),Bytes(With(good,v=>Infra(v)["sourceCommit"]=null)),
+                Bytes(With(good,v=>Infra(v)["setup"]!["name"]="other.exe")),Bytes(With(good,v=>Infra(v)["setup"]!["name"]="..\\Yahad.Setup-9.9.9.exe")),Bytes(With(good,v=>Infra(v)["setup"]!["sha256"]="ab")),
+                Bytes(With(good,v=>Infra(v)["setup"]!["bytes"]=0)),Bytes(With(good,v=>Infra(v)["setup"]!["bytes"]=ReleaseManifest.MaximumSetupBytes+1)),
+                Bytes(With(good,v=>App(v)["archive"]!["name"]="yahad-windows-app-9.9.8.zip")),Bytes(With(good,v=>App(v)["archive"]!["bytes"]=ReleaseManifest.MaximumAppArchiveBytes+1)),
+                Bytes(With(good,v=>App(v)["databaseSchema"]=0)),Bytes(With(good,v=>App(v)["databaseMigrationsFrom"]=new JsonArray(7))),Bytes(With(good,v=>App(v)["databaseMigrationsFrom"]=new JsonArray(5,5))),
+                Bytes(With(good,v=>App(v)["databaseMigrationsFrom"]=null)),Bytes(With(good,v=>App(v)["treeSha256"]="F".PadRight(64,'f'))),
+                Bytes(With(good,v=>v["minimumFrom"]!["app"]="10.0.0")),Bytes(With(good,v=>v["minimumFrom"]!["infrastructure"]="999.0.0")),Bytes(With(good,v=>v["minimumFrom"]!["app"]="x")),
+                Bytes(With(good,v=>v.Remove("keyId"))),Bytes(With(good,v=>v.Remove("minimumFrom"))),Bytes(With(good,v=>v.Remove("infrastructure"))),Bytes(With(good,v=>v["app"]=null)),
+                Bytes(With(good,v=>Infra(v)["setup"]=null))
             };
             for(var i=0;i<bad.Count;i++)
             {var index=i;try{DenyCode("RELEASE_MANIFEST_INVALID",()=>ReleaseManifest.Parse(bad[index]));}catch(Exception error){throw new Exception("manifest case "+index,error);}}
@@ -92,21 +118,92 @@ internal static class UpgradeTests
         await check("release verification reads nothing before the signature",()=>
         {
             using var release=new Release();var garbage=Text("not json");
-            DenyCode("RELEASE_SIGNATURE_INVALID",()=>ReleaseVerification.Verify(release.Spki,garbage,new byte[64],"1.0.0",6));
-            DenyCode("RELEASE_SIGNATURE_INVALID",()=>ReleaseVerification.Verify(release.Spki,garbage,null,"1.0.0",6));
-            DenyCode("RELEASE_SIGNATURE_INVALID",()=>ReleaseVerification.Verify(release.Spki,new byte[ReleaseManifest.MaximumBytes+1],release.Sign(new byte[ReleaseManifest.MaximumBytes+1]),"1.0.0",6));
-            DenyCode("RELEASE_MANIFEST_INVALID",()=>ReleaseVerification.Verify(release.Spki,garbage,release.Sign(garbage),"1.0.0",6));
+            DenyCode("RELEASE_SIGNATURE_INVALID",()=>ReleaseVerification.Verify(release.Spki,garbage,new byte[64]));
+            DenyCode("RELEASE_SIGNATURE_INVALID",()=>ReleaseVerification.Verify(release.Spki,garbage,null));
+            DenyCode("RELEASE_SIGNATURE_INVALID",()=>ReleaseVerification.Verify(release.Spki,new byte[ReleaseManifest.MaximumBytes+1],release.Sign(new byte[ReleaseManifest.MaximumBytes+1])));
+            DenyCode("RELEASE_MANIFEST_INVALID",()=>ReleaseVerification.Verify(release.Spki,garbage,release.Sign(garbage)));
+            using var other=new Release();var foreign=Bytes(With(release.Fields(),v=>v["keyId"]=TrustedReleaseKey.Id(other.Spki)));
+            DenyCode("RELEASE_KEY_UNTRUSTED",()=>ReleaseVerification.Verify(release.Spki,foreign,release.Sign(foreign)));
             return Task.CompletedTask;
         });
-        await check("release verification refuses a downgrade, a replay and an unsupported source",()=>
+        await check("the engine applies only the track a release selects for the installed pair",()=>
         {
-            using var release=new Release();
-            byte[] Signed(JsonObject value,out byte[] signature){var bytes=Bytes(value);signature=release.Sign(bytes);return bytes;}
-            void Refuse(string code,JsonObject value,string installed,int? schema=6){var bytes=Signed(value,out var signature);DenyCode(code,()=>ReleaseVerification.Verify(release.Spki,bytes,signature,installed,schema));}
-            var good=Signed(release.Fields(),out var valid);Assert(ReleaseVerification.Verify(release.Spki,good,valid,"1.0.0",null).Version=="9.9.9","unknown schema admitted");
-            Refuse("RELEASE_NOT_NEWER",release.Fields("9.9.9"),"9.9.9");Refuse("RELEASE_NOT_NEWER",release.Fields("9.9.9"),"10.0.0");
-            Refuse("RELEASE_UNSUPPORTED_FROM",release.Fields(minimum:"2.0.0"),"1.0.0");Refuse("RELEASE_UNSUPPORTED_FROM",release.Fields(schema:5),"1.0.0");
-            using var other=new Release();Refuse("RELEASE_KEY_UNTRUSTED",With(release.Fields(),v=>v["keyId"]=TrustedReleaseKey.Id(other.Spki)),"1.0.0");
+            // Installed: the fixture infrastructure 1.0.0 with app 1.0.0 at schema 6.
+            var installed=PairFixture.State(active:PairFixture.Pair("1.0.0","1.0.0",schema:6));var id=new string('0',16);var tree=installed.Active.Infrastructure.TreeSha256;
+            ReleaseManifest Of(JsonObject value)=>ReleaseManifest.Parse(Bytes(value));
+            ReleaseTrack? Select(JsonObject value)=>ReleaseSelection.Select(Of(value),installed.Active.Pointer());
+            Assert(Select(Format2(id,"1.0.1",infra:"1.0.0",infraTree:tree))==ReleaseTrack.App,"same infrastructure, newer app");
+            Assert(Select(Format2(id,"1.0.1",infra:"1.0.1"))==ReleaseTrack.Setup,"newer infrastructure");
+            Assert(Select(Format2(id,"1.0.0",infra:"1.0.0",infraTree:tree)) is null,"same app");
+            Assert(Select(Format2(id,"0.9.0",infra:"1.0.1")) is null,"newer infrastructure, older app");
+            Assert(Select(Format2(id,"1.0.1",infra:"0.9.0")) is null,"older infrastructure");
+            DenyCode("INFRA_IDENTITY_MISMATCH",()=>Select(Format2(id,"1.0.1",infra:"1.0.0",infraTree:new string('d',64))));
+            DenyCode("APP_NEEDS_INFRASTRUCTURE",()=>Select(Format2(id,"1.0.1",infra:"1.0.0",infraTree:tree,contract:InfrastructureRelease.ContractMax+1)));
+            DenyCode("RELEASE_UNSUPPORTED_FROM",()=>Select(Format2(id,"1.0.1",minimum:"1.0.1",infra:"1.0.0",infraTree:tree)));
+            // The engine's own refusals: the other track, nothing newer, a schema it cannot open.
+            ReleaseStage.RequireTrack(Of(Format2(id,"1.0.1",infra:"1.0.0",infraTree:tree)),installed,ReleaseTrack.App);
+            ReleaseStage.RequireTrack(Of(Format2(id,"1.0.1",infra:"1.0.1")),installed,ReleaseTrack.Setup);
+            DenyCode("RELEASE_TRACK_MISMATCH",()=>ReleaseStage.RequireTrack(Of(Format2(id,"1.0.1",infra:"1.0.1")),installed,ReleaseTrack.App));
+            DenyCode("RELEASE_TRACK_MISMATCH",()=>ReleaseStage.RequireTrack(Of(Format2(id,"1.0.1",infra:"1.0.0",infraTree:tree)),installed,ReleaseTrack.Setup));
+            DenyCode("RELEASE_NOT_NEWER",()=>ReleaseStage.RequireTrack(Of(Format2(id,"1.0.0",infra:"1.0.0",infraTree:tree)),installed,ReleaseTrack.App));
+            // The recorded schema decides: 4 is neither the target nor a migration source.
+            DenyCode("RELEASE_UNSUPPORTED_FROM",()=>ReleaseStage.RequireTrack(Of(Format2(id,"1.0.1",schema:9,infra:"1.0.0",infraTree:tree)),PairFixture.State(active:PairFixture.Pair("1.0.0","1.0.0",schema:4)),ReleaseTrack.App));
+            Assert(Of(Format2(id,schema:9)).AcceptsSchema(9)&&!Of(Format2(id,schema:9)).AcceptsSchema(4)&&Of(Format2(id,schema:9)).AcceptsSchema(5),"schema rule");
+            return Task.CompletedTask;
+        });
+        await check("a staged release is read by its exact names and must be that version",()=>
+        {
+            using var release=new Release();var root=PrivateSession.Create(Path.GetTempPath());
+            try
+            {
+                var stage=Path.Combine(root,"9.9.9");Directory.CreateDirectory(stage);var manifest=Bytes(release.Fields());
+                DenyCode("RELEASE_SIGNATURE_INVALID",()=>ReleaseStage.Read(stage,"9.9.9",release.Spki));
+                // A glob would have found these; exact names do not.
+                File.WriteAllBytes(Path.Combine(stage,"yahad-windows-release-9.9.9 (1).json"),manifest);File.WriteAllBytes(Path.Combine(stage,"yahad-windows-release-9.9.9 (1).json.sig"),release.Sign(manifest));
+                DenyCode("RELEASE_SIGNATURE_INVALID",()=>ReleaseStage.Read(stage,"9.9.9",release.Spki));
+                File.WriteAllBytes(Path.Combine(stage,ReleaseManifest.ManifestName("9.9.9")),manifest);
+                DenyCode("RELEASE_SIGNATURE_INVALID",()=>ReleaseStage.Read(stage,"9.9.9",release.Spki));
+                File.WriteAllBytes(Path.Combine(stage,ReleaseManifest.SignatureName("9.9.9")),[..release.Sign(manifest),0]);
+                DenyCode("RELEASE_SIGNATURE_INVALID",()=>ReleaseStage.Read(stage,"9.9.9",release.Spki));
+                File.WriteAllBytes(Path.Combine(stage,ReleaseManifest.SignatureName("9.9.9")),release.Sign(manifest));
+                Assert(ReleaseStage.Read(stage,"9.9.9",release.Spki).Version=="9.9.9","exact names");
+                // Another release's manifest under this version's names is not this stage.
+                var other=Bytes(release.Fields("9.9.8"));File.WriteAllBytes(Path.Combine(stage,ReleaseManifest.ManifestName("9.9.9")),other);File.WriteAllBytes(Path.Combine(stage,ReleaseManifest.SignatureName("9.9.9")),release.Sign(other));
+                DenyCode("RELEASE_MANIFEST_INVALID",()=>ReleaseStage.Read(stage,"9.9.9",release.Spki));
+                DenyCode("RELEASE_SIGNATURE_INVALID",()=>ReleaseStage.Read(stage,"latest",release.Spki));
+                DenyCode("RELEASE_SIGNATURE_INVALID",()=>ReleaseStage.Read("9.9.9","9.9.9",release.Spki));
+            }
+            finally{Directory.Delete(root,true);}
+            return Task.CompletedTask;
+        });
+        await check("a staged Setup carries exactly the pair its signed manifest names",()=>
+        {
+            var package=PairFixture.Package(app:PairFixture.App("9.9.9"),schema:7,migrations:[5,6]);using var opened=PairFixture.Open(package);var manifest=opened.Manifest;
+            var signed=Format2(new string('0',16),"9.9.9",appTree:manifest.App.TreeSha256);
+            ReleaseManifest Of(Action<JsonObject>? change=null)=>ReleaseManifest.Parse(Bytes(change is null?signed:With(signed,change)));
+            UpgradeHost.RequireAgrees(Of(),manifest);
+            // Migration sources are a set: their order in the signed manifest is free.
+            UpgradeHost.RequireAgrees(Of(v=>v["app"]!["databaseMigrationsFrom"]=new JsonArray(6,5)),manifest);
+            foreach(var change in new Action<JsonObject>[]
+            {
+                v=>{v["version"]="9.9.8";v["infrastructure"]!["setup"]!["name"]=ReleaseManifest.SetupName("9.9.8");v["app"]!["archive"]!["name"]=ReleaseManifest.AppArchiveName("9.9.8");},v=>v["sourceCommit"]=new string('c',40),v=>v["infrastructure"]!["version"]="1.0.1",v=>v["infrastructure"]!["treeSha256"]=new string('d',64),
+                v=>v["infrastructure"]!["sourceCommit"]=new string('c',40),v=>v["app"]!["treeSha256"]=new string('d',64),v=>v["app"]!["databaseSchema"]=8,
+                v=>v["app"]!["databaseMigrationsFrom"]=new JsonArray(5),v=>v["app"]!["databaseMigrationsFrom"]=new JsonArray(4,5,6),v=>v["minimumFrom"]!["app"]="0.0.1",v=>v["minimumFrom"]!["infrastructure"]="0.0.1"
+            })
+            {var value=Of(change);DenyCode("RELEASE_SETUP_MISMATCH",()=>UpgradeHost.RequireAgrees(value,manifest));}
+            return Task.CompletedTask;
+        });
+        await check("a Setup moves only from the pairs its package supports",()=>
+        {
+            var installed=PairFixture.Pair("1.0.0","1.0.0");
+            using(var package=PairFixture.Open(PairFixture.Package(app:PairFixture.App("1.0.1"))))package.RequireFrom(installed);
+            using(var package=PairFixture.Open(PairFixture.Package(app:PairFixture.App("1.0.1"),minimum:new("1.0.0","1.0.0"))))package.RequireFrom(installed);
+            using(var package=PairFixture.Open(PairFixture.Package(app:PairFixture.App("1.0.1"),minimum:new("1.0.1","0.0.0"))))DenyCode("RELEASE_UNSUPPORTED_FROM",()=>package.RequireFrom(installed));
+            // The package always carries the compiled infrastructure, so an older installed one is the case.
+            using(var package=PairFixture.Open(PairFixture.Package(app:PairFixture.App("1.0.1"),minimum:new("0.0.0",InfrastructureRelease.Version))))DenyCode("RELEASE_UNSUPPORTED_FROM",()=>package.RequireFrom(PairFixture.Pair("0.0.0","1.0.0")));
+            // Never newer than the package's own pair, never missing.
+            foreach(var minimum in new PackageMinimumFrom?[]{new("1.0.2","0.0.0"),new("0.0.0","999.0.0"),new("x","0.0.0"),new("0.0.0","1.0"),null})
+                DenyCode("PACKAGE_FORMAT",()=>PairFixture.Open(PairFixture.Package(app:PairFixture.App("1.0.1"),change:m=>m with{MinimumFrom=minimum!})).Dispose());
             return Task.CompletedTask;
         });
         await check("release versions compare as numbers",()=>
@@ -134,13 +231,22 @@ internal static class UpgradeTests
         {
             var state=Upgrade();var bytes=state.Encode();var read=UpgradeState.Parse(bytes);
             Assert(read.Id==state.Id&&read.Phase==state.Phase&&read.Kind=="setup"&&read.FromSchema==6&&read.ToSchema==7&&read.SchemaChanged&&read.To.App.Files.Length==state.To.App.Files.Length,"round trip");
-            Assert(read.From.SameTrees(state.From)&&read.To.SameTrees(state.To)&&read.Track==UpgradeTrack.App,"pairs");
+            Assert(read.From.SameTrees(state.From)&&read.To.SameTrees(state.To)&&read.Track==UpgradeTrack.Infrastructure,"pairs");
             Assert(!Upgrade(fromSchema:7).SchemaChanged,"same schema");
             // FromSchema is the installer record's, never a live observation.
-            Assert(UpgradeState.Begin(PairFixture.Pair(schema:4),PairFixture.Pair(app:"1.0.1",schema:7),0).FromSchema==4,"record schema");
-            foreach(var phase in UpgradeState.Phases)Assert(UpgradeState.Parse((state with{Phase=phase}).Encode()).Phase==phase,phase);
+            Assert(UpgradeState.Begin(UpgradeState.AppKind,PairFixture.Pair(schema:4),PairFixture.Pair(app:"1.0.1",schema:7),0).FromSchema==4,"record schema");
+            foreach(var kind in new[]{UpgradeState.SetupKind,UpgradeState.AppKind})
+            {
+                var begun=UpgradeState.Begin(kind,PairFixture.Pair(),PairFixture.Pair(kind==UpgradeState.AppKind?"1.0.0":"1.0.1","1.0.1",schema:7),0);Assert(begun.Phase==UpgradeState.Phases(kind)[0],"first phase "+kind);
+                foreach(var phase in UpgradeState.Phases(kind))Assert(UpgradeState.Parse((begun with{Phase=phase}).Encode()).Phase==phase,kind+phase);
+            }
+            // Each kind moves exactly its own track, and knows only its own phases.
+            DenyCode("INSTALL_STATE_INVALID",()=>(Upgrade(kind:UpgradeState.AppKind) with{Kind=UpgradeState.SetupKind}).Encode());
+            DenyCode("INSTALL_STATE_INVALID",()=>(state with{Kind=UpgradeState.AppKind}).Encode());
+            DenyCode("INSTALL_STATE_INVALID",()=>(Upgrade(kind:UpgradeState.AppKind) with{Phase="backed_up"}).Encode());
+            DenyCode("INSTALL_STATE_INVALID",()=>(state with{Phase="switching"}).Encode());
             var json=JsonNode.Parse(bytes)!.AsObject();
-            foreach(var bad in new[]{With(json,v=>v["Unknown"]=1),With(json,v=>v["Kind"]="updater"),With(json,v=>v["Phase"]="other"),With(json,v=>v.Remove("To")),With(json,v=>v["From"]="..\\x"),
+            foreach(var bad in new[]{With(json,v=>v["Unknown"]=1),With(json,v=>v["Kind"]="updater"),With(json,v=>v["Kind"]="app"),With(json,v=>v["Phase"]="other"),With(json,v=>v.Remove("To")),With(json,v=>v["From"]="..\\x"),
                 With(json,v=>v["To"]=v["From"]!.DeepClone()),With(json,v=>{var from=v["From"]!.DeepClone();v["From"]=v["To"]!.DeepClone();v["To"]=from;}),With(json,v=>v["FromSchema"]=5),
                 With(json,v=>v["Id"]="x"),With(json,v=>{v["RestoreData"]=true;v["FromSchema"]=7;v["SchemaChanged"]=false;}),With(json,v=>v["SchemaChanged"]=false)})
             {var value=Bytes(bad);try{UpgradeState.Parse(value);}catch(IOException){continue;}throw new Exception("UPGRADE_STATE_ADMITTED "+bad.ToJsonString()[..60]);}
@@ -176,14 +282,25 @@ internal static class UpgradeTests
         });
         await check("repair decisions follow the recorded phase",()=>
         {
-            foreach(var(phase,attempts,action)in new[]
+            const string S=UpgradeState.SetupKind,A=UpgradeState.AppKind;
+            foreach(var(kind,phase,attempts,action)in new[]
             {
-                ("preparing",0,RepairAction.Discard),("prepared",9,RepairAction.Discard),("stopped",0,RepairAction.RollBack),("backed_up",0,RepairAction.RollBack),("switched",2,RepairAction.RollBack),
-                ("started",0,RepairAction.RollBack),("rolling_back",1,RepairAction.RollBack),("started",3,RepairAction.GiveUp),("rolling_back",3,RepairAction.GiveUp),("stopped",4,RepairAction.GiveUp),
-                ("healthy",0,RepairAction.FinishCommit),("committed",9,RepairAction.FinishCommit),("rolled_back",9,RepairAction.FinishRollback)
-            })Assert(UpgradeRules.ForRepair(phase,attempts)==action,phase+attempts);
-            DenyCode("INSTALL_STATE_INVALID",()=>UpgradeRules.ForRepair("other",0));
-            Assert(new HashSet<string>(UpgradeState.Phases).SetEquals(UpgradeState.Phases),"phases unique");
+                (S,"preparing",0,RepairAction.Discard),(S,"prepared",9,RepairAction.Discard),(S,"stopped",0,RepairAction.RollBack),(S,"backed_up",0,RepairAction.RollBack),(S,"switched",2,RepairAction.RollBack),
+                (S,"started",0,RepairAction.RollBack),(S,"rolling_back",1,RepairAction.RollBack),(S,"started",3,RepairAction.GiveUp),(S,"rolling_back",3,RepairAction.GiveUp),(S,"stopped",4,RepairAction.GiveUp),
+                (S,"healthy",0,RepairAction.FinishCommit),(S,"committed",9,RepairAction.FinishCommit),(S,"rolled_back",9,RepairAction.FinishRollback),
+                // Section 7: a phase is recorded as its step begins.
+                (A,"admitting",0,RepairAction.Discard),(A,"preparing",0,RepairAction.Discard),(A,"fencing",9,RepairAction.Discard),(A,"stopping",0,RepairAction.Discard),(A,"stopped",3,RepairAction.Discard),
+                (A,"switching",0,RepairAction.RollBack),(A,"started",2,RepairAction.RollBack),(A,"healthy",0,RepairAction.RollBack),(A,"rolling_back",1,RepairAction.RollBack),
+                (A,"switching",3,RepairAction.GiveUp),(A,"healthy",3,RepairAction.GiveUp),(A,"rolling_back",3,RepairAction.GiveUp),
+                (A,"committed",9,RepairAction.FinishCommit),(A,"rolled_back",9,RepairAction.FinishRollback)
+            })Assert(UpgradeRules.ForRepair(kind,phase,attempts)==action,kind+phase+attempts);
+            DenyCode("INSTALL_STATE_INVALID",()=>UpgradeRules.ForRepair(S,"other",0));DenyCode("INSTALL_STATE_INVALID",()=>UpgradeRules.ForRepair(A,"backed_up",0));
+            DenyCode("INSTALL_STATE_INVALID",()=>UpgradeRules.ForRepair(S,"switching",0));DenyCode("INSTALL_STATE_INVALID",()=>UpgradeRules.ForRepair("updater","preparing",0));
+            foreach(var kind in new[]{S,A})
+            {
+                Assert(new HashSet<string>(UpgradeState.Phases(kind)).Count==UpgradeState.Phases(kind).Length,"phases unique");
+                foreach(var phase in UpgradeState.Phases(kind))_=UpgradeRules.ForRepair(kind,phase,0);
+            }
             return Task.CompletedTask;
         });
         await check("data is restored exactly when the new release may have touched it",()=>
@@ -193,6 +310,11 @@ internal static class UpgradeTests
             foreach(var phase in new[]{"backed_up","switched","started"})Assert(!UpgradeRules.RestoresData(Upgrade(phase,fromSchema:7)),"same schema "+phase);
             Assert(UpgradeRules.RestoresData(Upgrade("rolling_back",restore:true)),"a resumed rollback keeps its decision");
             Assert(!UpgradeRules.RestoresData(Upgrade("rolling_back")),"a rollback from before the backup never restores");
+            // The app track's backup is whole once its switch began.
+            const string A=UpgradeState.AppKind;
+            foreach(var phase in new[]{"admitting","preparing","fencing","stopping","stopped"})Assert(!UpgradeRules.RestoresData(Upgrade(phase,kind:A)),A+phase);
+            foreach(var phase in new[]{"switching","started","healthy"})Assert(UpgradeRules.RestoresData(Upgrade(phase,kind:A))&&!UpgradeRules.RestoresData(Upgrade(phase,fromSchema:7,kind:A)),A+phase);
+            Assert(UpgradeRules.RestoresData(Upgrade("rolling_back",restore:true,kind:A))&&!UpgradeRules.RestoresData(Upgrade("rolling_back",kind:A)),"app rollback keeps its decision");
             return Task.CompletedTask;
         });
         await check("health needs this release, its schema and consecutive answers",()=>
@@ -210,12 +332,16 @@ internal static class UpgradeTests
             {
                 ("UPGRADED",0),("REPAIRED",0),("NOTHING_TO_REPAIR",0),("RELEASE_SIGNATURE_INVALID",2),("RELEASE_KEY_UNTRUSTED",2),("RELEASE_NOT_NEWER",2),("RELEASE_SETUP_MISMATCH",2),("RELEASE_MANIFEST_INVALID",2),("RELEASE_UNSUPPORTED_FROM",2),
                 ("UPGRADE_LOCKED",2),("UPGRADE_INCOMPLETE",2),("NOT_INSTALLED",2),("INSTALL_INCOMPLETE",2),("LEGACY_INSTALL_UNSUPPORTED",2),("INFRA_IDENTITY_MISMATCH",2),("APP_IDENTITY_MISMATCH",2),
-                ("INSTALL_DOWNGRADE_REFUSED",2),("ACTIVE_POINTER_INVALID",2),("TREE_RECORD_INVALID",2),(RepairHost.HandOff,1),("REPAIR_RELAUNCHED",1),("REPAIR_RUNNING_FROM_TARGET",1),("ROLLBACK_FAILED",3),("UPGRADE_COMMIT_INCOMPLETE",3),("REPAIR_UNHEALTHY",3),("ROLLED_BACK_UNHEALTHY",4),("UPGRADE_PREPARE_FAILED",4),("ADMIN_REQUIRED",1),("UNEXPECTED",1)
+                ("INSTALL_DOWNGRADE_REFUSED",2),("ACTIVE_POINTER_INVALID",2),("TREE_RECORD_INVALID",2),(RepairHost.HandOff,1),("REPAIR_RELAUNCHED",1),("REPAIR_RUNNING_FROM_TARGET",1),("ROLLBACK_FAILED",3),("UPGRADE_COMMIT_INCOMPLETE",3),("REPAIR_UNHEALTHY",3),("ROLLED_BACK_UNHEALTHY",4),("UPGRADE_PREPARE_FAILED",4),("ADMIN_REQUIRED",1),("UNEXPECTED",1),
+                ("RELEASE_TRACK_MISMATCH",2),("APP_NEEDS_INFRASTRUCTURE",2),("RELEASE_APP_SIZE",2),("RELEASE_APP_HASH",2),("APP_PACKAGE_PE",2),("APP_PACKAGE_MEMBER_HASH",2),("DISK_SPACE",1)
             })Assert(UpgradeRules.Exit(code)==exit,code);
             // Every refusal reaches the result as itself, not as a generic failure.
             foreach(var code in new[]{"RELEASE_SIGNATURE_INVALID","RELEASE_KEY_UNTRUSTED","RELEASE_NOT_NEWER","RELEASE_SETUP_MISMATCH","RELEASE_MANIFEST_INVALID","RELEASE_UNSUPPORTED_FROM","UPGRADE_LOCKED","UPGRADE_INCOMPLETE","UPGRADE_BACKUP_INVALID","NOT_INSTALLED","INSTALL_INCOMPLETE",
-                "LEGACY_INSTALL_UNSUPPORTED","INFRA_IDENTITY_MISMATCH","APP_IDENTITY_MISMATCH","ACTIVE_POINTER_INVALID","TREE_RECORD_INVALID"})
+                "LEGACY_INSTALL_UNSUPPORTED","INFRA_IDENTITY_MISMATCH","APP_IDENTITY_MISMATCH","ACTIVE_POINTER_INVALID","TREE_RECORD_INVALID","RELEASE_TRACK_MISMATCH","APP_NEEDS_INFRASTRUCTURE","RELEASE_APP_SIZE","RELEASE_APP_HASH",
+                "APP_PACKAGE_ZIP","APP_PACKAGE_PATH","APP_PACKAGE_FORBIDDEN","APP_PACKAGE_COLLISION","APP_PACKAGE_MEMBER_TYPE","APP_PACKAGE_BOUND","APP_PACKAGE_MISSING","APP_PACKAGE_TREE_MISMATCH","APP_PACKAGE_MEMBERS","APP_PACKAGE_MEMBER","APP_PACKAGE_PE","APP_PACKAGE_SIZE","APP_PACKAGE_MEMBER_HASH"})
                 Assert(SetupOperation.Code(new IOException(code))==code,code);
+            // A discard reports an archive the validator refused as itself, anything else as the failed preparation.
+            Assert(UpgradeRules.Discarded("APP_PACKAGE_PE")=="APP_PACKAGE_PE"&&UpgradeRules.Discarded("DISK_SPACE")=="UPGRADE_PREPARE_FAILED"&&UpgradeRules.Discarded("SERVICE_START_FAILED")=="UPGRADE_PREPARE_FAILED","discarded");
             return Task.CompletedTask;
         });
         await check("a private copy runs outside every tree it may delete, in a fresh protected directory under the system temp",()=>
@@ -305,7 +431,10 @@ internal static class UpgradeTests
             foreach(var args in new[]{new[]{"--quiet-upgrade",@"C:\release","--result",@"C:\r.json"},["--repair","--result",@"C:\r.json"]})Assert(QuietSetup.Parse(args) is not null,args[0]);
             Assert(QuietSetup.Parse(["--quiet-upgrade",@"C:\release","--result",@"C:\r.json"])!.UpgradeDirectory==@"C:\release","upgrade directory");
             Assert(QuietSetup.Parse(["--repair","--result",@"C:\r.json"])!.Repair,"repair");
-            Assert(QuietSetup.Parse(["--repair"]) is null&&QuietSetup.Parse(["--quiet-upgrade",@"C:\release"]) is null,"a result file is required");
+            Assert(QuietSetup.Parse(["--repair"]) is null&&QuietSetup.Parse(["--quiet-upgrade",@"C:\release"]) is null&&QuietSetup.Parse(["--apply-app",@"C:\stage\1.0.1"]) is null,"a result file is required");
+            var apply=QuietSetup.Parse(["--apply-app",@"C:\stage\1.0.1","--result",@"C:\r.json"])!;
+            Assert(apply.AppStage==@"C:\stage\1.0.1"&&apply.UpgradeDirectory is null&&!apply.Repair&&!apply.Uninstall,"app stage");
+            try{QuietSetup.Parse(["--apply-app",@"stage\1.0.1","--result",@"C:\r.json"]);throw new Exception("relative stage accepted");}catch(IOException){}
             return Task.CompletedTask;
         });
     }

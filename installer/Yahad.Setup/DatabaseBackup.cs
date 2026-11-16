@@ -15,12 +15,16 @@ internal static class DatabaseBackup
     private static readonly string[] Names=["app.sqlite-wal","app.sqlite-shm","app.sqlite"];
     private const string ManifestName="manifest.json";
     internal static long Size(string data)=>Names.Select(n=>new FileInfo(Path.Combine(data,n))).Where(f=>f.Exists).Sum(f=>f.Length);
-    internal static void Create(string data,string backup)
+    internal static void Create(string data,string backup){using var lease=WindowsFileBoundary.AcquireDataLease(data);Create(data,backup,lease);}
+    internal static void Restore(string data,string backup){using var lease=WindowsFileBoundary.AcquireDataLease(data);Restore(data,backup,lease);}
+    // The caller holds the data lease across more than the copy (the app track holds it
+    // from stopped until the Runtime starts again, 7).
+    internal static void Create(string data,string backup,WindowsFileBoundary.DataLease held)
     {
+        ArgumentNullException.ThrowIfNull(held);
         UpgradeFiles.Remove(backup);var parent=Path.GetDirectoryName(backup)!;
         if(!Directory.Exists(parent))NativeInstallFiles.NewDirectory(parent);
         NativeInstallFiles.NewDirectory(backup);
-        using var lease=WindowsFileBoundary.AcquireDataLease(data);
         var entries=new List<Entry>();
         foreach(var name in Names)
         {
@@ -33,9 +37,9 @@ internal static class DatabaseBackup
     // Verified before anything live is touched, and safe to run again after an
     // interruption. The main database file appears last and whole, through a
     // same-directory rename, so a partial restore can never be opened as a database.
-    internal static void Restore(string data,string backup)
+    internal static void Restore(string data,string backup,WindowsFileBoundary.DataLease held)
     {
-        using var lease=WindowsFileBoundary.AcquireDataLease(data);
+        ArgumentNullException.ThrowIfNull(held);
         var entries=NativeJson.Read<Entry[]>(NativeInstallFiles.ReadRecord(Path.Combine(backup,ManifestName),65536));
         if(entries.Any(e=>!Names.Contains(e.Name)))throw new IOException("UPGRADE_BACKUP_INVALID");
         foreach(var entry in entries)

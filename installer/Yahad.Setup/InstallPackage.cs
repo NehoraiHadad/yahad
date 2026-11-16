@@ -9,7 +9,10 @@ namespace Yahad.Setup;
 internal sealed record InstallMember(string Path,long Size,string Sha256);
 internal sealed record PackageInfrastructure(string Version,int ContractMin,int ContractMax,string SourceCommit,string TreeSha256);
 internal sealed record PackageApp(string Version,string SourceCommit,int RequiresContract,string TreeSha256,int DatabaseSchema,int[] DatabaseMigrationsFrom);
-internal sealed record InstallPackageManifest(int Format,PackageInfrastructure Infrastructure,PackageApp App,string ZipSha256,InstallMember[] Files);
+// The oldest installed pair this release moves from: the release manifest's
+// minimumFrom (5.1), carried by the Setup for its manual path.
+internal sealed record PackageMinimumFrom(string App,string Infrastructure);
+internal sealed record InstallPackageManifest(int Format,PackageInfrastructure Infrastructure,PackageApp App,PackageMinimumFrom MinimumFrom,string ZipSha256,InstallMember[] Files);
 // Where Extract writes: protected directories, protected files and a no-replace commit.
 internal sealed record ExtractTarget(Action<string> CreateDirectory,Func<string,FileStream> CreateFile,Action<string,string> Commit,Func<string,InstallMember,bool> ExistingMatches);
 // One format-2 archive (docs/WINDOWS-APP-PACKAGE-PLAN.md 4.2, 5.3) holding two
@@ -35,10 +38,13 @@ internal sealed class InstallPackage:IDisposable
     {
         stream=zip;
         try{Manifest=NativeJson.Read<InstallPackageManifest>(manifest);}catch(JsonException){throw new IOException("PACKAGE_FORMAT");}
-        var infra=Manifest.Infrastructure;var app=Manifest.App;
-        if(Manifest.Format!=Format||infra is null||app is null||Manifest.Files is not {Length:>=16 and <=2*TreeRecord.MaximumMembers+2}||app.DatabaseMigrationsFrom is null||
+        var infra=Manifest.Infrastructure;var app=Manifest.App;var minimum=Manifest.MinimumFrom;
+        if(Manifest.Format!=Format||infra is null||app is null||minimum is null||Manifest.Files is not {Length:>=16 and <=2*TreeRecord.MaximumMembers+2}||app.DatabaseMigrationsFrom is null||
             !SemVer.IsVersion(infra.Version)||!SemVer.IsVersion(app.Version)||!TreeRecord.IsCommit(infra.SourceCommit)||!TreeRecord.IsCommit(app.SourceCommit)||
-            app.DatabaseSchema is <1 or >1024||!InfrastructureRelease.IsContract(app.RequiresContract))throw new IOException("PACKAGE_FORMAT");
+            app.DatabaseSchema is <1 or >1024||!InfrastructureRelease.IsContract(app.RequiresContract)||
+            // A release may not admit a source newer than itself.
+            minimum.App is null||minimum.Infrastructure is null||!SemVer.IsVersion(minimum.App)||!SemVer.IsVersion(minimum.Infrastructure)||
+            SemVer.Compare(minimum.App,app.Version)>0||SemVer.Compare(minimum.Infrastructure,infra.Version)>0)throw new IOException("PACKAGE_FORMAT");
         // Migrations are strictly ascending, each older than the target schema.
         for(var i=0;i<app.DatabaseMigrationsFrom.Length;i++)
             if(app.DatabaseMigrationsFrom[i]<1||app.DatabaseMigrationsFrom[i]>=app.DatabaseSchema||i>0&&app.DatabaseMigrationsFrom[i]<=app.DatabaseMigrationsFrom[i-1])throw new IOException("PACKAGE_FORMAT");
@@ -61,7 +67,7 @@ internal sealed class InstallPackage:IDisposable
         if(archive.Entries.Count!=expected.Count)throw new IOException("PACKAGE_MEMBERS");
         foreach(var entry in archive.Entries)
         {
-            Name(entry.FullName);if(!expected.Remove(entry.FullName)||entry.Length<0||((entry.ExternalAttributes>>16)&0xf000) is not(0 or 0x8000)||((entry.ExternalAttributes&0x400)!=0))throw new IOException("PACKAGE_MEMBER_TYPE");
+            Name(entry.FullName);if(!expected.Remove(entry.FullName)||!ArchiveExtraction.RegularFile(entry))throw new IOException("PACKAGE_MEMBER_TYPE");
         }
         if(expected.Count!=0)throw new IOException("PACKAGE_MEMBERS");
         foreach(var required in Required)if(!Manifest.Files.Any(r=>r.Path==required))throw new IOException("PACKAGE_MISSING");
@@ -116,37 +122,15 @@ internal sealed class InstallPackage:IDisposable
     // A kept database is acceptable only at the target schema or at one this app
     // migrates from (8.3).
     internal bool AcceptsSchema(int schema)=>schema==Manifest.App.DatabaseSchema||Manifest.App.DatabaseMigrationsFrom.Contains(schema);
-    // Writes every member of one namespace under root through a same-directory partial
-    // that is committed by a no-replace rename, so a present member is always whole.
-    // A present member is never rewritten: it must already be byte-identical.
-    internal void Extract(TreeKind kind,string root,Action<int> progress,CancellationToken cancellation,ExtractTarget target)
+    // The manual path and a reinstall over a kept record move only from a pair this
+    // release supports, as selection does for the signed manifest (ReleaseSelection).
+    internal void RequireFrom(InstalledPair installed)
     {
-        var count=0;var full=Path.GetFullPath(root);var prefix=Prefix(kind);var members=Members(kind);
-        foreach(var record in members)
-        {
-            cancellation.ThrowIfCancellationRequested();var path=Path.GetFullPath(Path.Combine(full,record.Path.Replace('/',Path.DirectorySeparatorChar)));
-            if(!path.StartsWith(full+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))throw new IOException("PACKAGE_PATH");
-            target.CreateDirectory(Path.GetDirectoryName(path)!);
-            var entry=archive.GetEntry(prefix+record.Path)??throw new IOException("PACKAGE_MEMBER");if(entry.Length!=record.Size)throw new IOException("PACKAGE_SIZE");
-            if(File.Exists(path)){if(!target.ExistingMatches(path,record))throw new IOException("INSTALL_TARGET_CHANGED");}
-            else
-            {
-                var partial=path+".partial-"+Guid.NewGuid().ToString("N");
-                try
-                {
-                    using(var input=entry.Open())using(var output=target.CreateFile(partial))
-                    {
-                        using var hash=IncrementalHash.CreateHash(HashAlgorithmName.SHA256);var chunk=new byte[1048576];long bytes=0;int n;
-                        while((n=input.Read(chunk))>0){cancellation.ThrowIfCancellationRequested();if((bytes+=n)>record.Size)throw new IOException("PACKAGE_SIZE");hash.AppendData(chunk,0,n);output.Write(chunk,0,n);}
-                        if(bytes!=record.Size||Convert.ToHexStringLower(hash.GetHashAndReset())!=record.Sha256)throw new IOException("PACKAGE_MEMBER_HASH");output.Flush(true);
-                    }
-                    target.Commit(partial,path);
-                }
-                catch{try{File.Delete(partial);}catch(IOException){}catch(UnauthorizedAccessException){}throw;}
-            }
-            if(++count%100==0||count==members.Length)progress(count*100/members.Length);
-        }
+        if(SemVer.Compare(installed.App.Version,Manifest.MinimumFrom.App)<0||SemVer.Compare(installed.Infrastructure.Version,Manifest.MinimumFrom.Infrastructure)<0)
+            throw new IOException("RELEASE_UNSUPPORTED_FROM");
     }
+    internal void Extract(TreeKind kind,string root,Action<int> progress,CancellationToken cancellation,ExtractTarget target)
+        =>ArchiveExtraction.Extract(archive,Prefix(kind),Members(kind),root,progress,cancellation,target,"PACKAGE_");
     // An interrupted extraction leaves only expected members and their uncommitted
     // partials. Anything else refuses; the partials are returned for the caller to
     // delete under its own ACL checks.
@@ -180,4 +164,42 @@ internal sealed class InstallPackage:IDisposable
     }
     private static void Digest(string? value){if(!TreeRecord.IsDigest(value))throw new IOException("PACKAGE_DIGEST");}
     public void Dispose(){archive.Dispose();stream.Dispose();}
+}
+// The member rules both archives share: the install package and the app archive (5.2).
+internal static class ArchiveExtraction
+{
+    // A regular file: no directory, symbolic link or reparse entry.
+    internal static bool RegularFile(ZipArchiveEntry entry)=>entry.Length>=0&&((entry.ExternalAttributes>>16)&0xf000) is 0 or 0x8000&&(entry.ExternalAttributes&0x400)==0;
+    // Writes every member of one namespace under root through a same-directory partial
+    // that is committed by a no-replace rename, so a present member is always whole.
+    // A present member is never rewritten: it must already be byte-identical. codes is
+    // the refusal prefix of the archive being read.
+    internal static void Extract(ZipArchive archive,string prefix,InstallMember[] members,string root,Action<int> progress,CancellationToken cancellation,ExtractTarget target,string codes)
+    {
+        var count=0;var full=Path.GetFullPath(root);
+        foreach(var record in members)
+        {
+            cancellation.ThrowIfCancellationRequested();var path=Path.GetFullPath(Path.Combine(full,record.Path.Replace('/',Path.DirectorySeparatorChar)));
+            if(!path.StartsWith(full+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))throw new IOException(codes+"PATH");
+            target.CreateDirectory(Path.GetDirectoryName(path)!);
+            var entry=archive.GetEntry(prefix+record.Path)??throw new IOException(codes+"MEMBER");if(entry.Length!=record.Size)throw new IOException(codes+"SIZE");
+            if(File.Exists(path)){if(!target.ExistingMatches(path,record))throw new IOException("INSTALL_TARGET_CHANGED");}
+            else
+            {
+                var partial=path+".partial-"+Guid.NewGuid().ToString("N");
+                try
+                {
+                    using(var input=entry.Open())using(var output=target.CreateFile(partial))
+                    {
+                        using var hash=IncrementalHash.CreateHash(HashAlgorithmName.SHA256);var chunk=new byte[1048576];long bytes=0;int n;
+                        while((n=input.Read(chunk))>0){cancellation.ThrowIfCancellationRequested();if((bytes+=n)>record.Size)throw new IOException(codes+"SIZE");hash.AppendData(chunk,0,n);output.Write(chunk,0,n);}
+                        if(bytes!=record.Size||Convert.ToHexStringLower(hash.GetHashAndReset())!=record.Sha256)throw new IOException(codes+"MEMBER_HASH");output.Flush(true);
+                    }
+                    target.Commit(partial,path);
+                }
+                catch{try{File.Delete(partial);}catch(IOException){}catch(UnauthorizedAccessException){}throw;}
+            }
+            if(++count%100==0||count==members.Length)progress(count*100/members.Length);
+        }
+    }
 }

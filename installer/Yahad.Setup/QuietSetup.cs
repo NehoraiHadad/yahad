@@ -10,7 +10,9 @@ namespace Yahad.Setup;
 // nowhere else; without it a quiet install leaves first-family setup to the window.
 internal static class QuietSetup
 {
-    internal sealed record Request(bool Uninstall,UninstallMode Mode,bool? AutomaticUpdates,string ResultPath,bool SetupLinkToStdout=false,string? UpgradeDirectory=null,bool Repair=false);
+    // UpgradeDirectory is a staged Setup-track release (8.1), AppStage a staged app-track
+    // release (7); the Updater names each by its version.
+    internal sealed record Request(bool Uninstall,UninstallMode Mode,bool? AutomaticUpdates,string ResultPath,bool SetupLinkToStdout=false,string? UpgradeDirectory=null,bool Repair=false,string? AppStage=null);
     internal static Request? Parse(string[] args)=>args switch
     {
         ["--quiet-install","--updates",var updates,"--result",var path,"--setup-link","stdout"]=>Install(updates,path,true),
@@ -18,6 +20,7 @@ internal static class QuietSetup
         ["--quiet-uninstall","--data","keep","--result",var path]=>new(true,UninstallMode.KeepData,null,Full(path)),
         ["--quiet-uninstall","--data","delete","--result",var path]=>new(true,UninstallMode.DeleteData,null,Full(path)),
         ["--quiet-upgrade",var directory,"--result",var path]=>new(false,UninstallMode.KeepData,null,Full(path),UpgradeDirectory:Full(directory)),
+        ["--apply-app",var directory,"--result",var path]=>new(false,UninstallMode.KeepData,null,Full(path),AppStage:Full(directory)),
         ["--repair","--result",var path]=>new(false,UninstallMode.KeepData,null,Full(path),Repair:true),
         _=>null
     };
@@ -44,9 +47,9 @@ internal static class QuietSetup
             }
         }
         if(request.Uninstall&&PrivateCopy.RemovalDeletes(Environment.ProcessPath??throw new IOException("SETUP_IMAGE")))return HandOff();
-        if(request.Repair||request.UpgradeDirectory is not null)
+        if(request.Repair||request.UpgradeDirectory is not null||request.AppStage is not null)
         {
-            var outcome=request.Repair?await RepairHost.RunAsync(Progress):await UpgradeHost.RunAsync(request.UpgradeDirectory!,Progress);
+            var outcome=request.Repair?await RepairHost.RunAsync(Progress):request.AppStage is not null?await AppUpgradeHost.RunAsync(request.AppStage,Progress):await UpgradeHost.RunAsync(request.UpgradeDirectory!,Progress);
             var done=outcome.Result;
             if(done.Code==RepairHost.HandOff)return HandOff();
             File.WriteAllBytes(request.ResultPath,JsonSerializer.SerializeToUtf8Bytes(new{done.Ok,done.Code,done.Url,done.DataPreserved,done.Failure,FromVersion=outcome.From?.App.Version,ToVersion=outcome.To?.App.Version,
