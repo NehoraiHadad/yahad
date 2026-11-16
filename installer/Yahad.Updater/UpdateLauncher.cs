@@ -4,18 +4,19 @@ using System.Runtime.InteropServices;
 using System.Text;
 namespace Yahad.Updater;
 
-// Starts a verified release's own Setup outside this process's job and console, so
-// stopping and replacing this service cannot touch it. No handle is inherited.
+// Starts the engine of a verified stage outside this process's job and console, so
+// stopping and replacing this service cannot touch it: the staged Setup for the Setup
+// track, the installed engine for the app track (UpdateLaunch). No handle is inherited.
 internal static class UpdateLauncher
 {
     private const uint Detached=0x8,NewGroup=0x200,Breakaway=0x1000000,Unicode=0x400;
-    internal static string CommandLine(string setup,string directory,string result)=>Quote(setup)+" --quiet-upgrade "+Quote(directory)+" --result "+Quote(result);
+    internal static string CommandLine(UpdateLaunch launch,string result)=>Quote(launch.Image)+" "+launch.Verb+" "+Quote(launch.Directory)+" --result "+Quote(result);
     private static string Quote(string value)
     {if(value.Contains('"')||value.EndsWith('\\'))throw new IOException("UPDATER_LAUNCH_PATH");return "\""+value+"\"";}
-    internal static void Launch(StagedRelease release,string result)
+    internal static void Launch(UpdateLaunch launch,string result)
     {
-        var startup=new StartupInfo{Size=Marshal.SizeOf<StartupInfo>()};var line=new StringBuilder(CommandLine(release.Setup,release.Directory,result));
-        if(!CreateProcessW(release.Setup,line,IntPtr.Zero,IntPtr.Zero,false,Detached|NewGroup|Breakaway|Unicode,IntPtr.Zero,release.Directory,ref startup,out var info))throw new Win32Exception();
+        var startup=new StartupInfo{Size=Marshal.SizeOf<StartupInfo>()};var line=new StringBuilder(CommandLine(launch,result));
+        if(!CreateProcessW(launch.Image,line,IntPtr.Zero,IntPtr.Zero,false,Detached|NewGroup|Breakaway|Unicode,IntPtr.Zero,launch.Directory,ref startup,out var info))throw new Win32Exception();
         CloseHandle(info.Process);CloseHandle(info.Thread);
     }
     [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)]private struct StartupInfo

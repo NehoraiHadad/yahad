@@ -38,18 +38,19 @@ internal sealed class GitHubReleaseSource:IDisposable
         while((n=await input.ReadAsync(chunk,deadline.Token))>0){if(output.Length+n>maximum)throw new IOException("GITHUB_RESPONSE_BOUND");output.Write(chunk,0,n);}
         return output.ToArray();
     }
-    // Reads no byte past the signed size and writes only what it hashed.
-    internal async Task DownloadAsync(string url,Stream output,long size,string sha256,CancellationToken cancellation)
+    // Reads no byte past the signed size and writes only what it hashed. The codes are
+    // the track's (RELEASE_SETUP_* or RELEASE_APP_*).
+    internal async Task DownloadAsync(string url,Stream output,long size,string sha256,string sizeCode,string hashCode,CancellationToken cancellation)
     {
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancellation);deadline.CancelAfter(TimeSpan.FromHours(2));
         using var response=await GetAsync(url,"application/octet-stream",deadline.Token);
-        if(response.Content.Headers.ContentLength is {} length&&length!=size)throw new IOException("RELEASE_SETUP_SIZE");
+        if(response.Content.Headers.ContentLength is {} length&&length!=size)throw new IOException(sizeCode);
         await using var input=await response.Content.ReadAsStreamAsync(deadline.Token);
         using var hash=IncrementalHash.CreateHash(HashAlgorithmName.SHA256);var chunk=new byte[1048576];long total=0;int n;
         while((n=await input.ReadAsync(chunk,deadline.Token))>0)
-        {if((total+=n)>size)throw new IOException("RELEASE_SETUP_SIZE");hash.AppendData(chunk,0,n);await output.WriteAsync(chunk.AsMemory(0,n),deadline.Token);}
-        if(total!=size)throw new IOException("RELEASE_SETUP_SIZE");
-        if(Convert.ToHexStringLower(hash.GetHashAndReset())!=sha256)throw new IOException("RELEASE_SETUP_HASH");
+        {if((total+=n)>size)throw new IOException(sizeCode);hash.AppendData(chunk,0,n);await output.WriteAsync(chunk.AsMemory(0,n),deadline.Token);}
+        if(total!=size)throw new IOException(sizeCode);
+        if(Convert.ToHexStringLower(hash.GetHashAndReset())!=sha256)throw new IOException(hashCode);
     }
     private async Task<HttpResponseMessage> GetAsync(string url,string accept,CancellationToken cancellation)
     {
