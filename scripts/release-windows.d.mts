@@ -7,10 +7,20 @@ export class Refusal extends Error {}
 export function committedKey(repo: string): Buffer;
 export function requireKeyMatches(keyFile: string, spki: Buffer): void;
 export function requireBuiltKey(packageDirectory: string, spki: Buffer): { manifestName: string; manifest: { format: number; product: string; keyId: string; version: string; sourceCommit: string } };
-export function collectReleaseAssets(directory: string, version: string, spki: Buffer): { name: string; path: string; bytes: number }[];
+// What `Yahad.Setup.exe --verify-package` reports of its embedded package (auditSetup).
+export type SetupReport = {
+  infrastructure: { version: string; contractMin: number; contractMax: number; sourceCommit: string; treeSha256: string };
+  app: { version: string; sourceCommit: string; requiresContract: number; treeSha256: string; databaseSchema: number; databaseMigrationsFrom: number[] };
+  minimumFrom: { app: string; infrastructure: string };
+  setupSourceCommit: string; coreSourceCommit: string; releaseKeyId: string | null;
+};
+type Audit = (setupFile: string) => SetupReport;
+export function auditSetup(setupFile: string): SetupReport;
+export function checkWindowsRelease(directory: string, version: string, spki: Buffer, audit?: Audit): unknown;
+export function collectReleaseAssets(directory: string, version: string, spki: Buffer, audit?: Audit): { name: string; path: string; bytes: number }[];
 export function planInfrastructure(args: { head: { version: string; digest: string }; baseline: { version: string; sourceCommit: string } | null; digestAt: (commit: string) => string }): InfraPlan;
 export function withInfrastructureSource<T>(repo: string, plan: InfraPlan, work: (infra: Infra) => Promise<T>): Promise<T>;
 export function runtimeVersionFor(appVersion: string): string;
 export function requireRuntimeAboveBootstrap(runtimeVersion: string, bootstrapSource: string): void;
 export function install(args: { repo: string; options: Options; build?: (context: { clone: string; root: string; keyFile: string; inputs: unknown }) => Promise<Built>; launch?: (file: string) => void }): Promise<Built>;
-export function publish(args: { repo: string; options: Options; confirm?: (question: string) => Promise<string>; stage?: Stage; plan?: (context: { repo: string; inputs: unknown; spki: Buffer; latest: string }) => Promise<InfraPlan>; log?: (line: string) => void }): Promise<{ version: string; commit: string; published: boolean }>;
+export function publish(args: { repo: string; options: Options; confirm?: (question: string) => Promise<string>; stage?: Stage; plan?: (context: { repo: string; inputs: unknown; spki: Buffer; latest: string }) => Promise<InfraPlan>; audit?: Audit; log?: (line: string) => void }): Promise<{ version: string; commit: string; published: boolean }>;

@@ -6,7 +6,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdir
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { collectReleaseAssets, install, planInfrastructure, publish, requireBuiltKey, requireRuntimeAboveBootstrap, runtimeVersionFor, withInfrastructureSource } from '../scripts/release-windows.mjs';
+import { auditSetup, collectReleaseAssets, install, planInfrastructure, publish, requireBuiltKey, requireRuntimeAboveBootstrap, runtimeVersionFor, withInfrastructureSource } from '../scripts/release-windows.mjs';
 
 const scripts = join(import.meta.dirname, '..', 'scripts');
 const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@invalid', ...args], { cwd, stdio: 'pipe', encoding: 'utf8' });
@@ -120,7 +120,14 @@ function zip(entries: Record<string, Buffer>) {
 // What the manifest must be consistent with. Every field a check reads can be bent by a case.
 type Flaw = {
   manifest?: (manifest: any) => void; appEntries?: (entries: Record<string, Buffer>) => void;
-  infraTree?: Buffer; signWith?: Pair; setup?: Buffer; omitSetupInfraTree?: boolean;
+  report?: (report: any) => void; signWith?: Pair; setup?: Buffer;
+};
+// A stand-in Setup: "MZ" and the report its --verify-package would print. The real audit runs the
+// release's Setup (auditSetup); this one reads the report back from the same file.
+const fakeAudit = (file: string) => {
+  const text = readFileSync(file, 'utf8');
+  if (!text.startsWith('MZ{')) throw new Error('verify-package failed');
+  return JSON.parse(text.slice(2));
 };
 function windowsFiles(version: string, keys: Pair, flaw: Flaw = {}) {
   const appFiles: Record<string, Buffer> = { 'app/package.json': Buffer.from('{"name":"yahad"}'), 'app/server/main.mjs': Buffer.from('export {};\n'.repeat(20)) };
@@ -129,15 +136,20 @@ function windowsFiles(version: string, keys: Pair, flaw: Flaw = {}) {
   const entries: Record<string, Buffer> = { 'app-tree.json': treeBytes, ...appFiles };
   flaw.appEntries?.(entries);
   const appZip = zip(entries);
-  const infraTree = Buffer.from(JSON.stringify({ format: 1, version: '1.0.0', sourceCommit: 'b'.repeat(40), files: [{ path: 'host/Yahad.ServiceHost.exe', size: 1, sha256: sha(Buffer.from('h')) }] }));
-  const install = zip({ 'infra/infra-tree.json': flaw.infraTree ?? infraTree, 'infra/host/Yahad.ServiceHost.exe': Buffer.from('h') });
-  // The distributable Setup carries install.zip verbatim as a managed resource.
-  const setup = flaw.setup ?? Buffer.concat([Buffer.from('MZ setup ' + version), install, Buffer.from(' trailer')]);
+  const infraTreeSha256 = 'c'.repeat(64);
+  // What the Setup reports of its embedded package: the same identity the manifest signs.
+  const report = {
+    artifact: 'Yahad.Setup', infrastructure: { version: '1.0.0', contractMin: 1, contractMax: 1, sourceCommit: 'b'.repeat(40), treeSha256: infraTreeSha256 },
+    app: { version, sourceCommit: 'a'.repeat(40), requiresContract: 1, treeSha256: sha(treeBytes), databaseSchema: 6, databaseMigrationsFrom: [1, 2, 3, 4, 5] },
+    minimumFrom: { app: '0.0.0', infrastructure: '0.0.0' }, setupSourceCommit: 'b'.repeat(40), coreSourceCommit: 'b'.repeat(40), releaseKeyId: keyId(keys.spki)
+  };
+  flaw.report?.(report);
+  const setup = flaw.setup ?? Buffer.from('MZ' + JSON.stringify(report));
   const names = { manifest: `yahad-windows-release-${version}.json`, setup: `Yahad.Setup-${version}.exe`, app: `yahad-windows-app-${version}.zip` };
   const manifest = {
     format: 2, product: 'yahad-windows-release', version, sourceCommit: 'a'.repeat(40), keyId: keyId(keys.spki), createdUnix: 1,
-    infrastructure: { version: '1.0.0', contractMin: 1, contractMax: 1, sourceCommit: 'b'.repeat(40), treeSha256: sha(infraTree), setup: { name: names.setup, sha256: sha(setup), bytes: setup.length } },
-    app: { archive: { name: names.app, sha256: sha(appZip), bytes: appZip.length }, treeSha256: sha(treeBytes), requiresContract: 1, databaseSchema: 6, databaseMigrationsFrom: [1, 2, 3, 4, 5] },
+    infrastructure: { version: '1.0.0', contractMin: 1, contractMax: 1, sourceCommit: 'b'.repeat(40), treeSha256: infraTreeSha256, setup: { name: names.setup, sha256: sha(setup), bytes: setup.length } },
+    app: { archive: { name: names.app, sha256: sha(appZip), bytes: appZip.length }, treeSha256: sha(treeBytes), requiresContract: 1, databaseSchema: 6, databaseMigrationsFrom: [5, 4, 3, 2, 1] },
     minimumFrom: { app: '0.0.0', infrastructure: '0.0.0' }
   };
   flaw.manifest?.(manifest);
@@ -232,7 +244,7 @@ const originMain = (origin: string) => git(origin, 'rev-parse', 'main').trim();
 
 test('release:publish refuses anything but a clean main equal to origin/main', async () => {
   await withWorld(async (w) => {
-    const refused = (pattern: RegExp) => assert.rejects(publish({ repo: w.repo, plan: w.plan, options: w.options, stage: w.stage(), confirm: async () => '0.5.4' }), pattern);
+    const refused = (pattern: RegExp) => assert.rejects(publish({ repo: w.repo, plan: w.plan, audit: fakeAudit, options: w.options, stage: w.stage(), confirm: async () => '0.5.4' }), pattern);
 
     writeFileSync(join(w.repo, 'stray.txt'), 'x');
     await refused(/working tree is dirty/);
@@ -264,7 +276,7 @@ test('release:publish refuses anything but a clean main equal to origin/main', a
 test('release:publish refuses a version not above the latest, a wrong confirmation and a missing asset', async () => {
   await withWorld(async (w) => {
     const head = originMain(w.origin);
-    const run = (options: Record<string, string | boolean>, confirm: (q: string) => Promise<string>, stage = w.stage()) => publish({ repo: w.repo, plan: w.plan, options, stage, confirm });
+    const run = (options: Record<string, string | boolean>, confirm: (q: string) => Promise<string>, stage = w.stage()) => publish({ repo: w.repo, plan: w.plan, audit: fakeAudit, options, stage, confirm });
 
     await assert.rejects(run({ ...w.options, version: '0.5.3' }, async () => '0.5.3'), /not above the latest release 0.5.3/);
     await assert.rejects(run({ ...w.options, version: '0.4.9' }, async () => '0.4.9'), /not above the latest release/);
@@ -290,13 +302,13 @@ test('release:publish --dry-run stops before push; a confirmed run pushes the co
   await withWorld(async (w) => {
     const head = originMain(w.origin);
     const logs: string[] = [];
-    const dry = await publish({ repo: w.repo, plan: w.plan, options: { ...w.options, 'dry-run': true }, stage: w.stage(), confirm: async () => assert.fail('dry run must not ask'), log: (line: string) => logs.push(line) });
+    const dry = await publish({ repo: w.repo, plan: w.plan, audit: fakeAudit, options: { ...w.options, 'dry-run': true }, stage: w.stage(), confirm: async () => assert.fail('dry run must not ask'), log: (line: string) => logs.push(line) });
     assert.equal(dry.published, false);
     assert.match(logs.join('\n'), /Release 0\.5\.4 \(latest is 0\.5\.3\)/);
     assert.equal(originMain(w.origin), head);
     assert.equal(git(w.origin, 'tag', '--list').trim(), '');
 
-    const done = await publish({ repo: w.repo, plan: w.plan, options: w.options, stage: w.stage(), confirm: async () => '0.5.4', log: () => {} });
+    const done = await publish({ repo: w.repo, plan: w.plan, audit: fakeAudit, options: w.options, stage: w.stage(), confirm: async () => '0.5.4', log: () => {} });
     assert.equal(done.published, true);
     assert.equal(git(w.origin, 'tag', '--list').trim(), 'v0.5.4');
     assert.equal(git(w.origin, 'rev-list', '--count', `${head}..main`).trim(), '1');
@@ -320,7 +332,7 @@ test('release:publish keeps the assets and prints a working retry when gh fails 
   await withWorld(async (w) => {
     process.env.FAKE_GH_FAIL = '1';
     try {
-      await assert.rejects(publish({ repo: w.repo, plan: w.plan, options: w.options, stage: w.stage(), confirm: async () => '0.5.4', log: () => {} }), (error: Error) => {
+      await assert.rejects(publish({ repo: w.repo, plan: w.plan, audit: fakeAudit, options: w.options, stage: w.stage(), confirm: async () => '0.5.4', log: () => {} }), (error: Error) => {
         assert.match(error.message, /v0\.5\.4 was pushed but gh release create failed/);
         const kept = join(w.repo, '.local', 'release-0.5.4');
         assert.equal(readdirSync(kept).length, 9);
@@ -339,7 +351,7 @@ test('collectReleaseAssets accepts exactly the nine assets and rejects every inc
     const keys = pair();
     const only = (name: string, flaw: Flaw | null, omit: string[] = [], key = keys.spki) => {
       writeAssets(join(root, name), '1.0.0', keys, omit, flaw ?? {});
-      return () => collectReleaseAssets(join(root, name), '1.0.0', key);
+      return () => collectReleaseAssets(join(root, name), '1.0.0', key, fakeAudit);
     };
     assert.deepEqual(only('ok', null)().map((file) => file.name).sort(), [
       'Yahad.Setup-1.0.0.exe', 'Yahad.Setup.exe', 'yachad-app.zip', 'yachad-release.json', 'yachad-updater.json', 'yachad-updater.zip',
@@ -387,12 +399,26 @@ test('collectReleaseAssets accepts exactly the nine assets and rejects every inc
     mkdirSync(join(root, 'unlisted'));
     writeAssets(join(root, 'unlisted'), '1.0.0', keys, Object.keys(unlisted), {});
     for (const [name, bytes] of Object.entries(unlisted)) writeFileSync(join(root, 'unlisted', name), bytes);
-    assert.throws(() => collectReleaseAssets(join(root, 'unlisted'), '1.0.0', keys.spki), /does not match its app-tree\.json/);
+    assert.throws(() => collectReleaseAssets(join(root, 'unlisted'), '1.0.0', keys.spki, fakeAudit), /does not match its app-tree\.json/);
 
-    // The infrastructure tree embedded in the Setup.
-    assert.throws(only('infra-tree', { manifest: (m) => { m.infrastructure.treeSha256 = '0'.repeat(64); } }), /infra-tree\.json embedded in Yahad\.Setup-1\.0\.0\.exe does not hash/);
-    assert.throws(only('infra-other', { infraTree: Buffer.from('{"other":true}'), manifest: () => {} }), /does not hash/);
-    assert.throws(only('infra-missing', { setup: Buffer.from('MZ a Setup with no embedded package') }), /embeds 0 members named infra\/infra-tree\.json/);
+    // The package embedded in the Setup, as the Setup reports it, against every field the manifest signs.
+    const disagrees = (field: string) => new RegExp(`embedded in Yahad\\.Setup-1\\.0\\.0\\.exe disagrees with the signed manifest on ${field.replaceAll('.', '\\.')}\\.$`);
+    assert.throws(only('infra-tree', { manifest: (m) => { m.infrastructure.treeSha256 = '0'.repeat(64); } }), disagrees('infrastructure.treeSha256'));
+    const bent: [string, (r: any) => void][] = [
+      ['infrastructure.version', (r) => { r.infrastructure.version = '1.0.1'; }], ['infrastructure.contractMin', (r) => { r.infrastructure.contractMin = 0; }],
+      ['infrastructure.contractMax', (r) => { r.infrastructure.contractMax = 2; }], ['infrastructure.sourceCommit', (r) => { r.infrastructure.sourceCommit = 'd'.repeat(40); }],
+      ['infrastructure.treeSha256', (r) => { r.infrastructure.treeSha256 = 'd'.repeat(64); }], ['setupSourceCommit', (r) => { r.setupSourceCommit = 'd'.repeat(40); }],
+      ['coreSourceCommit', (r) => { r.coreSourceCommit = 'd'.repeat(40); }], ['app.version', (r) => { r.app.version = '1.0.1'; }],
+      ['app.sourceCommit', (r) => { r.app.sourceCommit = 'd'.repeat(40); }], ['app.treeSha256', (r) => { r.app.treeSha256 = 'd'.repeat(64); }],
+      ['app.requiresContract', (r) => { r.app.requiresContract = 2; }], ['app.databaseSchema', (r) => { r.app.databaseSchema = 7; }],
+      ['app.databaseMigrationsFrom', (r) => { r.app.databaseMigrationsFrom = [1, 2, 3, 4]; }], ['minimumFrom.app', (r) => { r.minimumFrom.app = '0.0.1'; }],
+      ['minimumFrom.infrastructure', (r) => { r.minimumFrom.infrastructure = '0.0.1'; }], ['releaseKeyId', (r) => { r.releaseKeyId = null; }]
+    ];
+    for (const [field, bend] of bent) assert.throws(only(`report-${field}`, { report: bend }), disagrees(field), field);
+    // Migration sources are a set: the order the manifest lists them in is its own.
+    assert.equal(only('report-order', { report: (r) => { r.app.databaseMigrationsFrom = [3, 1, 2, 5, 4]; } })().length, 9);
+    // A Setup that cannot report its package is not a release Setup.
+    assert.throws(only('infra-missing', { setup: Buffer.from('MZ a Setup with no embedded package') }), /verify-package failed/);
 
     // The Linux assets keep their own checks.
     const updater = only('updater-tampered', null);
@@ -404,6 +430,12 @@ test('collectReleaseAssets accepts exactly the nine assets and rejects every inc
     writeFileSync(join(root, 'stale', 'yachad-updater.json'), JSON.stringify({ ...runtime, version: '1.0.1' }));
     assert.throws(stale, /at runtime 2\.0\.0/);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('auditSetup runs the file it is given and refuses a program that cannot report a package', () => {
+  // Node is an executable that rejects --verify-package: the audit reports the exit, never a guess.
+  assert.throws(() => auditSetup(process.execPath), /--verify-package failed \(exit \d+\)/);
+  assert.throws(() => auditSetup(join(tmpdir(), 'no-such-setup.exe')), /--verify-package failed/);
 });
 
 // ---- the infrastructure version rule and the reused-infrastructure worktree ----
@@ -482,7 +514,7 @@ test('the real updater packager produces a pair that the release check accepts',
     execFileSync(process.execPath, [join(repository, 'scripts', 'release-updater.mjs'), 'package-github', runtimeVersionFor('0.6.0'), join(root, 'pair')], { cwd: repository, stdio: 'pipe' });
     assert.deepEqual(readdirSync(join(root, 'pair')).sort(), ['yachad-updater.json', 'yachad-updater.zip']);
     for (const name of readdirSync(join(root, 'pair'))) copyFileSync(join(root, 'pair', name), join(assets, name));
-    const names = collectReleaseAssets(assets, '0.6.0', keys.spki).map((file) => file.name);
+    const names = collectReleaseAssets(assets, '0.6.0', keys.spki, fakeAudit).map((file) => file.name);
     assert.ok(names.includes('yachad-updater.zip'));
     assert.equal(JSON.parse(readFileSync(join(assets, 'yachad-updater.json'), 'utf8')).version, '1.6.0');
   } finally { rmSync(root, { recursive: true, force: true }); }

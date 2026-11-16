@@ -160,8 +160,12 @@ and `Yahad.Setup-<v>.exe` for Windows, and the same Setup as `Yahad.Setup.exe` f
 fixed link), because both updaters read GitHub's single `/releases/latest`; see
 [GITHUB-RUNTIME-UPDATES.md](../docs/GITHUB-RUNTIME-UPDATES.md). Before publishing, the command checks the
 signature against the committed key, that the manifest names this version, the Setup bytes and the app
-zip's size and hash, that the zip's `app-tree.json` matches `app.treeSha256`, and that
-`infrastructure.treeSha256` matches the Setup's embedded `infra-tree.json`.
+zip's size and hash, that the zip's `app-tree.json` matches `app.treeSha256`, and that the
+package embedded in the Setup is the one the manifest signs: it runs that Setup's
+`--verify-package` (which checks the embedded zip, its members and both tree records against its
+own install manifest) and compares the reported infrastructure and app identity, contract,
+schema, migrations, minimum-from pair and release key with the signed manifest. The Setup is a
+compressed single-file bundle, so its embedded bytes are not visible from outside it.
 Building Windows alone from a clean checkout is `node scripts/release-windows.mjs build <key.pem> --out <new-dir>`,
 which writes the four Windows files and never publishes.
 

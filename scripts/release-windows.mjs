@@ -134,19 +134,43 @@ export function zipDirectory(buffer, label) {
 }
 const zipRead = (buffer, entries, name, label) => zipMember(buffer, entries.get(name)?.offset ?? -1, `${label}!${name}`);
 
-// The distributable Setup carries install.zip as an uncompressed managed resource (Yahad.Install.Payload,
-// installer/Yahad.Setup/Yahad.Setup.csproj), so the member's local header is present verbatim in the .exe.
-// The same bytes are what `Setup --verify-package` audits and what its embedded-zip hash covers. Exactly
-// one local header must name the member; a second one (a nested or repeated archive) is refused.
-export function embeddedMember(setupBytes, name, label) {
-  const needle = Buffer.from(name, 'utf8');
-  const found = [];
-  for (let at = setupBytes.indexOf(needle); at >= 0; at = setupBytes.indexOf(needle, at + 1)) {
-    const header = at - 30;
-    if (header >= 0 && setupBytes.readUInt32LE(header) === LOCAL_SIGNATURE && setupBytes.readUInt16LE(header + 26) === needle.length) found.push(header);
-  }
-  if (found.length !== 1) refuse(`${label} embeds ${found.length} members named ${name}; expected exactly one.`);
-  return zipMember(setupBytes, found[0], `${label}!${name}`);
+// The distributable Setup is a compressed single-file bundle (EnableCompressionInSingleFile,
+// installer/Yahad.Setup/Yahad.Setup.csproj), so its embedded package is not visible in the .exe bytes.
+// The Setup itself is the authority: `--verify-package` opens its own embedded package, checks the zip
+// hash, every member and both tree records against the embedded manifest, and prints that identity
+// (installer/Yahad.Setup/SetupEntry.cs). Run on the release file whose SHA-256 the manifest names, so
+// the report is bound to those bytes. Setup requires administrator rights; RunAsInvoker starts this
+// read-only audit with the caller's own token, as installer/package.ps1 does.
+export function auditSetup(setupFile) {
+  const run = spawnSync(setupFile, ['--verify-package'], { encoding: 'utf8', windowsHide: true, timeout: 120000, env: { ...process.env, __COMPAT_LAYER: 'RunAsInvoker' } });
+  if (run.error || run.status !== 0) refuse(`${basenameOf(setupFile)} --verify-package failed (${run.error?.message ?? `exit ${run.status}`}).`);
+  try { return JSON.parse(run.stdout); } catch { refuse(`${basenameOf(setupFile)} --verify-package printed no report.`); }
+}
+
+// What the Setup's embedded package says of itself against the signed manifest: every field both carry
+// (UpgradeHost.RequireAgrees), the key it trusts, and the source commit it was compiled from.
+function checkSetupReport(report, manifest, name) {
+  const infra = manifest.infrastructure; const app = manifest.app;
+  const sorted = (list) => JSON.stringify([...(list ?? [])].sort((a, b) => a - b));
+  const differs = [
+    ['infrastructure.version', report.infrastructure?.version, infra.version],
+    ['infrastructure.contractMin', report.infrastructure?.contractMin, infra.contractMin],
+    ['infrastructure.contractMax', report.infrastructure?.contractMax, infra.contractMax],
+    ['infrastructure.sourceCommit', report.infrastructure?.sourceCommit, infra.sourceCommit],
+    ['infrastructure.treeSha256', report.infrastructure?.treeSha256, infra.treeSha256],
+    ['setupSourceCommit', report.setupSourceCommit, infra.sourceCommit],
+    ['coreSourceCommit', report.coreSourceCommit, infra.sourceCommit],
+    ['app.version', report.app?.version, manifest.version],
+    ['app.sourceCommit', report.app?.sourceCommit, manifest.sourceCommit],
+    ['app.treeSha256', report.app?.treeSha256, app.treeSha256],
+    ['app.requiresContract', report.app?.requiresContract, app.requiresContract],
+    ['app.databaseSchema', report.app?.databaseSchema, app.databaseSchema],
+    ['app.databaseMigrationsFrom', sorted(report.app?.databaseMigrationsFrom), sorted(app.databaseMigrationsFrom)],
+    ['minimumFrom.app', report.minimumFrom?.app, manifest.minimumFrom?.app],
+    ['minimumFrom.infrastructure', report.minimumFrom?.infrastructure, manifest.minimumFrom?.infrastructure],
+    ['releaseKeyId', report.releaseKeyId, manifest.keyId]
+  ].filter(([, seen, signed]) => seen !== signed).map(([field]) => field);
+  if (differs.length) refuse(`The package embedded in ${name} disagrees with the signed manifest on ${differs.join(', ')}.`);
 }
 
 // The app archive against its manifest: bytes and hash first, then exactly app-tree.json plus app/ members,
@@ -164,8 +188,9 @@ function checkAppArchive(zip, manifest, name) {
   if (members.length !== listed.size || members.some((member) => entries.get(member).size !== listed.get(member))) refuse(`${name} does not match its app-tree.json (member names or sizes differ).`);
 }
 
-// The Windows half of a release in `directory`, each file consistent with the signed manifest.
-export function checkWindowsRelease(directory, version, spki) {
+// The Windows half of a release in `directory`, each file consistent with the signed manifest. `audit`
+// reads the Setup's own report of its embedded package (auditSetup).
+export function checkWindowsRelease(directory, version, spki, audit = auditSetup) {
   const names = windowsNames(version);
   const read = (name) => readFileSync(join(directory, name));
   const manifestBytes = read(names.manifest);
@@ -177,14 +202,13 @@ export function checkWindowsRelease(directory, version, spki) {
   const setup = manifest.infrastructure?.setup;
   if (setup?.name !== names.setup || setup.bytes !== setupBytes.length || setup.sha256 !== sha256Of(setupBytes)) refuse(`${names.manifest} does not describe ${names.setup} (name, size or SHA-256 differs).`);
   checkAppArchive(read(names.app), manifest, names.app);
-  const infraTree = embeddedMember(setupBytes, 'infra/infra-tree.json', names.setup);
-  if (sha256Of(infraTree) !== manifest.infrastructure.treeSha256) refuse(`infra-tree.json embedded in ${names.setup} does not hash to the manifest's infrastructure.treeSha256.`);
+  checkSetupReport(audit(join(directory, names.setup)), manifest, names.setup);
   return manifest;
 }
 
 // Exactly the nine assets, each consistent with its own manifest. A release missing any one of them would
 // stall one platform's updater.
-export function collectReleaseAssets(directory, version, spki) {
+export function collectReleaseAssets(directory, version, spki, audit = auditSetup) {
   const names = windowsNames(version);
   const expected = [...LINUX_ASSETS, names.manifest, names.signature, names.app, names.setup, STABLE_SETUP];
   const found = existsSync(directory) ? readdirSync(directory) : [];
@@ -199,7 +223,7 @@ export function collectReleaseAssets(directory, version, spki) {
   const runtime = JSON.parse(read('yachad-updater.json').toString('utf8'));
   const runtimeZip = read('yachad-updater.zip');
   if (runtime.kind !== 'yachad-updater' || runtime.version !== runtimeVersionFor(version) || runtime.archive !== 'yachad-updater.zip' || runtime.bytes !== runtimeZip.length || runtime.sha256 !== sha256Of(runtimeZip)) refuse(`yachad-updater.json does not describe yachad-updater.zip at runtime ${runtimeVersionFor(version)}.`);
-  checkWindowsRelease(directory, version, spki);
+  checkWindowsRelease(directory, version, spki, audit);
   if (!read(STABLE_SETUP).equals(read(names.setup))) refuse(`${STABLE_SETUP} is not the same file as ${names.setup}.`);
   return expected.map((name) => ({ name, path: join(directory, name), bytes: statSync(join(directory, name)).size }));
 }
@@ -526,7 +550,7 @@ const typed = async (question) => {
   try { return (await rl.question(question)).trim(); } finally { rl.close(); }
 };
 
-export async function publish({ repo, options, confirm = typed, stage = stageRelease, plan = planFromLatest, log = console.log }) {
+export async function publish({ repo, options, confirm = typed, stage = stageRelease, plan = planFromLatest, audit = auditSetup, log = console.log }) {
   requireReleasable(repo);
   const keyFile = requireUsableKey(options);
   const inputs = resolveInputs(repo, options);
@@ -550,7 +574,7 @@ export async function publish({ repo, options, confirm = typed, stage = stageRel
     const spki = committedKey(repo);
     const infrastructure = await plan({ repo, inputs, spki, latest });
     const { assets } = await withInfrastructureSource(repo, infrastructure, (infra) => stage({ clone, root, keyFile, inputs, infra }));
-    const files = collectReleaseAssets(assets, version, spki);
+    const files = collectReleaseAssets(assets, version, spki, audit);
 
     log(`\nRelease ${version} (latest is ${latest})`);
     log(`  commit   ${commit}  (on top of origin/main)`);

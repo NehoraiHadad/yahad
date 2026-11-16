@@ -189,11 +189,12 @@ try {
     $manifest = Get-Content -LiteralPath (Join-Path $system 'install-manifest.json') -Raw | ConvertFrom-Json
     # Each half against its own identity: the infrastructure, the Setup and its
     # Install.Core against the cached build; the app against this release.
-    if ($verified.infrastructureVersion -ne $infra.infrastructureVersion -or $manifest.Infrastructure.Version -ne $infra.infrastructureVersion -or
-        $verified.infrastructureSourceCommit -ne $infra.sourceCommit -or $verified.setupSourceCommit -ne $infra.sourceCommit -or
-        $verified.coreSourceCommit -ne $infra.sourceCommit -or $manifest.Infrastructure.TreeSha256 -ne $infra.treeSha256) { throw 'Embedded infrastructure identity mismatch' }
-    if ($verified.appVersion -ne $version -or $manifest.App.Version -ne $version -or $verified.appSourceCommit -ne $commit -or
-        $manifest.App.TreeSha256 -ne $package.appTreeSha256) { throw 'Embedded app identity mismatch' }
+    if ($verified.infrastructure.version -ne $infra.infrastructureVersion -or $manifest.Infrastructure.Version -ne $infra.infrastructureVersion -or
+        $verified.infrastructure.sourceCommit -ne $infra.sourceCommit -or $verified.setupSourceCommit -ne $infra.sourceCommit -or
+        $verified.coreSourceCommit -ne $infra.sourceCommit -or $verified.infrastructure.treeSha256 -ne $infra.treeSha256 -or
+        $manifest.Infrastructure.TreeSha256 -ne $infra.treeSha256) { throw 'Embedded infrastructure identity mismatch' }
+    if ($verified.app.version -ne $version -or $manifest.App.Version -ne $version -or $verified.app.sourceCommit -ne $commit -or
+        $verified.app.treeSha256 -ne $package.appTreeSha256 -or $manifest.App.TreeSha256 -ne $package.appTreeSha256) { throw 'Embedded app identity mismatch' }
     if ($verified.embeddedZip -ne $manifest.ZipSha256 -or $verified.files -ne $manifest.Files.Count -or $verified.systemOperationsInvoked -ne $false) { throw 'Embedded package identity mismatch' }
     if ($verified.windowingLoaded -ne $false) { throw 'An unattended Setup mode loaded WPF' }
     if ($verified.releaseKeyId -ne $releaseKeyId) { throw 'Embedded release key mismatch' }

@@ -620,7 +620,10 @@ It moves to this exact set of nine names, and checks:
 - that the manifest names this version and the Setup bytes;
 - that the app zip matches its size and hash, and that the `app-tree.json` inside
   it matches `treeSha256`;
-- that `infrastructure.treeSha256` matches the Setup's embedded `infra-tree.json`.
+- that the package embedded in the Setup is the one the manifest signs. The Setup is a
+  compressed single-file bundle, so the check runs the release's own Setup with
+  `--verify-package` (which verifies the embedded zip, its members and both tree records)
+  and compares its reported identity field by field with the signed manifest.
 
 **Signing stays local.** `windows-release-key.mjs sign` always uses
 `yahad-release-v1\n` (`scripts/windows-release-key.mjs:11,36`). It switches to
