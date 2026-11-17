@@ -16,7 +16,6 @@ public partial class MainWindow
     private enum LanProfile { Unknown, Private, Public, Domain }
     private Func<string,int> readLanCategory=NativeNetworkProfile.ReadCategory;
     private LanProfile selectedProfile=LanProfile.Unknown;
-    internal const string NetworkSettingsUri="ms-settings:network-status";
     private static bool HasExistingAccess()=>new[]{InstallLocations.Binaries,InstallLocations.RemovalStateFile,LanProxyPaths.State}.Any(Path.Exists);
     private void InitializeLan(IReadOnlyList<LanChoice>? choices=null,bool existingAccess=false,Func<string,int>? lanCategory=null)
     {
@@ -76,7 +75,7 @@ public partial class MainWindow
     }
     private void OpenNetworkSettings_Click(object sender,RoutedEventArgs e)
     {
-        try{Process.Start(new ProcessStartInfo(NetworkSettingsUri){UseShellExecute=true});}
+        try{Process.Start(new ProcessStartInfo(SetupErrorCatalog.NetworkSettingsUri){UseShellExecute=true});}
         catch{LanProfileText.Text="הגדרות Windows לא נפתחו. פתחו את התפריט התחל, חפשו הגדרות, ובחרו רשת ואינטרנט.";}
     }
     private void RecheckNetwork_Click(object sender,RoutedEventArgs e)=>RefreshLanProfile();

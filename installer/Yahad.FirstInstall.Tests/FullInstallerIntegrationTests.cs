@@ -397,7 +397,9 @@ internal static class FullInstallerIntegrationTests
         {
             foreach(var code in new[]{"INSTALL_UPGRADE_REQUIRED","INSTALL_DOWNGRADE_REFUSED","INSTALL_TARGET_CHANGED","LEGACY_INSTALL_UNSUPPORTED","PACKAGE_TREE_MISMATCH","PACKAGE_CONTRACT","PACKAGE_MISSING","PACKAGE_MEMBERS","PACKAGE_PATH",
                 "INFRA_IDENTITY_MISMATCH","APP_IDENTITY_MISMATCH","ACTIVE_POINTER_INVALID","TREE_RECORD_INVALID","RELEASE_UNSUPPORTED_FROM"})Assert(SetupOperation.Code(new IOException(code))==code);
-            foreach(var gone in new[]{"UPDATE_LEGACY_PROFILE_REQUIRES_REMOVAL","PACKAGE_PAYLOAD_ANCHOR","REPAIR_RUNNING_FROM_TARGET","REPAIR_RELAUNCHED",RepairHost.HandOff})Assert(SetupOperation.Code(new IOException(gone))=="INSTALL_FAILED");
+            // A retired code still reaches support as itself; only the hand-off, a control result, never comes from an exception.
+            foreach(var gone in new[]{"UPDATE_LEGACY_PROFILE_REQUIRES_REMOVAL","PACKAGE_PAYLOAD_ANCHOR","REPAIR_RUNNING_FROM_TARGET","REPAIR_RELAUNCHED"})Assert(SetupOperation.Code(new IOException(gone))==gone);
+            Assert(SetupOperation.Code(new IOException(RepairHost.HandOff))=="INSTALL_FAILED");
             Assert(SetupOperation.OperationTimeout("install")==TimeSpan.FromMinutes(48)&&SetupOperation.OperationTimeout("uninstall")==TimeSpan.FromMinutes(96));
             return Task.CompletedTask;
         });

@@ -104,6 +104,21 @@
      <TextBlock Text="התיקייה המושפעת: C:\ProgramData\Yahad.FirstInstall" FontSize="12" Foreground="#5C716B" Margin="2,12,2,0"/>
     </StackPanel>
     <Border x:Name="Notice" Background="#EAF1EA" CornerRadius="13" Padding="16" Margin="0,16,0,0"><TextBlock x:Name="NoticeText" Text="לאחר ההתקנה יחד תפעל ברקע ותופעל עם המחשב." FontSize="13" Foreground="#46665B" LineHeight="22"/></Border>
+    <Border x:Name="FailurePanel" Visibility="Collapsed" Background="#FDF6EC" BorderBrush="#EAD3B0" BorderThickness="1" CornerRadius="13" Padding="16" Margin="0,16,0,0">
+     <StackPanel>
+      <TextBlock Text="מה עושים עכשיו" FontSize="15" FontWeight="SemiBold"/>
+      <TextBlock x:Name="FailureNext" FontSize="13" TextWrapping="Wrap" LineHeight="21" Margin="0,6,0,0"/>
+      <TextBlock x:Name="FailureContext" Visibility="Collapsed" FontSize="13" TextWrapping="Wrap" LineHeight="21" Margin="0,8,0,0"/>
+      <WrapPanel Margin="0,12,0,0">
+       <Button x:Name="FailureAction" Visibility="Collapsed" Click="FailureAction_Click" FontSize="13" Padding="14,6" Margin="0,0,8,6"/>
+       <Button x:Name="CopyDetails" Content="העתקת פרטים" Click="CopyDetails_Click" FontSize="13" Background="Transparent" Foreground="#157C69" Padding="14,6" Margin="0,0,0,6"/>
+      </WrapPanel>
+      <TextBlock x:Name="SupportCode" FontSize="12" Foreground="#5C716B" Margin="0,4,0,0"/>
+      <Expander x:Name="FailureTechnical" Header="פרטים טכניים" IsExpanded="False" FontSize="12" Margin="0,8,0,0">
+       <TextBox x:Name="FailureTechnicalText" IsReadOnly="True" FlowDirection="LeftToRight" TextWrapping="Wrap" FontSize="11" FontFamily="Consolas, Segoe UI" BorderThickness="0" Background="Transparent" Margin="4,6,4,0" AutomationProperties.Name="פרטים טכניים של התקלה"/>
+      </Expander>
+     </StackPanel>
+    </Border>
     <ProgressBar x:Name="ProgressBar" Visibility="Collapsed" Height="7" Maximum="100" Foreground="#157C69" Background="#DFE7E0" BorderThickness="0" Margin="0,18,0,0" AutomationProperties.Name="התקדמות ההתקנה"/>
     <TextBlock x:Name="Status" FontSize="13" Foreground="#5C716B" Margin="0,12,0,0" AutomationProperties.LiveSetting="Polite"/>
    </StackPanel></ScrollViewer>
