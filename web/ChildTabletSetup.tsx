@@ -1,19 +1,19 @@
 import React from 'react';
 import { ArrowLeft, KeyRound, Tablet } from 'lucide-react';
 import type { familyProgress } from './FamilyProgress';
-import { CopyField, JoinPageNote } from './HomeAddress';
-import { homeJoinPage, isLoopbackOrigin, sharedAddress } from './siteAddress';
+import { CopyField, JoinSteps } from './HomeAddress';
+import { isLoopbackOrigin, sharedAddress, tabletAddress, type HomeNetwork } from './siteAddress';
 
 type Child = ReturnType<typeof familyProgress>['children'][number];
-export function ChildTabletSetup({ child, loaded, stale, busy, origin, siteOrigin, onPassword, openChat }: {
-  child?: Child; loaded: boolean; stale: boolean; busy: boolean; origin: string; siteOrigin?: string;
+export function ChildTabletSetup({ child, loaded, stale, busy, origin, siteOrigin, homeNetwork, onPassword, openChat }: {
+  child?: Child; loaded: boolean; stale: boolean; busy: boolean; origin: string; siteOrigin?: string; homeNetwork?: HomeNetwork;
   onPassword: (id: string) => void; openChat: () => void;
 }) {
-  // The parent's current origin is not necessarily reachable from another device:
-  // the server's own origin is, unless the server is reachable from its computer only.
+  // This computer's loopback entry is not reachable from another device; the
+  // server's own address is, unless the server is reachable from its computer only.
   const loopback = isLoopbackOrigin(origin);
-  const address = sharedAddress(siteOrigin) ?? (loopback ? null : new URL(origin).origin);
-  const join = address ? homeJoinPage(address) : null;
+  const address = tabletAddress(origin, siteOrigin);
+  const home = address && address === sharedAddress(siteOrigin) ? homeNetwork : undefined;
   const ready = loaded && !stale && !!child?.ready;
   const status = !loaded ? 'טוענים את מצב ההכנה…' : stale ? 'ממתינים לאימות מצב ההכנה מול השרת.'
     : !child ? 'בחרו חשבון ילד ברשימת הילדים. אם עדיין אין חשבון, הוסיפו אותו תחילה.'
@@ -37,8 +37,8 @@ export function ChildTabletSetup({ child, loaded, stale, busy, origin, siteOrigi
           <p>{loopback ? 'הכתובת שבדפדפן כאן פועלת רק במחשב הזה. בטאבלט פותחים בדפדפן את הכתובת הזו:'
             : 'פותחים בדפדפן בטאבלט את הכתובת הזו:'}</p>
           <CopyField label="כתובת יחד" value={address}/>
-          <p className="tablet-step-note">זו כתובת האתר, לא כתובת של הטאבלט.{join ? ' הטאבלט צריך להיות מחובר לאותה רשת ביתית.' : ''}</p>
-          {join && <JoinPageNote join={join}/>}
+          <p className="tablet-step-note">זו כתובת האתר, לא כתובת של הטאבלט.{home ? ' הטאבלט צריך להיות מחובר לאותה רשת ביתית.' : ''}</p>
+          {home && <JoinSteps home={home}/>}
         </> : <p>יחד זמינה כרגע רק במחשב שבו היא מותקנת, ולכן הטאבלט לא יכול להגיע אליה. כדי להוסיף גישה,
           מפעילים שוב במחשב הזה את התקנת יחד ובוחרים „גם בטלפון ובטאבלט שמחוברים לרשת הביתית”.</p>}
       </li>

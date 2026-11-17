@@ -22,13 +22,21 @@ test('tablet handoff groups three instructions and labels site address separatel
   assert.match(html, /ולא מחברת את הטאבלט/);
 });
 
-test('on the loopback entry the tablet is given the home address and its join page', () => {
-  const html = render({ origin: 'http://127.0.0.1:47123', siteOrigin: 'https://192.168.4.25' });
+test('on the loopback entry the tablet is given the home address, its join page and the fingerprint', () => {
+  const homeNetwork = { joinPage: 'http://192.168.4.25/', certificateSha256: 'AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB' };
+  const html = render({ origin: 'http://127.0.0.1:47123', siteOrigin: 'https://192.168.4.25', homeNetwork });
   assert.match(html, /כתובת יחד<input readOnly="" dir="ltr" value="https:\/\/192.168.4.25"/);
-  assert.doesNotMatch(html, /value="http:\/\/127.0.0.1/);
+  assert.ok(!html.includes('value="http://127.0.0.1'));
   assert.match(html, /פועלת רק במחשב הזה/);
-  assert.match(html, /דף ההצטרפות<input readOnly="" dir="ltr" value="https:\/\/192.168.4.25\/home-network"/);
-  assert.match(html, /אזהרת אבטחה/);
+  assert.match(html, /דף ההצטרפות<input readOnly="" dir="ltr" value="http:\/\/192.168.4.25\/"/);
+  assert.ok(html.includes('value="AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB"'));
+});
+
+test('a parent on a Tailscale address gives the tablet that address, without home-network steps', () => {
+  const homeNetwork = { joinPage: 'http://192.168.4.25/', certificateSha256: 'AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB' };
+  const html = render({ origin: 'https://test-device.test-tailnet.ts.net', siteOrigin: 'https://192.168.4.25', homeNetwork });
+  assert.match(html, /value="https:\/\/test-device.test-tailnet.ts.net"/);
+  assert.doesNotMatch(html, /192.168.4.25|דף ההצטרפות|רשת ביתית/);
 });
 
 test('a server reachable from its computer only says how to add home-network access instead of a useless address', () => {

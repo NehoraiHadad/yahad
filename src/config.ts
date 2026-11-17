@@ -3,6 +3,7 @@ import { platformFiles, type PlatformFiles } from './platform-files.js';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 import { parseAdditionalOrigins } from './allowed-origins.js';
+import { parseHomeNetwork, type HomeNetwork } from './home-network.js';
 export interface Config {
   dataDir: string;
   masterKey: Buffer;
@@ -12,6 +13,7 @@ export interface Config {
   port: number;
   origin: string;
   additionalOrigins?: string[];
+  homeNetwork?: HomeNetwork;
   secureCookie: boolean;
   maxMedia: number;
   maxStorage: number;
@@ -34,6 +36,8 @@ export function loadConfig(files: PlatformFiles = platformFiles): Config {
       PORT: z.coerce.number().int().min(1).max(65535).default(3000),
       APP_ORIGIN: z.url(),
       APP_ADDITIONAL_ORIGINS: z.string().max(4096).default(''),
+      APP_JOIN_PAGE: z.string().max(512).optional(),
+      APP_HOME_CERTIFICATE_SHA256: z.string().max(128).optional(),
       COOKIE_SECURE: z.enum(['true', 'false']).default('true'),
       MAX_MEDIA_MB: z.coerce.number().min(1).max(32).default(16),
       MAX_STORAGE_MB: z.coerce.number().min(64).default(2048),
@@ -64,6 +68,7 @@ export function loadConfig(files: PlatformFiles = platformFiles): Config {
     port: env.PORT,
     origin,
     additionalOrigins: parseAdditionalOrigins(env.APP_ADDITIONAL_ORIGINS, env.COOKIE_SECURE === 'true'),
+    homeNetwork: parseHomeNetwork(env.APP_JOIN_PAGE, env.APP_HOME_CERTIFICATE_SHA256, origin),
     secureCookie: env.COOKIE_SECURE === 'true',
     maxMedia: env.MAX_MEDIA_MB * 1024 ** 2,
     maxStorage: env.MAX_STORAGE_MB * 1024 ** 2,

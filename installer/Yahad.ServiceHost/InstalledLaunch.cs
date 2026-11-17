@@ -43,6 +43,34 @@ internal static class InstalledLaunch
     }
     internal static void Id(string id){if(!Guid.TryParseExact(id,"N",out var parsed)||parsed.ToString("N")!=id)throw new IOException("INSTALLED_LAUNCH_IDENTIFIER");}
 }
+// What the parent is shown about the home network: the join page Setup set up
+// (the plain-HTTP help page, or the HTTPS one when the owner turned that off) and
+// the home certificate's fingerprint, to compare on a new device. Setup writes it
+// beside installed.json whenever it enables the home network or moves the proxy.
+// A separate file, so installed.json keeps the format older hosts read.
+internal sealed record InstalledHomeNetwork(int Format,string JoinPage,string RootSha256);
+internal static class InstalledHomeNetworkRecord
+{
+    internal const string FileName="home-network.json";
+    internal static byte[] Encode(InstalledHomeNetwork value)=>System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(value,ServiceHostJsonContext.Default.InstalledHomeNetwork);
+    internal static InstalledHomeNetwork Parse(byte[] bytes,Uri origin)
+    {
+        if(bytes.Length is <1 or >4096)throw new IOException("HOME_NETWORK_BOUND");
+        var value=NativeJson.Read(bytes,ServiceHostJsonContext.Default.InstalledHomeNetwork);
+        if(value.Format!=1)throw new IOException("HOME_NETWORK_FORMAT");
+        if(!System.Text.RegularExpressions.Regex.IsMatch(value.RootSha256,"^([0-9A-F]{2}:){31}[0-9A-F]{2}$"))throw new IOException("HOME_NETWORK_FINGERPRINT");
+        // Only the two pages the proxy serves for this very address.
+        if(value.JoinPage!="http://"+origin.Host+"/"&&value.JoinPage!=origin.GetLeftPart(UriPartial.Authority)+LanDeployment.HelpPath)throw new IOException("HOME_NETWORK_JOIN_PAGE");
+        return value;
+    }
+    // A record for another address (the home network was moved or turned off) or a
+    // damaged one only leaves the parent without these hints; it never stops the service.
+    internal static InstalledHomeNetwork? TryRead(string path,Uri origin)
+    {
+        try{return File.Exists(path)?Parse(NativeInstallFiles.ReadRecord(path,4096),origin):null;}
+        catch(Exception error)when(error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException){return null;}
+    }
+}
 internal sealed class InstalledLaunchResolver:IServiceStartAuthorizer
 {
     // File work and taking the lease must not occupy the SCM entry/control thread.
@@ -69,7 +97,12 @@ internal sealed class InstalledLaunchResolver:IServiceStartAuthorizer
                 {"CONNECTOR",InstalledLaunch.Connector},{"ALLOW_REAL_WHATSAPP",InstalledLaunch.ConnectorApproval},{"SETUP_CAPABILITY_FILE",Path.Combine(state,"Secrets","setup-capability.json")}};
             // LAN HTTPS keeps Secure cookies. Only the fixed local loopback origin
             // is added for bootstrap; remote origins are never inferred here.
-            if(origin.Scheme=="https"&&NetworkPlan.IsPrivateLanV4(origin.Host))environment["APP_ADDITIONAL_ORIGINS"]=$"http://127.0.0.1:{config.Port}";
+            if(origin.Scheme=="https"&&NetworkPlan.IsPrivateLanV4(origin.Host))
+            {
+                environment["APP_ADDITIONAL_ORIGINS"]=$"http://127.0.0.1:{config.Port}";
+                if(InstalledHomeNetworkRecord.TryRead(Path.Combine(state,InstalledHomeNetworkRecord.FileName),origin) is {} home)
+                {environment["APP_JOIN_PAGE"]=home.JoinPage;environment["APP_HOME_CERTIFICATE_SHA256"]=home.RootSha256;}
+            }
             var spec=new VerifiedProcessSpec(node,["server/main.mjs"],app,temporary,
                 InstalledLayout.PlatformImage(InfrastructureRelease.Version),environment,lease);
             return new AuthorizedServiceStart(new ServiceProcessLauncher(spec,()=>new LocalChildControl()),lease);

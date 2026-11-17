@@ -298,6 +298,7 @@ export async function createApp(
       // The address other devices open. A parent may be on another accepted entry
       // point, such as the loopback address Windows Setup opens.
       siteOrigin: s.user.role === 'parent' ? config.origin : undefined,
+      homeNetwork: s.user.role === 'parent' ? config.homeNetwork : undefined,
     };
   });
   app.post('/api/activity', async () => ({ ok: true }));
