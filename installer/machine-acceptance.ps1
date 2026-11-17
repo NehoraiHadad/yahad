@@ -230,9 +230,12 @@ function UpdatesRequest($Body) {
 # click and the result the launched engine or Setup wrote.
 function InstallThroughUpdater($Release, [string]$Track, [string]$Name, [scriptblock]$Prepare = {}) {
     $stage = Join-Path $updaterRoot "staging\$($Release.Version)"
+    # A running Updater removes, on its next tick, every stage it is not offering
+    # (CleanStaging), so the release is placed only while it is stopped.
+    Stop-Service -Name $updater
     NewStage $Release $Track $stage
     & $Prepare
-    Restart-Service -Name $updater
+    Start-Service -Name $updater
     $status = UpdatesStatus
     $fingerprint = Fingerprint $Release $Track
     if ($status.phase -ne 'available' -or $status.latestVersion -ne $Release.Version -or $status.installTarget.fingerprint -ne $fingerprint) {
