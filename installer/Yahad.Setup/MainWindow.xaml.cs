@@ -8,9 +8,9 @@ namespace Yahad.Setup;
 public partial class MainWindow:Window
 {
     private bool running,completed;private readonly bool uninstall;private SetupResult? result;private readonly UninstallChoice choice=new();
-    internal MainWindow(bool uninstall=false,IReadOnlyList<LanChoice>? lanChoices=null,bool? existingAccess=null,bool? existingUpdate=null)
+    internal MainWindow(bool uninstall=false,IReadOnlyList<LanChoice>? lanChoices=null,bool? existingAccess=null,bool? existingUpdate=null,Func<string,int>? lanCategory=null)
     {
-        InitializeComponent();VersionBadge.Text=(SetupOperation.DisplayVersion() is {} version?version+" · ":"")+"Windows";this.uninstall=uninstall;Closing+=OnClosing;InitializeLan(lanChoices,existingAccess??(lanChoices is null&&HasExistingAccess()));
+        InitializeComponent();VersionBadge.Text=(SetupOperation.DisplayVersion() is {} version?version+" · ":"")+"Windows";this.uninstall=uninstall;Closing+=OnClosing;InitializeLan(lanChoices,existingAccess??(lanChoices is null&&HasExistingAccess()),lanCategory);
         InitializeUpdate(existingUpdate??ExistingInstallation.Present());
         if(!uninstall&&existingUpdateProfile)RemovalEntry.Visibility=Visibility.Visible;
         if(uninstall)
@@ -65,7 +65,7 @@ public partial class MainWindow:Window
             else try{OpenBrowser(result);}catch{Status.Text="הדפדפן לא נפתח. אפשר לנסות שוב בלחיצה על פתיחת יחד.";}
         }
         catch(Exception error){Failure(SetupOperation.Code(error),SetupFailureDetail.From(error));}
-        finally{UpdatePanel.IsEnabled=true;running=false;Primary.IsEnabled=true;Secondary.IsEnabled=true;UninstallChoices.IsEnabled=true;LanPanel.IsEnabled=true;if(uninstall&&!completed)Primary.IsEnabled=choice.CanBegin;else if(!completed)UpdateLanUi();}
+        finally{UpdatePanel.IsEnabled=true;running=false;Primary.IsEnabled=true;Secondary.IsEnabled=true;UninstallChoices.IsEnabled=true;LanPanel.IsEnabled=true;if(uninstall&&!completed)Primary.IsEnabled=choice.CanBegin;else if(!completed){if(HomeLan.IsChecked==true)RefreshLanProfile();else UpdateLanUi();}}
     }
     // The window may stay open long past the link's 15 minutes. Only this elevated process can issue a new one.
     private async Task OpenCurrentLink(SetupResult current)
@@ -107,7 +107,7 @@ public partial class MainWindow:Window
             "INSTALL_DOWNGRADE_REFUSED"=>"במחשב מותקנת או נשמרה גרסה חדשה יותר של יחד. המתקין הזה ישן יותר ולכן לא שינינו דבר.",
             "INSTALL_TARGET_CHANGED"=>"קובצי ההתקנה בתיקייה אינם תואמים לחבילה. ההתקנה נעצרה ולא שינתה אותם.",
             "LAN_CONSENT_REQUIRED"=>"בחרו חיבור ביתי ואשרו במפורש את פתיחת הגישה לפני ניסיון נוסף.",
-            "LAN_PRIVATE_PROFILE_REQUIRED"=>"החיבור שנבחר אינו מוגדר ב-Windows כרשת ביתית פרטית. רק אם זו הרשת הביתית שלכם, אפשר לאשר ב-Windows שזו רשת פרטית. המתקין אינו משנה את סוג הרשת.",
+            "LAN_PRIVATE_PROFILE_REQUIRED"=>"Windows מגדיר את הרשת שבחרתם כרשת ציבורית, ולכן לא נפתחה אליה גישה מהטלפון. אם זו הרשת של הבית, סמנו אותה כפרטית לפי ההוראות שבבחירת הרשת, ולחצו על ניסיון נוסף. אפשר גם לבחור רק במחשב הזה ולהמשיך.",
             "NETWORK_SELECTION_CHANGED"=>"כתובת הרשת או המתאם השתנו. בחרו מחדש את החיבור הביתי; לא תיבחר רשת אחרת אוטומטית.",
             "LAN_CA_CHANGED" or "LAN_CA_STORAGE_DAMAGED"=>"חומר התעודות אינו תואם להתקנה. הוא נשמר ולא הוחלף אוטומטית. נדרש תיקון מקומי לפני חידוש הגישה.",
             "LAN_FIREWALL_CHANGED" or "LAN_FIREWALL_DUPLICATE" or "LAN_FIREWALL_REPAIR_REQUIRED"=>"כללי חומת האש אינם תואמים להגדרה של יחד. ההתקנה לא מחליפה כללים לא מוכרים. הגישה דורשת תיקון ואישור מחדש.",

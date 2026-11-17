@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -9,10 +10,19 @@ public partial class MainWindow
 {
     private sealed record LanDisplay(LanChoice Choice, string Label);
     private bool existingNetworkAccess;
+    // Windows' own category for the selected adapter, read before anything is
+    // installed so a Public network is explained here, not as a failure code.
+    // Read-only: the user changes the category in Windows; Setup never does.
+    private enum LanProfile { Unknown, Private, Public, Domain }
+    private Func<string,int> readLanCategory=NativeNetworkProfile.ReadCategory;
+    private LanProfile selectedProfile=LanProfile.Unknown;
+    internal const string NetworkSettingsUri="ms-settings:network-status";
     private static bool HasExistingAccess()=>new[]{InstallLocations.Binaries,InstallLocations.RemovalStateFile,LanProxyPaths.State}.Any(Path.Exists);
-    private void InitializeLan(IReadOnlyList<LanChoice>? choices=null,bool existingAccess=false)
+    private void InitializeLan(IReadOnlyList<LanChoice>? choices=null,bool existingAccess=false,Func<string,int>? lanCategory=null)
     {
         if(uninstall){LanPanel.Visibility=Visibility.Collapsed;return;}
+        if(lanCategory is not null)readLanCategory=lanCategory;
+        Activated+=(_,_)=>{if(!running&&!completed&&HomeLan.IsChecked==true&&LanAddress.SelectedItem is LanDisplay)RefreshLanProfile();};
         try{LanAddress.ItemsSource=(choices??LanSetupRequest.Choices()).Select(c=>new LanDisplay(c,c.DisplayName+" · "+c.Address)).ToArray();}
         catch{LanAddress.ItemsSource=Array.Empty<LanDisplay>();}
         LanProgram.Text=LanProxyPaths.Caddy(InfrastructureRelease.Version);
@@ -23,15 +33,53 @@ public partial class MainWindow
         UpdateLanUi();
     }
     private void LanAddressChanged(object sender,SelectionChangedEventArgs e)
-    {if(LanConsent is null)return;LanConsent.IsChecked=false;UpdateLanUi();}
+    {if(LanConsent is null)return;LanConsent.IsChecked=false;RefreshLanProfile();}
     private void LanChanged(object sender,RoutedEventArgs e)
-    {if(LanConsent is null||LanSelection is null||Primary is null)return;UpdateLanUi();}
+    {if(LanConsent is null||LanSelection is null||Primary is null)return;if(HomeLan.IsChecked==true)RefreshLanProfile();else UpdateLanUi();}
+    private void RefreshLanProfile()
+    {
+        selectedProfile=LanAddress.SelectedItem is LanDisplay selected?ReadProfile(selected.Choice.AdapterId):LanProfile.Unknown;
+        UpdateLanUi();
+    }
+    private LanProfile ReadProfile(string adapter)
+    {
+        try{return readLanCategory(adapter) switch{1=>LanProfile.Private,0=>LanProfile.Public,2=>LanProfile.Domain,_=>LanProfile.Unknown};}
+        catch{return LanProfile.Unknown;}
+    }
     private void UpdateLanUi()
     {
         if(uninstall||running||completed)return;
         var home=HomeLan.IsChecked==true;LanSelection.Visibility=home?Visibility.Visible:Visibility.Collapsed;
-        Primary.IsEnabled=UpdateChoiceReady()&&(!home||(LanAddress.SelectedItem is LanDisplay&&LanConsent.IsChecked==true));
+        var chosen=home&&LanAddress.SelectedItem is LanDisplay;var ready=chosen&&selectedProfile==LanProfile.Private;
+        LanProfileHelp.Visibility=chosen&&!ready?Visibility.Visible:Visibility.Collapsed;
+        LanConsentArea.Visibility=!chosen||ready?Visibility.Visible:Visibility.Collapsed;
+        if(chosen&&!ready)ShowProfileHelp(selectedProfile);
+        Primary.IsEnabled=UpdateChoiceReady()&&(!home||(ready&&LanConsent.IsChecked==true));
+        Primary.ToolTip=chosen&&!ready?"הרשת שנבחרה אינה מוגדרת ב-Windows כרשת פרטית. אפשר לסמן אותה כפרטית או לבחור רק במחשב הזה.":null;
     }
+    private void ShowProfileHelp(LanProfile profile)
+    {
+        var steps=profile is LanProfile.Public;
+        LanProfileHeading.Text=profile switch
+        {
+            LanProfile.Public=>"Windows מגדיר את הרשת הזו כרשת ציבורית",
+            LanProfile.Domain=>"זו רשת של עבודה או ארגון",
+            _=>"לא הצלחנו לבדוק את סוג הרשת"
+        };
+        LanProfileText.Text=profile switch
+        {
+            LanProfile.Public=>"ברשת ציבורית Windows חוסם חיבורים ממכשירים אחרים, ולכן הטלפון לא יוכל להגיע ליחד. אם זו הרשת של הבית, אפשר לסמן אותה כרשת פרטית. ברשת של בית קפה, עבודה או מקום ציבורי אל תשנו את ההגדרה; בחרו רק במחשב הזה.",
+            LanProfile.Domain=>"גישה מהטלפון אפשרית רק ברשת הביתית. במחשב שמחובר לרשת של עבודה בחרו רק במחשב הזה.",
+            _=>"Windows לא מסר את סוג הרשת שנבחרה. ודאו שהמחשב מחובר לרשת הביתית ולחצו על בדיקה מחדש."
+        };
+        LanProfileSteps.Visibility=OpenNetworkSettings.Visibility=steps?Visibility.Visible:Visibility.Collapsed;
+    }
+    private void OpenNetworkSettings_Click(object sender,RoutedEventArgs e)
+    {
+        try{Process.Start(new ProcessStartInfo(NetworkSettingsUri){UseShellExecute=true});}
+        catch{LanProfileText.Text="הגדרות Windows לא נפתחו. פתחו את התפריט התחל, חפשו הגדרות, ובחרו רשת ואינטרנט.";}
+    }
+    private void RecheckNetwork_Click(object sender,RoutedEventArgs e)=>RefreshLanProfile();
     private LanSetupRequest? SelectedLanRequest()
     {
         if(uninstall)return null;
