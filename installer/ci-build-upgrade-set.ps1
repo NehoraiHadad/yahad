@@ -105,8 +105,8 @@ try {
     }
     # The app starts, migrates and serves, but its readiness never passes.
     function MakeUnhealthy([string]$Tree) {
-        $ready = 'return { ok: true, version: String(info.version), databaseSchema: DATABASE_SCHEMA };'
-        ReplaceOnce (Join-Path $Tree 'src/server.ts') $ready "if (info) return reply.code(503).send({ ok: false }); $ready"
+        $ready = 'return { ok: true, version, databaseSchema: DATABASE_SCHEMA };'
+        ReplaceOnce (Join-Path $Tree 'src/server.ts') $ready "if (version) return reply.code(503).send({ ok: false }); $ready"
     }
     # The help page template names the app it came from; one mark per page.
     function MarkHelpPage([string]$Tree, [string]$Version) {

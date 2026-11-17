@@ -720,7 +720,7 @@ function RequireAccessBoundaries([string]$Infra, [string]$Version) {
 function RequireRemovedServices { if ((YahadServices).Count) { throw ('Services remain after removal: ' + ((YahadServices).Name -join ',')) } }
 function RequireNothingLeft {
     RequireRemovedServices
-    foreach ($path in $programData, $programFiles, $lanRoot, "$programFiles.lan-uninstall.json", (Join-Path $env:windir 'System32\Tasks\Yahad')) { if (Test-Path -LiteralPath $path) { throw "$path remains after removal" } }
+    foreach ($path in $programData, "$programData.setup-logs", $programFiles, $lanRoot, "$programFiles.lan-uninstall.json", (Join-Path $env:windir 'System32\Tasks\Yahad')) { if (Test-Path -LiteralPath $path) { throw "$path remains after removal" } }
     RequireNoRepairTask
 }
 function Collect {
@@ -747,7 +747,7 @@ try {
         $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
         $policy = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
         Write-Output ("MACHINE os={0} admin={1} EnableLUA={2} ConsentPromptBehaviorAdmin={3}" -f [Environment]::OSVersion.Version, $principal.IsInRole('Administrators'), $policy.EnableLUA, $policy.ConsentPromptBehaviorAdmin)
-        if ((YahadServices).Count -or (Test-Path -LiteralPath $programData) -or (Test-Path -LiteralPath $programFiles) -or (Test-Path -LiteralPath $lanRoot)) { throw 'Machine is not clean: an existing Yahad installation is present' }
+        if ((YahadServices).Count -or (Test-Path -LiteralPath $programData) -or (Test-Path -LiteralPath "$programData.setup-logs") -or (Test-Path -LiteralPath $programFiles) -or (Test-Path -LiteralPath $lanRoot)) { throw 'Machine is not clean: an existing Yahad installation is present' }
     }
     $install = $null
     Phase 'install' { $script:install = RunSetup @('--quiet-install', '--updates', 'notify') (Join-Path $out 'install-result.json') @('--setup-link', 'stdout') }

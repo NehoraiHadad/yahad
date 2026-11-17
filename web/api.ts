@@ -69,12 +69,14 @@ async function request(path: string, method: string, body: unknown, headers: Rec
 /** CSRF_DENIED is refused before any handler runs, so nothing was done. It means this page
  * holds the token of a replaced session (a newer sign-in in another window). Recover the
  * current token once, and only when the cookie still belongs to the same account. */
-async function refreshToken() {
+async function refreshToken(initiator: string) {
   const res = await request('/me', 'GET', undefined, {}).catch(() => null);
   if (!res?.ok) return false;
   const me = await res.json().catch(() => null);
   if (!me?.user?.id || typeof me.csrf !== 'string') return false;
-  if (me.user.id !== viewerId) {
+  // Compared with the account that started the request, never the page's current
+  // viewer: a concurrent refresh may already have switched the page to another one.
+  if (me.user.id !== initiator || viewerId !== initiator) {
     window.dispatchEvent(new Event('session-changed'));
     return false;
   }
@@ -82,10 +84,11 @@ async function refreshToken() {
   return true;
 }
 export async function api<T = any>(path: string, method = 'GET', body?: unknown, headers: Record<string, string> = {}): Promise<T> {
+  const initiator = viewerId;
   let res = await request(path, method, body, headers);
-  if (res.status === 403 && method !== 'GET' && viewerId) {
+  if (res.status === 403 && method !== 'GET' && initiator) {
     const denied = await res.clone().json().catch(() => null);
-    if (denied?.error === 'CSRF_DENIED' && await refreshToken()) res = await request(path, method, body, headers);
+    if (denied?.error === 'CSRF_DENIED' && await refreshToken(initiator)) res = await request(path, method, body, headers);
   }
   if (!res.ok) {
     let error = 'UNREADABLE_RESPONSE', sendOutcome: 'not_submitted' | undefined;

@@ -351,8 +351,6 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
                     tree.DeleteContents(PrivateCopy.DeleteMember,p=>progress(new("deleting_data",25+p*50/100)),cancellation);
                     operationPhase=UninstallPhase.DeleteDataRoot;WindowsFileBoundary.DeleteNoFollow(InstallLocations.State,true);
                 }
-                // Setup's own failure records go with the family's data.
-                operationPhase=UninstallPhase.DeleteDataRoot;SetupFailureLog.Remove(cancellation);
             }
             else if(mode==UninstallMode.KeepData)
             {
@@ -376,6 +374,10 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
             }
             intent=intent with{Stage="binaries_removed"};SaveRemoval(intent);
         }
+        // Setup's own failure records go with the family's data. Removed here, after every
+        // step that can fail and record one, and on every resumed attempt: a failure after
+        // data_removed writes a new record, which the retry that completes removal deletes.
+        if(mode==UninstallMode.DeleteData){operationPhase=UninstallPhase.DeleteDataRoot;SetupFailureLog.Remove(cancellation);}
         operationPhase=UninstallPhase.RemoveRegistration;Registry.LocalMachine.DeleteSubKey(RegistryKey,false);
         // The protected receipt is deleted last: a failed final step still has
         // the complete owner, mode and inventory for the same bounded retry.
