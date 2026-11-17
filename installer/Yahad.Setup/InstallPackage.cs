@@ -280,19 +280,23 @@ internal sealed class SetupImage:IDisposable
 // the main module (which follows renames) is opened and the two are compared by
 // volume and file ID. That name is read again while the second handle, which denies
 // rename and delete, is open: unchanged, it still names the image, and the image is
-// the file that handle holds.
+// the file that handle holds. A file ID names a file, not one of its data streams:
+// the running image's default stream can be renamed to a named stream and a new
+// default stream written, so both the mapped name and the held handle must be the
+// default stream (no ":stream" in the last component; NTFS names hold no ':').
 internal static class LoadedImage
 {
     internal static bool Is(SafeFileHandle file)=>Is(file,MappedName);
     // mapped reports the main module's NT path; tests stand in for the memory manager.
     internal static bool Is(SafeFileHandle file,Func<string?> mapped)
     {
-        var name=mapped();if(name is null)return false;
+        var name=mapped();if(name is null||NamesStream(name)||NtName(file) is not {} held||NamesStream(held))return false;
         SafeFileHandle named;
         try{named=File.OpenHandle(@"\\?\GLOBALROOT"+name,FileMode.Open,FileAccess.Read,FileShare.Read);}
         catch(Exception e)when(e is IOException or UnauthorizedAccessException){return false;}
         using(named)return Identity(file) is {} opened&&Identity(named)==opened&&mapped()==name;
     }
+    private static bool NamesStream(string ntName)=>ntName.AsSpan(ntName.LastIndexOf('\\')+1).Contains(':');
     // The NT path of a handle's file, as GetMappedFileName reports one.
     internal static string? NtName(SafeFileHandle file)
     {

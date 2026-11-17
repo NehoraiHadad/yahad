@@ -283,6 +283,18 @@ internal static class FullInstallerIntegrationTests
                     var reads=0;Assert(!LoadedImage.Is(image1,()=>++reads==1?mapped:mapped+".moved"));
                     Assert(!LoadedImage.Is(image1,()=>null));
                 }
+                // The loaded image's default stream renamed to a named stream and a new
+                // default stream written: one file ID, two streams. Only the default
+                // stream is the image.
+                {
+                    var file=Path.Combine(session,"streams.exe");File.WriteAllBytes(file,image);File.WriteAllBytes(file+":original",fixture.Engine);
+                    Assert(File.ReadAllBytes(file+":original").SequenceEqual(fixture.Engine)&&File.ReadAllBytes(file).SequenceEqual(image));
+                    using var planted=File.OpenHandle(file,FileMode.Open,FileAccess.Read,FileShare.Read);var name=LoadedImage.NtName(planted)!;
+                    Assert(LoadedImage.Is(planted,()=>name));
+                    Assert(!LoadedImage.Is(planted,()=>name+":original"));Assert(!LoadedImage.Is(planted,()=>name+"::$DATA"));
+                    using var stream=File.OpenHandle(file+":original",FileMode.Open,FileAccess.Read,FileShare.Read);
+                    Assert(LoadedImage.NtName(stream)!.EndsWith(":original",StringComparison.Ordinal));Assert(!LoadedImage.Is(stream,()=>LoadedImage.NtName(stream)));
+                }
                 // The archive never carries the engine a second time.
                 using(var archive=new ZipArchive(new MemoryStream(fixture.Zip)))Assert(archive.GetEntry(InstallPackage.EnginePath) is null);
                 // The bare engine (no trailer) carries no package.
