@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { X, Check } from 'lucide-react';
-import { ApiError, api, isTransientApiError } from './api';
+import { ApiError, api, isTransientApiError, shownError, type ShownError } from './api';
+import { ErrorReference } from './ErrorReference';
 import { normalizeAccountName, accountNameKey } from '../src/account-name';
 import { passphraseHelp } from './FamilySetup';
 import { useDialogFocus } from './useDialogFocus';
@@ -30,7 +31,7 @@ export function AccountSettings({
     [confirmedNames, setConfirmedNames] = useState<Record<string, string>>({}),
     [busy, setBusy] = useState(false),
     [message, setMessage] = useState(''),
-    [error, setError] = useState('');
+    [error, setError] = useState<ShownError | null>(null);
   const [nameInvalid, setNameInvalid] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const submitting = useRef(false), dialog = useRef<HTMLDivElement>(null);
@@ -39,7 +40,7 @@ export function AccountSettings({
   const selected = accounts.find(user => user.id === child);
   const unavailable = !!child && !selected;
   const editingProfile = !!selected && mode === 'profile';
-  const resetFeedback = () => { setCurrent(''); setNext(''); setConfirmation(''); setShow(false); setMessage(''); setError(''); setNameInvalid(false); };
+  const resetFeedback = () => { setCurrent(''); setNext(''); setConfirmation(''); setShow(false); setMessage(''); setError(null); setNameInvalid(false); };
   const changeMode = (value: 'profile' | 'password') => {
     if (submitting.current || uncertain) return;
     setMode(value); setName(selected?.name || ''); resetFeedback();
@@ -48,9 +49,9 @@ export function AccountSettings({
     e.preventDefault();
     if (submitting.current || uncertain || !selected) return;
     let value: string;
-    setError(''); setMessage(''); setNameInvalid(false);
+    setError(null); setMessage(''); setNameInvalid(false);
     try { value = normalizeAccountName(name); }
-    catch { setNameInvalid(true); setError('כתבו שם באורך 1–60 תווים: אותיות בעברית או באנגלית, מספרים, רווח, נקודה או מקף.'); return; }
+    catch { setNameInvalid(true); setError({ text: 'כתבו שם באורך 1–60 תווים: אותיות בעברית או באנגלית, מספרים, רווח, נקודה או מקף.' }); return; }
     if (value === selected.name) return;
     submitting.current = true; setBusy(true);
     try {
@@ -64,8 +65,8 @@ export function AccountSettings({
       const unconfirmed = isTransientApiError(e) || e instanceof SyntaxError;
       if (unconfirmed) setUncertain(true);
       setError(unconfirmed
-        ? 'לא התקבל אישור לשמירה. ייתכן שהשם עודכן. סגרו את החלון ובדקו את השם ברשימה לפני ניסיון נוסף.'
-        : (e as Error).message);
+        ? { ...shownError(e), text: 'לא התקבל אישור לשמירה. ייתכן שהשם עודכן. סגרו את החלון ובדקו את השם ברשימה לפני ניסיון נוסף.' }
+        : shownError(e));
       onProfileChanged?.();
     } finally {
       submitting.current = false; setBusy(false);
@@ -74,8 +75,8 @@ export function AccountSettings({
   const savePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (submitting.current || uncertain || unavailable) return;
-    setError('');
-    if (next !== confirmation) { setError('הסיסמאות אינן זהות.'); return; }
+    setError(null);
+    if (next !== confirmation) { setError({ text: 'הסיסמאות אינן זהות.' }); return; }
     submitting.current = true; setBusy(true); setMessage('');
     try {
       if (child) {
@@ -89,8 +90,8 @@ export function AccountSettings({
     } catch (e) {
       if (isTransientApiError(e) || e instanceof SyntaxError) {
         setUncertain(true);
-        setError('לא התקבל אישור לעדכון הסיסמה. ייתכן שהיא השתנתה. סגרו את החלון ובדקו כניסה עם הסיסמה החדשה לפני ניסיון נוסף.');
-      } else setError((e as Error).message);
+        setError({ ...shownError(e), text: 'לא התקבל אישור לעדכון הסיסמה. ייתכן שהיא השתנתה. סגרו את החלון ובדקו כניסה עם הסיסמה החדשה לפני ניסיון נוסף.' });
+      } else setError(shownError(e));
     } finally {
       submitting.current = false; setBusy(false);
     }
@@ -138,7 +139,7 @@ export function AccountSettings({
             <label htmlFor="account-name">שם הילד או הילדה
               <input id="account-name" dir="auto" autoComplete="off" required maxLength={120} disabled={busy || uncertain || unavailable}
                 aria-invalid={nameInvalid} aria-describedby="account-name-help account-settings-error" value={name}
-                onChange={e => { setName(e.target.value); setNameInvalid(false); setError(''); setMessage(''); }} />
+                onChange={e => { setName(e.target.value); setNameInvalid(false); setError(null); setMessage(''); }} />
             </label>
             <p id="account-name-help" className="muted">שם אחד שמופיע באפליקציה וגם משמש לכניסה. אפשר בעברית. אחרי השמירה נכנסים בשם החדש, עם אותה סיסמה.</p>
             <p className="muted">השינוי לא משנה את החתימה בהודעות WhatsApp ולא מנתק מכשירים שכבר מחוברים.</p>
@@ -154,7 +155,8 @@ export function AccountSettings({
             <p id="account-password-help" className="muted">{passphraseHelp}</p>
             <p className="muted">שינוי סיסמה מנתק את כל החיבורים של החשבון. אפשר להשתמש במשפט סודי שקל לזכור.</p>
           </>}
-          {error && <p id="account-settings-error" className="error" role="alert">{error}</p>}
+          {error && <p id="account-settings-error" className="error" role="alert">{error.text}</p>}
+          {error && <ErrorReference code={error.code} refId={error.ref} />}
           {!error && <span id="account-settings-error" />}
           {message && <p role="status">{message}</p>}
           <button className="primary" disabled={busy || uncertain || unavailable || editingProfile && (!name.trim() || name === selected?.name)}>

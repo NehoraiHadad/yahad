@@ -14,7 +14,7 @@ import { DATABASE_SCHEMA } from './db.js';
 import { normalizeAccountName, accountNameKey } from './account-name.js';
 import QRCode from 'qrcode';
 import { hash, verifyPassword, passwordHash } from './crypto.js';
-import { timingSafeEqual, randomUUID } from 'node:crypto';
+import { timingSafeEqual, randomUUID, randomBytes } from 'node:crypto';
 import type { Config } from './config.js';
 import { parseAdditionalOrigins } from './allowed-origins.js';
 import { Store, type Session } from './store.js';
@@ -22,7 +22,9 @@ import { UsageError } from './usage.js';
 import { ChildAccessError } from './child-access.js';
 import { SendNotSubmittedError, confirmedSend, acknowledgedSend, sendState, sendRequestHash, type SendState } from './send-outcome.js';
 import { unreadCount, markLocallyViewed } from './chat-read-state.js';
-import { ChatService, AppError, deny } from './service.js';
+import { ChatService, AppError, deny, failureCause } from './service.js';
+import { appVersion, errorClassName } from './diagnostics.js';
+import { logServerFailure } from './logging.js';
 import { VoiceRejection, validateVoiceOgg } from './ogg-opus.js';
 import { attachmentKind, needsPreview } from './media-kind.js';
 import { validJpegPreview } from './jpeg-preview.js';
@@ -39,6 +41,18 @@ const sendSchema = z.object({
   text: textSchema.default(''),
   replyId: z.string().max(180).optional(),
 });
+/** Every response error carries one deliberate code. A thrown value that is not one of
+ * ours becomes a typed AppError here, so no route can answer with an uncatalogued code. */
+function responseError(error: unknown): { status: number; code: string } {
+  if (error instanceof AppError || error instanceof UsageError || error instanceof ChildAccessError) return error;
+  if (error instanceof z.ZodError) return new AppError(400, 'INVALID_INPUT');
+  const e = error as { statusCode?: unknown; code?: unknown } | undefined;
+  if (e?.statusCode === 413 || e?.code === 'FST_REQ_FILE_TOO_LARGE') return new AppError(413, 'FILE_TOO_LARGE');
+  // Fastify's own request rejections (malformed JSON, wrong content type, multipart limits).
+  if (typeof e?.code === 'string' && e.code.startsWith('FST_') && typeof e.statusCode === 'number' &&
+    e.statusCode >= 400 && e.statusCode < 500) return new AppError(e.statusCode, 'INVALID_INPUT');
+  return new AppError(500, 'REQUEST_FAILED');
+}
 declare module 'fastify' {
   interface FastifyRequest {
     session: Session;
@@ -53,7 +67,13 @@ export async function createApp(
     ...parseAdditionalOrigins((config.additionalOrigins ?? []).join(','), config.secureCookie)]);
   const acceptedOrigin = (origin: string | undefined) => origin !== undefined && acceptedOrigins.has(origin);
   const app = Fastify({
+    // Fastify's request logger would write URLs (conversation IDs) and provider errors.
+    // Failures are recorded deliberately below: closed fields only, never payloads.
     logger: false,
+    // A server-made reference per request (never taken from the client): it is returned
+    // as X-Request-Id and as `ref` in error bodies, and recorded with the error code.
+    genReqId: () => randomBytes(5).toString('hex'),
+    requestIdHeader: false,
     bodyLimit: 100_000,
     ...(config.tls ? { https: config.tls } : {}),
   });
@@ -62,8 +82,9 @@ export async function createApp(
   const service = new ChatService(store, options.factory);
   store.diagnostics.start(store.all('SELECT id FROM families').map(x => x.id));
   const timings = new WeakMap<object, number>();
-  app.addHook('onRequest', async req => {
+  app.addHook('onRequest', async (req, reply) => {
     timings.set(req, performance.now());
+    reply.header('X-Request-Id', req.id);
   });
   app.addHook('onResponse', async (req, reply) => {
     if (!req.session || req.url.startsWith('/api/parent/diagnostics') || req.url.startsWith('/api/parent/updates') || req.url.startsWith('/api/events')) return;
@@ -77,7 +98,7 @@ export async function createApp(
   const credentialThrottle = new CredentialThrottle(store);
   let activeLogins = 0;
   const limitedVerify = async (password: string, stored: string) => {
-    if (activeLogins >= 3) throw new AppError(429, 'SLOW_DOWN');
+    if (activeLogins >= 3) throw new AppError(429, 'LOGIN_BUSY');
     activeLogins++;
     try { return await verifyPassword(password, stored); }
     finally { activeLogins--; }
@@ -100,26 +121,19 @@ export async function createApp(
   const activeUploads = new Set<string>();
   app.decorateRequest('session', null as unknown as Session);
   app.setErrorHandler((error, req, reply) => {
-    const e = error as any;
-    const status =
-      e instanceof AppError || e instanceof UsageError || e instanceof ChildAccessError
-        ? e.status
-        : e instanceof z.ZodError
-          ? 400
-          : e.statusCode === 413 || e.code === 'FST_REQ_FILE_TOO_LARGE'
-            ? 413
-            : 500;
+    const e = responseError(error);
+    // The original failure (an unexpected throw, or an AppError's cause) as class and kind only.
+    const cause = e === error ? (e instanceof AppError ? e.cause : undefined) : error;
+    const route = req.routeOptions?.url ?? 'unmatched';
+    if (req.session) store.diagnostics.recordError(req.session.user.familyId, { code: e.code, status: e.status,
+      method: req.method, route, ref: req.id, error: cause, cause: cause === undefined ? undefined : failureCause(cause) });
+    if (e.status >= 500) logServerFailure({ status: e.status, code: e.code, method: req.method, route, ref: req.id,
+      class: cause === undefined ? null : errorClassName(cause), kind: cause === undefined ? null : failureCause(cause) });
     const outcome = sendOutcomes.get(req);
-    reply.code(status).send({
+    reply.code(e.status).send({
       ...(outcome?.state === 'failed' && outcome.current() === 'failed' ? { sendOutcome: 'not_submitted' } : {}),
-      error:
-        e instanceof AppError || e instanceof UsageError || e instanceof ChildAccessError
-          ? e.code
-          : status === 400
-            ? 'INVALID_INPUT'
-            : status === 413
-              ? 'FILE_TOO_LARGE'
-              : 'REQUEST_FAILED',
+      error: e.code,
+      ref: req.id,
     });
   });
   app.addHook('onRequest', async (req, reply) => {
@@ -136,13 +150,15 @@ export async function createApp(
     if (!req.url.startsWith('/api/')) return;
     const origin = req.headers.origin;
     if (origin && !acceptedOrigin(origin)) throw new AppError(403, 'ORIGIN_DENIED');
+    if (!['GET', 'HEAD'].includes(req.method) && !acceptedOrigin(origin)) throw new AppError(403, 'ORIGIN_DENIED');
     if (req.url === '/api/login' || req.url === '/api/setup' || req.url === '/api/setup/status') return;
     const s = store.session(req.cookies.sid || '');
     if (!s) throw new AppError(401, 'SIGN_IN_REQUIRED');
     req.session = s;
     if (!['GET', 'HEAD'].includes(req.method)) {
-      if (!acceptedOrigin(origin) || req.headers['x-csrf-token'] !== s.csrf)
-        throw new AppError(403, 'CSRF_DENIED');
+      // The origin is already accepted here; a token mismatch means this page holds the
+      // token of another session (a newer sign-in in another window replaced the cookie).
+      if (req.headers['x-csrf-token'] !== s.csrf) throw new AppError(403, 'CSRF_DENIED');
       if (req.url !== '/api/logout') store.session(s.sid, true);
     }
   });
@@ -171,7 +187,7 @@ export async function createApp(
   const rateSend = (s: Session) => {
     const k = `${s.user.familyId}:${s.user.id}`,
       times = (sends.get(k) || []).filter((t) => t > Date.now() - 60_000);
-    if (times.length >= 30) throw new AppError(429, 'SLOW_DOWN');
+    if (times.length >= 30) throw new AppError(429, 'SEND_RATE_LIMIT');
     times.push(Date.now());
     sends.set(k, times);
   };
@@ -234,7 +250,7 @@ export async function createApp(
       .parse(req.body);
     const row = store.one('SELECT * FROM users WHERE name_key=?', accountNameKey(input.name));
     const accessRevision = row?.role === 'child' ? store.childAccess(row.family_id, row.id).revision : 0;
-    if (activeLogins >= 3) throw new AppError(429, 'SLOW_DOWN');
+    if (activeLogins >= 3) throw new AppError(429, 'LOGIN_BUSY');
     const credentialKey = row ? `account:${row.family_id}:${row.id}` : `unknown:${accountNameKey(input.name)}`;
     if (!credentialThrottle.reserve(credentialKey, req.ip)) {
       reply.header('Retry-After', '900');
@@ -282,6 +298,15 @@ export async function createApp(
     };
   });
   app.post('/api/activity', async () => ({ ok: true }));
+  // The web app reports its own crash (the screen fell to the error page) with the
+  // reference it showed. Closed fields only: no stack, message, component or URL.
+  app.post('/api/client-error', async req => {
+    const data = z.object({ kind: z.literal('render'), errorClass: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/),
+      ref: z.string().regex(/^[a-z0-9]{6,16}$/) }).strict().parse(req.body);
+    store.diagnostics.recordError(req.session.user.familyId, { code: 'CLIENT_RENDER_FAILED', route: 'client:render',
+      ref: data.ref, errorClass: data.errorClass });
+    return { ok: true };
+  });
   app.get('/api/usage', async req => {
     if (req.session.user.role !== 'child') throw new AppError(403, 'CHILD_ONLY');
     return store.usage.status(req.session.user.familyId, req.session.user.id, req.session.sid);
@@ -582,7 +607,7 @@ export async function createApp(
     const s = req.session,
       g = req.params.g;
     group(s, g);
-    if (activeUploads.size >= 2) throw new AppError(429, 'SLOW_DOWN');
+    if (activeUploads.size >= 2) throw new AppError(429, 'UPLOAD_BUSY');
     activeUploads.add(req.id);
     let preparationKey: string | undefined, reservation: symbol | undefined;
     try {
@@ -789,8 +814,9 @@ export async function createApp(
   app.get('/health/ready', async (_req, reply) => {
     try {
       store.one('SELECT 1');
-      const info = JSON.parse(readFileSync(resolve('package.json'), 'utf8'));
-      return { ok: true, version: String(info.version), databaseSchema: DATABASE_SCHEMA };
+      const version = appVersion();
+      if (version === 'unknown') throw new Error('Version unavailable');
+      return { ok: true, version, databaseSchema: DATABASE_SCHEMA };
     } catch { return reply.code(503).send({ ok: false }); }
   });
   app.get('/api/parent/overview', async (req) => {
@@ -954,7 +980,8 @@ export async function createApp(
     const data = z.object({ name: accountNameSchema,
       password: z.string().min(4).max(256), confirmation: z.string().max(256) }).strict().parse(req.body);
     if (data.password !== data.confirmation) throw new AppError(400, 'PASSWORD_MISMATCH');
-    if (addingChild) throw new AppError(429, 'SLOW_DOWN');
+    // Rejected before anything is written: a conflict, not an uncertain outcome.
+    if (addingChild) throw new AppError(409, 'CHILD_CREATE_BUSY');
     addingChild = true;
     try {
       const pw = await passwordHash(data.password), f = req.session.user.familyId, id = randomUUID();
@@ -1071,7 +1098,7 @@ export async function createApp(
     await app.register(serveStatic, { root: resolve('dist'), prefix: '/', cacheControl: false });
     app.setNotFoundHandler((req, reply) =>
       req.url.startsWith('/api/')
-        ? reply.code(404).send({ error: 'NOT_FOUND' })
+        ? reply.code(404).send({ error: 'NOT_FOUND', ref: req.id })
         : reply.type('text/html').send(readFileSync(resolve('dist/index.html'))),
     );
   }

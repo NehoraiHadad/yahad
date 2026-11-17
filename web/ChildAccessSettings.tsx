@@ -1,13 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { FamilyChild } from './FamilyProgress';
-import type { ChildAccessChange } from './childManagementState';
+import type { ActionOutcome, ChildAccessChange } from './childManagementState';
 import { useDialogFocus } from './useDialogFocus';
+import { ApiError, shownError, type ShownError } from './api';
+import { ErrorReference } from './ErrorReference';
 
 export function ChildAccessSettings({ child, disabled, stale, onChange }: {
-  child: FamilyChild; disabled: boolean; stale: boolean; onChange: (change: ChildAccessChange) => Promise<boolean>;
+  child: FamilyChild; disabled: boolean; stale: boolean; onChange: (change: ChildAccessChange) => Promise<ActionOutcome>;
 }) {
   const [confirmation, setConfirmation] = useState<ChildAccessChange | null>(null);
   const [saving, setSaving] = useState(false), [result, setResult] = useState<ChildAccessChange | null>(null);
+  const [rejected, setRejected] = useState<ShownError | null>(null);
   const working = useRef(false), mounted = useRef(true), dialog = useRef<HTMLDivElement>(null);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useDialogFocus(dialog, !!confirmation);
@@ -17,12 +20,14 @@ export function ChildAccessSettings({ child, disabled, stale, onChange }: {
   const submit = async () => {
     if (!mounted.current || working.current || !confirmation || disabled || changed) return;
     const request = confirmation;
-    working.current = true; setSaving(true); setResult(null);
-    try { await onChange(request); }
-    catch { /* Parent refreshes authoritative state even after a lost response. */ }
-    finally {
-      working.current = false;
-      if (mounted.current) { setSaving(false); setConfirmation(null); setResult(request); }
+    working.current = true; setSaving(true); setResult(null); setRejected(null);
+    // The parent refreshes authoritative state either way. A definite server answer is
+    // shown as itself; a lost response stays "not confirmed" since it may have been applied.
+    const outcome = await onChange(request);
+    working.current = false;
+    if (mounted.current) {
+      setSaving(false); setConfirmation(null); setResult(request);
+      setRejected(!outcome.ok && outcome.error instanceof ApiError ? shownError(outcome.error) : null);
     }
   };
   const confirmed = result && !stale && result.childId === child.id && !!child.paused === result.paused &&
@@ -33,11 +38,13 @@ export function ChildAccessSettings({ child, disabled, stale, onChange }: {
     <p>השהיה מנתקת את מכשירי הילד ושומרת את הסיסמה, השיחות והגדרות הזמן. הזמן שנותר נשמר; מכסת היום ממשיכה להתחדש כרגיל.</p>
     <button className="outline-button" type="button" disabled={disabled || saving} onClick={() => {
       if (working.current || disabled) return;
-      setResult(null); setConfirmation({ childId: child.id, paused: !child.paused, revision: child.accessRevision ?? 0 });
+      setResult(null); setRejected(null); setConfirmation({ childId: child.id, paused: !child.paused, revision: child.accessRevision ?? 0 });
     }}>{child.paused ? 'הפעלת הגישה מחדש' : 'השהיית הגישה'}</button>
     {result && <p role={confirmed || stale ? 'status' : 'alert'}>{stale ? 'לא ניתן לאמת את הפעולה. ממתינים לרענון לפני שינוי נוסף.' : confirmed
       ? result.paused ? 'הגישה הושהתה וכל המכשירים נותקו.' : 'הגישה הופעלה מחדש. צריך להיכנס שוב; חיבורים ישנים נשארים מנותקים.'
+      : rejected ? `הפעולה לא בוצעה. ${rejected.text}`
       : 'לא התקבל אישור לפעולה. מוצג המצב האחרון מהשרת; בדקו אותו לפני ניסיון נוסף.'}</p>}
+    {result && !confirmed && !stale && rejected && <ErrorReference code={rejected.code} refId={rejected.ref}/>}
     {confirmation && <div className="modal-backdrop"><div className="modal" ref={dialog} role="dialog" aria-modal="true"
       aria-labelledby="child-access-title" aria-describedby="child-access-description" aria-busy={saving}
       onKeyDown={e => { if (e.key === 'Escape') close(); }}>

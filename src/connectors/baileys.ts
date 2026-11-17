@@ -41,13 +41,18 @@ import type {
   StoredMessage,
   Receipt,
 } from './types.js';
+import { PairingDataUnreadable } from './types.js';
 const logger = pino({ level: 'silent' });
 const stringify = (x: unknown) => JSON.stringify(x, BufferJSON.replacer);
 const parse = (s: string) => JSON.parse(s, BufferJSON.reviver);
 export function encryptedAuth(h: ConnectorHooks): { state: AuthenticationState; save: () => void } {
   const creds = h.authGet('creds');
+  let saved: AuthenticationState['creds'] | undefined;
+  if (creds) {
+    try { saved = parse(creds); } catch (error) { throw new PairingDataUnreadable({ cause: error }); }
+  }
   const state: AuthenticationState = {
-    creds: creds ? parse(creds) : initAuthCreds(),
+    creds: saved ?? initAuthCreds(),
     keys: {
       get: async (type, ids) => {
         const result: Record<string, any> = {};
@@ -302,7 +307,39 @@ export class BaileysConnector implements Connector {
   async start() {
     if (this.sock) return;
     this.stopping = false;
-    await this.connect();
+    try { await this.connect(); }
+    catch (error) {
+      // Unreadable pairing data needs a new QR; the caller decides. Anything else
+      // (storage busy, socket setup) is an outage this connector keeps retrying.
+      if (error instanceof PairingDataUnreadable) throw error;
+      this.connectFailed(error, this.generation);
+    }
+  }
+  /** Schedule the next connection attempt with backoff, staying in "reconnecting". */
+  private scheduleReconnect(code?: number) {
+    this.hooks.state('reconnecting');
+    const wait =
+      code === DisconnectReason.restartRequired
+        ? 200
+        : Math.min(60_000, 1000 * 2 ** Math.min(this.attempt++, 6)) + Math.random() * 500;
+    const generation = this.generation;
+    this.timer = setTimeout(() => {
+      if (this.stopping || generation !== this.generation) return;
+      void this.connect().catch(error => this.connectFailed(error, this.generation));
+    }, wait);
+  }
+  /** A local failure to open a connection. Only unreadable pairing data needs a new QR:
+   * a transient fault must never send the parent to rescan (and erase working credentials). */
+  private connectFailed(error: unknown, generation: number) {
+    if (this.stopping || generation !== this.generation) return;
+    this.sock = undefined;
+    this.hooks.connectFailed?.(error);
+    if (error instanceof PairingDataUnreadable) {
+      this.stopping = true;
+      this.hooks.state('needs_pairing');
+      return;
+    }
+    this.scheduleReconnect();
   }
   async connect() {
     this.ingestion?.dispose();
@@ -366,14 +403,16 @@ export class BaileysConnector implements Connector {
       }
       if (u.connection === 'close') {
         this.sock = undefined;
-        const code = (u.lastDisconnect?.error as any)?.output?.statusCode;
+        const status = (u.lastDisconnect?.error as any)?.output?.statusCode;
+        const code = typeof status === 'number' && Number.isInteger(status) ? status : undefined;
+        this.hooks.disconnected?.(code);
         if (
           [
             DisconnectReason.loggedOut,
             DisconnectReason.badSession,
             DisconnectReason.multideviceMismatch,
             DisconnectReason.forbidden,
-          ].includes(code)
+          ].includes(code as number)
         ) {
           this.stopping = true;
           this.hooks.state('needs_pairing');
@@ -384,14 +423,7 @@ export class BaileysConnector implements Connector {
           this.hooks.state('conflict');
           return;
         }
-        this.hooks.state('reconnecting');
-        const wait =
-          code === DisconnectReason.restartRequired
-            ? 200
-            : Math.min(60_000, 1000 * 2 ** Math.min(this.attempt++, 6)) + Math.random() * 500;
-        this.timer = setTimeout(() => {
-          if (valid()) void this.connect().catch(() => this.hooks.state('needs_pairing'));
-        }, wait);
+        this.scheduleReconnect(code);
       }
     });
     const queue = new IngestionQueue(async m => { if (valid() && this.hooks.allowed(m.groupId)) await this.hooks.incoming(m); },

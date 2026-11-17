@@ -15,6 +15,8 @@ import { Store, type User } from './store.js';
 import { MockConnector } from './connectors/mock.js';
 import { BaileysConnector } from './connectors/baileys.js';
 import { HistoryTracker } from './history.js';
+import { classifyFailure } from './diagnostics.js';
+import { PairingDataUnreadable } from './connectors/types.js';
 import type {
   Connector,
   ConnectorHooks,
@@ -24,14 +26,18 @@ import type {
   Capabilities,
 } from './connectors/types.js';
 export class AppError extends Error {
+  /** `cause` is kept for the diagnostics report as a class name and storage kind only. */
   constructor(
     public status: number,
     public code: string,
+    options?: { cause?: unknown },
   ) {
-    super(code);
+    super(code, options);
   }
 }
 export const deny = () => new AppError(404, 'NOT_FOUND');
+/** The diagnostics cause of a failure: unreadable pairing, or a storage kind. */
+export const failureCause = (error: unknown) => error instanceof PairingDataUnreadable ? 'pairing_unreadable' as const : classifyFailure(error);
 export interface PublicMessage extends Omit<StoredMessage, 'raw' | 'replyId' | 'reactions' | 'reactionTimes' | 'editTime' | 'originalTimeKnown' | 'pollState' | 'sendRequestHash' | 'sendAcknowledged' | 'groupReceipts'> {
   pollResults?: ObservedPollResults;
   reply?: { id: string; text: string; sender: string; available?: boolean };
@@ -61,8 +67,9 @@ export class ChatService {
     for (const fn of this.listeners) fn(f, g, type);
   }
   async boot() {
+    // One family's failed start must not stop the server or the other families.
     for (const row of this.store.all('SELECT id FROM families WHERE linked=1'))
-      await this.connect(row.id);
+      await this.connect(row.id).catch(error => this.recordConnectFailure(row.id, error));
   }
   requireGroup(user: User, g: string) {
     if (!this.store.allowed(user, g)) throw deny();
@@ -170,6 +177,8 @@ export class ChatService {
           for (const [k, v] of Object.entries(data)) this.store.authSet(f, k, v);
         }, f),
       getMessage: (g, id) => active() ? this.store.getMessage(f, g, id) : undefined,
+      disconnected: statusCode => { if (active()) this.store.diagnostics.recordDisconnect(f, statusCode); },
+      connectFailed: error => { if (active()) this.recordConnectFailure(f, error); },
     };
     if (resetAuth) {
       this.store.run('DELETE FROM auth WHERE family_id=?', f);
@@ -185,16 +194,36 @@ export class ChatService {
     this.store.run('UPDATE families SET linked=1 WHERE id=?', f);
     try {
       await this.store.diagnostics.measureAsync(f, 'connector', () => c.start());
-      if (this.states.get(f)?.state === 'connected') await this.syncGroups(f);
-    } catch {
-      this.states.set(f, { state: 'needs_pairing' });
+    } catch (error) {
+      if (!active()) throw new AppError(502, 'CONNECT_FAILED', { cause: error });
+      this.photos.clear(c);
+      this.connectors.delete(f);
+      await Promise.resolve(c.stop()).catch(() => undefined);
+      // Only unreadable pairing data is a reason to ask for a new QR. Any other local
+      // failure keeps the saved link (boot or the parent's next click retries with it).
+      const state = error instanceof PairingDataUnreadable ? 'needs_pairing' : 'idle';
+      this.states.set(f, { state });
+      this.store.run(
+        'INSERT INTO family_connections VALUES(?,?,?) ON CONFLICT(family_id) DO UPDATE SET state=excluded.state,changed=excluded.changed',
+        f, state, Date.now());
       this.notify(f, undefined, 'connection');
-      throw new AppError(502, 'CONNECT_FAILED');
+      throw new AppError(502, state === 'needs_pairing' ? 'PAIRING_UNREADABLE' : 'CONNECT_FAILED', { cause: error });
     }
+    // The link is up; a failed catalog read reports GROUP_SYNC_FAILED and leaves the state as it is.
+    if (this.states.get(f)?.state === 'connected') await this.syncGroups(f);
+  }
+  /** Record a connection failure that no HTTP request reports (reconnects, boot). */
+  private recordConnectFailure(f: string, error: unknown) {
+    const cause = error instanceof AppError ? error.cause ?? error : error;
+    this.store.diagnostics.recordError(f, {
+      code: error instanceof AppError ? error.code : cause instanceof PairingDataUnreadable ? 'PAIRING_UNREADABLE' : 'CONNECT_FAILED',
+      route: 'connector', error: cause, cause: failureCause(cause) });
   }
   async syncGroups(f: string) {
     const connector = this.connector(f), generation = this.generations.get(f);
-    const groups = await connector.groups();
+    let groups: import('./connectors/types.js').ChatGroup[];
+    try { groups = await connector.groups(); }
+    catch (error) { throw new AppError(502, 'GROUP_SYNC_FAILED', { cause: error }); }
     // A refresh that finishes after unlink must not revoke retained groups.
     if (this.connectors.get(f) !== connector || this.generations.get(f) !== generation) return;
     this.reconcileGroups(f, groups);

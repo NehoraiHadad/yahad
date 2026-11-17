@@ -13,7 +13,7 @@ const overview = (): FamilyOverview => ({ state: 'connected', children: [
 ], groups: [{ id: 'one', title: 'משפחה סינתטית' }, { id: 'two', title: 'כיתה סינתטית' }],
 grants: [{ user_id: 'a', group_id: 'one' }, { user_id: 'b', group_id: 'two' }] });
 const props = () => ({ data: overview(), selected: 'a', busy: false, stale: false, createdChild: '',
-  onSelect() {}, onAdd() {}, onSettings() {}, onRefresh() {}, onRetry() {}, onGrant: async () => true });
+  onSelect() {}, onAdd() {}, onSettings() {}, onRefresh() {}, onRetry() {}, onGrant: async () => ({ ok: true as const }) });
 
 test('child workspace identifies roster, selected name, login name, per-child counts and direct settings', () => {
   const html = renderToStaticMarkup(React.createElement(ChildManagement, props()));
