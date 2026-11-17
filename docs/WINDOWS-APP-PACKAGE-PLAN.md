@@ -643,6 +643,35 @@ and to `UpdaterRules.Ending` and `CheckError` (`UpdaterEngine.cs:23-42`). They m
 onto the existing `updates.ts` error enum, so the app's status schema doesn't
 change.
 
+**The precise cause.** Beside the coarse word, the record and the status carry
+`errorCode` and `lastRequest.code`, and `errorPermanent` (`UpdaterProtocol.cs`).
+The code is the deliberate code from the table above, or, for an unexpected
+failure, the exception type with one fixed detail (`UpdaterRules.Code`: an HTTP
+status, an `HttpRequestError`, or a Win32 error), such as `GITHUB_HTTP:403` or
+`Win32Exception:5`. It is never a message or a path. The Updater also names its
+own failures that have no exception: `CHECK_INTERRUPTED`, `UPGRADE_RESULT_MISSING`,
+`UPGRADE_RESULT_INVALID`. `errorPermanent` is true only when a version was
+refused for good, so retrying cannot help. Both fields are written only when they
+are set, so a record without a failure still reads on an older Updater. Both are
+optional in `updates.ts`, so the Linux worker and older Updaters still parse.
+
+The web catalog `web/updateErrors.ts` explains each word and code, and
+`tests/update-errors.test.ts` proves that every literal in the Updater sources
+resolves to an entry.
+
+**Event log.** Every failed check or install is also written to the Application
+log under source `Yahad` (`ServiceStartupDiagnostic.TryRecordUpdate`).
+
+| Id | Type | Meaning |
+| --- | --- | --- |
+| 1001 | Error | The service failed to start or stop |
+| 2001 | Warning | An update check or install failed; it is an Error for `rollback` and `internal` |
+| 3003 | Error | Repair gave up |
+
+Event 2001's data is the same allowlisted JSON as the others: operation, word,
+code, permanence, from-version, version, source commit, and stack sites. It
+never carries a message.
+
 ## 10. Release tooling
 
 **Assets.** `/releases/latest` stays the only source for both platforms

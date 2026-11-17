@@ -9,13 +9,24 @@ namespace Yahad.Install;
 // reply per connection. The status names are the ones src/updates.ts accepts.
 internal sealed record UpdaterRequest(int V,string Op,string? Id=null,string? Version=null,string? Fingerprint=null,string? Mode=null);
 internal sealed record UpdaterTarget(string Version,string Fingerprint);
-internal sealed record UpdaterLastRequest(string Id,string Action,string State,long StartedAt,long? FinishedAt,string? Error,UpdaterTarget? Target);
+// The precise fields are written only when set: an older Updater refuses a field it
+// does not know (UnmappedMemberHandling.Disallow), so a record or a status without a
+// failure reads exactly as before they existed. A code is the failure's deliberate
+// UPPER_SNAKE code, or its exception type with at most a fixed number or kind, never a
+// message or a path (UpdaterRules.Code). ErrorPermanent says the version is refused
+// for good, so asking again cannot help.
+internal sealed record UpdaterLastRequest(string Id,string Action,string State,long StartedAt,long? FinishedAt,string? Error,UpdaterTarget? Target,
+    [property:JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)]string? Code=null);
 internal sealed record UpdaterLastMode(string Id,string Mode,string State,string? Error=null);
-internal sealed record UpdaterStatus(bool Enabled,string Mode,string Phase,string CurrentVersion,string? LatestVersion,UpdaterTarget? InstallTarget,long? CheckedAt,long UpdatedAt,string? Error,UpdaterLastRequest? LastRequest,UpdaterLastMode? LastModeRequest);
+internal sealed record UpdaterStatus(bool Enabled,string Mode,string Phase,string CurrentVersion,string? LatestVersion,UpdaterTarget? InstallTarget,long? CheckedAt,long UpdatedAt,string? Error,UpdaterLastRequest? LastRequest,UpdaterLastMode? LastModeRequest,
+    [property:JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)]string? ErrorCode=null,
+    [property:JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)]bool? ErrorPermanent=null);
 internal sealed record UpdaterReply(int V,bool Ok,string? Code=null,UpdaterStatus? Status=null);
 // updater\state.json. Setup seeds the mode from the administrator's choice; from
 // then on only the Updater writes it, and it survives an upgrade and a rollback.
-internal sealed record UpdaterRecord(int Format,string Mode,string? Phase=null,UpdaterLastRequest? LastRequest=null,UpdaterLastMode? LastModeRequest=null,long? CheckedAt=null,long? LastUpdateAt=null,string? Latest=null,string? Error=null,string? RefusedVersion=null)
+internal sealed record UpdaterRecord(int Format,string Mode,string? Phase=null,UpdaterLastRequest? LastRequest=null,UpdaterLastMode? LastModeRequest=null,long? CheckedAt=null,long? LastUpdateAt=null,string? Latest=null,string? Error=null,string? RefusedVersion=null,
+    [property:JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)]string? ErrorCode=null,
+    [property:JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)]bool? ErrorPermanent=null)
 {
     internal static UpdaterRecord Seed(bool automatic)=>new(1,automatic?UpdaterProtocol.Auto:UpdaterProtocol.Notify);
     internal byte[] Encode()=>JsonSerializer.SerializeToUtf8Bytes(this,UpdaterJsonContext.Default.UpdaterRecord);

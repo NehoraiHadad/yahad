@@ -6,7 +6,15 @@ import { z } from 'zod';
 import type { Config } from './config.js';
 import type { User } from './store.js';
 
-const updateError = z.enum(['configuration','network','signature','archive','build','backup','health','rollback','storage','maintenance','incompatible','internal','target_changed']);
+export const updateErrorWords = ['configuration','network','signature','archive','build','backup','health','rollback','storage','maintenance','incompatible','internal','target_changed'] as const;
+export const modeRequestErrorWords = ['configuration','expired','replayed','local_setup','operator_changed','busy'] as const;
+const updateError = z.enum(updateErrorWords);
+// The precise cause beside the coarse word (Windows Updater, UpdaterRules.Code): a
+// deliberate UPPER_SNAKE code, or an exception type with one fixed detail, never a
+// message. An older Updater, and the Linux worker, send none; a malformed one is
+// dropped rather than hiding the whole status.
+export const updateCodePattern = /^[A-Za-z][A-Za-z0-9_]{0,63}(:[A-Za-z0-9]{1,32})?$/;
+const updateCode = z.string().regex(updateCodePattern).nullable().optional().catch(undefined);
 // This is an opaque root-issued identity, not a URL, repository or client-selected
 // release. The privileged worker independently revalidates it before any update.
 export const updateTargetSchema = z.object({
@@ -19,15 +27,19 @@ const statusSchema = z.object({
   enabled: z.boolean(), mode: z.enum(['notify', 'auto']),
   modeControlAllowed: z.boolean().default(false),
   lastModeRequest: z.object({id:z.uuid(),mode:z.enum(['notify','auto']),state:z.enum(['pending','applied','rejected']),
-    error:z.enum(['configuration','expired','replayed','local_setup','operator_changed','busy']).nullable()}).nullable().optional(),
+    error:z.enum(modeRequestErrorWords).nullable()}).nullable().optional(),
   lastRequest: z.object({id:z.uuid(),action:z.enum(['check','install']),state:z.enum(['running','succeeded','failed']),
-    startedAt:z.number(),finishedAt:z.number().nullable(),error:updateError.or(z.literal('expired')).nullable(),target:visibleTargetSchema}).nullable().optional(),
+    startedAt:z.number(),finishedAt:z.number().nullable(),error:updateError.or(z.literal('expired')).nullable(),target:visibleTargetSchema,
+    code:updateCode}).nullable().optional(),
   operator: z.object({ familyId: z.string().max(100), userId: z.string().max(100) }),
   phase: z.enum(['idle','available','checking','preparing','downloading','verifying','building','stopping','backing_up','activating','checking_health','healthy','rolled_back','failed','incompatible','rolling_back','recovery_required','rollback_pending_health']),
   currentVersion: z.string().max(40).nullable(), latestVersion: z.string().max(40).nullable(),
   installTarget: visibleTargetSchema,
   checkedAt: z.number().nullable(), updatedAt: z.number(),
   error: updateError.nullable(),
+  errorCode: updateCode,
+  // True when this version is refused for good, so asking again cannot help.
+  errorPermanent: z.boolean().optional().catch(undefined),
 });
 export async function updateStatus(config: Config, user: User, native?: WindowsUpdateTransport) {
   try {

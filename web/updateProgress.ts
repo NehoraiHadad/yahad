@@ -1,4 +1,5 @@
 import type { UpdateTarget, updateStatus } from '../src/updates';
+import { describeUpdateFailure, updateRepairTexts } from './updateErrors';
 
 export type { UpdateTarget };
 export type UpdateStatus = Awaited<ReturnType<typeof updateStatus>>;
@@ -87,10 +88,9 @@ export function updateNeedsRepair(data: ConfiguredUpdate) {
 
 export function updateProgress(data: ConfiguredUpdate, local: LocalUpdateRequest | null = null) {
   // A repair barrier is authoritative even if an older queue/journal still says running.
-  if (updateNeedsRepair(data)) return { kind: 'failure', active: false, title: updatePhases[data.phase],
-    action: undefined, detail: data.phase === 'recovery_required'
-      ? 'לא ניתן להמשיך אוטומטית בבטחה. נדרש תיקון במחשב שבו מותקנת האפליקציה. אין כאן אישור שהאפליקציה חזרה לפעול כראוי. רענון המצב רק בודק אם התקבל דיווח חדש; הוא לא מתחיל עדכון נוסף.'
-      : 'שירות העדכון עדיין לא אישר שהגרסה הקודמת פועלת כראוי. נדרשת בדיקה במחשב שבו מותקנת האפליקציה לפני המשך עדכונים; אין לשלוח התקנה נוספת.' } as const;
+  if (updateNeedsRepair(data)) { const repair = updateRepairTexts[data.phase as 'recovery_required' | 'rollback_pending_health'];
+    return { kind: 'failure', active: false, title: updatePhases[data.phase], action: undefined, detail: repair.what, todo: repair.todo,
+      retry: false, support: data.errorCode || data.error || data.phase } as const; }
   if (!Object.hasOwn(updatePhases, data.phase)) return { kind: 'unknown', active: true,
     title: 'אין דיווח מצב מוכר מהשירות', action: undefined,
     detail: 'אין כרגע אישור להתקדמות, להצלחה או לכשל. נבדוק שוב את המצב בלבד, בלי לשלוח בקשת עדכון נוספת.' } as const;
@@ -118,18 +118,27 @@ export function updateProgress(data: ConfiguredUpdate, local: LocalUpdateRequest
     title: activePhases.has(data.phase) ? updatePhases[data.phase] : 'שירות העדכון מטפל בבקשה',
     action: last?.state === 'running' ? updateActionLabel(last.action, data.mode, last.target) : undefined,
     detail: 'זהו השלב האחרון שדווח בפועל. שירות העדכון ממשיך במחשב גם אם סוגרים את הדפדפן. השאירו את המחשב פועל; בפתיחה מחדש בודקים את המצב מהשירות, בלי להתחיל שוב.' } as const;
-  if (last?.state === 'failed' || failedPhases.has(data.phase)) return { kind: 'failure', active: false,
-    title: last?.error === 'target_changed' ? 'יעד העדכון השתנה — נדרשת בדיקה חדשה' : last?.error === 'expired' ? 'תוקף הבקשה פג לפני הטיפול' : failedPhases.has(data.phase) ? updatePhases[data.phase] : 'הפעולה לא הושלמה',
-    action: last?.state === 'failed' ? updateActionLabel(last.action, data.mode, last.target) : undefined,
-    detail: last?.error === 'target_changed' ? 'ההתקנה שהתבקשה לא בוצעה: הגרסה או קובצי העדכון אינם זהים לאישור שנשלח. בדקו שוב ובחרו את הגרסה מחדש; לא נשלחת התקנה נוספת אוטומטית.' : last?.error === 'expired' ? 'הבקשה המתינה מעבר לתוקף שלה ולא בוצעה עבורה התקנה. אפשר לשלוח בקשה חדשה אם עדיין תרצו; הבקשה הזאת לא תישלח שוב אוטומטית.'
-      : data.phase === 'rolled_back' ? 'הגרסה החדשה לא התקבלה. שירות העדכון דיווח שחזר לגרסה הקודמת.'
-      : 'שירות העדכון דיווח על כשל. אין כאן אישור שהגרסה החדשה הותקנה.' } as const;
+  if (last?.state === 'failed' || failedPhases.has(data.phase)) {
+    // The journal's failure, or else the phase's. The Updater's permanence belongs to
+    // the failure it recorded, so it applies to the journal only when the codes agree.
+    const failure = last?.state === 'failed'
+      ? describeUpdateFailure({ error: last.error, code: last.code, action: last.action,
+        permanent: !!last.code && last.code === data.errorCode && data.errorPermanent === true })
+      : describeUpdateFailure({ error: data.error, code: data.errorCode, permanent: data.errorPermanent, phase: data.phase });
+    return { kind: 'failure', active: false, title: failure.title,
+      action: last?.state === 'failed' ? updateActionLabel(last.action, data.mode, last.target) : undefined,
+      detail: failure.what, todo: failure.todo, retry: failure.retry, support: failure.support } as const;
+  }
   if (last?.state === 'succeeded') return { kind: 'success', active: false,
     title: data.phase === 'healthy' ? updatePhases.healthy : data.phase === 'available' ? 'הבדיקה הסתיימה — נמצאה גרסה חדשה' : 'הבדיקה הסתיימה — אין עדכון ממתין',
     action: updateActionLabel(last.action, data.mode, last.target),
     detail: data.phase === 'healthy' ? 'שירות העדכון אישר שהגרסה החדשה פעילה ועברה בדיקת תקינות.'
       : data.phase === 'available' ? 'הגרסה זמינה, אך לא התקבלה הודעה שהותקנה.' : 'זהו המצב שאישר שירות העדכון בסיום הפעולה.' } as const;
-  return { kind: data.error ? 'failure' : data.phase === 'healthy' ? 'success' : 'idle', active: false, title: updatePhases[data.phase] || 'מצב שירות העדכון',
+  // A scheduled run's failure, reported without a manual-request journal.
+  if (data.error) { const failure = describeUpdateFailure({ error: data.error, code: data.errorCode, permanent: data.errorPermanent, phase: data.phase });
+    return { kind: 'failure', active: false, title: failure.title, action: undefined,
+      detail: failure.what, todo: failure.todo, retry: failure.retry, support: failure.support } as const; }
+  return { kind: data.phase === 'healthy' ? 'success' : 'idle', active: false, title: updatePhases[data.phase] || 'מצב שירות העדכון',
     action: undefined, detail: 'מצב השרת האחרון שדווח. בקשה שנשלחה אינה הוכחה שהחלה התקנה.' } as const;
 }
 

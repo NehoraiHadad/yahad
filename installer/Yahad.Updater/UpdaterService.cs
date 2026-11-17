@@ -40,7 +40,8 @@ internal sealed class UpdaterService(IScmApi scm,Func<Action,CancellationToken,T
         var key=Path.Combine(InstalledLayout.BinaryRoot,TrustedReleaseKey.InstalledName);
         using var source=new GitHubReleaseSource();
         var engine=new UpdaterEngine(UpdaterPaths.Installed,Live,
-            ()=>File.Exists(key)?NativeInstallFiles.ReadRecord(key):null,TrustedReleaseKey.Embedded,source,UpdateLauncher.Launch,()=>DateTimeOffset.UtcNow);
+            ()=>File.Exists(key)?NativeInstallFiles.ReadRecord(key):null,TrustedReleaseKey.Embedded,source,UpdateLauncher.Launch,()=>DateTimeOffset.UtcNow,
+            failure=>ServiceStartupDiagnostic.TryRecordUpdate(failure.Operation,failure.Error,failure.Code,failure.Permanent,failure.From,failure.Version,failure.Cause));
         engine.Start(cancellation);
         using var linked=CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         var pipe=new UpdaterPipe(UpdaterProtocol.PipeName,runtime,$"D:P(A;;GA;;;SY)(A;;GRGW;;;{runtime.Value})",engine.Handle,error=>ServiceStartupDiagnostic.TryRecord(StartupDiagnosticRole.Updater,error));

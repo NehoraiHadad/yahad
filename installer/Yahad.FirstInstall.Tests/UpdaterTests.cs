@@ -464,22 +464,90 @@ internal static class UpdaterTests
         await check("updater: failures reach the parent as the words src/updates.ts accepts, and refuse a version only for a signature or a defective release",()=>
         {
             var words=new HashSet<string>{"configuration","network","signature","archive","build","backup","health","rollback","storage","maintenance","incompatible","internal","target_changed"};
-            foreach(var (error,expected,refuse) in new (Exception,string,bool)[]{(new HttpRequestException(),"network",false),(new TaskCanceledException(),"network",false),(new IOException("GITHUB_URL"),"network",false),(new IOException("GITHUB_LIST_INVALID"),"network",false),
-                (new IOException("RELEASE_SIGNATURE_INVALID"),"signature",true),(new IOException("RELEASE_KEY_UNTRUSTED"),"signature",true),(new IOException("RELEASE_MANIFEST_INVALID"),"signature",true),
-                (new IOException("RELEASE_UNSUPPORTED_FROM"),"incompatible",true),(new IOException("APP_NEEDS_INFRASTRUCTURE"),"incompatible",true),
-                (new IOException("RELEASE_SETUP_HASH"),"archive",false),(new IOException("RELEASE_SETUP_SIZE"),"archive",false),(new IOException("RELEASE_APP_HASH"),"archive",false),(new IOException("RELEASE_APP_SIZE"),"archive",false),
-                (new IOException("DISK_SPACE"),"storage",false),(new IOException("INFRA_IDENTITY_MISMATCH"),"internal",false),(new IOException("ACTIVE_POINTER_INVALID"),"internal",false),(new IOException("other"),"internal",false),(new InvalidOperationException(),"internal",false)})
-                Assert(UpdaterRules.CheckError(error)==new CheckFailure(expected,refuse)&&words.Contains(expected),error.Message+" maps to "+UpdaterRules.CheckError(error));
+            // The precise code is the deliberate code, or else the exception's type: never its message.
+            foreach(var (error,expected,refuse,code) in new (Exception,string,bool,string)[]{(new HttpRequestException(),"network",false,"HttpRequestException"),(new TaskCanceledException(),"network",false,"TaskCanceledException"),(new IOException("GITHUB_URL"),"network",false,"GITHUB_URL"),(new IOException("GITHUB_LIST_INVALID"),"network",false,"GITHUB_LIST_INVALID"),
+                (new HttpRequestException("GITHUB_HTTP",null,HttpStatusCode.Forbidden),"network",false,"GITHUB_HTTP:403"),(new HttpRequestException(HttpRequestError.NameResolutionError,"No such host is known. (api.github.com:443)"),"network",false,"HttpRequestException:NameResolutionError"),
+                (new IOException("RELEASE_SIGNATURE_INVALID"),"signature",true,"RELEASE_SIGNATURE_INVALID"),(new IOException("RELEASE_KEY_UNTRUSTED"),"signature",true,"RELEASE_KEY_UNTRUSTED"),(new IOException("RELEASE_MANIFEST_INVALID"),"signature",true,"RELEASE_MANIFEST_INVALID"),
+                (new IOException("RELEASE_UNSUPPORTED_FROM"),"incompatible",true,"RELEASE_UNSUPPORTED_FROM"),(new IOException("APP_NEEDS_INFRASTRUCTURE"),"incompatible",true,"APP_NEEDS_INFRASTRUCTURE"),
+                (new IOException("RELEASE_SETUP_HASH"),"archive",false,"RELEASE_SETUP_HASH"),(new IOException("RELEASE_SETUP_SIZE"),"archive",false,"RELEASE_SETUP_SIZE"),(new IOException("RELEASE_APP_HASH"),"archive",false,"RELEASE_APP_HASH"),(new IOException("RELEASE_APP_SIZE"),"archive",false,"RELEASE_APP_SIZE"),
+                (new IOException("DISK_SPACE"),"storage",false,"DISK_SPACE"),(new IOException("INFRA_IDENTITY_MISMATCH"),"internal",false,"INFRA_IDENTITY_MISMATCH"),(new IOException("ACTIVE_POINTER_INVALID"),"internal",false,"ACTIVE_POINTER_INVALID"),
+                (new IOException("other"),"internal",false,"IOException"),(new IOException(@"C:\ProgramData\Yahad\secret"),"internal",false,"IOException"),(new IOException("NOT_A_code"),"internal",false,"IOException"),
+                (new FileNotFoundException(@"C:\ProgramData\Yahad\secret"),"internal",false,"FileNotFoundException:2"),(new UnauthorizedAccessException(@"C:\secret"),"internal",false,"UnauthorizedAccessException:5"),
+                (new Win32Exception(32),"internal",false,"Win32Exception:32"),(new InvalidOperationException(),"internal",false,"InvalidOperationException")})
+            {
+                var failure=UpdaterRules.CheckError(error);
+                Assert(failure==new CheckFailure(expected,refuse,code)&&words.Contains(expected),error.GetType().Name+" maps to "+failure);
+                Assert(System.Text.RegularExpressions.Regex.IsMatch(failure.Code,@"\A[A-Za-z][A-Za-z0-9_]{0,63}(:[A-Za-z0-9]{1,32})?\z"),"the code is not what src/updates.ts accepts: "+failure.Code);
+            }
             foreach(var (code,phase,error,refuse) in new (string?,string,string?,bool)[]{("UPGRADED","healthy",null,false),("ROLLED_BACK_UNHEALTHY","rolled_back","health",true),("ROLLBACK_FAILED","failed","rollback",false),("DISK_SPACE","failed","storage",false),
                 ("RELEASE_UNSUPPORTED_FROM","incompatible","incompatible",true),("APP_NEEDS_INFRASTRUCTURE","incompatible","incompatible",true),("RELEASE_APP_SIZE","failed","archive",false),("RELEASE_APP_HASH","failed","archive",false),
                 ("APP_PACKAGE_FORBIDDEN","failed","archive",false),("APP_PACKAGE_TREE_MISMATCH","failed","archive",false),("RELEASE_SIGNATURE_INVALID","failed","signature",true),("RELEASE_KEY_UNTRUSTED","failed","signature",true),
                 ("RELEASE_MANIFEST_INVALID","failed","signature",true),("RELEASE_NOT_NEWER","failed","signature",true),("RELEASE_SETUP_MISMATCH","failed","signature",true),
                 ("INFRA_IDENTITY_MISMATCH","failed","internal",false),("APP_IDENTITY_MISMATCH","failed","internal",false),("RELEASE_TRACK_MISMATCH","failed","internal",false),("UPGRADE_PREPARE_FAILED","failed","internal",false),
-                ("UPGRADE_COMMIT_INCOMPLETE","failed","internal",false),("UPGRADE_LOCKED","failed","internal",false),("UPGRADE_INCOMPLETE","failed","internal",false),("APP_PACKAGE","failed","internal",false),(null,"failed","internal",false)})
+                ("UPGRADE_COMMIT_INCOMPLETE","failed","internal",false),("UPGRADE_LOCKED","failed","internal",false),("UPGRADE_INCOMPLETE","failed","internal",false),("APP_PACKAGE","failed","internal",false),(null,"failed","internal",false),
+                ("not a code","failed","internal",false),(@"C:\secret","failed","internal",false)})
             {
-                var ending=UpdaterRules.Ending(code);
-                Assert(ending==new UpgradeEnding(code=="UPGRADED",phase,error,refuse)&&(error is null||words.Contains(error)),code+" ends "+ending);
+                // The Setup's own code is kept; one that is no deliberate code is never passed on.
+                var ending=UpdaterRules.Ending(code);var precise=code=="UPGRADED"?null:UpdaterRules.IsCode(code)?code:UpdaterRules.ResultInvalid;
+                Assert(ending==new UpgradeEnding(code=="UPGRADED",phase,error,refuse,precise)&&(error is null||words.Contains(error)),code+" ends "+ending);
             }
+            return Task.CompletedTask;
+        });
+        await check("updater: a failure keeps its precise code and whether the version is refused for good, in the record, the status and the event",async()=>
+        {
+            // A check refused for good: the signature, recorded with the candidate version.
+            using var bed=new Bed();var reported=new List<UpdateFailure>();
+            UpdaterEngine Engine()=>Started(new UpdaterEngine(bed.Paths,()=>bed.Pointer,()=>bed.Spki,bed.Spki,bed.Source,(launch,result)=>{if(bed.LaunchFailure is not null)throw bed.LaunchFailure;bed.Launched.Add((launch,result));},()=>bed.Now,reported.Add));
+            static UpdaterEngine Started(UpdaterEngine engine){engine.Start();return engine;}
+            using(var other=new Bed()){var manifest=Bed.Encode(bed.Fields("9.9.9",ReleaseTrack.App));bed.List("v9.9.9",manifest:manifest,signature:other.Sign(manifest));}
+            var engine=Engine();var status=await Bed.CheckAsync(engine);
+            Assert(status is {Error:"signature",ErrorCode:"RELEASE_SIGNATURE_INVALID",ErrorPermanent:true,LastRequest:{Error:"signature",Code:"RELEASE_SIGNATURE_INVALID"}},"signature status "+status);
+            Assert(reported is [{Operation:"check",Error:"signature",Code:"RELEASE_SIGNATURE_INVALID",Permanent:true,From:"1.0.0",Version:"9.9.9",Cause:IOException}],"signature event "+string.Join(",",reported));
+            // It survives a restart, and a success clears all three.
+            Assert(Bed.Status(Engine()) is {ErrorCode:"RELEASE_SIGNATURE_INVALID",ErrorPermanent:true},"lost on restart");
+            bed.Good("9.9.10");status=await Bed.CheckAsync(engine);
+            Assert(status is {Error:null,ErrorCode:null,ErrorPermanent:null,LastRequest:{Code:null}}&&reported.Count==1,"a success kept the failure");
+            // A network failure carries the HTTP status, and asking again can help.
+            using var limited=new Bed();limited.Network.Routes[GitHubReleaseSource.Latest]=()=>new(HttpStatusCode.Forbidden);
+            status=await Bed.CheckAsync(limited.Engine());
+            Assert(status is {Error:"network",ErrorCode:"GITHUB_HTTP:403",ErrorPermanent:false},"network status "+status);
+            // An install's ending: the Setup's code, refused only with its target.
+            var install=(await Bed.CheckAsync(engine)).InstallTarget!;reported.Clear();
+            Assert(engine.Handle(new(1,"install",Id(),install.Version,install.Fingerprint)).Ok,"install refused");
+            Assert(Bed.Status(engine) is {ErrorCode:null,ErrorPermanent:null},"activating kept the old failure");
+            File.WriteAllText(bed.Paths.LastUpgrade,JsonSerializer.Serialize(new{Code="ROLLED_BACK_UNHEALTHY",Ok=false}));
+            status=Bed.Status(engine);
+            Assert(status is {Phase:"rolled_back",Error:"health",ErrorCode:"ROLLED_BACK_UNHEALTHY",ErrorPermanent:true,LastRequest:{Code:"ROLLED_BACK_UNHEALTHY"}},"rollback status "+status);
+            Assert(reported is [{Operation:"install",Error:"health",Code:"ROLLED_BACK_UNHEALTHY",Permanent:true,Version:"9.9.10",Cause:null}],"rollback event "+string.Join(",",reported));
+            // No result before the timeout, and an engine that cannot start.
+            bed.Good("9.9.11");install=(await Bed.CheckAsync(engine)).InstallTarget!;
+            Assert(engine.Handle(new(1,"install",Id(),install.Version,install.Fingerprint)).Ok,"install refused");
+            bed.Now=bed.Now.Add(UpdaterRules.ResultTimeout).AddMinutes(1);
+            Assert(Bed.Status(engine) is {Error:"internal",ErrorCode:UpdaterRules.ResultMissing,ErrorPermanent:false},"missing result");
+            bed.LaunchFailure=new Win32Exception(5);reported.Clear();
+            Assert(engine.Handle(new(1,"install",Id(),install.Version,install.Fingerprint)) is {Ok:false,Code:"INTERNAL"},"a failed launch was accepted");
+            Assert(Bed.Status(engine) is {Error:"internal",ErrorCode:"Win32Exception:5",LastRequest:{Code:"Win32Exception:5"}}&&reported is [{Operation:"install",Code:"Win32Exception:5",Cause:Win32Exception}],"launch failure");
+            // A check the last run did not finish says so.
+            File.WriteAllBytes(bed.Paths.State,(UpdaterRecord.Seed(true) with{LastRequest=new(Id(),"check","running",1,null,null,null)}).Encode());reported.Clear();
+            Assert(Bed.Status(Engine()).LastRequest is {Error:"internal",Code:UpdaterRules.CheckInterrupted}&&reported is [{Code:UpdaterRules.CheckInterrupted}],"interrupted check");
+        });
+        await check("updater: the precise fields are written only when set, so a record without a failure reads as before",()=>
+        {
+            var plain=Encoding.UTF8.GetString((UpdaterRecord.Seed(true) with{LastRequest=new(Id(),"check","succeeded",1,2,null,null)}).Encode());
+            Assert(!plain.Contains("errorCode")&&!plain.Contains("errorPermanent")&&!plain.Contains("\"code\""),"a record without a failure carries the new fields: "+plain);
+            // What an older Updater wrote is read as it was.
+            var older=UpdaterRecord.Parse(Encoding.UTF8.GetBytes("""{"format":1,"mode":"auto","phase":"failed","lastRequest":{"id":"11111111-1111-4111-8111-111111111111","action":"check","state":"failed","startedAt":1,"finishedAt":2,"error":"network","target":null},"lastModeRequest":null,"checkedAt":2,"lastUpdateAt":null,"latest":null,"error":"network","refusedVersion":null}"""));
+            Assert(older is {Error:"network",ErrorCode:null,ErrorPermanent:null,LastRequest.Code:null},"an older record");
+            var failed=UpdaterRecord.Parse((older with{ErrorCode="GITHUB_HTTP:403",ErrorPermanent=false,LastRequest=older.LastRequest! with{Code="GITHUB_HTTP:403"}}).Encode());
+            Assert(failed is {ErrorCode:"GITHUB_HTTP:403",ErrorPermanent:false,LastRequest.Code:"GITHUB_HTTP:403"},"round trip");
+            // The event: fixed words, the code and versions; never the cause's message.
+            var cause=new IOException(@"C:\ProgramData\Yahad\secret");
+            try{throw cause;}catch(IOException){}
+            using var json=JsonDocument.Parse(ServiceStartupDiagnostic.EncodeUpdate("check","internal","IOException",false,"1.0.0","9.9.9",cause));var root=json.RootElement;
+            Assert(root.EnumerateObject().Select(p=>p.Name).SequenceEqual(["Format","Operation","Error","Code","Permanent","From","Version","SourceCommit","Sites"]),"event fields "+root);
+            Assert(root.GetProperty("Code").GetString()=="IOException"&&root.GetProperty("Sites").GetArrayLength()>=1&&!root.ToString().Contains("secret"),"event "+root);
+            using var ending=JsonDocument.Parse(ServiceStartupDiagnostic.EncodeUpdate("install","health","ROLLED_BACK_UNHEALTHY",true,null,"9.9.9",null));
+            Assert(ending.RootElement.GetProperty("Sites").GetArrayLength()==0&&ending.RootElement.GetProperty("From").ValueKind==JsonValueKind.Null,"install event "+ending.RootElement);
             return Task.CompletedTask;
         });
         await check("updater: the fingerprint binds the track, and the disk budget is the track's",()=>
@@ -550,6 +618,13 @@ internal static class UpdaterTests
             Assert(result.Select(p=>p.Key).OrderBy(k=>k,StringComparer.Ordinal).SequenceEqual(new[]{"checkedAt","currentVersion","enabled","error","installTarget","lastModeRequest","lastRequest","latestVersion","mode","modeControlAllowed","operator","phase","updatedAt"}),"status fields "+string.Join(",",result.Select(p=>p.Key)));
             Assert(result["operator"]!["familyId"]!.GetValue<string>()=="family"&&result["operator"]!["userId"]!.GetValue<string>()=="user"&&result["modeControlAllowed"]!.GetValue<bool>(),"operator");
             Assert(result["lastModeRequest"]!.AsObject().ContainsKey("error")&&result["lastRequest"]!.AsObject().ContainsKey("finishedAt")&&result["installTarget"]!["fingerprint"]!.GetValue<string>().Length==64,"nested fields");
+            // A failure adds exactly its precise code and whether the version is refused for good.
+            var failing=SampleStatus() with{Phase="failed",Error="signature",ErrorCode="RELEASE_SIGNATURE_INVALID",ErrorPermanent=true};
+            failing=failing with{LastRequest=failing.LastRequest! with{State="failed",Error="signature",Code="RELEASE_SIGNATURE_INVALID"}};
+            var failed=(await UpdaterClient.HandleAsync(input,Owner,(_,_)=>Task.FromResult(new UpdaterReply(1,true,Status:failing)),default))["result"]!.AsObject();
+            Assert(failed.Select(p=>p.Key).Except(result.Select(p=>p.Key)).Order(StringComparer.Ordinal).SequenceEqual(new[]{"errorCode","errorPermanent"}),"failure fields "+failed.ToJsonString());
+            Assert(failed["errorCode"]!.GetValue<string>()=="RELEASE_SIGNATURE_INVALID"&&failed["errorPermanent"]!.GetValue<bool>()&&failed["lastRequest"]!["code"]!.GetValue<string>()=="RELEASE_SIGNATURE_INVALID","failure values "+failed.ToJsonString());
+            Assert(!result["lastRequest"]!.AsObject().ContainsKey("code"),"a request without a failure carries a code");
             static bool Refused(JsonObject value)=>value["ok"]!.GetValue<bool>()==false&&value["code"]!.GetValue<string>()=="UPDATES_UNAVAILABLE";
             static string ReasonOf(JsonObject value)=>value["reason"]!.GetValue<string>();
             var never=(Func<UpdaterRequest,CancellationToken,Task<UpdaterReply>>)((_,_)=>throw new Exception("ASKED"));
