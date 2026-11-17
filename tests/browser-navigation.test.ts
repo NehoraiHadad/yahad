@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readRoute, writeRoute } from '../web/browserNavigation.js';
+import { ApiError, shownError } from '../web/api.js';
 
 test('management → chats → group supports Back/Forward without leaving the app or duplicate entries', () => {
   const entries: unknown[] = [null]; let index = 0;
@@ -47,7 +48,7 @@ test('actual App navigation restores history on popstate and clears stale errors
     useRef(value: any) { const i = cursor++; return slots[i] ||= { current: value }; },
     useEffect(fn: () => void) { if (fn.toString().includes('popstate')) fn(); },
     api: async () => ({ user: { id: 'synthetic-parent', role: 'parent' }, csrf: 'synthetic' }),
-    setCsrf() {}, localStorage: { getItem() { return null; } },
+    setCsrf() {}, setViewerRole() {}, setViewerAccount() {}, ApiError, shownError, localStorage: { getItem() { return null; } },
     window: { addEventListener(type: string, fn: () => void) { handlers.set(type, fn); }, removeEventListener() {} },
   });
   const render = () => { cursor = 0; return App(); };
@@ -56,9 +57,9 @@ test('actual App navigation restores history on popstate and clears stale errors
   assert.equal(app.route.mode, 'parent');
   app.navigate({ mode: 'chat', group: null });
   app = render(); app.navigate({ mode: 'chat', group: 'synthetic' });
-  app = render(); app.setError('old failure');
+  app = render(); app.setError({ text: 'old failure' });
   position--; handlers.get('popstate')!(); app = render();
-  assert.equal(app.route.mode, 'chat'); assert.equal(app.route.group, null); assert.equal(app.error, '');
+  assert.equal(app.route.mode, 'chat'); assert.equal(app.route.group, null); assert.equal(app.error, null);
   position--; handlers.get('popstate')!(); assert.equal(render().route.mode, 'parent');
   position += 2; handlers.get('popstate')!(); assert.equal(render().route.group, 'synthetic');
   await render().refresh(); assert.equal(render().route.group, 'synthetic', 'reload retains route');

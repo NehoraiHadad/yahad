@@ -1,88 +1,108 @@
+import { catalogEntry, errorText, type ErrorCategory, type ViewerRole } from './errorCatalog';
+
 export let csrf = '';
 export function setCsrf(value: string) {
   csrf = value;
 }
+let viewerRole: ViewerRole | undefined;
+/** The signed-in role chooses the wording (a child never sees admin detail). */
+export function setViewerRole(role: ViewerRole | undefined) {
+  viewerRole = role;
+}
+let viewerId: string | undefined;
+/** The signed-in account this page acts for; a token refresh never switches accounts silently. */
+export function setViewerAccount(id: string | undefined) {
+  viewerId = id;
+}
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number, readonly code: string, readonly sendOutcome?: 'not_submitted') {
+  constructor(message: string, readonly status: number, readonly code: string, readonly sendOutcome?: 'not_submitted',
+    readonly ref?: string) {
     super(message); this.name = 'ApiError';
   }
 }
-export class ApiNetworkError extends Error {}
+export class ApiNetworkError extends Error {
+  readonly code = 'NETWORK_UNAVAILABLE';
+}
 /** Only background reads may quietly retry these failures; auth errors remain explicit. */
 export function isTransientApiError(error: unknown) {
   return error instanceof ApiNetworkError || error instanceof ApiError &&
     error.code !== 'LOGIN_WAIT' && (error.status === 408 || error.status === 429 || error.status >= 500 && error.status < 600);
 }
-const errors: Record<string, string> = {
-  ORIGINAL_UNAVAILABLE: 'ההודעה המקורית אינה זמינה לפעולה הזאת. אפשר לפתוח אותה ב־WhatsApp.',
-  CHILD_ACCESS_PAUSED: 'ההורה השהה את הגישה לחשבון. אפשר לפנות אליו כדי להפעיל אותה מחדש.',
-  CHILD_ACCESS_CHANGED: 'מצב הגישה השתנה. בדקו את המצב המעודכן ונסו שוב.',
-  USAGE_TAB_LIMIT: 'יותר מדי חלונות פעילים בחשבון הזה. סגרו חלון אחר ונסו שוב בעוד כמה שניות.',
-  USAGE_TAB_EXPIRED: 'החלון דורש בדיקה מחדש לפני המשך השימוש.',
-  USAGE_EXHAUSTED: 'מכסת הזמן להיום הסתיימה. ההורה יכול להוסיף זמן.',
-  USAGE_PAUSED: 'זמן השימוש מושהה. יש לחזור לחלון פעיל ולבדוק את המכסה.',
-  USAGE_CLOCK: 'שעון השרת דורש בדיקה. זמן השימוש מושהה.',
-  USAGE_TIMEZONE_REQUIRED: 'על ההורה לבחור אזור זמן משפחתי לפני הפעלת המכסה.',
-  BONUS_DAY_CHANGED: 'היום התחלף. יש לרענן לפני הוספת זמן.',
-  UPDATES_MODE_LOCKED: 'שליטה במצב העדכון טרם אושרה בהגדרה המקומית של רכיב העדכון.',
-  HISTORY_WAIT: 'יש בקשות היסטוריה פעילות או שבוצעו לאחרונה. המתינו מעט לפני בקשה נוספת.',
-  DELETION_INCOMPLETE: 'מחיקת שיחות קודמת לא הושלמה. בדקו את המצב ואשרו בנפרד את השלמת המחיקה לפני חיבור מחדש.',
-  CONNECTION_BUSY: 'פעולת חיבור או ניתוק כבר מתבצעת. המתינו לסיום.',
-  PASSWORD_MISMATCH: 'הסיסמאות אינן זהות.',
-  NAME_UNAVAILABLE: 'השם כבר בשימוש. בחרו שם אחר, למשל שם פרטי ושם משפחה.',
-  CHILD_LIMIT: 'אפשר ליצור עד 20 חשבונות ילדים במשפחה.',
-  UPDATES_UNAVAILABLE: 'שירות העדכון אינו זמין או שהחשבון אינו מורשה לנהל אותו.',
-  SIGN_IN_REQUIRED: 'החיבור הסתיים. צריך להיכנס שוב.',
-  INVALID_CREDENTIALS: 'השם או הסיסמה אינם נכונים.',
-  LOGIN_WAIT: 'היו יותר מדי ניסיונות כניסה. המתינו עד 15 דקות ונסו שוב. תקלה בחשבון אחד אינה מחייבת איפוס של שאר החשבונות.',
-  SLOW_DOWN: 'רגע קטן, ננסה שוב בעוד כמה דקות.',
-  NOT_FOUND: 'השיחה או ההודעה כבר אינן זמינות.',
-  PARENT_ONLY: 'הפעולה זמינה להורה בלבד.',
-  NOT_CONNECTED: 'אין כרגע חיבור. אפשר לנסות שוב כשיחזור.',
-  SEND_PENDING: 'השליחה עדיין מתבצעת. אפשר לבדוק את מצבה בלי לשלוח שוב.',
-  SEND_ID_CONFLICT: 'מזהה השליחה כבר שייך להודעה אחרת. לא נשלחה הודעה נוספת.',
-  SEND_NOT_SUBMITTED: 'ההודעה לא הוגשה לשליחה. אפשר לנסות שוב.',
-  SEND_UNCERTAIN: 'לא התקבל אישור שליחה. אפשר לבדוק את המצב; לא נשלח שוב כל עוד התוצאה לא ידועה.',
-  FILE_TOO_LARGE: 'הקובץ גדול מדי. אפשר לבחור קובץ קטן יותר.',
-  EDIT_WINDOW_CLOSED: 'חלון הזמן לעריכה הסתיים.',
-  AUDIO_NOT_OGG: 'ההקלטה אינה בפורמט של הודעה קולית. אפשר להקליט שוב.',
-  AUDIO_NOT_OPUS: 'ההקלטה אינה בפורמט של הודעה קולית. אפשר להקליט שוב.',
-  AUDIO_NOT_MONO: 'אפשר לשלוח רק הקלטה בערוץ אחד (מונו).',
-  AUDIO_TOO_LONG: 'הודעה קולית יכולה להיות באורך של עד שתי דקות.',
-  AUDIO_TOO_LARGE: 'ההקלטה גדולה מדי לשליחה.',
-  AUDIO_EMPTY: 'ההקלטה ריקה. אפשר להקליט שוב.',
-  PREVIEW_REQUIRED: 'לתמונה ולסרטון צריך תצוגה מקדימה, והדפדפן לא הכין אותה. אפשר לנסות שוב.',
-  INVALID_PREVIEW: 'התצוגה המקדימה שהדפדפן הכין אינה תקינה. אפשר לנסות שוב.',
-  PREVIEW_UNEXPECTED: 'נשלחה תצוגה מקדימה לקובץ שאינו תמונה או סרטון.',
-  UNEXPECTED_FILE: 'הבקשה כללה קובץ לא צפוי.',
-  WRONG_PASSWORD: 'הסיסמה הנוכחית אינה נכונה.',
-  WEBP_REQUIRED: 'מדבקה צריכה להיות קובץ WebP.',
-  UNSUPPORTED: 'הפעולה אינה נתמכת בחיבור הנוכחי.',
-};
-export async function api<T = any>(path: string, method = 'GET', body?: unknown): Promise<T> {
+
+/** What a screen shows for an error: the text, and a reference for support when there is one. */
+export interface ShownError {
+  text: string;
+  code?: string;
+  ref?: string;
+  category?: ErrorCategory;
+}
+/** Normalize anything a catch block holds. A plain string or local Error keeps its text. */
+export function shownError(error: unknown): ShownError {
+  if (typeof error === 'string') return { text: error };
+  if (error instanceof ApiError || error instanceof ApiNetworkError) {
+    const code = error.code;
+    return { text: error.message, code, ref: error instanceof ApiError ? error.ref : undefined, category: catalogEntry(code).category };
+  }
+  if (error instanceof Error && error.message) return { text: error.message };
+  return { text: errorText('', viewerRole) };
+}
+
+const refPattern = /^[a-z0-9]{6,16}$/;
+const codePattern = /^[A-Z][A-Z0-9_]{0,63}$/;
+async function request(path: string, method: string, body: unknown, headers: Record<string, string>) {
   const form = body instanceof FormData;
-  const res = await fetch('/api' + path, {
+  return fetch('/api' + path, {
     method,
     headers: {
       ...(method === 'GET' ? {} : { 'X-CSRF-Token': csrf }),
       ...(body && !form ? { 'Content-Type': 'application/json' } : {}),
+      ...headers,
     },
     body: body ? (form ? body : JSON.stringify(body)) : undefined,
     credentials: 'same-origin',
     cache: 'no-store',
   }).catch(error => {
-    if (error instanceof TypeError) throw new ApiNetworkError('החיבור לשרת אינו זמין כרגע.', { cause: error });
+    if (error instanceof TypeError) throw new ApiNetworkError(errorText('NETWORK_UNAVAILABLE', viewerRole), { cause: error });
     throw error;
   });
+}
+/** CSRF_DENIED is refused before any handler runs, so nothing was done. It means this page
+ * holds the token of a replaced session (a newer sign-in in another window). Recover the
+ * current token once, and only when the cookie still belongs to the same account. */
+async function refreshToken(initiator: string) {
+  const res = await request('/me', 'GET', undefined, {}).catch(() => null);
+  if (!res?.ok) return false;
+  const me = await res.json().catch(() => null);
+  if (!me?.user?.id || typeof me.csrf !== 'string') return false;
+  // Compared with the account that started the request, never the page's current
+  // viewer: a concurrent refresh may already have switched the page to another one.
+  if (me.user.id !== initiator || viewerId !== initiator) {
+    window.dispatchEvent(new Event('session-changed'));
+    return false;
+  }
+  setCsrf(me.csrf);
+  return true;
+}
+export async function api<T = any>(path: string, method = 'GET', body?: unknown, headers: Record<string, string> = {}): Promise<T> {
+  const initiator = viewerId;
+  let res = await request(path, method, body, headers);
+  if (res.status === 403 && method !== 'GET' && initiator) {
+    const denied = await res.clone().json().catch(() => null);
+    if (denied?.error === 'CSRF_DENIED' && await refreshToken(initiator)) res = await request(path, method, body, headers);
+  }
   if (!res.ok) {
-    let error = 'REQUEST_FAILED', sendOutcome: 'not_submitted' | undefined;
+    let error = 'UNREADABLE_RESPONSE', sendOutcome: 'not_submitted' | undefined;
+    let ref = res.headers.get('X-Request-Id') ?? undefined;
     try {
-      const result = await res.json(); error = result.error;
+      const result = await res.json();
+      if (typeof result.error === 'string' && codePattern.test(result.error)) error = result.error;
+      if (typeof result.ref === 'string') ref = result.ref;
       if (result.sendOutcome === 'not_submitted') sendOutcome = result.sendOutcome;
     } catch {}
+    if (ref !== undefined && !refPattern.test(ref)) ref = undefined;
     if (res.status === 401 && path !== '/login') window.dispatchEvent(new Event('session-expired'));
     if (error.startsWith('USAGE_') && path !== '/usage/heartbeat') window.dispatchEvent(new Event('usage-required'));
-    throw new ApiError(errors[error] || 'הפעולה לא הושלמה. אפשר לנסות שוב.', res.status, error, sendOutcome);
+    throw new ApiError(errorText(error, viewerRole), res.status, error, sendOutcome, ref);
   }
   return res.json();
 }

@@ -1,21 +1,33 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Clock3, Download, LoaderCircle, RefreshCw, TriangleAlert } from 'lucide-react';
 import { csrf } from './api';
+import { ErrorReference } from './ErrorReference';
 import { availableUpdateTarget, sameUpdateTarget, createUpdatePoller, reconcileUpdateRequest, updateActionsDisabled, updateNeedsRepair, updatePhases, updateProgress, type ConfiguredUpdate,
   type LocalUpdateRequest, type UpdateAction, type UpdateStatus, type UpdateTarget } from './updateProgress';
+import { modeRequestErrorTexts, modeRequestRejectedText, unavailableUpdatesText, updateRejectionFallback, updateRejectionTexts } from './updateErrors';
 
-export class RejectedUpdateRequest extends Error {}
+/** The server's answer, kept as its code (src/server.ts) so support sees the real cause. */
+function serverCode(body: unknown, status: number) {
+  const code = (body as { error?: unknown } | null)?.error;
+  return typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(code) ? code : `HTTP_${status}`;
+}
+export class RejectedUpdateRequest extends Error {
+  constructor(readonly code: string, message = updateRejectionTexts[code] ?? updateRejectionFallback) { super(message); }
+}
 export class UpdateAccessError extends Error {
-  constructor(readonly status: 401 | 403) {
+  constructor(readonly status: 401 | 403, readonly code = `HTTP_${status}`) {
     super(status === 401 ? 'החיבור הסתיים. צריך להיכנס שוב.' : 'אין הרשאה לצפייה במצב העדכונים. המידע הקודם הוסתר; יש לבדוק את הרשאת החשבון במחשב השרת.');
   }
 }
+type PanelError = { message: string; code: string };
+
 
 function expiredSession() { window.dispatchEvent(new Event('session-expired')); }
 export async function readUpdateStatus(signal: AbortSignal): Promise<UpdateStatus> {
   const response = await fetch('/api/parent/updates', { credentials: 'same-origin', cache: 'no-store', signal });
   if (response.status === 401) expiredSession();
-  if (response.status === 401 || response.status === 403) throw new UpdateAccessError(response.status);
+  if (response.status === 401 || response.status === 403)
+    throw new UpdateAccessError(response.status, serverCode(await response.json().catch(() => null), response.status));
   if (!response.ok) throw new Error('Status unavailable');
   const value = await response.json();
   if (!value || typeof value.configured !== 'boolean' || value.configured && !Object.hasOwn(updatePhases, value.phase))
@@ -23,7 +35,7 @@ export async function readUpdateStatus(signal: AbortSignal): Promise<UpdateStatu
   return value;
 }
 export async function submitUpdateRequest(action: UpdateAction, mode?: 'auto' | 'notify', target?: UpdateTarget): Promise<{ state: 'queued' | 'pending' }> {
-  if (action === 'install' && !target) throw new RejectedUpdateRequest('צריך לבדוק את הגרסה מחדש לפני התקנה. לא נשלחה בקשת התקנה ללא יעד מאושר.');
+  if (action === 'install' && !target) throw new RejectedUpdateRequest('target_changed', 'צריך לבדוק את הגרסה מחדש לפני התקנה. לא נשלחה בקשת התקנה ללא יעד מאושר.');
   const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 15_000);
   try {
     const response = await fetch('/api/parent/updates', { method: 'POST', credentials: 'same-origin', signal: controller.signal,
@@ -34,10 +46,7 @@ export async function submitUpdateRequest(action: UpdateAction, mode?: 'auto' | 
       // A lost response or server error can occur after durable queue publication.
       // Only a definite client rejection is safe to present as "not accepted".
       if (response.status >= 400 && response.status < 500 && response.status !== 408) {
-        const rejection = await response.json().catch(() => null);
-        if (rejection?.error === 'UPDATES_TARGET_CHANGED')
-          throw new RejectedUpdateRequest('יעד העדכון השתנה או טרם אושר. לא נשלחה התקנה; בדקו שוב את הגרסה ובחרו מחדש לפני אישור.');
-        throw new RejectedUpdateRequest('השרת לא אישר את הבקשה. רעננו את המצב ובדקו שהעדכונים זמינים ושהחשבון מורשה.');
+        throw new RejectedUpdateRequest(serverCode(await response.json().catch(() => null), response.status));
       }
       throw new Error('Request outcome unknown');
     }
@@ -58,6 +67,8 @@ export function UpdateProgressStatus({ data, local = null, reconnecting = false 
     {unavailable && <p>הדיווח האחרון שהתקבל: {progress.title}</p>}
     {progress.action && <p>הפעולה שהתבקשה: {progress.action}</p>}
     {!unavailable && <p>{progress.detail}</p>}
+    {!unavailable && progress.todo && <p>מה לעשות: {progress.todo}</p>}
+    {!unavailable && progress.support && <ErrorReference code={progress.support}/>}
     {unavailable && <p>אין כרגע אישור להתקדמות, להצלחה או לכשל חדש. ייתכן שזה ניתוק זמני בזמן הפעלה מחדש. ננסה לקבל דיווח מצב חדש בלבד — לא נשלח שוב בקשת עדכון.</p>}
     {data.updatedAt && <small>דיווח אחרון מהשירות: {new Date(data.updatedAt).toLocaleString('he-IL')}</small>}
   </div>;
@@ -67,7 +78,7 @@ export function UpdatesPanel() {
   const [open, setOpen] = useState(false), [data, setData] = useState<UpdateStatus | null>(null);
   const [checked, setChecked] = useState(false);
   const [busy, setBusy] = useState(false), [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState(''), [notice, setNotice] = useState('');
+  const [error, setError] = useState<PanelError | null>(null), [notice, setNotice] = useState('');
   const [reconnecting, setReconnecting] = useState(false), [confirm, setConfirm] = useState<UpdateTarget | null>(null);
   const [accessDenied, setAccessDenied] = useState(false);
   const [choice, setChoice] = useState<'auto' | 'notify' | null>(null);
@@ -102,7 +113,7 @@ export function UpdatesPanel() {
         if (failure instanceof UpdateAccessError) {
           accessDeniedRef.current = true; setAccessDenied(true); setChecked(true);
           dataRef.current = null; setData(null); rememberRequest(null);
-          setReconnecting(false); setError(failure.message); setNotice(''); setChoice(null); setConfirm(null);
+          setReconnecting(false); setError({ message: failure.message, code: failure.code }); setNotice(''); setChoice(null); setConfirm(null);
         } else setReconnecting(true);
       },
     });
@@ -112,17 +123,17 @@ export function UpdatesPanel() {
 
   function refresh() {
     setRefreshing(true);
-    if (accessDenied) { accessDeniedRef.current = false; setAccessDenied(false); setError(''); }
+    if (accessDenied) { accessDeniedRef.current = false; setAccessDenied(false); setError(null); }
     else poller.current?.refresh();
   }
   async function request(action: UpdateAction, mode?: 'auto' | 'notify', target?: UpdateTarget) {
     const current = dataRef.current?.configured ? dataRef.current : null;
     if (sending.current || !current || updateActionsDisabled(current, localRef.current, reconnecting, busy)) return;
     if (action === 'install' && !sameUpdateTarget(target, availableUpdateTarget(current))) {
-      setError('יעד העדכון השתנה. לא נשלחה התקנה; בדקו את הגרסה ופתחו אישור חדש.');
+      setError({ message: 'יעד העדכון השתנה. לא נשלחה התקנה; בדקו את הגרסה ופתחו אישור חדש.', code: 'target_changed' });
       setConfirm(null); return;
     }
-    sending.current = true; setBusy(true); setError(''); setNotice('');
+    sending.current = true; setBusy(true); setError(null); setNotice('');
     rememberRequest({ action, mode, target, state: 'sending', previousRequestId: current.lastRequest?.id,
       previousModeId: current.lastModeRequest?.id });
     try {
@@ -133,7 +144,7 @@ export function UpdatesPanel() {
       setConfirm(null); setChoice(null); poller.current?.refresh();
     } catch (e) {
       if (!mounted.current || accessDeniedRef.current) return;
-      if (e instanceof RejectedUpdateRequest) { rememberRequest(null); setError(e.message); }
+      if (e instanceof RejectedUpdateRequest) { rememberRequest(null); setError({ message: e.message, code: e.code }); }
       else {
         if (localRef.current) rememberRequest({ ...localRef.current, state: 'uncertain' });
         setReconnecting(true);
@@ -152,10 +163,11 @@ export function UpdatesPanel() {
       <Download size={20}/><span><b>עדכוני האפליקציה</b><small aria-live="polite">{accessDenied ? 'אין הרשאה לצפייה במצב העדכונים' : reconnecting || configured?.stale ? 'מצב עדכני אינו זמין — בודקים שוב' : progress?.title || 'גרסאות מ־GitHub, גיבוי ושליטה שלכם'}</small></span><span>{open ? 'סגירה' : 'פתיחה'}</span>
     </button>
     {open && <div className="diagnostics-body" aria-busy={busy || refreshing}>
-      {error && <p className="error" role="alert">{error}</p>}
+      {error && <div role="alert"><p className="error">{error.message}</p><ErrorReference code={error.code}/></div>}
       {refreshing && !data && <p role="status">בודקים את המצב…</p>}
       {reconnecting && !configured && !accessDenied && <p role="status" className="diagnostics-notice">לא ניתן לקבל את מצב שירות העדכון כרגע. מנסים לקרוא את המצב שוב; אין אישור להצלחה או לכשל ולא נשלחת בקשת עדכון נוספת.</p>}
-      {data && !configured && !reconnecting && <p>מצב העדכונים אינו זמין לחשבון הזה. ייתכן שרכיב העדכון עוד לא הוגדר, שאין כרגע דיווח תקין או שהחשבון אינו מוגדר כאחראי לעדכונים. אפשר לרענן את המצב; אין כאן אישור שעדכון התחיל או הסתיים.</p>}
+      {data && !data.configured && !reconnecting && <><p>{unavailableUpdatesText(data.reason)}</p>
+        {data.reason && <details><summary>פרטים טכניים</summary><ErrorReference code={data.reason}/></details>}</>}
       {configured && <>
         <UpdateProgressStatus data={configured} local={local} reconnecting={reconnecting}/>
         <p>גרסה נוכחית שדווחה: <span dir="ltr">{configured.currentVersion || 'טרם דווחה'}</span>{configured.latestVersion && <> · גרסה זמינה: <span dir="ltr">{configured.latestVersion}</span></>}</p>
@@ -163,8 +175,11 @@ export function UpdatesPanel() {
         <p>שירות העדכון שומר גיבוי מקומי מוצפן ובודק תקינות כחלק מההתקנה. השלבים כאן הם רק אלה שדווחו בפועל, ולא הבטחה שהעדכון יצליח. סגירת הדפדפן אינה מבטלת עדכון שכבר נקלט; השאירו את המחשב פועל. בפתיחה מחדש בודקים את המצב מהשירות.</p>
         {pendingMode && <p role="status" className="diagnostics-notice">השינוי שהתבקש: {(configured.queuedMode?.mode || configured.lastModeRequest?.mode) === 'auto' ? 'עדכונים אוטומטיים' : 'הודעה בלבד'}. המצב הפעיל למעלה יתעדכן לאחר שהשינוי יושלם. אין צורך ללחוץ שוב.</p>}
         {!configured.queuedMode && configured.lastModeRequest?.state === 'applied' && <p role="status">הבחירה האחרונה נשמרה והופעלה.</p>}
-        {!repairRequired && !configured.queuedMode && configured.lastModeRequest?.state === 'rejected' && <p role="alert">שינוי המצב האחרון לא הוחל. המצב הפעיל למעלה נשמר. רעננו ונסו שוב; אם זה חוזר, נדרשת בדיקה במחשב השרת.</p>}
-        {configured.lastModeRequest?.state === 'pending' && configured.lastModeRequest.error && <p role="alert">לא ניתן לשמור את שינוי המצב בגלל תקלה בהגדרת השירות. נדרשת בדיקה במחשב השרת; בדיקות גרסה חדשות עשויות להמתין עד לתיקון.</p>}
+        {!repairRequired && !configured.queuedMode && configured.lastModeRequest?.state === 'rejected' && <div role="alert">
+          <p>{configured.lastModeRequest.error ? modeRequestErrorTexts[configured.lastModeRequest.error] : modeRequestRejectedText}</p>
+          <ErrorReference code={configured.lastModeRequest.error ?? 'mode_rejected'}/></div>}
+        {configured.lastModeRequest?.state === 'pending' && configured.lastModeRequest.error && <div role="alert">
+          <p>{modeRequestErrorTexts[configured.lastModeRequest.error]}</p><ErrorReference code={configured.lastModeRequest.error}/></div>}
         {!configured.modeControlAllowed && <p>שינוי המצב זמין להורה המוגדר כאחראי לעדכונים, לאחר השלמת המתקין במחשב השרת.</p>}
         {!repairRequired && <button type="button" className="outline-button" disabled={disabled || !configured.modeControlAllowed} onClick={() => setChoice(configured.mode === 'auto' ? 'notify' : 'auto')}>{configured.mode === 'auto' ? 'מעבר להודעה בלבד' : 'הפעלת עדכונים אוטומטיים'}</button>}
         {choice && !repairRequired && <div className="diagnostics-notice" role="group" aria-label="אישור שינוי מצב העדכונים"><p>{choice === 'auto' ? 'להתקין אוטומטית גרסאות יציבות חדשות? ייתכן ניתוק קצר מהשיחות בזמן התקנה.' : 'לעבור להודעה בלבד? גרסאות חדשות יוצגו כאן, ותבחרו מתי להתקין.'}</p><button className="outline-button" disabled={disabled} onClick={() => void request('set_mode', choice)}>כן, {choice === 'auto' ? 'הפעלת עדכונים אוטומטיים' : 'מעבר להודעה בלבד'}</button><button className="text-button" disabled={busy} onClick={() => setChoice(null)}>ביטול</button></div>}

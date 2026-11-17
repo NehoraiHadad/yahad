@@ -5,15 +5,17 @@ import { childLabel } from './childLabels';
 import { ChildUsageSettings } from './ChildUsageSettings';
 import { GroupPicker } from './GroupPicker';
 import { ChildAccessSettings } from './ChildAccessSettings';
-import type { ChildAccessChange } from './childManagementState';
+import type { ActionOutcome, ChildAccessChange } from './childManagementState';
 import { ChildActionGuard, confirmedChildGrant, type ChildGrantChange } from './childManagementState';
+import { ApiError, shownError, type ShownError } from './api';
+import { ErrorReference } from './ErrorReference';
 
 type Props = {
   data: FamilyOverview | null; selected: string; busy: boolean; stale: boolean; createdChild: string;
   photoRetryKey?: string; onSelect: (id: string) => void; onAdd: () => void;
   onSettings: (id: string, mode: 'profile' | 'password') => void;
-  onGrant: (change: ChildGrantChange) => Promise<boolean>; onRefresh: () => void; onRetry: () => void;
-  onAccess?: (change: ChildAccessChange) => Promise<boolean>;
+  onGrant: (change: ChildGrantChange) => Promise<ActionOutcome>; onRefresh: () => void; onRetry: () => void;
+  onAccess?: (change: ChildAccessChange) => Promise<ActionOutcome>;
   children?: React.ReactNode;
 };
 
@@ -67,7 +69,8 @@ export function ChildManagement(props: Props) {
 function ChildWorkspace({ data, selectedChild: child, busy, stale, createdChild, onGrant, onAccess, onSettings, onRefresh, photoRetryKey, children }: Props & {
   data: FamilyOverview; selectedChild: ReturnType<typeof familyProgress>['children'][number];
 }) {
-  const [change, setChange] = useState<(ChildGrantChange & { title: string; phase: 'saving' | 'settled'; acknowledged?: boolean }) | null>(null);
+  const [change, setChange] = useState<(ChildGrantChange & { title: string; phase: 'saving' | 'settled'; acknowledged?: boolean;
+    rejected?: ShownError }) | null>(null);
   const guard = useRef(new ChildActionGuard());
   useEffect(() => () => guard.current.invalidate(), []);
   const toggle = async (groupId: string, allowed: boolean) => {
@@ -75,10 +78,11 @@ function ChildWorkspace({ data, selectedChild: child, busy, stale, createdChild,
     const request = guard.current.begin(); if (request === null) return;
     const update = { childId: child.id, groupId, allowed, title: data.groups.find(group => group.id === groupId)?.title || '' };
     setChange({ ...update, phase: 'saving' });
-    let acknowledged = false;
-    try { acknowledged = await onGrant({ childId: update.childId, groupId, allowed }); }
-    catch { /* The parent reconciles even when a mutation response is lost. */ }
-    if (guard.current.finish(request)) setChange({ ...update, phase: 'settled', acknowledged });
+    // The parent reconciles with the server either way. A definite server answer is shown
+    // as itself; a lost response stays "not confirmed" because it may have been saved.
+    const outcome = await onGrant({ childId: update.childId, groupId, allowed });
+    const rejected = !outcome.ok && outcome.error instanceof ApiError ? shownError(outcome.error) : undefined;
+    if (guard.current.finish(request)) setChange({ ...update, phase: 'settled', acknowledged: outcome.ok, rejected });
   };
   const confirmed = change && change.phase === 'settled' && confirmedChildGrant(data, change, stale);
   const saving = change?.phase === 'saving';
@@ -101,6 +105,8 @@ function ChildWorkspace({ data, selectedChild: child, busy, stale, createdChild,
       <div className={'child-save-feedback ' + (confirmed ? 'confirmed' : '')} role={change?.phase === 'settled' && !stale && !confirmed ? 'alert' : 'status'} aria-live="polite">
         {change ? saving ? `שומרים את השינוי ב־${change.title} עבור ${child.name}…` : stale ? `לא ניתן לאמת את השינוי בשיחה ${change.title} עבור ${child.name}. ממתינים לחיבור ולרענון לפני שינוי נוסף.`
           : confirmed ? `${change.title} ${change.allowed ? 'אושרה' : 'הוסרה מהשיחות המאושרות'} עבור ${child.name}.`
+          : change.rejected ? <>השינוי בשיחה {change.title} עבור {child.name} לא נשמר. {change.rejected.text}
+            <ErrorReference code={change.rejected.code} refId={change.rejected.ref}/></>
           : `לא התקבל אישור לשינוי בשיחה ${change.title} עבור ${child.name}. הרשימה מציגה את המצב האחרון מהשרת; אפשר לבדוק ולנסות שוב.` : 'השיחות המסומנות הן השיחות המאושרות לחשבון הזה.'}
       </div>
       <GroupPicker groups={data.groups} grants={data.grants} childId={child.id} childName={child.name} showFilters

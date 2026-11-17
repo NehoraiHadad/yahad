@@ -100,7 +100,7 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
                 InstallLocations.ServiceSid,target,EmbeddedKeyDigest);
             NativeInstallFiles.NewDirectory(InstallLocations.State,InstallAcl);Save("preparing");
         }
-        if(new DriveInfo(Path.GetPathRoot(InstallLocations.Binaries)!).AvailableFreeSpace<checked(package.Manifest.Files.Sum(f=>f.Size)*3+536870912L))throw new IOException("DISK_SPACE");
+        if(new DriveInfo(Path.GetPathRoot(InstallLocations.Binaries)!).AvailableFreeSpace<package.Manifest.RequiredFreeBytes())throw new IOException("DISK_SPACE");
         if(!Directory.Exists(InstallLocations.Binaries))NativeInstallFiles.NewDirectory(InstallLocations.Binaries,BinaryAcl);
         // A resumed extraction holds only this pair's members and their uncommitted
         // partials; the partials go, committed members stay.
@@ -222,20 +222,11 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
         // RUNNING is reported only after the application answered its own health check
         // as this app, at the schema this app writes.
         using var client=new HttpClient(new HttpClientHandler{UseProxy=false,AllowAutoRedirect=false}){Timeout=TimeSpan.FromSeconds(10)};
-        using(var health=await client.GetAsync(LocalUrl+"health/ready",cancellation))
-        {
-            health.EnsureSuccessStatusCode();var bytes=await health.Content.ReadAsByteArrayAsync(cancellation);if(bytes.Length>16384)throw new IOException("SERVER_NOT_READY");
-            var seen=NativeJson.Read(bytes,SetupJsonContext.Default.JsonElement);var target=Package.Manifest.App;
-            if(!UpgradeRules.HealthPasses(new(seen.GetProperty("ok").GetBoolean(),seen.GetProperty("version").GetString(),seen.GetProperty("databaseSchema").GetInt32()),target.Version,target.DatabaseSchema))
-                throw new IOException("SERVER_NOT_READY");
-            reportedSchema=target.DatabaseSchema;
-        }
-        async Task<string?> SetupState()
-        {
-            using var response=await client.GetAsync(LocalUrl+"api/setup/status",cancellation);response.EnsureSuccessStatusCode();
-            var result=await response.Content.ReadAsByteArrayAsync(cancellation);if(result.Length>16384)throw new IOException("SERVER_NOT_READY");
-            return NativeJson.Read(result,SetupJsonContext.Default.JsonElement).GetProperty("state").GetString();
-        }
+        var target=Package.Manifest.App;
+        if(!await AskAsync(client,LocalUrl+"health/ready",seen=>UpgradeRules.HealthPasses(new(seen.GetProperty("ok").GetBoolean(),seen.GetProperty("version").GetString(),seen.GetProperty("databaseSchema").GetInt32()),target.Version,target.DatabaseSchema),cancellation))
+            throw new IOException("SERVER_NOT_READY");
+        reportedSchema=target.DatabaseSchema;
+        Task<string?> SetupState()=>AskAsync(client,LocalUrl+"api/setup/status",seen=>seen.GetProperty("state").GetString(),cancellation);
         var setup=await SetupState();
         if(setup=="complete")setupToken=null;
         else if(resumed&&setup=="closed")
@@ -249,6 +240,22 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
         await updater.StartAsync(cancellation);
         var lan=await network.ObserveAsync(cancellation);
         return new(true,"READY",LocalUrl,setupToken,Lan:lan);
+    }
+    // One question to the Runtime just started. However it fails to answer as this app
+    // (refused, the client's own 10-second timeout, an error status, a body that is not
+    // the expected record) it is not ready: SERVER_NOT_READY, with the cause kept for
+    // the detail. Only the operation's own deadline stays INSTALL_TIMEOUT.
+    internal static async Task<T> AskAsync<T>(HttpClient client,string url,Func<JsonElement,T> read,CancellationToken cancellation)
+    {
+        try
+        {
+            using var response=await client.GetAsync(url,cancellation);response.EnsureSuccessStatusCode();
+            var bytes=await response.Content.ReadAsByteArrayAsync(cancellation);if(bytes.Length>16384)throw new IOException("SERVER_NOT_READY");
+            return read(NativeJson.Read(bytes,SetupJsonContext.Default.JsonElement));
+        }
+        catch(Exception error)when(!cancellation.IsCancellationRequested&&error is not IOException{Message:"SERVER_NOT_READY"}&&
+            error is HttpRequestException or TaskCanceledException or JsonException or KeyNotFoundException or InvalidOperationException or FormatException or IOException)
+        {throw new IOException("SERVER_NOT_READY",error);}
     }
     // The only place a first install records "committed", with the schema the Runtime
     // reported healthy. The migration copy is no longer the data's only safe state.
@@ -322,19 +329,28 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
                 if(updater is not null){updater.Delete();updater.Dispose();updater=null;}
                 if(service is not null){service.Delete();service.Dispose();service=null;}
                 operationPhase=UninstallPhase.WaitForServiceRemoval;
+                // Windows deletes a marked service once its last handle closes; 15 seconds
+                // without that is Windows still releasing it, not the operation's deadline.
                 using(var wait=CancellationTokenSource.CreateLinkedTokenSource(cancellation))
-                {wait.CancelAfter(TimeSpan.FromSeconds(15));while(AnyServiceExists())await Task.Delay(100,wait.Token);}
+                {
+                    wait.CancelAfter(TimeSpan.FromSeconds(15));
+                    try{while(AnyServiceExists())await Task.Delay(100,wait.Token);}
+                    catch(OperationCanceledException error)when(!cancellation.IsCancellationRequested){throw new IOException("UNINSTALL_SERVICE_REMOVAL_PENDING",error);}
+                }
                 operationPhase=UninstallPhase.SaveRemovalState;intent=intent with{Stage="services_removed"};SaveRemoval(intent);
             }
         }
         if(!intent!.AtLeast("data_removed"))
         {
-            if(mode==UninstallMode.DeleteData&&Directory.Exists(InstallLocations.State))
+            if(mode==UninstallMode.DeleteData)
             {
-                operationPhase=UninstallPhase.DeleteData;
-                var tree=RemovalTree.Inspect(InstallLocations.State,WindowsFileBoundary.RequireNoLink);
-                tree.DeleteContents(PrivateCopy.DeleteMember,p=>progress(new("deleting_data",25+p*50/100)),cancellation);
-                operationPhase=UninstallPhase.DeleteDataRoot;WindowsFileBoundary.DeleteNoFollow(InstallLocations.State,true);
+                if(Directory.Exists(InstallLocations.State))
+                {
+                    operationPhase=UninstallPhase.DeleteData;
+                    var tree=RemovalTree.Inspect(InstallLocations.State,WindowsFileBoundary.RequireNoLink);
+                    tree.DeleteContents(PrivateCopy.DeleteMember,p=>progress(new("deleting_data",25+p*50/100)),cancellation);
+                    operationPhase=UninstallPhase.DeleteDataRoot;WindowsFileBoundary.DeleteNoFollow(InstallLocations.State,true);
+                }
             }
             else if(mode==UninstallMode.KeepData)
             {
@@ -358,6 +374,10 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
             }
             intent=intent with{Stage="binaries_removed"};SaveRemoval(intent);
         }
+        // Setup's own failure records go with the family's data. Removed here, after every
+        // step that can fail and record one, and on every resumed attempt: a failure after
+        // data_removed writes a new record, which the retry that completes removal deletes.
+        if(mode==UninstallMode.DeleteData){operationPhase=UninstallPhase.DeleteDataRoot;SetupFailureLog.Remove(cancellation);}
         operationPhase=UninstallPhase.RemoveRegistration;Registry.LocalMachine.DeleteSubKey(RegistryKey,false);
         // The protected receipt is deleted last: a failed final step still has
         // the complete owner, mode and inventory for the same bounded retry.

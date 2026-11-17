@@ -58,22 +58,28 @@ internal static class SetupOperation
         catch(Exception failure){return FailureResult(failure,mode);}
     }
     internal static SetupResult FailureResult(Exception failure,UninstallMode mode)=>new(false,Code(failure),DataPreserved:mode==UninstallMode.KeepData,Failure:SetupFailureDetail.From(failure));
+    // The code a failure reaches the window, the result file and the log as. A code the
+    // engine wrote (SetupErrorCatalog.IsCode) survives as itself, whatever exception
+    // carries it; Windows' own errors are named by number; INSTALL_FAILED is left for
+    // what nothing named, and the detail then carries the exception's type. A control
+    // result is never taken from an exception: no throw can impersonate the hand-off.
     internal static string Code(Exception error)=>SetupFailureDetail.Cause(error) switch
     {
-        Win32Exception w when w.NativeErrorCode==112=>"DISK_SPACE",
-        Win32Exception w when w.NativeErrorCode==5=>"ACCESS_DENIED",
-        Win32Exception w when w.NativeErrorCode==32=>"FILE_LOCKED",
+        var cause when SetupErrorCatalog.IsCode(cause.Message)&&cause.Message!=RepairHost.HandOff=>cause.Message,
+        Win32Exception w=>Win32Code(w.NativeErrorCode)??"INSTALL_FAILED",
         UnauthorizedAccessException=>"ACCESS_DENIED",
         OperationCanceledException=>"INSTALL_TIMEOUT",
-        IOException io when KnownCodes.Contains(io.Message)||LanCodes.Contains(io.Message)||UpdateCodes.Contains(io.Message)||UpgradeCodes.Contains(io.Message)=>io.Message,
+        // System.IO reports a Win32 failure as IOException with HRESULT_FROM_WIN32(error).
+        IOException io when((uint)io.HResult>>16)==0x8007=>Win32Code(io.HResult&0xFFFF)??"INSTALL_FAILED",
         _=>"INSTALL_FAILED"
     };
-    private static readonly HashSet<string> UpgradeCodes=new(StringComparer.Ordinal){"RELEASE_SIGNATURE_INVALID","RELEASE_KEY_UNTRUSTED","RELEASE_NOT_NEWER","RELEASE_SETUP_MISMATCH","RELEASE_MANIFEST_INVALID","RELEASE_UNSUPPORTED_FROM","UPGRADE_LOCKED","UPGRADE_INCOMPLETE","UPGRADE_BACKUP_INVALID","NOT_INSTALLED","INSTALL_INCOMPLETE",
-        "LEGACY_INSTALL_UNSUPPORTED","INFRA_IDENTITY_MISMATCH","APP_IDENTITY_MISMATCH","ACTIVE_POINTER_INVALID","TREE_RECORD_INVALID","RELEASE_TRACK_MISMATCH","APP_NEEDS_INFRASTRUCTURE","RELEASE_APP_SIZE","RELEASE_APP_HASH",
-        "APP_PACKAGE_ZIP","APP_PACKAGE_PATH","APP_PACKAGE_FORBIDDEN","APP_PACKAGE_COLLISION","APP_PACKAGE_MEMBER_TYPE","APP_PACKAGE_BOUND","APP_PACKAGE_MISSING","APP_PACKAGE_TREE_MISMATCH","APP_PACKAGE_MEMBERS","APP_PACKAGE_MEMBER","APP_PACKAGE_PE","APP_PACKAGE_SIZE","APP_PACKAGE_MEMBER_HASH"};
-    private static readonly HashSet<string> UpdateCodes=new(StringComparer.Ordinal){"UPDATE_CONSENT_REQUIRED","UPDATE_CONSENT_ALREADY_CAPTURED","UPDATE_OWNER_BINDING","UNINSTALL_SERVICE_REAPPEARED"};
-    private static readonly HashSet<string> LanCodes=new(StringComparer.Ordinal){"LAN_ACTION_INVALID","LAN_CONSENT_REQUIRED","LAN_PAYLOAD_NOT_SUPPORTED","LAN_PAYLOAD_CHANGED","LAN_SETUP_PAUSED","NETWORK_SELECTION_CHANGED","LAN_PRIVATE_PROFILE_REQUIRED","LAN_NETWORK_PROFILE_UNAVAILABLE","LAN_FIREWALL_UNAVAILABLE","LAN_FIREWALL_CHANGED","LAN_FIREWALL_DUPLICATE","LAN_FIREWALL_REPAIR_REQUIRED","LAN_PREPARATION_CHANGED","LAN_OWNERSHIP_MISSING","LAN_INSTALL_COLLISION","LAN_UNINSTALL_INCOMPLETE","LAN_CA_CHANGED","LAN_CA_STORAGE_DAMAGED","LAN_CERTIFICATE_INVALID","LAN_HTTPS_CONNECTION_FAILED","LAN_QUIESCENCE_UNCONFIRMED"};
-    private static readonly HashSet<string> KnownCodes=new(StringComparer.Ordinal){"PACKAGE_NOT_EMBEDDED","PACKAGE_IMAGE","PACKAGE_IMAGE_IDENTITY","PACKAGE_ENGINE","PACKAGE_HASH","PACKAGE_MEMBER_HASH","PACKAGE_FORMAT","PACKAGE_SOURCE","PACKAGE_CONTRACT","PACKAGE_TREE_MISMATCH","PACKAGE_PATH","PACKAGE_FORBIDDEN","PACKAGE_PE","PACKAGE_BOUND","PACKAGE_MISSING","PACKAGE_MEMBERS","PAYLOAD_VERSION","INSTALL_COLLISION","EXISTING_DATA_PRESERVED","INSTALL_UPGRADE_REQUIRED","INSTALL_DOWNGRADE_REFUSED","INSTALL_SERVICE_STOP_STALLED","INSTALL_SERVICE_GENERATION_CHANGED","INSTALL_TARGET_CHANGED","DISK_SPACE","NO_LOCAL_PORT","SERVICE_START_FAILED","SERVER_NOT_READY","SERVICE_NOT_OWNED","UNINSTALL_UNOWNED_FILE_PRESERVED","INSTALL_STATE_INVALID","ADMIN_REQUIRED","INSTALL_BUSY","UNINSTALL_MODE_INVALID","UNINSTALL_MODE_CHANGED","UNINSTALL_INCOMPLETE","UNINSTALL_INTENT_INVALID","UNINSTALL_QUIESCENCE_UNCONFIRMED","UNINSTALL_SERVICE_REMOVAL_PENDING","UNINSTALL_LINK_PRESERVED","UNINSTALL_ROOT_NOT_EMPTY","UNINSTALL_TREE_LIMIT"};
+    private static string? Win32Code(int error)=>error switch
+    {
+        5=>"ACCESS_DENIED",
+        32 or 33=>"FILE_LOCKED", // ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION
+        39 or 112=>"DISK_SPACE", // ERROR_HANDLE_DISK_FULL, ERROR_DISK_FULL
+        _=>null
+    };
     internal static string HashFile(string path){using var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read);return Convert.ToHexStringLower(SHA256.HashData(file));}
     // The app version the window names: the one this image installs or, for the
     // payload-free engine, the active app the installer record (or, mid-removal, its
@@ -81,9 +87,10 @@ internal static class SetupOperation
     // operation itself reports why.
     internal static string? DisplayVersion()
     {
-        if(InstallPackage.IsEmbedded)return InstallPackage.DisplayVersion();
         try
         {
+            // A damaged image still opens the window, whose install then names the damage.
+            if(InstallPackage.IsEmbedded)return InstallPackage.DisplayVersion();
             if(File.Exists(InstallLocations.RemovalStateFile))return RemovalIntent.Read(InstallLocations.RemovalStateFile).State.Active.App.Version;
             return File.Exists(InstallLocations.StateFile)?NativeSetupHost.ReadState().Active.App.Version:null;
         }

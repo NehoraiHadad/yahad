@@ -21,8 +21,13 @@ internal sealed record StartupDiagnosticStep(string Stage,long Ms,string? Failur
 internal sealed record StartupDiagnostic(int Format,string Role,string SourceCommit,int ProcessId,string? Code,int HResult,int? NativeError,int? ExitCode,
     string[] Sites,StartupDiagnosticStep[]? Steps);
 internal sealed record UpgradeDiagnostic(int Format,string Upgrade,string From,string To,int Attempts);
-[JsonSerializable(typeof(StartupDiagnostic))][JsonSerializable(typeof(UpgradeDiagnostic))]
+internal sealed record UpdateDiagnostic(int Format,string Operation,string Error,string Code,bool Permanent,string? From,string? Version,string SourceCommit,string[] Sites);
+[JsonSerializable(typeof(StartupDiagnostic))][JsonSerializable(typeof(UpgradeDiagnostic))][JsonSerializable(typeof(UpdateDiagnostic))]
 internal sealed partial class DiagnosticJsonContext:JsonSerializerContext;
+// The Application events of source "Yahad", one JSON string each:
+//   1001 error    a service (Runtime or Updater) could not start or stopped on a failure
+//   2001 warning  an update check or install failed (error: rollback or internal)
+//   3003 error    the repair gave up on an interrupted upgrade
 internal static class ServiceStartupDiagnostic
 {
     internal static string Encode(StartupDiagnosticRole role,Exception error,IReadOnlyList<StartupStep>? steps=null)
@@ -61,13 +66,22 @@ internal static class ServiceStartupDiagnostic
     // the upgrade identifier only.
     internal static bool TryRecordUpgrade(string id,string from,string to,int attempts)
     {try{return Write(JsonSerializer.Serialize(new UpgradeDiagnostic(1,id,from,to,attempts),DiagnosticJsonContext.Default.UpgradeDiagnostic),3003);}catch{return false;}}
-    private static bool Write(string value,uint id)
+    // What the updates page shows, kept for whoever reads the machine later: the fixed
+    // operation and error word, the precise code (UpdaterRules.Code, message-free),
+    // the versions, and for a check the Yahad sites that threw.
+    internal static string EncodeUpdate(string operation,string error,string code,bool permanent,string? from,string? version,Exception? cause)
+        =>JsonSerializer.Serialize(new UpdateDiagnostic(1,operation,error,code,permanent,from,version,InfrastructureRelease.SourceCommit,cause is null?[]:Sites(cause)),
+            DiagnosticJsonContext.Default.UpdateDiagnostic);
+    internal static bool TryRecordUpdate(string operation,string error,string code,bool permanent,string? from,string? version,Exception? cause)
+    {try{return Write(EncodeUpdate(operation,error,code,permanent,from,version,cause),2001,error is "rollback" or "internal"?Error:Warning);}catch{return false;}}
+    private const ushort Error=1,Warning=2;
+    private static bool Write(string value,uint id,ushort type=Error)
     {
         // RegisterEventSource retrieves a handle; an unregistered fixed source
         // falls back to Application. It does not create an event-source key.
         // https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-registereventsourcew
         var handle=RegisterEventSourceW(null,"Yahad");if(handle==IntPtr.Zero)return false;
-        try{return ReportEventW(handle,1,0,id,IntPtr.Zero,1,0,[value],IntPtr.Zero);}
+        try{return ReportEventW(handle,type,0,id,IntPtr.Zero,1,0,[value],IntPtr.Zero);}
         finally{_=DeregisterEventSource(handle);}
     }
     [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)]private static extern IntPtr RegisterEventSourceW(string? server,string source);

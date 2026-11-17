@@ -4,7 +4,8 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import vm from 'node:vm';
 import ts from 'typescript';
-import { ApiError } from '../web/api.js';
+import { ApiError, shownError } from '../web/api.js';
+import * as errorReferenceModule from '../web/ErrorReference.js';
 
 function harness(childId = 'child-a') {
   let cursor = 0, nextId = 0, writes = 0; const slots: any[] = [], effects: (() => (() => void) | void)[] = [], cleanup: (() => void)[] = [];
@@ -19,7 +20,8 @@ function harness(childId = 'child-a') {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 },
   }).outputText;
   vm.runInNewContext(code, { module, exports: module.exports, require: (name: string) => name === 'react' ? hooks
-    : name === './api' ? { ApiError, api: (path: string, method?: string, body?: any) => new Promise((resolve, reject) => requests.push({ path, method, body, resolve, reject })) }
+    : name === './ErrorReference' ? errorReferenceModule
+    : name === './api' ? { ApiError, shownError, api: (path: string, method?: string, body?: any) => new Promise((resolve, reject) => requests.push({ path, method, body, resolve, reject })) }
     : name === './UsageBudget' ? { usageMinutes: (ms: number) => ms / 60000 }
     : name === './clientId' ? { newClientId: () => 'synthetic-id-' + ++nextId } : require(name),
     setInterval() { return 1; }, clearInterval() {},

@@ -230,12 +230,19 @@ function UpdatesRequest($Body) {
 # click and the result the launched engine or Setup wrote.
 function InstallThroughUpdater($Release, [string]$Track, [string]$Name, [scriptblock]$Prepare = {}) {
     $stage = Join-Path $updaterRoot "staging\$($Release.Version)"
+    # A running Updater removes, on its next tick, every stage it is not offering
+    # (CleanStaging), so the release is placed only while it is stopped.
+    Stop-Service -Name $updater
     NewStage $Release $Track $stage
     & $Prepare
-    Restart-Service -Name $updater
+    Start-Service -Name $updater
     $status = UpdatesStatus
     $fingerprint = Fingerprint $Release $Track
-    if ($status.phase -ne 'available' -or $status.latestVersion -ne $Release.Version -or $status.installTarget.fingerprint -ne $fingerprint) { throw "The Updater offers $($status.phase)/$($status.latestVersion)/$($status.installTarget.fingerprint), expected $($Release.Version)/$fingerprint" }
+    if ($status.phase -ne 'available' -or $status.latestVersion -ne $Release.Version -or $status.installTarget.fingerprint -ne $fingerprint) {
+        # What the Updater saw: its whole status and the stage it was given.
+        $staged = @(Get-ChildItem -LiteralPath $stage -Force -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name):$($_.Length)" }) -join ','
+        throw "The Updater offers $($status.phase)/$($status.latestVersion)/$($status.installTarget.fingerprint), expected $($Release.Version)/$fingerprint; status $($status | ConvertTo-Json -Compress -Depth 4); stage [$staged]"
+    }
     # A target that is not the staged release is refused before anything runs.
     $stale = $false
     try { UpdatesRequest @{ action='install'; target=@{ version=$Release.Version; fingerprint=('0' * 64) } } | Out-Null } catch { $stale = [int]$_.Exception.Response.StatusCode -eq 409 }
@@ -720,7 +727,7 @@ function RequireAccessBoundaries([string]$Infra, [string]$Version) {
 function RequireRemovedServices { if ((YahadServices).Count) { throw ('Services remain after removal: ' + ((YahadServices).Name -join ',')) } }
 function RequireNothingLeft {
     RequireRemovedServices
-    foreach ($path in $programData, $programFiles, $lanRoot, "$programFiles.lan-uninstall.json", (Join-Path $env:windir 'System32\Tasks\Yahad')) { if (Test-Path -LiteralPath $path) { throw "$path remains after removal" } }
+    foreach ($path in $programData, "$programData.setup-logs", $programFiles, $lanRoot, "$programFiles.lan-uninstall.json", (Join-Path $env:windir 'System32\Tasks\Yahad')) { if (Test-Path -LiteralPath $path) { throw "$path remains after removal" } }
     RequireNoRepairTask
 }
 function Collect {
@@ -747,7 +754,7 @@ try {
         $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
         $policy = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
         Write-Output ("MACHINE os={0} admin={1} EnableLUA={2} ConsentPromptBehaviorAdmin={3}" -f [Environment]::OSVersion.Version, $principal.IsInRole('Administrators'), $policy.EnableLUA, $policy.ConsentPromptBehaviorAdmin)
-        if ((YahadServices).Count -or (Test-Path -LiteralPath $programData) -or (Test-Path -LiteralPath $programFiles) -or (Test-Path -LiteralPath $lanRoot)) { throw 'Machine is not clean: an existing Yahad installation is present' }
+        if ((YahadServices).Count -or (Test-Path -LiteralPath $programData) -or (Test-Path -LiteralPath "$programData.setup-logs") -or (Test-Path -LiteralPath $programFiles) -or (Test-Path -LiteralPath $lanRoot)) { throw 'Machine is not clean: an existing Yahad installation is present' }
     }
     $install = $null
     Phase 'install' { $script:install = RunSetup @('--quiet-install', '--updates', 'notify') (Join-Path $out 'install-result.json') @('--setup-link', 'stdout') }

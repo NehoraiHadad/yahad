@@ -25,6 +25,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { open, seal, hash, token, passwordHash } from './crypto.js';
 import type { Config } from './config.js';
 import type { StoredMessage, ChatGroup } from './connectors/types.js';
+import { PairingDataUnreadable } from './connectors/types.js';
 export interface User {
   id: string;
   familyId: string;
@@ -421,8 +422,12 @@ export class Store {
       );
   }
   authGet(f: string, key: string) {
+    // A storage failure propagates as itself (an outage); a row that no longer decrypts
+    // under this server's key means the pairing itself is unusable.
     const r = this.one('SELECT value FROM auth WHERE family_id=? AND key=?', f, key);
-    return r ? open(this.config.masterKey, r.value, `${f}:auth:${key}`).toString() : undefined;
+    if (!r) return undefined;
+    try { return open(this.config.masterKey, r.value, `${f}:auth:${key}`).toString(); }
+    catch (error) { throw new PairingDataUnreadable({ cause: error }); }
   }
   authSet(f: string, key: string, value: string | null) {
     if (value === null) this.diagnostics.measure(f, 'db_write', () => this.run('DELETE FROM auth WHERE family_id=? AND key=?', f, key));

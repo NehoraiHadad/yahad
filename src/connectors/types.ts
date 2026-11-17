@@ -119,7 +119,16 @@ export type ConnectionState =
   | 'reconnecting'
   | 'needs_pairing'
   | 'conflict';
+/** The saved pairing data cannot be decrypted or parsed, so only a new QR link can help.
+ * Every other failure to open a connection is treated as an outage that is retried. */
+export class PairingDataUnreadable extends Error {
+  constructor(options?: { cause?: unknown }) { super('Pairing data unreadable', options); this.name = 'PairingDataUnreadable'; }
+}
 export interface ConnectorHooks {
+  /** The provider closed the connection; only its numeric status code is passed on. */
+  disconnected?: (statusCode: number | undefined) => void;
+  /** Opening a connection failed locally (before any provider answer); retried unless pairing is unreadable. */
+  connectFailed?: (error: unknown) => void;
   /** Only authenticated provider events may discover direct conversations. */
   discoverDirect?: (chats: ChatGroup[]) => void;
   discoverGroups?: (chats: ChatGroup[]) => void;

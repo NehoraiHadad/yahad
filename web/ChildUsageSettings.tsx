@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { api, ApiError } from './api';
+import { api, ApiError, shownError, type ShownError } from './api';
+import { InlineError } from './ErrorReference';
 import { newClientId } from './clientId';
 import type { UsageStatus } from '../src/usage';
 import { usageMinutes } from './UsageBudget';
@@ -14,7 +15,7 @@ const timezoneName = (zone: string) => timezoneChoices.find(([id]) => id === zon
 
 export function ChildUsageSettings({ childId, name, disabled }: { childId: string; name: string; disabled: boolean }) {
   const [status, setStatus] = useState<UsageStatus | null>(null), [minutes, setMinutes] = useState(''), [unlimited, setUnlimited] = useState(true);
-  const [bonus, setBonus] = useState(''), [zone, setZone] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
+  const [bonus, setBonus] = useState(''), [zone, setZone] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState<ShownError | null>(null), [notice, setNotice] = useState('');
   const mounted = useRef(true), generation = useRef(0), edited = useRef(false), working = useRef(false);
   const pendingBonus = useRef<{ requestId: string; day: string; dayKey: string; minutes: number } | null>(null);
   const path = '/parent/usage/' + encodeURIComponent(childId);
@@ -29,22 +30,22 @@ export function ChildUsageSettings({ childId, name, disabled }: { childId: strin
       const request = ++generation.current;
       try {
         const value = await api<UsageStatus>(path);
-        if (mounted.current && request === generation.current) { accept(value); setError(''); }
-      } catch (e) { if (mounted.current && request === generation.current) { setStatus(null); setError((e as Error).message); } }
+        if (mounted.current && request === generation.current) { accept(value); setError(null); }
+      } catch (e) { if (mounted.current && request === generation.current) { setStatus(null); setError(shownError(e)); } }
     };
     void load(); const timer = setInterval(() => void load(), 10000);
     return () => { mounted.current = false; generation.current++; clearInterval(timer); };
   }, [childId]);
   const act = async (operation: () => Promise<UsageStatus | void>, message: string | ((value: UsageStatus) => string)) => {
     if (!mounted.current || disabled || working.current || !status) return;
-    working.current = true; generation.current++; setBusy(true); setError(''); setNotice('');
+    working.current = true; generation.current++; setBusy(true); setError(null); setNotice('');
     try {
       const result = await operation();
       const value = result || await api<UsageStatus>(path);
       if (!mounted.current) return;
       edited.current = false;
       accept(value); setNotice(typeof message === 'function' ? message(value) : message);
-    } catch (e) { if (mounted.current) setError((e as Error).message); }
+    } catch (e) { if (mounted.current) setError(shownError(e)); }
     finally { working.current = false; if (mounted.current) setBusy(false); }
   };
   const number = Number(minutes), bonusNumber = Number(bonus);
@@ -95,6 +96,6 @@ export function ChildUsageSettings({ childId, name, disabled }: { childId: strin
       <button className="outline-button" type="submit" disabled={!pendingBonus.current && !(bonus !== '' && Number.isSafeInteger(bonusNumber) && bonusNumber > 0 && bonusNumber <= 1000000)}>{pendingBonus.current ? 'בדיקה חוזרת של התוספת' : 'הוספת זמן להיום'}</button>
     </fieldset></form>
     <p className="small-note">הספירה פועלת כשהחלון גלוי ובמיקוד. לאחר חמש דקות ללא פעולה מופיעה בקשת המשך, גם בזמן קריאה. סגירה או ניתוק פתאומי עשויים להוסיף עד 15 שניות.</p>
-    {error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
+    <InlineError error={error} />{notice && <p role="status">{notice}</p>}
   </section>;
 }

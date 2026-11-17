@@ -25,39 +25,72 @@ internal sealed record UpdateLaunch(ReleaseTrack Track,string Image,string Direc
     internal static UpdateLaunch For(StagedRelease release,ActivePointer installed)
         =>release.Track==ReleaseTrack.Setup?new(release.Track,release.Payload,release.Directory):new(release.Track,InstalledLayout.EngineImage(installed.Infrastructure.Version),release.Directory);
 }
-// What a Setup's result means to the person reading the updates page.
-internal readonly record struct UpgradeEnding(bool Succeeded,string Phase,string? Error,bool Refuse);
-// What a failed check means (9.4): the error word, and whether that version is refused
-// for good. A bad signature or a defective release never selects another path.
-internal readonly record struct CheckFailure(string Error,bool Refuse);
+// What a Setup's result means to the person reading the updates page. Code is the
+// precise one beside the error word (UpdaterRules.Code); null only for a success.
+internal readonly record struct UpgradeEnding(bool Succeeded,string Phase,string? Error,bool Refuse,string? Code);
+// What a failed check means (9.4): the error word, whether that version is refused for
+// good, and the precise code. A bad signature or a defective release never selects
+// another path.
+internal readonly record struct CheckFailure(string Error,bool Refuse,string Code);
+// One failure for the developer record (event 2001): fixed words, versions and the
+// cause's sites only. Permanent is true only when a version was actually refused.
+internal sealed record UpdateFailure(string Operation,string Error,string Code,bool Permanent,string? From,string? Version,Exception? Cause);
 internal static class UpdaterRules
 {
     internal static readonly TimeSpan FirstCheck=TimeSpan.FromMinutes(10),CheckEvery=TimeSpan.FromHours(24),ResultTimeout=TimeSpan.FromMinutes(30),Tick=TimeSpan.FromMinutes(1);
     internal const long DiskReserve=1073741824L;
-    internal static UpgradeEnding Ending(string? code)=>code switch
+    // The codes the Updater itself gives a failure that has no thrown code.
+    internal const string CheckInterrupted="CHECK_INTERRUPTED",ResultMissing="UPGRADE_RESULT_MISSING",ResultInvalid="UPGRADE_RESULT_INVALID";
+    // A deliberate code: the UPPER_SNAKE word a Yahad failure is thrown or reported with.
+    internal static bool IsCode(string? value)=>value is {Length:>=3 and <=64}&&value[0] is >='A' and <='Z'&&value.All(c=>c is >='A' and <='Z' or >='0' and <='9' or '_');
+    // The precise cause, for support: the deliberate code, or else the exception's type;
+    // then at most one fixed detail (an HTTP status, the HTTP error kind or a Windows
+    // error number). Never the message, which may hold a path.
+    internal static string Code(Exception error)
     {
-        "UPGRADED"=>new(true,"healthy",null,false),
-        "ROLLED_BACK_UNHEALTHY"=>new(false,"rolled_back","health",true),
-        "ROLLBACK_FAILED"=>new(false,"failed","rollback",false),
-        "DISK_SPACE"=>new(false,"failed","storage",false),
-        "RELEASE_UNSUPPORTED_FROM" or "APP_NEEDS_INFRASTRUCTURE"=>new(false,"incompatible","incompatible",true),
-        "RELEASE_APP_SIZE" or "RELEASE_APP_HASH"=>new(false,"failed","archive",false),
-        {}when code.StartsWith("APP_PACKAGE_",StringComparison.Ordinal)=>new(false,"failed","archive",false),
-        "RELEASE_SIGNATURE_INVALID" or "RELEASE_KEY_UNTRUSTED" or "RELEASE_NOT_NEWER" or "RELEASE_SETUP_MISMATCH" or "RELEASE_MANIFEST_INVALID"=>new(false,"failed","signature",true),
-        // INFRA_IDENTITY_MISMATCH, UPGRADE_COMMIT_INCOMPLETE and anything unforeseen.
-        _=>new(false,"failed","internal",false)
-    };
-    internal static CheckFailure CheckError(Exception error)=>error switch
+        var detail=error switch
+        {
+            System.Net.Http.HttpRequestException{StatusCode:{} status}=>((int)status).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            System.Net.Http.HttpRequestException{HttpRequestError:var kind}when kind!=System.Net.Http.HttpRequestError.Unknown=>kind.ToString(),
+            System.ComponentModel.Win32Exception win32=>win32.NativeErrorCode.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            _ when (uint)error.HResult>>16==0x8007=>(error.HResult&0xFFFF).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            _=>null
+        };
+        var name=IsCode(error.Message)?error.Message:new string(error.GetType().Name.TakeWhile(char.IsAsciiLetterOrDigit).Take(64).ToArray());
+        return detail is null?name:name+":"+detail;
+    }
+    internal static UpgradeEnding Ending(string? code)
     {
-        System.Net.Http.HttpRequestException or TaskCanceledException=>new("network",false),
-        IOException{Message:"RELEASE_UNSUPPORTED_FROM" or "APP_NEEDS_INFRASTRUCTURE"}=>new("incompatible",true),
-        IOException{Message:"RELEASE_SETUP_SIZE" or "RELEASE_SETUP_HASH" or "RELEASE_APP_SIZE" or "RELEASE_APP_HASH"}=>new("archive",false),
-        IOException{Message:"DISK_SPACE"}=>new("storage",false),
-        IOException{Message:var code}when code.StartsWith("RELEASE_",StringComparison.Ordinal)=>new("signature",true),
-        IOException{Message:var code}when code.StartsWith("GITHUB_",StringComparison.Ordinal)=>new("network",false),
-        // INFRA_IDENTITY_MISMATCH, ACTIVE_POINTER_INVALID and anything unforeseen.
-        _=>new("internal",false)
-    };
+        var precise=IsCode(code)?code:ResultInvalid;
+        return code switch
+        {
+            "UPGRADED"=>new(true,"healthy",null,false,null),
+            "ROLLED_BACK_UNHEALTHY"=>new(false,"rolled_back","health",true,precise),
+            "ROLLBACK_FAILED"=>new(false,"failed","rollback",false,precise),
+            "DISK_SPACE"=>new(false,"failed","storage",false,precise),
+            "RELEASE_UNSUPPORTED_FROM" or "APP_NEEDS_INFRASTRUCTURE"=>new(false,"incompatible","incompatible",true,precise),
+            "RELEASE_APP_SIZE" or "RELEASE_APP_HASH"=>new(false,"failed","archive",false,precise),
+            {}when code.StartsWith("APP_PACKAGE_",StringComparison.Ordinal)=>new(false,"failed","archive",false,precise),
+            "RELEASE_SIGNATURE_INVALID" or "RELEASE_KEY_UNTRUSTED" or "RELEASE_NOT_NEWER" or "RELEASE_SETUP_MISMATCH" or "RELEASE_MANIFEST_INVALID"=>new(false,"failed","signature",true,precise),
+            // INFRA_IDENTITY_MISMATCH, UPGRADE_COMMIT_INCOMPLETE and anything unforeseen.
+            _=>new(false,"failed","internal",false,precise)
+        };
+    }
+    internal static CheckFailure CheckError(Exception error)
+    {
+        var (word,refuse)=error switch
+        {
+            System.Net.Http.HttpRequestException or TaskCanceledException=>("network",false),
+            IOException{Message:"RELEASE_UNSUPPORTED_FROM" or "APP_NEEDS_INFRASTRUCTURE"}=>("incompatible",true),
+            IOException{Message:"RELEASE_SETUP_SIZE" or "RELEASE_SETUP_HASH" or "RELEASE_APP_SIZE" or "RELEASE_APP_HASH"}=>("archive",false),
+            IOException{Message:"DISK_SPACE"}=>("storage",false),
+            IOException{Message:var code}when code.StartsWith("RELEASE_",StringComparison.Ordinal)=>("signature",true),
+            IOException{Message:var code}when code.StartsWith("GITHUB_",StringComparison.Ordinal)=>("network",false),
+            // INFRA_IDENTITY_MISMATCH, ACTIVE_POINTER_INVALID and anything unforeseen.
+            _=>("internal",false)
+        };
+        return new(word,refuse,Code(error));
+    }
     internal static string TrackName(ReleaseTrack track)=>track==ReleaseTrack.Setup?"setup":"app";
     // The target names the track as well as the signed bytes (9.3), so the same
     // release staged for the other track is another target.
@@ -82,7 +115,8 @@ internal static class UpdaterRules
 // staging folder. Without an installed key nothing is ever downloaded to run. The
 // installed pair is current(), read again for every decision (9.2): an app apply
 // changes it while this process keeps running.
-internal sealed class UpdaterEngine(UpdaterPaths paths,Func<ActivePointer> current,Func<byte[]?> installedKey,byte[]? embeddedKey,GitHubReleaseSource source,Action<UpdateLaunch,string> launch,Func<DateTimeOffset> clock)
+// Every failure the page shows is also handed to report, for the event log.
+internal sealed class UpdaterEngine(UpdaterPaths paths,Func<ActivePointer> current,Func<byte[]?> installedKey,byte[]? embeddedKey,GitHubReleaseSource source,Action<UpdateLaunch,string> launch,Func<DateTimeOffset> clock,Action<UpdateFailure>? report=null)
 {
     private readonly object gate=new();private readonly DateTimeOffset started=clock();private readonly TimeSpan jitter=TimeSpan.FromSeconds(Random.Shared.Next(3600));
     private UpdaterRecord record=UpdaterRecord.Seed(false);private StagedRelease? staged;private string? progress,candidate;private CancellationToken stop;
@@ -101,12 +135,19 @@ internal sealed class UpdaterEngine(UpdaterPaths paths,Func<ActivePointer> curre
             catch(IOException){record=UpdaterRecord.Seed(false);}
             foreach(var partial in Directory.EnumerateFiles(paths.Root,"*.partial-*"))TryDelete(partial);
             // A check the last run did not finish is over.
-            if(record.LastRequest is {Action:"check",State:"running"})record=record with{LastRequest=Finished(record.LastRequest,"internal")};
+            if(record.LastRequest is {Action:"check",State:"running"})
+            {
+                record=record with{LastRequest=Finished(record.LastRequest,"internal",UpdaterRules.CheckInterrupted)};
+                Report(new("check","internal",UpdaterRules.CheckInterrupted,false,From(),null,null));
+            }
             staged=Key() is {} key?Rediscover(key,current()):null;CleanStaging();Ingest();
         }
     }
     private void Save()=>NativeInstallFiles.Publish(paths.State,record.Encode());
-    private UpdaterLastRequest Finished(UpdaterLastRequest request,string? error)=>request with{State=error is null?"succeeded":"failed",FinishedAt=Now,Error=error};
+    private UpdaterLastRequest Finished(UpdaterLastRequest request,string? error,string? code)=>request with{State=error is null?"succeeded":"failed",FinishedAt=Now,Error=error,Code=code};
+    // The record never stops a decision: a pointer that cannot be read leaves From empty.
+    private string? From(){try{return current().App.Version;}catch(Exception error)when(error is IOException or UnauthorizedAccessException){return null;}}
+    private void Report(UpdateFailure failure)=>report?.Invoke(failure);
 
     internal UpdaterReply Handle(UpdaterRequest request)
     {
@@ -136,7 +177,8 @@ internal sealed class UpdaterEngine(UpdaterPaths paths,Func<ActivePointer> curre
     private static UpdaterReply Refuse(string code)=>new(1,false,code);
     private string Phase()=>progress??(Activating?"activating":staged is not null?"available":record.Phase??"idle");
     // currentVersion stays the app version, the one src/updates.ts shows.
-    private UpdaterStatus Status()=>new(Key() is not null,record.Mode,Phase(),current().App.Version,staged?.Version??record.Latest,staged is null?null:new(staged.Version,staged.Fingerprint),record.CheckedAt,Now,record.Error,record.LastRequest,record.LastModeRequest);
+    private UpdaterStatus Status()=>new(Key() is not null,record.Mode,Phase(),current().App.Version,staged?.Version??record.Latest,staged is null?null:new(staged.Version,staged.Fingerprint),record.CheckedAt,Now,record.Error,record.LastRequest,record.LastModeRequest,
+        record.ErrorCode,record.ErrorPermanent);
 
     private UpdaterReply BeginCheck(string? id)
     {
@@ -147,19 +189,22 @@ internal sealed class UpdaterEngine(UpdaterPaths paths,Func<ActivePointer> curre
     }
     private async Task CheckAsync(string? id,byte[] key)
     {
-        CheckFailure? failure=null;
+        CheckFailure? failure=null;Exception? cause=null;
         try{await CheckCoreAsync(key,stop);}
         // The service is stopping; the next start closes what this left open.
         catch(OperationCanceledException)when(stop.IsCancellationRequested){return;}
-        catch(Exception error){failure=UpdaterRules.CheckError(error);}
+        catch(Exception error){failure=UpdaterRules.CheckError(error);cause=error;}
         lock(gate)
         {
             progress=null;var error=failure?.Error;
-            var refused=failure is {Refuse:true}&&candidate is not null?candidate:record.RefusedVersion;
+            var refusing=failure is {Refuse:true}&&candidate is not null;
+            var refused=refusing?candidate:record.RefusedVersion;
             if(staged?.Version==refused)staged=null;
-            record=record with{CheckedAt=Now,Error=error,Phase=error switch{null=>"idle","incompatible"=>"incompatible",_=>"failed"},RefusedVersion=refused,
-                LastRequest=id is not null&&record.LastRequest?.Id==id?Finished(record.LastRequest,error):record.LastRequest};
+            record=record with{CheckedAt=Now,Error=error,ErrorCode=failure?.Code,ErrorPermanent=failure is null?null:refusing,
+                Phase=error switch{null=>"idle","incompatible"=>"incompatible",_=>"failed"},RefusedVersion=refused,
+                LastRequest=id is not null&&record.LastRequest?.Id==id?Finished(record.LastRequest,error,failure?.Code):record.LastRequest};
             Save();CleanStaging();
+            if(failure is {} known)Report(new("check",known.Error,known.Code,refusing,From(),candidate,cause));
         }
     }
     private async Task CheckCoreAsync(byte[] key,CancellationToken cancellation)
@@ -254,10 +299,14 @@ internal sealed class UpdaterEngine(UpdaterPaths paths,Func<ActivePointer> curre
         // A stage the live pair no longer selects, such as another track's, goes now.
         if(staged is null||staged.Version!=target.Version||staged.Fingerprint!=target.Fingerprint){CleanStaging();return Refuse("STALE_TARGET");}
         File.Delete(paths.LastUpgrade);
-        record=record with{Phase="activating",Error=null,LastRequest=new(id,"install","running",Now,null,null,target)};Save();
+        record=record with{Phase="activating",Error=null,ErrorCode=null,ErrorPermanent=null,LastRequest=new(id,"install","running",Now,null,null,target)};Save();
         try{launch(UpdateLaunch.For(staged,installed),paths.LastUpgrade);}
         catch(Exception error)when(error is IOException or System.ComponentModel.Win32Exception)
-        {record=record with{Phase="failed",Error="internal",LastRequest=Finished(record.LastRequest!,"internal")};Save();return Refuse("INTERNAL");}
+        {
+            var code=UpdaterRules.Code(error);
+            record=record with{Phase="failed",Error="internal",ErrorCode=code,ErrorPermanent=false,LastRequest=Finished(record.LastRequest!,"internal",code)};Save();
+            Report(new("install","internal",code,false,installed.App.Version,target.Version,error));return Refuse("INTERNAL");
+        }
         return new(1,true);
     }
     // The launched engine outlives this process and may replace it, so its result is
@@ -276,11 +325,15 @@ internal sealed class UpdaterEngine(UpdaterPaths paths,Func<ActivePointer> curre
         catch(Exception error)when(error is IOException or UnauthorizedAccessException or JsonException or KeyNotFoundException or InvalidOperationException)
         {
             if(request is not null&&Now-request.StartedAt<UpdaterRules.ResultTimeout.TotalMilliseconds)return;
-            ending=new(false,"failed","internal",false);
+            ending=new(false,"failed","internal",false,File.Exists(paths.LastUpgrade)?UpdaterRules.ResultInvalid:UpdaterRules.ResultMissing);
         }
-        record=record with{Phase=ending.Phase,Error=ending.Error,LastRequest=request is null?null:Finished(request,ending.Error),LastUpdateAt=ending.Succeeded?Now:record.LastUpdateAt,
+        var permanent=ending.Refuse&&request?.Target is not null;
+        record=record with{Phase=ending.Phase,Error=ending.Error,ErrorCode=ending.Code,ErrorPermanent=ending.Succeeded?null:permanent,
+            LastRequest=request is null?null:Finished(request,ending.Error,ending.Code),LastUpdateAt=ending.Succeeded?Now:record.LastUpdateAt,
             RefusedVersion=ending.Refuse?request?.Target?.Version:record.RefusedVersion,Latest=ending.Succeeded?null:record.Latest};
-        Save();var installed=current();staged=Key() is {} key?Rediscover(key,installed):null;CleanStaging();
+        Save();
+        if(!ending.Succeeded)Report(new("install",ending.Error!,ending.Code!,permanent,From(),request?.Target?.Version,null));
+        var installed=current();staged=Key() is {} key?Rediscover(key,installed):null;CleanStaging();
     }
     // Only the offered release stays. A folder a check is still writing, and the stage
     // an install is reading until its result is in, are left alone. A process still

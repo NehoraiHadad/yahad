@@ -14,7 +14,13 @@ internal sealed record PackageApp(string Version,string SourceCommit,int Require
 // The oldest installed pair this release moves from: the release manifest's
 // minimumFrom (5.1), carried by the Setup for its manual path.
 internal sealed record PackageMinimumFrom(string App,string Infrastructure);
-internal sealed record InstallPackageManifest(int Format,PackageInfrastructure Infrastructure,PackageApp App,PackageMinimumFrom MinimumFrom,string ZipSha256,InstallMember[] Files);
+internal sealed record InstallPackageManifest(int Format,PackageInfrastructure Infrastructure,PackageApp App,PackageMinimumFrom MinimumFrom,string ZipSha256,InstallMember[] Files)
+{
+    // The free space an install requires on the binary root's drive: the extracted
+    // trees with room for their partials and a later upgrade, plus 512 MiB. The
+    // install check and the DISK_SPACE text both name this one number.
+    internal long RequiredFreeBytes()=>checked(Files.Sum(f=>f.Size)*3+536870912L);
+}
 // Where Extract writes: protected directories, protected files and a no-replace commit.
 internal sealed record ExtractTarget(Action<string> CreateDirectory,Func<string,FileStream> CreateFile,Action<string,string> Commit,Func<string,InstallMember,bool> ExistingMatches);
 // One format-2 archive (docs/WINDOWS-APP-PACKAGE-PLAN.md 4.2, 5.3) holding two
@@ -98,6 +104,12 @@ internal sealed class InstallPackage:IDisposable
         using var image=SetupImage.OpenRunning()??throw new IOException("PACKAGE_NOT_EMBEDDED");
         var version=NativeJson.Read(image.ReadManifest(),SetupJsonContext.Default.InstallPackageManifest).App?.Version;
         return version is not null&&SemVer.IsVersion(version)?version:throw new IOException("PACKAGE_FORMAT");
+    }
+    // The free space this image's install requires, read from the manifest alone.
+    internal static long RequiredFreeBytes()
+    {
+        using var image=SetupImage.OpenRunning()??throw new IOException("PACKAGE_NOT_EMBEDDED");
+        return NativeJson.Read(image.ReadManifest(),SetupJsonContext.Default.InstallPackageManifest).RequiredFreeBytes();
     }
     // The package of the running image, read through the one handle that proved it is
     // that image; the package holds the handle until it is disposed.

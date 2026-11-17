@@ -4,7 +4,8 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import ts from 'typescript';
-import { ApiError } from '../web/api.js';
+import { ApiError, shownError } from '../web/api.js';
+import * as errorReferenceModule from '../web/ErrorReference.js';
 import { childLabel } from '../web/childLabels.js';
 import { normalizeAccountName, accountNameKey } from '../src/account-name.js';
 
@@ -28,7 +29,8 @@ function harness(initialChildId?: string, nameA?: string) {
       : name === './FamilySetup' ? { passphraseHelp: 'synthetic help' }
       : name === './childLabels' ? { childLabel }
       : name === '../src/account-name' ? { normalizeAccountName, accountNameKey }
-      : name === './api' ? { ApiError, isTransientApiError: (e: Error) => e.message === 'network', api: (...args: any[]) => { requests.push(args); return new Promise((r, j) => { resolve = r; reject = j; }); } }
+      : name === './ErrorReference' ? errorReferenceModule
+      : name === './api' ? { ApiError, shownError, isTransientApiError: (e: Error) => e.message === 'network', api: (...args: any[]) => { requests.push(args); return new Promise((r, j) => { resolve = r; reject = j; }); } }
       : require(name),
   });
   const render = () => { cursor = 0; return module.exports.AccountSettings({ children: [{ id: 'a', name: nameA || 'alice' }, { id: 'b', name: 'נועם' }], initialChildId, onProfileChanged() { refreshed++; }, onClose() { closed++; } }); };

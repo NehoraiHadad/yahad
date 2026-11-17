@@ -2,7 +2,7 @@ import { monitorEventLoopDelay, performance } from 'node:perf_hooks';
 import { freemem, totalmem } from 'node:os';
 import { mkdirSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { writeFile, rename, unlink, statfs, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { hash, open, seal } from './crypto.js';
@@ -13,7 +13,7 @@ export const operations = ['db_read', 'db_write', 'db_commit', 'media_read', 'me
   'api', 'media_prepare', 'connector', 'media_download'] as const;
 export type Operation = typeof operations[number];
 export const errorKinds = ['io', 'no_space', 'readonly', 'busy', 'permission', 'internal'] as const;
-type ErrorKind = typeof errorKinds[number];
+export type ErrorKind = typeof errorKinds[number];
 const bounds = [1, 5, 20, 50, 100, 250, 1000, 5000, 30000];
 const hourMs = 3600000;
 const number = z.number().finite().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -26,6 +26,39 @@ const savedSchema = z.object({ version: z.literal(1), buckets: z.array(bucketSch
 type Aggregate = z.infer<typeof aggregateSchema>;
 type Bucket = z.infer<typeof bucketSchema>;
 type Family = { buckets: Bucket[]; dirty: boolean; revision: number; lastSavedAt: number | null };
+
+/** One refused or failed request (or client failure) as the parent's report shows it.
+ * Closed shapes only: a code, a route pattern (`/api/groups/:g`, never a filled URL), a
+ * reference, an exception class name. Never a message, body, chat content, token or name. */
+export interface ErrorEvent {
+  time: number; code: string; status: number | null; method: string | null; route: string | null;
+  ref: string | null; errorClass: string | null; cause: ErrorKind | 'pairing_unreadable' | null;
+}
+/** A WhatsApp socket close, kept as the provider's numeric status code only. */
+export interface DisconnectEvent { time: number; statusCode: number | null }
+export const ERROR_EVENT_LIMIT = 50;
+export const DISCONNECT_EVENT_LIMIT = 30;
+const codePattern = /^[A-Z][A-Z0-9_]{0,63}$/;
+const routePattern = /^[A-Za-z0-9_:/.*-]{1,120}$/;
+const refPattern = /^[a-z0-9]{6,16}$/;
+const classPattern = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+const methods = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
+const pick = (value: unknown, pattern: RegExp) => typeof value === 'string' && pattern.test(value) ? value : null;
+/** The class name of a thrown value, for a report. Never its message or stack. */
+export function errorClassName(error: unknown) {
+  const name = error instanceof Error ? error.constructor?.name || error.name : typeof error;
+  return pick(name, classPattern) ?? 'Unknown';
+}
+let version: string | undefined;
+/** The running application version (package.json beside the working directory). */
+export function appVersion() {
+  if (version === undefined) {
+    try { version = String(JSON.parse(readFileSync(resolve('package.json'), 'utf8')).version); }
+    catch { version = 'unknown'; }
+    if (!/^\d{1,5}\.\d{1,5}\.\d{1,5}$/.test(version)) version = 'unknown';
+  }
+  return version;
+}
 
 export function classifyFailure(error: unknown): ErrorKind {
   const e = error as { code?: unknown; errcode?: unknown } | undefined;
@@ -80,6 +113,9 @@ export class Diagnostics {
   private sample: { sampledAt: number; cpuPercent: number; eventLoopP95Ms: number | null;
     rssBytes: number; heapBytes: number; hostAvailableBytes: number; hostTotalBytes: number } | null = null;
   private persistenceError: ErrorKind | 'integrity' | null = null;
+  // In memory only: cleared by a restart, by the parent's reset, and with the family.
+  private errorEvents = new Map<string, ErrorEvent[]>();
+  private disconnectEvents = new Map<string, DisconnectEvent[]>();
   private directory: string;
   constructor(private config: Config, private now = () => Date.now()) {
     this.enabled = config.diagnosticsEnabled ?? true;
@@ -144,6 +180,29 @@ export class Diagnostics {
     else if (bytes >= 65536 && Number.isSafeInteger(bytes)) { a.bytes += bytes; a.byteMs += ms; }
     family.dirty = true; family.revision++;
   }
+  /** Keep a bounded, sanitized record of one error for the family's report. */
+  recordError(f: string, event: { code: string; status?: number; method?: string; route?: string; ref?: string;
+    error?: unknown; errorClass?: string; cause?: ErrorEvent['cause'] }) {
+    if (!this.enabled || this.forgotten.has(f)) return;
+    const code = pick(event.code, codePattern);
+    if (!code) return;
+    const list = this.errorEvents.get(f) || [];
+    list.push({ time: this.now(), code,
+      status: Number.isInteger(event.status) && event.status! >= 100 && event.status! <= 599 ? event.status! : null,
+      method: event.method && methods.has(event.method) ? event.method : null,
+      route: pick(event.route, routePattern), ref: pick(event.ref, refPattern),
+      errorClass: event.error !== undefined ? errorClassName(event.error) : pick(event.errorClass, classPattern),
+      cause: event.cause ?? null });
+    this.errorEvents.set(f, list.slice(-ERROR_EVENT_LIMIT));
+  }
+  /** Keep the numeric WhatsApp disconnect status (no reason text, no payload). */
+  recordDisconnect(f: string, statusCode: unknown) {
+    if (!this.enabled || this.forgotten.has(f)) return;
+    const list = this.disconnectEvents.get(f) || [];
+    list.push({ time: this.now(),
+      statusCode: Number.isInteger(statusCode) && (statusCode as number) >= 0 && (statusCode as number) <= 9999 ? statusCode as number : null });
+    this.disconnectEvents.set(f, list.slice(-DISCONNECT_EVENT_LIMIT));
+  }
   measure<T>(f: string, operation: Operation, action: () => T, bytes = 0): T {
     if (!this.enabled) return action();
     const start = performance.now();
@@ -186,6 +245,8 @@ export class Diagnostics {
     this.forgotten.add(f);
     if (this.flushTask) await this.flushTask;
     this.families.delete(f);
+    this.errorEvents.delete(f);
+    this.disconnectEvents.delete(f);
     try { await unlink(this.path(f)); } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'ENOENT') { this.persistenceError = classifyFailure(e); throw e; }
     }
@@ -200,13 +261,16 @@ export class Diagnostics {
     const fs = await statfs(this.config.dataDir).catch(() => null);
     const sizes = await Promise.all(['app.sqlite', 'app.sqlite-wal'].map(name => stat(join(this.config.dataDir, name)).then(s => s.size).catch(() => null)));
     const memory = process.memoryUsage();
-    return { version: 1, enabled: this.enabled, generatedAt: this.now(), retentionDays: this.retentionDays,
+    return { version: 1, appVersion: appVersion(), enabled: this.enabled, generatedAt: this.now(), retentionDays: this.retentionDays,
       flushSeconds: this.flushSeconds, lastSavedAt: family.lastSavedAt, persistenceError: this.persistenceError,
       process: { uptimeSeconds: Math.round((Date.now() - this.startedAt) / 1000),
         rssBytes: memory.rss, heapBytes: memory.heapUsed, sample: this.sample },
       storage: { freeBytes: fs ? Number(fs.bavail) * Number(fs.bsize) : null,
         totalBytes: fs ? Number(fs.blocks) * Number(fs.bsize) : null, databaseBytes: sizes[0], walBytes: sizes[1] },
       metrics,
+      // Newest first. Codes and references match what the screen showed the person.
+      recentErrors: [...(this.errorEvents.get(f) || [])].reverse(),
+      whatsappDisconnects: [...(this.disconnectEvents.get(f) || [])].reverse(),
       hours: family.buckets.map(b => ({ hour: b.hour, metrics: operations.flatMap(operation => b.metrics[operation] ? [{ operation, ...present(b.metrics[operation]!) }] : []) })),
     };
   }

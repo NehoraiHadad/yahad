@@ -34,6 +34,9 @@ internal static class QuietSetup
         SetupResult result;var clock=System.Diagnostics.Stopwatch.StartNew();var phases=new List<object>();string? current=null;
         // Phase entry times only, so an operator or CI can see where time goes.
         void Progress(SetupProgress p){lock(phases){if(p.Phase==current)return;current=p.Phase;phases.Add(new{p.Phase,Seconds=Math.Round(clock.Elapsed.TotalSeconds,1)});}}
+        // Each failed result also leaves the developer's record (SetupFailureLog).
+        var operation=request.Repair?"repair":request.AppStage is not null?"apply-app":request.UpgradeDirectory is not null?"upgrade":request.Uninstall?"quiet-uninstall":"quiet-install";
+        void Record(SetupResult done){if(!done.Ok)SetupFailureLog.Write(SetupFailureReport.Create(done.Code,done.Failure,operation,DateTimeOffset.UtcNow,SetupOperation.DisplayVersion()));}
         // The private copy runs the same command and writes the result itself; this
         // process writes one only when the copy never started.
         int HandOff()
@@ -41,7 +44,7 @@ internal static class QuietSetup
             try{return PrivateCopy.Run();}
             catch(Exception error)
             {
-                var failed=new SetupResult(false,SetupOperation.Code(error),DataPreserved:request.Mode==UninstallMode.KeepData,Failure:SetupFailureDetail.From(error));
+                var failed=new SetupResult(false,SetupOperation.Code(error),DataPreserved:request.Mode==UninstallMode.KeepData,Failure:SetupFailureDetail.From(error));Record(failed);
                 File.WriteAllBytes(request.ResultPath,JsonSerializer.SerializeToUtf8Bytes(new{failed.Ok,failed.Code,failed.Url,failed.DataPreserved,failed.Failure,Phases=phases,Seconds=Math.Round(clock.Elapsed.TotalSeconds,1)}));
                 return 1;
             }
@@ -52,6 +55,7 @@ internal static class QuietSetup
             var outcome=request.Repair?await RepairHost.RunAsync(Progress):request.AppStage is not null?await AppUpgradeHost.RunAsync(request.AppStage,Progress):await UpgradeHost.RunAsync(request.UpgradeDirectory!,Progress);
             var done=outcome.Result;
             if(done.Code==RepairHost.HandOff)return HandOff();
+            Record(done);
             File.WriteAllBytes(request.ResultPath,JsonSerializer.SerializeToUtf8Bytes(new{done.Ok,done.Code,done.Url,done.DataPreserved,done.Failure,FromVersion=outcome.From?.App.Version,ToVersion=outcome.To?.App.Version,
                 FromInfrastructureVersion=outcome.From?.Infrastructure.Version,ToInfrastructureVersion=outcome.To?.Infrastructure.Version,outcome.RolledBack,Phases=phases,Seconds=Math.Round(clock.Elapsed.TotalSeconds,1)}));
             return outcome.Exit;
@@ -63,6 +67,7 @@ internal static class QuietSetup
             if(result.Ok&&request.Uninstall)ShortcutCleanup.TryRemove(result.Url);
         }
         catch(Exception error){result=new(false,SetupOperation.Code(error),Failure:SetupFailureDetail.From(error));}
+        Record(result);
         File.WriteAllBytes(request.ResultPath,JsonSerializer.SerializeToUtf8Bytes(new{result.Ok,result.Code,result.Url,result.DataPreserved,result.Failure,Phases=phases,Seconds=Math.Round(clock.Elapsed.TotalSeconds,1)}));
         if(request.SetupLinkToStdout&&result.Ok&&result.Url is not null&&result.SetupToken is not null)
         {Console.Out.WriteLine(result.Url+"#setup="+result.SetupToken);Console.Out.Flush();}
