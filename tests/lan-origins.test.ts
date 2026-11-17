@@ -76,6 +76,7 @@ test('LAN and selected HTTPS entry points retain secure login, authentication, a
     const cookie = (login.headers['set-cookie'] as string).split(';')[0];
     const me = await f.app.inject({ url: '/api/me', headers: { origin: remote, cookie } });
     assert.equal(me.statusCode, 200);
+    assert.equal(me.json().siteOrigin, primary, 'a parent on any entry point learns the address other devices open');
     const csrf = me.json().csrf;
     assert.equal((await f.app.inject({ method: 'POST', url: '/api/logout', headers: { origin: remote, cookie } })).statusCode, 403);
     for (const origin of ['https://different.test-tailnet.ts.net', 'http://test-device.test-tailnet.ts.net',

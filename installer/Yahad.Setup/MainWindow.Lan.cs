@@ -103,7 +103,11 @@ public partial class MainWindow
         SaveLanCertificate.Visibility=lan.CertificateDerBase64 is null?Visibility.Collapsed:Visibility.Visible;
         LanResultText.Text="כתובת יחד בבית: "+lan.Origin+"\n"+
             "דף ההצטרפות: "+(lan.HelpOrigin??lan.Origin+LanDeployment.HelpPath)+"\n"+
-            "חיבור HTTPS מהמחשב נבדק. כניסה ממכשיר נוסף עדיין לא נבדקה.";
+            "חיבור HTTPS מהמחשב נבדק. כניסה ממכשיר נוסף עדיין לא נבדקה.\n"+
+            // The browser opens the loopback address: the owner's first sign-in happens there,
+            // and this computer does not trust the home certificate.
+            "במחשב הזה יחד נפתחת בכתובת 127.0.0.1, שפועלת רק כאן. אין צורך לשמור את הכתובת לבית: "+
+            "היא מופיעה גם ביחד, במסך ההורה, תחת „כתובת יחד למכשירים אחרים”.";
     }
     private void SaveLanCertificate_Click(object sender,RoutedEventArgs e)
     {

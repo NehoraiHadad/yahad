@@ -21,6 +21,24 @@ internal static class FullInstallerIntegrationTests
     private static InstallerState State(string phase="committed")=>PairFixture.State(phase);
     internal static async Task Run(Func<string,Func<Task>,Task> check)
     {
+        await check("the home-network record names only a join page of its own address, and a bad one is ignored",()=>
+        {
+            var origin=new Uri("https://192.168.4.25");var sha=string.Join(':',Enumerable.Repeat("AB",32));
+            byte[] Record(string page,string root,int format=1)=>InstalledHomeNetworkRecord.Encode(new(format,page,root));
+            foreach(var page in new[]{"http://192.168.4.25/","https://192.168.4.25/home-network"})
+             Assert(InstalledHomeNetworkRecord.Parse(Record(page,sha),origin)==new InstalledHomeNetwork(1,page,sha));
+            foreach(var bytes in new[]{Record("http://192.168.4.26/",sha),Record("http://192.168.4.25",sha),Record("https://192.168.4.25/",sha),
+             Record("https://evil.example/home-network",sha),Record("http://192.168.4.25/",sha.ToLowerInvariant()),Record("http://192.168.4.25/",sha[3..]),
+             Record("http://192.168.4.25/",sha,format:2),"{\"Format\":1,\"JoinPage\":\"http://192.168.4.25/\",\"RootSha256\":null}"u8.ToArray(),
+                "{\"Format\":1,\"JoinPage\":null,\"RootSha256\":\"AB\"}"u8.ToArray(),"{\"Format\":1,\"JoinPage\":\"http://192.168.4.25/\",\"RootSha256\":\"x\",\"Extra\":1}"u8.ToArray()})
+            {
+             var copy=bytes;try{InstalledHomeNetworkRecord.Parse(copy,origin);Assert(false);}catch(Exception error)when(error is IOException or System.Text.Json.JsonException){}
+             var path=Path.Combine(Path.GetTempPath(),"home-network-"+Guid.NewGuid().ToString("N")+".json");File.WriteAllBytes(path,bytes);
+             try{Assert(InstalledHomeNetworkRecord.TryRead(path,origin) is null);}finally{File.Delete(path);}
+            }
+            Assert(InstalledHomeNetworkRecord.TryRead(Path.Combine(Path.GetTempPath(),Guid.NewGuid().ToString("N")),origin) is null);
+            return Task.CompletedTask;
+        });
         await check("stop is sent only when the service state accepts it and a pending state is bounded by its own progress",()=>
         {
             // START_PENDING without STOP is what refused removal with 1052.
@@ -385,7 +403,7 @@ internal static class FullInstallerIntegrationTests
         });
         await check("installer partial cleanup recognizes only exact generated record names with canonical nonces",()=>
         {
-            Assert(FullInstallerResidue.Metadata.SequenceEqual(new[]{"installer-state.json","upgrade-state.json","installed.json","lan-preparation.json","setup-capability.json","master-key"}));
+            Assert(FullInstallerResidue.Metadata.SequenceEqual(new[]{"installer-state.json","upgrade-state.json","installed.json","home-network.json","lan-preparation.json","setup-capability.json","master-key"}));
             foreach(var name in FullInstallerResidue.Metadata)
             {
                 Assert(FullInstallerResidue.IsOwnedName(name+".partial-"+new string('a',32)));

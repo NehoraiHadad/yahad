@@ -22,6 +22,7 @@ internal sealed class NativeLanInstall(InstallerState application,InstalledPair 
     internal NativeLanInstall(InstallerState application):this(application,application.Active){}
     private static string StateFile=>Path.Combine(LanProxyPaths.State,"owner.json");
     private static string JournalFile=>Path.Combine(LanProxyPaths.State,"web-change.json");
+    private static string HomeNetworkFile=>Path.Combine(InstallLocations.State,InstalledHomeNetworkRecord.FileName);
     private static string PreparationFile=>Path.Combine(InstallLocations.State,"lan-preparation.json");
     private static string RemovalFile=>InstallLocations.Binaries+".lan-uninstall.json";
     private static string RootCertificate=>Path.Combine(LanProxyPaths.Data,"pki","authorities","local","root.crt");
@@ -77,6 +78,9 @@ internal sealed class NativeLanInstall(InstallerState application,InstalledPair 
         var before=NativeInstallFiles.ReadRecord(InstallLocations.LaunchFile);Record(JournalFile,before);
         Record(InstallLocations.LaunchFile,InstalledLaunch.Encode(InstalledLaunch.Parse(before) with{Origin=origin}));
     }
+    // What the parent is shown in the app: the join page this plan serves and the home root.
+    private static void WriteHomeNetwork(LanDeploymentPlan plan,string root)=>
+        Record(HomeNetworkFile,InstalledHomeNetworkRecord.Encode(new(1,plan.HelpOrigin is {} help?help+"/":plan.Origin+LanDeployment.HelpPath,root)));
     private static void CompleteWebChange(){if(File.Exists(JournalFile))File.Delete(JournalFile);}
     private static async Task StartProxyAsync(NativeService proxy,CancellationToken cancellation)
     {using var bound=CancellationTokenSource.CreateLinkedTokenSource(cancellation);bound.CancelAfter(TimeSpan.FromSeconds(50));await proxy.StartAsync(bound.Token);}
@@ -195,7 +199,7 @@ internal sealed class NativeLanInstall(InstallerState application,InstalledPair 
             Record(Path.Combine(LanProxyPaths.PublicJoin,"certificate.crt"),root.Der);
             Record(Path.Combine(LanProxyPaths.PublicJoin,"index.html"),HelpPage(template,plan,root.Sha256Fingerprint));
             next=next with{RootSha256=root.Sha256Fingerprint};Save(next);
-            ChangeOrigin(plan.Origin);
+            ChangeOrigin(plan.Origin);WriteHomeNetwork(plan,root.Sha256Fingerprint);
             LanDeployment.RequireSelectedAdapter(plan,LanSetupRequest.Choices());NativeNetworkProfile.RequirePrivateProfile(next.AdapterId);
             NativeLanFirewall.Add(plan.FirewallRules);proxy.EnableStartup();await StartProxyAsync(proxy,cancellation);
             Save(next with{Phase="enabled"});CompleteWebChange();RemovePreparation();
@@ -217,7 +221,8 @@ internal sealed class NativeLanInstall(InstallerState application,InstalledPair 
     private async Task DisableAsync(LanOwnedState owned,CancellationToken cancellation)
     {
         await StopProxyIfPresentAsync(cancellation);
-        NativeLanFirewall.Remove(Plan(owned).FirewallRules);ChangeOrigin("http://127.0.0.1:"+application.Port);Save(owned with{Phase="disabled"});CompleteWebChange();RemovePreparation();
+        NativeLanFirewall.Remove(Plan(owned).FirewallRules);ChangeOrigin("http://127.0.0.1:"+application.Port);
+        if(File.Exists(HomeNetworkFile))File.Delete(HomeNetworkFile);Save(owned with{Phase="disabled"});CompleteWebChange();RemovePreparation();
     }
     private async Task StopProxyIfPresentAsync(CancellationToken cancellation)
     {
@@ -234,6 +239,7 @@ internal sealed class NativeLanInstall(InstallerState application,InstalledPair 
     {
         var owned=Read(removing:true,preparing:true);if(owned is not {Phase:"enabled",RootSha256:not ""})return;
         Record(Path.Combine(LanProxyPaths.PublicJoin,"index.html"),HelpPage(RequirePayload(app),Plan(owned),owned.RootSha256));
+        WriteHomeNetwork(Plan(owned),owned.RootSha256);
     }
     // The Caddyfile is infrastructure: only an infrastructure move rewrites it, while
     // the proxy is stopped.
@@ -241,6 +247,8 @@ internal sealed class NativeLanInstall(InstallerState application,InstalledPair 
     {
         var owned=Read(removing:true,preparing:true);if(owned is not {Phase:"enabled",RootSha256:not ""})return;
         Record(LanProxyPaths.Config,Encoding.UTF8.GetBytes(Plan(owned).Caddyfile));
+        // An install from before this record gets it on its next infrastructure move.
+        WriteHomeNetwork(Plan(owned),owned.RootSha256);
     }
     internal void Move(NativeService proxy,string? otherInfrastructure){proxy.SwitchImage(pair.Infrastructure.Version);MoveFirewall(otherInfrastructure);}
     internal void MoveFirewall(string? otherInfrastructure)

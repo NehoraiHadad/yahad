@@ -2545,6 +2545,9 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 .tablet-login-field input { box-sizing:border-box; width:100%; min-width:0; min-height:44px; border:1px solid #b7c9b1; border-radius:8px; padding:10px; background:white; color:#294e47; font:inherit; font-weight:400; }
 .tablet-login-field input:focus-visible { outline:3px solid #409b91; outline-offset:2px; }
 .tablet-setup .tablet-step-note { font-size:13px; color:#5e6e58; }
+.copy-field label { display:flex; flex-direction:column; gap:6px; }
+.copy-field .text-button { align-self:flex-start; }
+.home-address .tablet-step-note { font-size:13px; color:#5e6e58; }
 .tablet-setup .text-button { display:inline-flex; align-items:center; gap:6px; min-height:44px; flex-wrap:wrap; text-align:start; }
 .tablet-setup bdi { overflow-wrap:anywhere; }
 .tablet-parent-navigation { display:flex; justify-content:space-between; align-items:center; gap:18px; border-top:1px solid #dbe5d7; padding-top:18px; }

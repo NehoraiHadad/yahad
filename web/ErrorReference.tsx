@@ -7,7 +7,7 @@ export function supportReference(code: string, ref?: string) {
   return ref ? `${code} · ${ref}` : code;
 }
 
-async function copyText(text: string) {
+export async function copyText(text: string) {
   if (navigator.clipboard && window.isSecureContext) {
     await navigator.clipboard.writeText(text);
     return;

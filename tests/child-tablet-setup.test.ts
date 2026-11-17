@@ -22,6 +22,31 @@ test('tablet handoff groups three instructions and labels site address separatel
   assert.match(html, /ולא מחברת את הטאבלט/);
 });
 
+test('on the loopback entry the tablet is given the home address, its join page and the fingerprint', () => {
+  const homeNetwork = { joinPage: 'http://192.168.4.25/', certificateSha256: 'AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB' };
+  const html = render({ origin: 'http://127.0.0.1:47123', siteOrigin: 'https://192.168.4.25', homeNetwork });
+  assert.match(html, /כתובת יחד<input readOnly="" dir="ltr" value="https:\/\/192.168.4.25"/);
+  assert.ok(!html.includes('value="http://127.0.0.1'));
+  assert.match(html, /פועלת רק במחשב הזה/);
+  assert.match(html, /דף ההצטרפות<input readOnly="" dir="ltr" value="http:\/\/192.168.4.25\/"/);
+  assert.ok(html.includes('value="AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB"'));
+});
+
+test('a parent on a Tailscale address gives the tablet that address, without home-network steps', () => {
+  const homeNetwork = { joinPage: 'http://192.168.4.25/', certificateSha256: 'AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB' };
+  const html = render({ origin: 'https://test-device.test-tailnet.ts.net', siteOrigin: 'https://192.168.4.25', homeNetwork });
+  assert.match(html, /value="https:\/\/test-device.test-tailnet.ts.net"/);
+  assert.doesNotMatch(html, /192.168.4.25|דף ההצטרפות|רשת ביתית/);
+});
+
+test('a server reachable from its computer only says how to add home-network access instead of a useless address', () => {
+  for (const siteOrigin of [undefined, 'http://127.0.0.1:47123']) {
+    const html = render({ origin: 'http://127.0.0.1:47123', siteOrigin });
+    assert.doesNotMatch(html, /value="http:\/\/127/);
+    assert.match(html, /מפעילים שוב במחשב הזה את התקנת יחד/);
+  }
+});
+
 test('stale, loading and missing child states never expose actionable old credentials', () => {
   for (const changes of [{ stale: true }, { loaded: false }, { child: undefined }]) {
     const html = render(changes);
@@ -58,12 +83,12 @@ test('selected child replacement changes login identity and password action atom
   assert.match(html, /class="text-button" disabled=""/);
 });
 
-test('loopback origins are clearly marked as unusable on another device', () => {
+test('a loopback origin is never offered to the tablet as its address', () => {
   for (const origin of ['http://localhost:3000', 'https://127.0.0.1', 'http://[::1]:3000']) {
     const html = render({ origin });
-    assert.match(html, /הכתובת במכשיר הזה בלבד/);
-    assert.match(html, /בטאבלט צריך לפתוח את כתובת השרת ברשת הביתית/);
+    assert.ok(!html.includes(`value="${origin}`), origin);
     assert.doesNotMatch(html, /פותחים בדפדפן בטאבלט את הכתובת הזו/);
+    assert.match(html, /יחד זמינה כרגע רק במחשב שבו היא מותקנת/);
   }
 });
 

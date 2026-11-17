@@ -1,15 +1,19 @@
 import React from 'react';
 import { ArrowLeft, KeyRound, Tablet } from 'lucide-react';
 import type { familyProgress } from './FamilyProgress';
+import { CopyField, JoinSteps } from './HomeAddress';
+import { isLoopbackOrigin, sharedAddress, tabletAddress, type HomeNetwork } from './siteAddress';
 
 type Child = ReturnType<typeof familyProgress>['children'][number];
-export function ChildTabletSetup({ child, loaded, stale, busy, origin, onPassword, openChat }: {
-  child?: Child; loaded: boolean; stale: boolean; busy: boolean; origin: string;
+export function ChildTabletSetup({ child, loaded, stale, busy, origin, siteOrigin, homeNetwork, onPassword, openChat }: {
+  child?: Child; loaded: boolean; stale: boolean; busy: boolean; origin: string; siteOrigin?: string; homeNetwork?: HomeNetwork;
   onPassword: (id: string) => void; openChat: () => void;
 }) {
-  // The parent's current origin is not necessarily reachable from another device.
-  const hostname = new URL(origin).hostname;
-  const loopback = hostname === 'localhost' || hostname.endsWith('.localhost') || hostname === '[::1]' || /^127\./.test(hostname);
+  // This computer's loopback entry is not reachable from another device; the
+  // server's own address is, unless the server is reachable from its computer only.
+  const loopback = isLoopbackOrigin(origin);
+  const address = tabletAddress(origin, siteOrigin);
+  const home = address && address === sharedAddress(siteOrigin) ? homeNetwork : undefined;
   const ready = loaded && !stale && !!child?.ready;
   const status = !loaded ? 'טוענים את מצב ההכנה…' : stale ? 'ממתינים לאימות מצב ההכנה מול השרת.'
     : !child ? 'בחרו חשבון ילד ברשימת הילדים. אם עדיין אין חשבון, הוסיפו אותו תחילה.'
@@ -29,11 +33,14 @@ export function ChildTabletSetup({ child, loaded, stale, busy, origin, onPasswor
     </header>
     {loaded && !stale && child && <ol className="tablet-setup-steps" aria-label="שלבי הכניסה בטאבלט">
       <li><h3><span aria-hidden="true">1</span> פותחים את יחד בטאבלט</h3>
-        <p>{loopback ? 'הכתובת הנוכחית פועלת רק במכשיר הזה. בטאבלט צריך לפתוח את כתובת השרת ברשת הביתית.' : 'פותחים בדפדפן בטאבלט את הכתובת הזו:'}</p>
-        <label className="tablet-login-field">{loopback ? 'הכתובת במכשיר הזה בלבד' : 'כתובת יחד'}
-          <input readOnly dir="ltr" value={origin} onFocus={event => event.currentTarget.select()}/>
-        </label>
-        <p className="tablet-step-note">זו כתובת האתר, לא כתובת של הטאבלט. כתובת מקומית דורשת חיבור לאותה רשת ביתית.</p>
+        {address ? <>
+          <p>{loopback ? 'הכתובת שבדפדפן כאן פועלת רק במחשב הזה. בטאבלט פותחים בדפדפן את הכתובת הזו:'
+            : 'פותחים בדפדפן בטאבלט את הכתובת הזו:'}</p>
+          <CopyField label="כתובת יחד" value={address}/>
+          <p className="tablet-step-note">זו כתובת האתר, לא כתובת של הטאבלט.{home ? ' הטאבלט צריך להיות מחובר לאותה רשת ביתית.' : ''}</p>
+          {home && <JoinSteps home={home}/>}
+        </> : <p>יחד זמינה כרגע רק במחשב שבו היא מותקנת, ולכן הטאבלט לא יכול להגיע אליה. כדי להוסיף גישה,
+          מפעילים שוב במחשב הזה את התקנת יחד ובוחרים „גם בטלפון ובטאבלט שמחוברים לרשת הביתית”.</p>}
       </li>
       <li><h3><span aria-hidden="true">2</span> נכנסים לחשבון הילד</h3>
         <label className="tablet-login-field">שם לכניסה

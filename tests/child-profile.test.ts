@@ -48,6 +48,7 @@ test('parent changes only the child account name, preserving password, sessions,
     assert.equal(f.store.identityLabel(f.a.familyId, f.a.childId), 'חתימה סינתטית');
     assert.ok(f.store.session(f.parent.sid)); assert.ok(f.store.session(f.child.sid));
     assert.equal((await f.get(f.child, '/api/me')).json().user.name, 'עדי');
+    assert.equal((await f.get(f.child, '/api/me')).json().siteOrigin, undefined, 'only a parent is given the site address');
     assert.equal((await f.get(f.parent, '/api/parent/overview')).json().children[0].name, 'עדי');
     assert.equal((await f.get(f.otherParent, '/api/parent/overview')).json().children[0].name, 'child-b');
     assert.deepEqual(notifications, [{ family: f.a.familyId, group: undefined, type: 'identity' }]);
