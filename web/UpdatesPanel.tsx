@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Clock3, Download, LoaderCircle, RefreshCw, TriangleAlert } from 'lucide-react';
 import { csrf } from './api';
+import { ErrorReference } from './ErrorReference';
 import { availableUpdateTarget, sameUpdateTarget, createUpdatePoller, reconcileUpdateRequest, updateActionsDisabled, updateNeedsRepair, updatePhases, updateProgress, type ConfiguredUpdate,
   type LocalUpdateRequest, type UpdateAction, type UpdateStatus, type UpdateTarget } from './updateProgress';
 import { modeRequestErrorTexts, modeRequestRejectedText, unavailableUpdatesText, updateRejectionFallback, updateRejectionTexts } from './updateErrors';
@@ -20,10 +21,6 @@ export class UpdateAccessError extends Error {
 }
 type PanelError = { message: string; code: string };
 
-/** The line support asks for: the precise code, selectable and copied as written. */
-function SupportCode({ code }: { code: string }) {
-  return <p className="diagnostics-caption">קוד לתמיכה: <code dir="ltr" style={{ userSelect: 'all' }}>{code}</code></p>;
-}
 
 function expiredSession() { window.dispatchEvent(new Event('session-expired')); }
 export async function readUpdateStatus(signal: AbortSignal): Promise<UpdateStatus> {
@@ -71,7 +68,7 @@ export function UpdateProgressStatus({ data, local = null, reconnecting = false 
     {progress.action && <p>הפעולה שהתבקשה: {progress.action}</p>}
     {!unavailable && <p>{progress.detail}</p>}
     {!unavailable && progress.todo && <p>מה לעשות: {progress.todo}</p>}
-    {!unavailable && progress.support && <SupportCode code={progress.support}/>}
+    {!unavailable && progress.support && <ErrorReference code={progress.support}/>}
     {unavailable && <p>אין כרגע אישור להתקדמות, להצלחה או לכשל חדש. ייתכן שזה ניתוק זמני בזמן הפעלה מחדש. ננסה לקבל דיווח מצב חדש בלבד — לא נשלח שוב בקשת עדכון.</p>}
     {data.updatedAt && <small>דיווח אחרון מהשירות: {new Date(data.updatedAt).toLocaleString('he-IL')}</small>}
   </div>;
@@ -166,11 +163,11 @@ export function UpdatesPanel() {
       <Download size={20}/><span><b>עדכוני האפליקציה</b><small aria-live="polite">{accessDenied ? 'אין הרשאה לצפייה במצב העדכונים' : reconnecting || configured?.stale ? 'מצב עדכני אינו זמין — בודקים שוב' : progress?.title || 'גרסאות מ־GitHub, גיבוי ושליטה שלכם'}</small></span><span>{open ? 'סגירה' : 'פתיחה'}</span>
     </button>
     {open && <div className="diagnostics-body" aria-busy={busy || refreshing}>
-      {error && <div role="alert"><p className="error">{error.message}</p><SupportCode code={error.code}/></div>}
+      {error && <div role="alert"><p className="error">{error.message}</p><ErrorReference code={error.code}/></div>}
       {refreshing && !data && <p role="status">בודקים את המצב…</p>}
       {reconnecting && !configured && !accessDenied && <p role="status" className="diagnostics-notice">לא ניתן לקבל את מצב שירות העדכון כרגע. מנסים לקרוא את המצב שוב; אין אישור להצלחה או לכשל ולא נשלחת בקשת עדכון נוספת.</p>}
       {data && !data.configured && !reconnecting && <><p>{unavailableUpdatesText(data.reason)}</p>
-        {data.reason && <details><summary>פרטים טכניים</summary><SupportCode code={data.reason}/></details>}</>}
+        {data.reason && <details><summary>פרטים טכניים</summary><ErrorReference code={data.reason}/></details>}</>}
       {configured && <>
         <UpdateProgressStatus data={configured} local={local} reconnecting={reconnecting}/>
         <p>גרסה נוכחית שדווחה: <span dir="ltr">{configured.currentVersion || 'טרם דווחה'}</span>{configured.latestVersion && <> · גרסה זמינה: <span dir="ltr">{configured.latestVersion}</span></>}</p>
@@ -180,9 +177,9 @@ export function UpdatesPanel() {
         {!configured.queuedMode && configured.lastModeRequest?.state === 'applied' && <p role="status">הבחירה האחרונה נשמרה והופעלה.</p>}
         {!repairRequired && !configured.queuedMode && configured.lastModeRequest?.state === 'rejected' && <div role="alert">
           <p>{configured.lastModeRequest.error ? modeRequestErrorTexts[configured.lastModeRequest.error] : modeRequestRejectedText}</p>
-          <SupportCode code={configured.lastModeRequest.error ?? 'mode_rejected'}/></div>}
+          <ErrorReference code={configured.lastModeRequest.error ?? 'mode_rejected'}/></div>}
         {configured.lastModeRequest?.state === 'pending' && configured.lastModeRequest.error && <div role="alert">
-          <p>{modeRequestErrorTexts[configured.lastModeRequest.error]}</p><SupportCode code={configured.lastModeRequest.error}/></div>}
+          <p>{modeRequestErrorTexts[configured.lastModeRequest.error]}</p><ErrorReference code={configured.lastModeRequest.error}/></div>}
         {!configured.modeControlAllowed && <p>שינוי המצב זמין להורה המוגדר כאחראי לעדכונים, לאחר השלמת המתקין במחשב השרת.</p>}
         {!repairRequired && <button type="button" className="outline-button" disabled={disabled || !configured.modeControlAllowed} onClick={() => setChoice(configured.mode === 'auto' ? 'notify' : 'auto')}>{configured.mode === 'auto' ? 'מעבר להודעה בלבד' : 'הפעלת עדכונים אוטומטיים'}</button>}
         {choice && !repairRequired && <div className="diagnostics-notice" role="group" aria-label="אישור שינוי מצב העדכונים"><p>{choice === 'auto' ? 'להתקין אוטומטית גרסאות יציבות חדשות? ייתכן ניתוק קצר מהשיחות בזמן התקנה.' : 'לעבור להודעה בלבד? גרסאות חדשות יוצגו כאן, ותבחרו מתי להתקין.'}</p><button className="outline-button" disabled={disabled} onClick={() => void request('set_mode', choice)}>כן, {choice === 'auto' ? 'הפעלת עדכונים אוטומטיים' : 'מעבר להודעה בלבד'}</button><button className="text-button" disabled={busy} onClick={() => setChoice(null)}>ביטול</button></div>}

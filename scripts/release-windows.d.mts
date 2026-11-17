@@ -27,7 +27,7 @@ export function collectReleaseAssets(directory: string, version: string, spki: B
 export function planInfrastructure(args: { head: { version: string; digest: string }; baseline: { version: string; sourceCommit: string } | null; digestAt: (commit: string) => string }): InfraPlan;
 export function cachedInfrastructure(repo: string, python: string, cache: string, version: string): CachedInfrastructure | null;
 export function infrastructureState(repo: string, inputs: Inputs): InfraState;
-export function resolveInfrastructure(args: { built: string; state: InfraState; plan?: InfraPlan | null; inHistory: (commit: string) => boolean }): { sourceCommit: string; digest: string };
+export function resolveInfrastructure(args: { built: string; head?: string; state: InfraState; plan?: InfraPlan | null; inHistory: (commit: string) => boolean }): { sourceCommit: string; digest: string };
 export function historyOf(repo: string, built: string): (commit: string) => boolean;
 export function withInfrastructure<T>(args: { repo: string; built: string; state: InfraState; plan?: InfraPlan | null }, work: (infra: Infra) => T | Promise<T>): Promise<T>;
 export function withInfrastructureSource<T>(repo: string, built: string, infra: { sourceCommit: string; digest: string }, work: (infra: Infra) => T | Promise<T>): Promise<T>;

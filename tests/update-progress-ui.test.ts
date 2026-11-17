@@ -12,6 +12,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import * as progressModule from '../web/updateProgress.js';
 import * as errorsModule from '../web/updateErrors.js';
+import * as errorReferenceModule from '../web/ErrorReference.js';
 import { updateErrorTexts } from '../web/updateErrors.js';
 
 const before = '11111111-1111-4111-8111-111111111111';
@@ -309,7 +310,7 @@ function panelHarness(data: ConfiguredUpdate | null, reconnecting = false, trans
       useState(initial: any) { const index = cursor++; if (!(index in slots)) slots[index] = initial; return [slots[index], (value: any) => { slots[index] = typeof value === 'function' ? value(slots[index]) : value; }]; },
       useRef(initial: any) { const index = cursor++; return slots[index] ||= { current: initial }; },
       useEffect() {},
-    } : name === './api' ? { csrf: 'synthetic' } : name === './updateProgress' ? progressModule : name === './updateErrors' ? errorsModule : require(name),
+    } : name === './api' ? { csrf: 'synthetic' } : name === './updateProgress' ? progressModule : name === './updateErrors' ? errorsModule : name === './ErrorReference' ? errorReferenceModule : require(name),
   });
   const render = () => { cursor = 0; return module.exports.UpdatesPanel(); };
   const nodes = (node: any): any[] => !node || typeof node !== 'object' ? [] : [node, ...[node.props?.children].flat(Infinity).flatMap(nodes)];

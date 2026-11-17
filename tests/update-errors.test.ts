@@ -117,8 +117,9 @@ test('the update screen shows what happened, what to do and the precise support 
   const progress = updateProgress(status);
   assert.equal(progress.title, updateErrorTexts.signature.title); assert.equal(progress.retry, false);
   const html = renderToStaticMarkup(React.createElement(UpdateProgressStatus, { data: status }));
-  assert.ok(html.includes('קוד לתמיכה: <code dir="ltr"'));
-  assert.ok(html.includes('>RELEASE_SIGNATURE_INVALID</code>'));
+  // The shared support reference: the exact code, isolated left-to-right, with a copy button.
+  assert.ok(html.includes('קוד לתמיכה: <bdi dir="ltr" class="error-reference-code">RELEASE_SIGNATURE_INVALID</bdi>'));
+  assert.ok(html.includes('error-reference-copy'));
   assert.ok(html.includes(updateErrorTexts.signature.todo));
   // A scheduled failure without a journal is still explained, by its own code.
   const scheduled = updateProgress({ ...status, phase: 'idle', lastRequest: null, error: 'network', errorCode: 'GITHUB_HTTP:403', errorPermanent: false });
