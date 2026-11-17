@@ -1,23 +1,26 @@
 import React, { useState } from 'react';
 import { Activity, Download, RefreshCw, Trash2 } from 'lucide-react';
-import { api } from './api';
+import { api, shownError, type ShownError } from './api';
+import { InlineError } from './ErrorReference';
 import type { DiagnosticsReport, Operation } from '../src/diagnostics';
 
 const labels: Record<Operation, string> = { db_read: 'קריאה מהמסד', db_write: 'שמירה במסד',
   db_commit: 'סיום עסקה במסד', media_read: 'קריאת קובץ מדיה', media_write: 'כתיבת קובץ מדיה',
   api: 'מענה של השרת', media_prepare: 'בדיקת קובץ לפני שליחה', connector: 'חיבור WhatsApp', media_download: 'הורדת מדיה מהחיבור' };
 const errors: Record<string, string> = { io: 'קלט/פלט', no_space: 'אין מקום', readonly: 'אחסון לקריאה בלבד',
-  busy: 'אחסון תפוס', permission: 'הרשאות קובץ', internal: 'כשל תפעולי', integrity: 'קובץ אבחון לא תקין' };
+  busy: 'אחסון תפוס', permission: 'הרשאות קובץ', internal: 'כשל תפעולי', integrity: 'קובץ אבחון לא תקין',
+  pairing_unreadable: 'נתוני קישור לא קריאים' };
+const at = (time: number) => new Date(time).toLocaleString('he-IL');
 const bytes = (n: number | null) => n === null ? 'לא זמין' : n >= 1024 ** 3 ? (n / 1024 ** 3).toFixed(1) + ' GiB' : (n / 1024 ** 2).toFixed(1) + ' MiB';
 const ms = (n: number) => n < 1 ? '<1 ms' : Math.round(n).toLocaleString('he-IL') + ' ms';
 
 export function DiagnosticsPanel() {
   const [open, setOpen] = useState(false), [data, setData] = useState<DiagnosticsReport | null>(null),
-    [busy, setBusy] = useState(false), [error, setError] = useState(''), [confirmClear, setConfirmClear] = useState(false);
+    [busy, setBusy] = useState(false), [error, setError] = useState<ShownError | null>(null), [confirmClear, setConfirmClear] = useState(false);
   async function refresh() {
-    setBusy(true); setError('');
+    setBusy(true); setError(null);
     try { setData(await api('/parent/diagnostics')); }
-    catch (e) { setError((e as Error).message); }
+    catch (e) { setError(shownError(e)); }
     finally { setBusy(false); }
   }
   const storageSlow = data?.metrics.some(x => ['db_write', 'db_commit', 'media_write'].includes(x.operation) && x.count >= 20 && (x.p95UpperMs === null || x.p95UpperMs >= 250));
@@ -28,7 +31,7 @@ export function DiagnosticsPanel() {
     }}><Activity size={20} /><span><b>מצב המערכת</b><small>אחסון, ביצועים ועדות לתקלות</small></span><span>{open ? 'סגירה' : 'פתיחה'}</span></button>
     {open && <div className="diagnostics-body">
       <p>מדדים תפעוליים מצטברים בלבד. אין כאן תוכן שיחות, שמות קבוצות או יומן פעילות של הילדה.</p>
-      {error && <p className="error" role="alert">{error}</p>}
+      <InlineError error={error} />
       {busy && !data && <p role="status">טוענים את מצב המערכת…</p>}
       {data && <>
         {!data.enabled && <p className="diagnostics-notice">איסוף מדדי פעולות כבוי בהגדרות השרת. נתוני המשאבים הנוכחיים עדיין זמינים.</p>}
@@ -52,6 +55,17 @@ export function DiagnosticsPanel() {
         </table></div> : <p>עדיין אין מספיק נתונים. המדדים ייאספו במהלך שימוש רגיל.</p>}
         {data.metrics.filter(m => m.mibPerSecond !== null && ['media_read','media_write'].includes(m.operation)).map(m =>
           <p key={m.operation} className="diagnostics-caption">{labels[m.operation]}: <b dir="ltr">{m.mibPerSecond!.toFixed(1)} MiB/s</b> בזמן הפעולות שנמדדו. מטמון מערכת ההפעלה כלול; זו אינה מהירות הכרטיס הגולמית.</p>)}
+        {data.recentErrors.length ? <div className="diagnostics-table-wrap"><table>
+          <caption>שגיאות אחרונות שהוצגו במשפחה (מאז הפעלת השרת)</caption>
+          <thead><tr><th>זמן</th><th>קוד</th><th>מסלול</th><th>סטטוס</th><th>מזהה</th><th>סיבה</th></tr></thead>
+          <tbody>{data.recentErrors.map((event, index) => <tr key={`${event.time}-${index}`}><td>{at(event.time)}</td>
+            <td><bdi dir="ltr">{event.code}</bdi></td><td><bdi dir="ltr">{event.method ? `${event.method} ` : ''}{event.route ?? '—'}</bdi></td>
+            <td dir="ltr">{event.status ?? '—'}</td><td><bdi dir="ltr">{event.ref ?? '—'}</bdi></td>
+            <td>{event.cause ? errors[event.cause] ?? event.cause : event.errorClass ? <bdi dir="ltr">{event.errorClass}</bdi> : '—'}</td></tr>)}</tbody>
+        </table></div> : <p>לא הוצגו שגיאות מאז הפעלת השרת.</p>}
+        {data.whatsappDisconnects.length > 0 && <p className="diagnostics-caption">ניתוקים אחרונים מ־WhatsApp (קוד הניתוק): {data.whatsappDisconnects.map((event, index) =>
+          <React.Fragment key={`${event.time}-${index}`}>{index ? ' · ' : ''}{at(event.time)} <bdi dir="ltr">{event.statusCode ?? '?'}</bdi></React.Fragment>)}</p>}
+        <p className="diagnostics-caption">גרסה: <bdi dir="ltr">{data.appVersion}</bdi>. השגיאות והניתוקים נשמרים בזיכרון בלבד ונמחקים באתחול: קוד, מסלול ומזהה, בלי תוכן הודעות או פרטים אישיים. המזהה תואם ל"קוד לתמיכה" שהוצג במסך.</p>
         <p className="diagnostics-caption">P95 הוא גבול עליון מקורב לפי טווחי זמן. CPU נמדד ביחס לליבה אחת ועשוי לעבור 100%; עיכוב הלולאה נדגם ברזולוציה של 20 ms. מדדי CPU ולולאה מתעדכנים כל 15 שניות ונמחקים באתחול.</p>
         <p className="diagnostics-caption">שמירה מוצפנת של סיכומים לפי שעה, עד {data.retentionDays} ימים, אחת ל־{Math.round(data.flushSeconds / 60)} דקות. כיבוי פתאומי עלול לאבד את הדגימות שטרם נשמרו. {data.lastSavedAt ? `שמירה אחרונה: ${new Date(data.lastSavedAt).toLocaleString('he-IL')}.` : 'טרם נשמר סיכום לדיסק.'}</p>
       </>}
@@ -62,7 +76,7 @@ export function DiagnosticsPanel() {
       </div>
       {confirmClear && <div className="diagnostics-notice"><p>למחוק את הסיכומים שנאספו למשפחה הזו? מדדים חדשים ימשיכו להיאסף אם האיסוף פעיל.</p><button className="outline-button" disabled={busy} onClick={async () => {
         setBusy(true); try { await api('/parent/diagnostics', 'DELETE'); setConfirmClear(false); await refresh(); }
-        catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+        catch (e) { setError(shownError(e)); } finally { setBusy(false); }
       }}>מחיקה</button></div>}
     </div>}
   </section>;

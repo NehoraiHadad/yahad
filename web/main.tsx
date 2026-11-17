@@ -24,7 +24,7 @@ import { GroupAvatar } from './GroupAvatar';
 import { ErrorToast } from './ErrorToast';
 import { ChildManagement } from './ChildManagement';
 import { ChildTabletSetup } from './ChildTabletSetup';
-import { reconcileChildSelection, readChildSelection, saveChildSelection } from './childManagementState';
+import { reconcileChildSelection, readChildSelection, saveChildSelection, type ActionOutcome } from './childManagementState';
 import { ParentChatFilter, filterParentGroups, searchChatGroups, parentEmptyMessage, type ChatFilter } from './ParentChatFilter';
 import { CatalogConversation, ConversationVerification } from './CatalogConversation';
 import './parentChatCatalog.css';
@@ -81,7 +81,9 @@ import {
   Eye,
   EyeOff,
 } from 'lucide-react';
-import { api, isTransientApiError, setCsrf } from './api';
+import { api, ApiError, isTransientApiError, setCsrf, setViewerAccount, setViewerRole, shownError, type ShownError } from './api';
+import { ErrorReference, InlineError } from './ErrorReference';
+import { errorText } from './errorCatalog';
 import './style.css';
 import './child-management.css';
 import { DiagnosticsPanel } from './DiagnosticsPanel';
@@ -143,18 +145,21 @@ function IconButton({
 function App() {
   const [me, setMe] = useState<Me | null>(null),
     [loaded, setLoaded] = useState(false),
-    [error, setError] = useState('');
+    // /me failed for a reason other than a finished session: say so, never a silent sign-out.
+    [bootError, setBootError] = useState<ShownError | null>(null),
+    [error, setError] = useState<ShownError | null>(null);
+  const showError = useCallback((e: unknown) => setError(shownError(e)), []);
   const [route, setRoute] = useState<AppRoute>({ mode: 'chat', group: null });
   const navigate = (next: AppRoute) => {
     if (!me) return;
     writeRoute(history, next, me.user.id);
-    setError('');
+    setError(null);
     setRoute(next);
   };
   useEffect(() => {
     if (!me) return;
     const restore = () => {
-      setError('');
+      setError(null);
       setRoute(readRoute(history.state, me.user.id, me.user.role) ||
         { mode: me.user.role === 'parent' ? 'parent' : 'chat', group: null });
     };
@@ -170,13 +175,19 @@ function App() {
     try {
       const m = await api<Me>('/me');
       setCsrf(m.csrf);
+      setViewerRole(m.user.role);
+      setViewerAccount(m.user.id);
+      setBootError(null);
       setMe(m);
       const next = readRoute(history.state, m.user.id, m.user.role) ||
         { mode: m.user.role === 'parent' ? 'parent' as const : 'chat' as const, group: null };
       writeRoute(history, next, m.user.id, true);
       setRoute(next);
-    } catch {
-      setMe(null);
+    } catch (e) {
+      setMe(null); setViewerRole(undefined); setViewerAccount(undefined);
+      // 401 is a finished session (the login screen is the answer). Anything else is the
+      // server not answering properly: show it, with a retry, instead of a login form.
+      setBootError(e instanceof ApiError && e.status === 401 ? null : shownError(e));
     } finally {
       setLoaded(true);
     }
@@ -186,20 +197,26 @@ function App() {
     const expire = () => {
       localStorage.setItem('yachad-locked', '1');
       setMe(null);
-      setCsrf('');
+      setCsrf(''); setViewerRole(undefined); setViewerAccount(undefined);
     };
+    // Another window signed in as a different account: show that account, not a stale one.
+    const changed = () => { setError(null); void refresh(); };
     window.addEventListener('session-expired', expire);
-    return () => window.removeEventListener('session-expired', expire);
+    window.addEventListener('session-changed', changed);
+    return () => {
+      window.removeEventListener('session-expired', expire);
+      window.removeEventListener('session-changed', changed);
+    };
   }, [refresh]);
   const logout = useCallback(async () => {
     const attempt = api('/logout', 'POST');
     localStorage.setItem('yachad-locked', '1');
     setMe(null);
-    setCsrf('');
+    setCsrf(''); setViewerRole(undefined); setViewerAccount(undefined);
     try {
       await attempt;
     } catch {
-      setError('המכשיר ננעל מקומית. החיבור לשרת אינו זמין כרגע.');
+      setError({ text: 'המכשיר ננעל מקומית. החיבור לשרת אינו זמין כרגע.' });
     }
   }, []);
   useEffect(() => {
@@ -234,7 +251,7 @@ function App() {
     const handler = (e: StorageEvent) => {
       if (e.key === 'yachad-locked' && e.newValue === '1') {
         setMe(null);
-        setCsrf('');
+        setCsrf(''); setViewerRole(undefined); setViewerAccount(undefined);
       }
     };
     window.addEventListener('storage', handler);
@@ -247,15 +264,26 @@ function App() {
         <span>רגע, מתחברים…</span>
       </div>
     );
+  if (bootError)
+    return (
+      <main className="splash" role="alert">
+        <AlertCircle />
+        <h1>השרת של יחד לא ענה כמו שצריך</h1>
+        <p>{bootError.text}</p>
+        <p>לא יצאתם מהחשבון. אפשר לנסות שוב בעוד רגע.</p>
+        <ErrorReference code={bootError.code} refId={bootError.ref} />
+        <button className="primary" onClick={() => { setLoaded(false); void refresh(); }}>ניסיון נוסף</button>
+      </main>
+    );
   if (!me) return <Login onLogin={refresh} />;
   return (
     <div className="app-shell">
       {error && (
-        <ErrorToast message={error} onDismiss={() => setError('')} />
+        <ErrorToast error={error} onDismiss={() => setError(null)} />
       )}
       <div className="app-content">
       {route.mode === 'parent' && me.user.role === 'parent' ? (
-        <Parent me={me} logout={logout} openChat={() => navigate({ mode: 'chat', group: null })} onError={setError} />
+        <Parent me={me} logout={logout} openChat={() => navigate({ mode: 'chat', group: null })} onError={showError} />
       ) : (
         <Chat
           key={me.user.id}
@@ -265,7 +293,7 @@ function App() {
           parent={() => navigate({ mode: 'parent', group: null })}
           routeGroup={route.group}
           onSelect={group => navigate({ mode: 'chat', group })}
-          onError={setError}
+          onError={showError}
         />
       )}
       </div>
@@ -275,7 +303,12 @@ function App() {
 function Login({ onLogin }: { onLogin: () => Promise<void> }) {
   const [setupDone, setSetupDone] = useState(false);
   const [setupState, setSetupState] = useState('');
-  useEffect(() => { void fetch('/api/setup/status').then(r => r.json()).then(x => setSetupState(x.state)).catch(() => {}); }, []);
+  // A failed check is said out loud: otherwise an expired link or a server that is down
+  // looks exactly like a login screen whose passwords are all wrong.
+  const [setupCheck, setSetupCheck] = useState<ShownError | null>(null);
+  useEffect(() => {
+    void api<{ state: string }>('/setup/status').then(x => setSetupState(x.state), e => setSetupCheck(shownError(e)));
+  }, []);
   // Only the home-network proxy answers here with a certificate; anywhere else this is the app's page.
   const [homeNetworkHelp, setHomeNetworkHelp] = useState(false);
   useEffect(() => { void fetch('/certificate.crt', { method: 'HEAD' }).then(r => setHomeNetworkHelp(r.headers.get('content-type') === 'application/pkix-cert')).catch(() => {}); }, []);
@@ -283,7 +316,7 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
     [password, setPassword] = useState(''),
     [show, setShow] = useState(false),
     [busy, setBusy] = useState(false),
-    [error, setError] = useState('');
+    [error, setError] = useState<ShownError | null>(null);
   const linkUsable = setupState !== 'closed' && setupState !== 'complete';
   if (setupToken && !setupDone && linkUsable) return <FamilySetup setupToken={setupToken}
     onDone={() => { setupToken = ''; setSetupDone(true); void onLogin(); }}
@@ -292,6 +325,8 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
     <main className="login-page">
       {setupState === 'closed' && <p className="setup-link-notice" role="status">קישור ההכנה תקף ל־15 דקות, והוא פג. כדי להמשיך, הפעילו שוב את המתקין של יחד באותו מחשב והוא יפתח קישור חדש. שום דבר לא אבד.</p>}
       {setupState === 'ready' && !setupToken && <p className="setup-link-notice" role="status">ההכנה עדיין פתוחה. חזרו לקישור הפרטי שהציג המתקין. רענון הדף מסיר את הקישור הפרטי להגנה על החשבון; אין צורך ליצור משפחה נוספת.</p>}
+      {setupCheck && <div className="setup-link-notice" role="status"><p>לא הצלחנו לבדוק את מצב השרת של יחד, ולכן ייתכן שגם הכניסה תיכשל. {setupCheck.text}</p>
+        <ErrorReference code={setupCheck.code} refId={setupCheck.ref} /></div>}
       <div className="login-art">
         <div className="brand">
           <MessageCircleHeart /> יחד<span>השיחות שלנו</span>
@@ -316,14 +351,14 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
         onSubmit={async (e) => {
           e.preventDefault();
           setBusy(true);
-          setError('');
+          setError(null);
           try {
             await api('/login', 'POST', { name, password });
             setPassword('');
             localStorage.removeItem('yachad-locked');
             await onLogin();
           } catch (e) {
-            setError((e as Error).message);
+            setError(shownError(e));
           } finally {
             setBusy(false);
           }
@@ -363,11 +398,7 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
             </IconButton>
           </div>
         </label>
-        {error && (
-          <p role="alert" className="error">
-            {error}
-          </p>
-        )}
+        <InlineError error={error} />
         <button className="primary" disabled={busy}>
           {busy ? (
             <LoaderCircle className="spin" />
@@ -400,7 +431,7 @@ function Chat({
   parent: () => void;
   routeGroup?: string | null;
   onSelect?: (group: string | null) => void;
-  onError: (x: string) => void;
+  onError: (error: unknown) => void;
 }) {
   const budget = useUsageBudget(me.user.role === 'child', me.user.id);
   const [confirmedUsage, setConfirmedUsage] = useState(-1);
@@ -561,7 +592,7 @@ function Chat({
       } catch (e) {
         if (selectedRef.current === g && generation === requestGeneration.current) {
           setBusy(false);
-          onError((e as Error).message);
+          onError(e);
         }
       }
     },
@@ -644,7 +675,7 @@ function Chat({
       await fn();
       if (selectedRef.current) await refreshMessages(selectedRef.current);
     } catch (e) {
-      onError((e as Error).message);
+      onError(e);
     }
   };
   const loadOlder = async () => {
@@ -668,7 +699,7 @@ function Chat({
         if (v) v.scrollTop += v.scrollHeight - old;
       }, 0);
     } catch (e) {
-      onError((e as Error).message);
+      onError(e);
     } finally {
       setOldBusy(false);
     }
@@ -691,7 +722,7 @@ function Chat({
         if (data.limited) onError('החיפוש הוגבל ל־2,000 ההודעות האחרונות שנשמרו.');
       }
     } catch (e) {
-      onError((e as Error).message);
+      onError(e);
     }
   };
   return (
@@ -1382,7 +1413,7 @@ function Composer({
   clearEditing: () => void;
   onSent: () => void;
   onBusyChange: (busy: boolean) => void;
-  onError: (x: string) => void;
+  onError: (error: unknown) => void;
 }) {
   const [text, setText] = useState(''),
     [busy, setBusy] = useState(false),
@@ -1498,7 +1529,7 @@ function Composer({
       if (!mounted.current || controller.signal.aborted) return;
       setFile(chosen); setVoice(null); setSticker(true); id.current = newId();
     } catch (e) {
-      if (mounted.current && !controller.signal.aborted) onError((e as Error).message);
+      if (mounted.current && !controller.signal.aborted) onError(e);
     } finally { if (mounted.current && stickerRequest.current === controller) { setBusy(false); onBusyChange(false); } }
   };
   const clearDraft = () => {
@@ -1515,7 +1546,7 @@ function Composer({
       else if (result.state === 'failed') { uncertain.current = false; setSendUncertain(false); }
       // Missing records cannot prove non-submission (for example after forgetting
       // a conversation). Neither an absent record nor an unknown result retries.
-    } catch (e) { if (mounted.current) onError((e as Error).message); }
+    } catch (e) { if (mounted.current) onError(e); }
     finally { submitting.current = false; if (mounted.current) { setBusy(false); onBusyChange(uncertain.current); } }
   };
   const send = async (e?: React.FormEvent) => {
@@ -1565,7 +1596,7 @@ function Composer({
         if (!editing && requested && (e as { sendOutcome?: string }).sendOutcome !== 'not_submitted') {
           uncertain.current = true; setSendUncertain(true); setEmojiOpen(false); setAttachOpen(false);
         }
-        onError((e as Error).message);
+        onError(e);
       }
     } finally {
       submitting.current = false;
@@ -1876,7 +1907,7 @@ function Parent({
   me: Me;
   logout: () => Promise<void>;
   openChat: () => void;
-  onError: (x: string) => void;
+  onError: (error: unknown) => void;
 }) {
   const [groupPhotoRevision, setGroupPhotoRevision] = useState(0);
   const [createdChild, setCreatedChild] = useState('');
@@ -1891,7 +1922,7 @@ function Parent({
     [addingChild, setAddingChild] = useState(false),
     [deleteOpen, setDeleteOpen] = useState(false),
     [password, setPassword] = useState(''),
-    [confirmError, setConfirmError] = useState('');
+    [confirmError, setConfirmError] = useState<ShownError | null>(null);
   useEffect(() => { if (data) saveChildSelection(me.user.id, child); }, [me.user.id, child, !!data]);
   const browserOnline = useBrowserOnline();
   const acting = useRef(false), overviewRequest = useRef(0);
@@ -1911,7 +1942,7 @@ function Parent({
         } catch (e) {
           if (request !== overviewRequest.current) return;
           setQr(null);
-          if (!(background && isTransientApiError(e))) onError((e as Error).message);
+          if (!(background && isTransientApiError(e))) onError(e);
         }
       } else setQr(null);
       setOverviewStale(false);
@@ -1921,7 +1952,7 @@ function Parent({
       setOverviewStale(true);
       setOverviewFailed(true);
       if (background && isTransientApiError(e)) return;
-      else onError((e as Error).message);
+      else onError(e);
     }
   }, [onError]);
   useEffect(() => {
@@ -1937,8 +1968,10 @@ function Parent({
       clearInterval(timer);
     };
   }, []);
-  const act = async (path: string, body?: unknown, method = 'POST') => {
-    if (acting.current) return false;
+  /** Run one parent action. `inline` actions report their failure next to the control that
+   * started them (the caller shows it); every other failure goes to the notification row. */
+  const act = async (path: string, body?: unknown, method = 'POST', inline = false): Promise<ActionOutcome> => {
+    if (acting.current) return { ok: false, error: null };
     acting.current = true; setBusy(true);
     try {
       await api(path, method, body);
@@ -1947,13 +1980,13 @@ function Parent({
       // the newest read confirms the persisted state (even after busy clears).
       setOverviewStale(true);
       await load(path === '/parent/grant');
-      return true;
+      return { ok: true };
     } catch (e) {
-      if (path !== '/parent/grant') onError((e as Error).message);
+      if (!inline) onError(e);
       // A lost mutation response may still have committed. Reconcile before another click.
       setOverviewStale(true);
       await load(true);
-      return false;
+      return { ok: false, error: e };
     } finally {
       acting.current = false; setBusy(false);
     }
@@ -2070,14 +2103,15 @@ function Parent({
             onAdd={() => setAddingChild(true)} onSelect={id => { setChild(id); setCreatedChild(''); }}
             onSettings={(id, mode) => { setSettingsChild(id); setSettingsMode(mode); setSettings(true); }}
             onRetry={() => void load()} onRefresh={() => void act('/parent/sync-groups')}
-            onAccess={change => act('/parent/child-access', change, 'PUT')}
-            onGrant={change => { setCreatedChild(''); return act('/parent/grant', change, 'PUT'); }}>
+            onAccess={change => act('/parent/child-access', change, 'PUT', true)}
+            onGrant={change => { setCreatedChild(''); return act('/parent/grant', change, 'PUT', true); }}>
             <IdentitySettings key={child} childId={child} disabled={busy || overviewStale}
               value={data?.children.find(account => account.id === child)?.senderLabel || ''}
               onSave={async label => {
-                const saved = await act('/parent/identity', { childId: child, label }, 'PUT');
-                if (!saved) throw new Error('לא התקבל אישור לשמירת החתימה. בדקו את המצב לאחר הרענון.');
-              }} onError={onError}/>
+                const saved = await act('/parent/identity', { childId: child, label }, 'PUT', true);
+                if (!saved.ok) throw saved.error instanceof ApiError ? saved.error
+                  : new Error('לא התקבל אישור לשמירת החתימה. בדקו את המצב לאחר הרענון.');
+              }}/>
           </ChildManagement>
           <ChildTabletSetup child={selectedChild} loaded={!!data} stale={overviewStale} busy={busy}
             origin={location.origin} openChat={openChat}
@@ -2141,12 +2175,12 @@ function Parent({
             aria-label="מחיקת משפחה"
             onSubmit={async (e) => {
               e.preventDefault();
-              setConfirmError('');
+              setConfirmError(null);
               try {
                 await api('/parent/family', 'DELETE', { password });
                 window.dispatchEvent(new Event('session-expired'));
               } catch (e) {
-                setConfirmError((e as Error).message);
+                setConfirmError(shownError(e));
               }
             }}
           >
@@ -2165,11 +2199,7 @@ function Parent({
                 autoComplete="current-password"
               />
             </label>
-            {confirmError && (
-              <p role="alert" className="error">
-                {confirmError}
-              </p>
-            )}
+            <InlineError error={confirmError} />
             <button className="danger-button">מחיקה סופית</button>
             <button type="button" className="text-button" onClick={() => setDeleteOpen(false)}>
               ביטול
@@ -2184,18 +2214,17 @@ function IdentitySettings({
   childId,
   value,
   onSave,
-  onError,
   disabled,
 }: {
   childId: string;
   disabled: boolean;
   value: string;
   onSave: (label: string) => Promise<void>;
-  onError: (x: string) => void;
 }) {
   const [label, setLabel] = useState(value),
     [saved, setSaved] = useState(false),
-    [busy, setBusy] = useState(false);
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState<ShownError | null>(null);
   const submitting = useRef(false);
   useEffect(() => { setLabel(value); setSaved(false); }, [value]);
   return (
@@ -2204,12 +2233,12 @@ function IdentitySettings({
       onSubmit={async (e) => {
         e.preventDefault();
         if (submitting.current || disabled || !childId) return;
-        submitting.current = true; setBusy(true);
+        submitting.current = true; setBusy(true); setError(null);
         try {
           await onSave(label.trim());
           setSaved(true);
         } catch (e) {
-          onError((e as Error).message);
+          setError(shownError(e));
         } finally {
           submitting.current = false; setBusy(false);
         }
@@ -2231,6 +2260,7 @@ function IdentitySettings({
           onChange={(e) => {
             setLabel(e.target.value);
             setSaved(false);
+            setError(null);
           }}
         />
       </label>
@@ -2244,6 +2274,7 @@ function IdentitySettings({
         הודעת זיהוי נפרדת. אם היא נשלחה והמדיה נכשלה, היא עשויה להישאר לבדה. תגובות אימוג׳י תמיד
         מופיעות בשם ההורה. החתימה אינה הוכחת זהות.
       </p>
+      <InlineError error={error} />
       <button className="outline-button" disabled={!childId || busy || disabled || label.trim() === value}>
         {busy ? 'שומרים…' : saved && !disabled ? 'החתימה נשמרה' : 'שמירת החתימה'}
         <Check size={17} />
@@ -2251,17 +2282,30 @@ function IdentitySettings({
     </form>
   );
 }
-class RenderBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
-  state = { failed: false };
+/** A reference the crash screen shows and the parent's report lists (sent once, below). */
+function clientRef() {
+  const bytes = crypto.getRandomValues(new Uint8Array(5));
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+class RenderBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean; ref: string }> {
+  state = { failed: false, ref: '' };
   static getDerivedStateFromError() {
-    return { failed: true };
+    return { failed: true, ref: clientRef() };
+  }
+  componentDidCatch(error: unknown) {
+    // Only the exception's class name leaves the page: its message and stack can contain
+    // conversation text, names or IDs. Recording fails quietly when signed out or offline.
+    const name = error instanceof Error ? error.constructor?.name || error.name : typeof error;
+    void api('/client-error', 'POST', { kind: 'render', ref: this.state.ref,
+      errorClass: /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(name) ? name : 'Unknown' }).catch(() => {});
   }
   render() {
     return this.state.failed ? (
-      <main className="splash">
+      <main className="splash" role="alert">
         <AlertCircle />
-        <h1>לא הצלחנו להציג את השיחה</h1>
-        <p>אפשר לרענן ולנסות שוב.</p>
+        <h1>לא הצלחנו להציג את המסך</h1>
+        <p>{errorText('CLIENT_RENDER_FAILED')}</p>
+        <ErrorReference code="CLIENT_RENDER_FAILED" refId={this.state.ref} />
         <button className="primary" onClick={() => location.reload()}>
           רענון
         </button>

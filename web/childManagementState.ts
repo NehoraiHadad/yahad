@@ -2,6 +2,8 @@ import { familyProgress, type FamilyOverview } from './FamilyProgress';
 
 export type ChildGrantChange = { childId: string; groupId: string; allowed: boolean };
 export type ChildAccessChange = { childId: string; paused: boolean; revision: number };
+/** A parent action's result; a failure keeps the original error for the screen that shows it. */
+export type ActionOutcome = { ok: true } | { ok: false; error: unknown };
 
 /** Selection is an account ID, never a name or an array position. */
 export function reconcileChildSelection(data: FamilyOverview, selected: string) {

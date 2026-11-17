@@ -5,6 +5,9 @@ import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { familyProgress, type FamilyChild } from '../web/FamilyProgress';
+import type { ActionOutcome } from '../web/childManagementState';
+import * as apiModule from '../web/api';
+import * as errorReferenceModule from '../web/ErrorReference';
 
 // Execute actual component handlers with deterministic hooks; browser QA is separate.
 function harness() {
@@ -19,10 +22,13 @@ function harness() {
       useState(initial: any) { const i = cursor++; if (!(i in slots)) slots[i] = initial; return [slots[i], (v: any) => slots[i] = v]; },
       useRef(initial: any) { const i = cursor++; return slots[i] ||= { current: initial }; },
       useEffect(effect: () => (() => void)) { const i = cursor++; if (!(i in slots)) { slots[i] = true; const cleanup = effect(); if (cleanup) cleanups.push(cleanup); } },
-    } : name === './useDialogFocus' ? { useDialogFocus() {} } : require(name),
+    } : name === './useDialogFocus' ? { useDialogFocus() {} }
+      : name === './api' ? apiModule : name === './ErrorReference' ? errorReferenceModule : require(name),
   });
   const props = { child: { id: 'a', name: 'Synthetic child', paused: false, accessRevision: 0 } as FamilyChild, disabled: false, stale: false,
-    onChange: (change: any) => new Promise<boolean>((resolve, reject) => pending.push({ change, resolve, reject: () => reject(new Error('lost response')) })) };
+    onChange: (change: any) => new Promise<ActionOutcome>(resolve => pending.push({ change,
+      resolve: ok => resolve(ok ? { ok: true } : { ok: false, error: null }),
+      reject: () => resolve({ ok: false, error: new apiModule.ApiNetworkError('lost response') }) })) };
   const nodes = (node: any): any[] => !node || typeof node !== 'object' ? [] : [node, ...[node.props?.children].flat(Infinity).flatMap(nodes)];
   const render = () => { cursor = 0; return module.exports.ChildAccessSettings(props); };
   const all = () => nodes(render());

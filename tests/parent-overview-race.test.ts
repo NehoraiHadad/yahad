@@ -29,7 +29,7 @@ function harness() {
     setOverviewFailed: (value: boolean) => { failed = value; },
     setBusy: (value: boolean) => { busy = value; },
     setGroupPhotoRevision() {}, onError() {}, isTransientApiError: () => true,
-  }) as { load: (background?: boolean) => Promise<void>; act: (path: string, body?: unknown, method?: string) => Promise<boolean> };
+  }) as { load: (background?: boolean) => Promise<void>; act: (path: string, body?: unknown, method?: string, inline?: boolean) => Promise<{ ok: boolean }> };
   return { handlers, requests, state: () => ({ stale, busy, data, failed, qr }) };
 }
 
@@ -96,7 +96,7 @@ for (const lostResponse of [false, true]) {
     await new Promise<void>(resolve => setImmediate(resolve));
     assert.equal(h.requests[2].path, '/parent/qr');
     h.requests[2].reject(new Error('Synthetic QR unavailable'));
-    assert.equal(await saving, !lostResponse);
+    assert.equal((await saving).ok, !lostResponse);
     assert.equal(h.state().stale, false);
     assert.equal(h.state().failed, false);
     assert.equal(h.state().data, paused);
@@ -110,7 +110,7 @@ for (const lostResponse of [false, true]) {
     await new Promise<void>(resolve => setImmediate(resolve));
     const resumed = { ...paused, state: 'connected', children: [{ ...paused.children[0], paused: false, accessRevision: 2 }] };
     h.requests[4].resolve(resumed);
-    assert.equal(await resuming, true);
+    assert.equal((await resuming).ok, true);
     assert.equal(h.state().data, resumed);
     assert.equal(h.state().stale, false);
     assert.equal(h.state().failed, false);

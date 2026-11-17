@@ -21,7 +21,7 @@ test('roster ordering is deterministic across server order and uses IDs to break
 test('child name is bidi isolated in mixed Hebrew copy and singular grant counts are grammatical', () => {
   const html = renderToStaticMarkup(React.createElement(ChildManagement, {
     data: { ...data, children: [{ id: 'a', name: 'Synthetic Jr.' }] }, selected: 'a', busy: false, stale: false, createdChild: 'a',
-    onSelect() {}, onAdd() {}, onSettings() {}, onRefresh() {}, onRetry() {}, onGrant: async () => true,
+    onSelect() {}, onAdd() {}, onSettings() {}, onRefresh() {}, onRetry() {}, onGrant: async () => ({ ok: true as const }),
   }));
   assert.match(html, /השיחות של <bdi>Synthetic Jr\.<\/bdi>/);
   assert.match(html, /שיחה אחת מאושרת/);
@@ -38,7 +38,7 @@ test('setup consistently labels password and ties name errors to name input', ()
 });
 
 test('toast has a keyboard-operable explicit dismiss button and a bounded lifetime', () => {
-  const html = renderToStaticMarkup(React.createElement(ErrorToast, { message: 'synthetic error', onDismiss() {} }));
+  const html = renderToStaticMarkup(React.createElement(ErrorToast, { error: { text: 'synthetic error' }, onDismiss() {} }));
   assert.match(html, /role="alert"/);
   assert.match(html, /<button type="button" class="icon-button" aria-label="סגירת הודעה"/);
   const source = readFileSync(new URL('../web/ErrorToast.tsx', import.meta.url), 'utf8');
