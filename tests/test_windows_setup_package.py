@@ -26,19 +26,30 @@ PACKAGE = json.dumps({'version':VERSION, 'engines':{'node':'>=24.0.0 <25'}, 'yah
                       'yahadWindowsMinimumFrom':{'app':'0.5.0', 'infrastructure':'1.0.0'}})
 
 
-def image(imported='kernel32.dll'):
+def image(imported='kernel32.dll',exported=None,managed=False):
     data=bytearray(2048);data[:2]=b'MZ';struct.pack_into('<I',data,0x3c,0x80);data[0x80:0x84]=b'PE\0\0'
     struct.pack_into('<HH',data,0x84,0x8664,1);struct.pack_into('<H',data,0x94,240)
     optional=0x98;struct.pack_into('<H',data,optional,0x20b);struct.pack_into('<I',data,optional+60,512);struct.pack_into('<I',data,optional+108,16)
     struct.pack_into('<IIII',data,optional+240+8,1536,0x1000,1536,512)
-    struct.pack_into('<II',data,optional+120,0x1000,40);struct.pack_into('<I',data,512+12,0x1000+900-512)
+    rva=lambda offset:0x1000+offset-512
+    struct.pack_into('<II',data,optional+120,0x1000,40);struct.pack_into('<I',data,512+12,rva(900))
     value=imported.encode('ascii')+b'\0';data[900:900+len(value)]=value
+    if exported:
+        # One export name, as ILC's .def gives every NativeAOT image.
+        struct.pack_into('<II',data,optional+112,rva(1200),40);struct.pack_into('<II',data,1200+24,1,1);struct.pack_into('<I',data,1200+32,rva(1260))
+        struct.pack_into('<I',data,1260,rva(1280));value=exported.encode('ascii')+b'\0';data[1280:1280+len(value)]=value
+    if managed:
+        # A CLR header with the IL-only flag: a managed entry assembly.
+        struct.pack_into('<II',data,optional+112+14*8,rva(1400),72);struct.pack_into('<I',data,1400+16,1)
     return bytes(data)
+
+
+def aot(imported='kernel32.dll'):return image(imported,exported=full.NATIVE_AOT_EXPORT)
 
 
 def describe(artifact, /, **changed):
     value=dict(artifact=artifact,infrastructureVersion=INFRA.version,contractMin=INFRA.contract_min,contractMax=INFRA.contract_max,
-               sourceCommit=SOURCE,version=INFRA.version+'+'+SOURCE)
+               sourceCommit=SOURCE,runtimeVersion=full.RUNTIME_VERSION,version=INFRA.version+'+'+SOURCE)
     if artifact=='Yahad.Setup': value['embeddedPackage']=False
     return dict(value,**changed)
 
@@ -92,13 +103,8 @@ class SetupPackageTests(unittest.TestCase):
     def source(self):return full.validate_payload_source(self.repo,self.prepared,self.records,VERSION,SOURCE,self.tracked)
 
     def native(self,artifact='Yahad.ServiceHost',root=None):
-        root=root or self.root/artifact;root.mkdir(parents=True)
-        for name in (artifact+'.exe',artifact+'.dll','coreclr.dll','hostfxr.dll','hostpolicy.dll','System.Private.CoreLib.dll'):put(root,name,image())
-        frameworks=[dict(name='Microsoft.NETCore.App',version=full.RUNTIME_VERSION)]
-        put(root,artifact+'.runtimeconfig.json',json.dumps(dict(runtimeOptions=dict(includedFrameworks=frameworks))))
-        libraries={'runtimepack.Microsoft.NETCore.App.Runtime.win-x64/'+full.RUNTIME_VERSION:dict(runtime={artifact+'.dll':{},'System.Private.CoreLib.dll':{}},native={'coreclr.dll':{},'hostfxr.dll':{},'hostpolicy.dll':{}})}
-        put(root,artifact+'.deps.json',json.dumps(dict(runtimeTarget=dict(name='net10.0/win-x64'),targets={'net10.0/win-x64':libraries})))
-        return root
+        # A NativeAOT publish: the one image, nothing beside it.
+        root=root or self.root/artifact;root.mkdir(parents=True);put(root,artifact+'.exe',aot());return root
 
     def engine(self):return put(self.root/'engine','Yahad.Setup.exe',image())
 
@@ -186,28 +192,42 @@ class SetupPackageTests(unittest.TestCase):
         root=self.native();description=describe('Yahad.ServiceHost')
         with patch.object(full,'describe_build_artifact',return_value=description) as audit:
             files=full.validate_native(root,'Yahad.ServiceHost',INFRA,SOURCE,self.repo)
-            self.assertIn('coreclr.dll',files);audit.assert_called_once_with(root/'Yahad.ServiceHost.exe','--describe',self.repo)
+            self.assertEqual(set(files),{'Yahad.ServiceHost.exe'});audit.assert_called_once_with(root/'Yahad.ServiceHost.exe','--describe',self.repo)
         for changed in (dict(sourceCommit='b'*40),dict(infrastructureVersion='1.0.1'),dict(version='1.0.1+'+SOURCE),dict(contractMax=2),
                         dict(contractMin=True),dict(applicationVersion=VERSION),dict(artifact='Yahad.Updater')):
             with self.subTest(changed=changed),patch.object(full,'describe_build_artifact',return_value=dict(description,**changed)),self.assertRaises(ValueError):
                 full.validate_native(root,'Yahad.ServiceHost',INFRA,SOURCE,self.repo)
 
-    def test_missing_dependency_and_nonprivate_native_import_fail_before_audit(self):
-        root=self.native();(root/'coreclr.dll').unlink()
-        with patch.object(full,'describe_build_artifact') as audit,self.assertRaisesRegex(full.PackageError,'Incomplete private'):full.validate_native(root,'Yahad.ServiceHost',INFRA,SOURCE,self.repo)
-        audit.assert_not_called();put(root,'coreclr.dll',image());put(root,'Yahad.ServiceHost.exe',image('private-missing.dll'))
-        with patch.object(full,'describe_build_artifact') as audit,self.assertRaisesRegex(full.PackageError,'private native dependency'):full.validate_native(root,'Yahad.ServiceHost',INFRA,SOURCE,self.repo)
+    def refused(self,root,reason):
+        with patch.object(full,'describe_build_artifact') as audit,self.assertRaisesRegex(full.PackageError,reason):full.validate_native(root,'Yahad.ServiceHost',INFRA,SOURCE,self.repo)
         audit.assert_not_called()
 
-    def test_every_declared_private_runtime_asset_must_be_present(self):
-        root=self.native();path=root/'Yahad.ServiceHost.deps.json';deps=json.loads(path.read_text())
-        next(iter(deps['targets']['net10.0/win-x64'].values()))['runtime']['missing.dll']={};path.write_text(json.dumps(deps))
-        with patch.object(full,'describe_build_artifact') as audit,self.assertRaisesRegex(full.PackageError,'Missing private .NET dependency'):full.validate_native(root,'Yahad.ServiceHost',INFRA,SOURCE,self.repo)
-        audit.assert_not_called()
+    def test_nonsystem_native_import_fails_before_audit(self):
+        # Nothing can sit beside the image, so every import is a system library.
+        root=self.native();put(root,'Yahad.ServiceHost.exe',aot('private-missing.dll'));self.refused(root,'private native dependency')
+        put(root,'Yahad.ServiceHost.exe',aot('ws2_32.dll'))
+        with patch.object(full,'describe_build_artifact',return_value=describe('Yahad.ServiceHost')):full.validate_native(root,'Yahad.ServiceHost',INFRA,SOURCE,self.repo)
+
+    def test_self_contained_runtime_remnants_are_refused(self):
+        for remnant in ('coreclr.dll','hostfxr.dll','hostpolicy.dll','System.Private.CoreLib.dll','Yahad.ServiceHost.dll','Yahad.Install.Core.dll',
+                        'Yahad.ServiceHost.runtimeconfig.json','Yahad.ServiceHost.deps.json','de/System.Private.CoreLib.resources.dll'):
+            with self.subTest(remnant=remnant):
+                root=self.native(root=self.root/'remnant'/remnant.replace('/','_'));put(root,remnant,image() if remnant.endswith('.dll') else '{}')
+                self.refused(root,'runtime remnant')
+
+    def test_a_managed_or_non_aot_entry_is_refused(self):
+        # An apphost or a single-file bundle is a native x64 image too, but not ILC's.
+        root=self.native();put(root,'Yahad.ServiceHost.exe',image());self.refused(root,'NativeAOT image required')
+        put(root,'Yahad.ServiceHost.exe',image(exported='DotNetRuntimeInfo'));self.refused(root,'NativeAOT image required')
+        put(root,'Yahad.ServiceHost.exe',image(exported=full.NATIVE_AOT_EXPORT,managed=True));self.refused(root,'Native x64 entry required')
+
+    def test_the_component_holds_only_its_own_image(self):
+        root=self.native();put(root,'README.txt','extra');self.refused(root,'holds only Yahad.ServiceHost.exe')
+        other=self.native('Yahad.Updater');self.refused(other,'holds only Yahad.ServiceHost.exe')
 
     def test_native_input_change_during_audit_is_not_blessed_by_source_description(self):
         root=self.native()
-        def changed(*args):put(root,'coreclr.dll',image()+b'changed');return describe('Yahad.ServiceHost')
+        def changed(*args):put(root,'Yahad.ServiceHost.exe',aot()+b'changed');return describe('Yahad.ServiceHost')
         with patch.object(full,'describe_build_artifact',side_effect=changed),self.assertRaisesRegex(full.PackageError,'closure changed'):full.validate_native(root,'Yahad.ServiceHost',INFRA,SOURCE,self.repo)
 
     def test_engine_is_one_payload_free_infrastructure_image(self):
@@ -216,7 +236,7 @@ class SetupPackageTests(unittest.TestCase):
             self.assertEqual(set(full.validate_engine(engine,INFRA,SOURCE,self.repo)),{'Yahad.Setup.exe'})
             audit.assert_called_once_with(engine,'--describe',self.repo)
         for changed in (dict(embeddedPackage=True),dict(embeddedPackage=None),dict(sourceCommit='b'*40,version='1.0.0+'+'b'*40),
-                        dict(infrastructureVersion='1.0.1',version='1.0.1+'+SOURCE),dict(artifact='Yahad.ServiceHost')):
+                        dict(infrastructureVersion='1.0.1',version='1.0.1+'+SOURCE),dict(artifact='Yahad.ServiceHost'),dict(runtimeVersion='10.0.13')):
             with self.subTest(changed=changed),patch.object(full,'describe_build_artifact',return_value=describe('Yahad.Setup',**changed)),self.assertRaises(ValueError):
                 full.validate_engine(engine,INFRA,SOURCE,self.repo)
         renamed=put(self.root/'other','Yahad.Setup-0.6.0.exe',image())
@@ -319,9 +339,12 @@ class InstallPackageBuildTests(unittest.TestCase):
             return full.build(b.repo,b.prepared,self.entry,self.output,self.app_archive)
 
     def written(self):
+        # Every package member: the archive's entries and the engine, the image's prefix.
         manifest=json.loads((self.output/'install-manifest.json').read_bytes())
         with zipfile.ZipFile(self.output/'install.zip') as archive:members={name:archive.read(name) for name in archive.namelist()}
-        return manifest,members
+        self.assertNotIn(full.ENGINE_MEMBER,members)
+        members[full.ENGINE_MEMBER]=full.read_image(self.output/full.ENGINE)['engine']
+        return manifest,{name:members[name] for name in sorted(members,key=full._ordinal)}
 
     def test_manifest_is_format_two_with_exact_keys_and_each_tracks_identity(self):
         result=self.build();manifest,members=self.written();data=(self.output/'install-manifest.json').read_bytes()
@@ -336,7 +359,7 @@ class InstallPackageBuildTests(unittest.TestCase):
             TreeSha256=hashlib.sha256(members['apps/app-tree.json']).hexdigest(),Version=VERSION))
         self.assertEqual(manifest['MinimumFrom'],dict(App='0.5.0',Infrastructure='1.0.0'))
         self.assertEqual(manifest['ZipSha256'],hashlib.sha256((self.output/'install.zip').read_bytes()).hexdigest())
-        self.assertEqual({p.name for p in self.output.iterdir()},{'install.zip','install-manifest.json'})
+        self.assertEqual({p.name for p in self.output.iterdir()},{'install.zip','install-manifest.json','Yahad.Setup.exe'})
         self.assertEqual([r['Path'] for r in manifest['Files']],list(members));self.assertEqual(result['files'],len(members))
         for item in manifest['Files']:
             self.assertEqual(sorted(item),['Path','Sha256','Size'])
@@ -377,9 +400,50 @@ class InstallPackageBuildTests(unittest.TestCase):
         self.assertTrue(all(name=='app-tree.json' or name.startswith('app/') for name in asset))
 
     def test_outputs_are_deterministic(self):
-        self.build();first=(self.output/'install.zip').read_bytes(),self.app_archive.read_bytes(),(self.output/'install-manifest.json').read_bytes()
+        names=('install.zip','install-manifest.json',full.ENGINE)
+        self.build();first=self.app_archive.read_bytes(),*((self.output/n).read_bytes() for n in names)
         self.output=self.base.root/'again';self.app_archive=self.base.root/'again-assets'/full.app_archive_name(VERSION);self.app_archive.parent.mkdir()
-        self.build();self.assertEqual(first,((self.output/'install.zip').read_bytes(),self.app_archive.read_bytes(),(self.output/'install-manifest.json').read_bytes()))
+        self.build();self.assertEqual(first,(self.app_archive.read_bytes(),*((self.output/n).read_bytes() for n in names)))
+
+    def test_setup_image_is_the_cached_engine_then_the_package_and_its_trailer(self):
+        result=self.build();image=self.output/full.ENGINE;data=image.read_bytes();parts=full.read_image(image)
+        engine=(self.entry/'tree'/'setup'/full.ENGINE).read_bytes()
+        self.assertEqual(parts['engine'],engine)
+        self.assertEqual(parts['archive'],(self.output/'install.zip').read_bytes())
+        self.assertEqual(parts['manifest'],(self.output/'install-manifest.json').read_bytes())
+        self.assertEqual(data[-40:],full.IMAGE_TRAILER.pack(b'Yahad.SetupImage',len(engine),len(parts['archive']),len(parts['manifest'])))
+        self.assertEqual(result['setupSha256'],hashlib.sha256(data).hexdigest())
+        # The engine member is listed with its cached record, once.
+        manifest=json.loads(parts['manifest'])
+        self.assertEqual([r for r in manifest['Files'] if r['Path']==full.ENGINE_MEMBER],[dict(Path=full.ENGINE_MEMBER,Size=len(engine),Sha256=hashlib.sha256(engine).hexdigest())])
+        self.assertEqual([r['Path'] for r in manifest['Files']],sorted((r['Path'] for r in manifest['Files']),key=full._ordinal))
+
+    def test_setup_image_trailer_must_describe_the_file(self):
+        self.build();data=(self.output/full.ENGINE).read_bytes();probe=self.base.root/'probe.exe'
+        def refused(value):
+            probe.write_bytes(value)
+            with self.assertRaisesRegex(full.PackageError,'Setup image trailer'):full.read_image(probe)
+        refused(data[:-41]+data[-40:]);refused(b'\0'+data);refused(data+b'\0');refused(data[:-40])
+        refused(data[:-40]+full.IMAGE_TRAILER.pack(b'Yahad.SetupImagf',*full.IMAGE_TRAILER.unpack(data[-40:])[1:]))
+
+    def test_setup_image_refuses_an_engine_that_changed_after_its_audit(self):
+        engine=self.entry/'tree'/'setup'/full.ENGINE;original=engine.read_bytes()
+        real=full._copy_verified
+        def changing(source,destination,size,sha256,maximum):
+            if Path(source)==engine: engine.write_bytes(original[:-1]+bytes([original[-1]^1]))
+            return real(source,destination,size,sha256,maximum)
+        with patch.object(full,'_copy_verified',changing):
+            with self.assertRaisesRegex(full.PackageError,'Input changed during image'):self.build()
+
+    def test_setup_image_bounds_the_package_by_the_archive_bound_not_the_member_bound(self):
+        # install.zip is bounded by MAX_TOTAL; only the engine is one member (MAX_FILE).
+        engine=(self.entry/'tree'/'setup'/full.ENGINE).stat().st_size;real=full.write_image;seen=[]
+        def bounded(output,engine_path,record,archive,*rest):
+            seen.append(Path(archive).stat().st_size)
+            with patch.object(full,'MAX_FILE',engine):return real(output,engine_path,record,archive,*rest)
+        with patch.object(full,'write_image',bounded):self.build()
+        self.assertGreater(seen[0],engine)
+        self.assertEqual(full.read_image(self.output/full.ENGINE)['archive'],(self.output/'install.zip').read_bytes())
 
     def test_tree_records_list_every_other_member_of_their_tree_exactly_once(self):
         self.build();manifest,members=self.written()

@@ -30,13 +30,13 @@ internal sealed class UpdaterPipe(string name,SecurityIdentifier allowed,string 
     private static bool ClientFault(Exception error)=>error is OperationCanceledException or UnauthorizedAccessException{Message:"UPDATER_PEER"}or IOException and not(FileNotFoundException or FileLoadException);
     private byte[] Answer(UpdaterRequest request)
     {
-        try{return UpdaterProtocol.Frame(handle(request));}
-        catch(Exception error){report(error);return UpdaterProtocol.Frame(new UpdaterReply(1,false,"INTERNAL"));}
+        try{return UpdaterProtocol.Frame(handle(request),UpdaterJsonContext.Default.UpdaterReply);}
+        catch(Exception error){report(error);return UpdaterProtocol.Frame(new UpdaterReply(1,false,"INTERNAL"),UpdaterJsonContext.Default.UpdaterReply);}
     }
     private async Task ServeAsync(NamedPipeServerStream server,CancellationToken cancellation)
     {
         using var read=CancellationTokenSource.CreateLinkedTokenSource(cancellation);read.CancelAfter(Timeout);
-        var request=await UpdaterProtocol.ReadAsync<UpdaterRequest>(server,read.Token);
+        var request=await UpdaterProtocol.ReadAsync(server,UpdaterJsonContext.Default.UpdaterRequest,read.Token);
         if(!Peer(server).Equals(allowed))throw new UnauthorizedAccessException("UPDATER_PEER");
         var reply=Answer(request);
         using var write=CancellationTokenSource.CreateLinkedTokenSource(cancellation);write.CancelAfter(Timeout);

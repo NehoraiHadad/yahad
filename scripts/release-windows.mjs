@@ -140,10 +140,10 @@ export function zipDirectory(buffer, label) {
 }
 const zipRead = (buffer, entries, name, label) => zipMember(buffer, entries.get(name)?.offset ?? -1, `${label}!${name}`);
 
-// The distributable Setup is a compressed single-file bundle (EnableCompressionInSingleFile,
-// installer/Yahad.Setup/Yahad.Setup.csproj), so its embedded package is not visible in the .exe bytes.
-// The Setup itself is the authority: `--verify-package` opens its own embedded package, checks the zip
-// hash, every member and both tree records against the embedded manifest, and prints that identity
+// The distributable Setup is the payload-free engine followed by its install package and a trailer
+// (installer/Yahad.Setup/InstallPackage.cs SetupImage). The Setup itself is the authority:
+// `--verify-package` opens its own package, checks the zip hash, the engine prefix, every member and
+// both tree records against the carried manifest, and prints that identity
 // (installer/Yahad.Setup/SetupEntry.cs). Run on the release file whose SHA-256 the manifest names, so
 // the report is bound to those bytes. Setup requires administrator rights; RunAsInvoker starts this
 // read-only audit with the caller's own token, as installer/package.ps1 does.

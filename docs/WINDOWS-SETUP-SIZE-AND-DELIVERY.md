@@ -1,10 +1,35 @@
 # Windows Setup: size and delivery options
 
-Status: **design notes, not implemented.** Two questions raised after release 0.6.5
-(Setup 287 MB, app zip 2.4 MB), each checked against
-[WINDOWS-APP-PACKAGE-PLAN.md](WINDOWS-APP-PACKAGE-PLAN.md) ("the plan"). Both would
-change a plan decision, so neither is built here; each ends with a recommendation
-for the maintainer to decide.
+Status: **B implemented in infrastructure 1.0.2 (as NativeAOT, option (d), plus one
+engine copy); C not adopted.** Two questions raised after release 0.6.5 (Setup
+287 MB, app zip 2.4 MB), each checked against
+[WINDOWS-APP-PACKAGE-PLAN.md](WINDOWS-APP-PACKAGE-PLAN.md) ("the plan").
+
+## Result (infrastructure 1.0.2, app 0.6.5, built 2026-11-17)
+
+| | 1.0.1 | 1.0.2 |
+| --- | --- | --- |
+| Distributable Setup | 287 MB | **128.5 MB** (-55%) |
+| Installed infrastructure tree | 455 MB | 230 MB |
+| `host/`, `updater/`, `platform/` (each) | 192 files, ~77 MiB | one native exe: 4.6, 8.1, 4.1 MiB |
+| Their share of install.zip (deflated) | 102.5 MiB | 7.3 MiB |
+| Engine copies in the Setup | 2 (image + install.zip member, 56.6 MiB) | 1 (the image prefix) |
+| .NET publishes per app-only release | 1 (`setup-publish`, 82 s) | 0 |
+
+Two changes, both on the infrastructure track:
+
+1. **One engine.** The Setup is the cached payload-free engine with install.zip,
+   install-manifest.json and a 40-byte trailer appended (plan 4.4, decision 7).
+   The engine member is listed in the manifest and `infra-tree.json` but is the
+   image's own prefix, verified by size and SHA-256.
+2. **NativeAOT** (plan decision 6) for ServiceHost, Updater and Platform: all JSON
+   through source generation, no trim/AOT warnings, `validate_native` requires one
+   native exe and no runtime closure. Publishing needs the MSVC build tools and a
+   Windows SDK (present on `windows-2025` runners).
+
+What remains is node.exe (33.5 MiB deflated), caddy.exe (17.3) and the WPF engine
+(62.1, about 36 of it WPF). The engine is the next lever (a non-WPF UI); the
+measurements behind each option are below.
 
 ## B. One .NET runtime for host, Updater and Platform
 

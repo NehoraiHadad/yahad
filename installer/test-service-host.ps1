@@ -22,10 +22,10 @@ try {
     & (Join-Path $PSScriptRoot 'Yahad.ServiceHost.Tests/bin/Release/net10.0-windows/Yahad.ServiceHost.Tests.exe') --node ([IO.Path]::GetFullPath($Node)) --report (Join-Path $PSScriptRoot 'artifacts/service-host-tests.json')
     if($LASTEXITCODE -ne 0){throw 'Service host contracts failed'}
     if($Publish){
-        # Folder publication keeps every CLR/bootstrap file explicit and hashed;
-        # the service never needs runtime extraction into an implicit machine TEMP.
+        # The host publishes NativeAOT (its csproj): one native image, no CLR beside
+        # it, so the service never needs runtime extraction into a machine TEMP.
         & $DotNet publish (Join-Path $PSScriptRoot 'Yahad.ServiceHost/Yahad.ServiceHost.csproj') -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:DebugType=None -o (Join-Path $PSScriptRoot 'artifacts/Yahad.ServiceHost') --nologo $restore
-        if($LASTEXITCODE -ne 0){throw 'Self-contained service host publication failed'}
+        if($LASTEXITCODE -ne 0){throw 'NativeAOT service host publication failed'}
         & (Join-Path $PSScriptRoot 'artifacts/Yahad.ServiceHost/Yahad.ServiceHost.exe') --describe
         if($LASTEXITCODE -ne 0){throw 'Non-SCM artifact description failed'}
     }

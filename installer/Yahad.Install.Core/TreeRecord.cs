@@ -43,7 +43,7 @@ internal sealed record TreeRecord(int Format,string Version,string SourceCommit,
     {
         if(bytes.Length is <1 or >MaximumBytes||bytes is [0xEF,0xBB,0xBF,..])throw new IOException("TREE_RECORD_INVALID");
         TreeRecord value;
-        try{value=NativeJson.ReadCamel<TreeRecord>(bytes);}catch(JsonException){throw new IOException("TREE_RECORD_INVALID");}
+        try{value=NativeJson.ReadCamel(bytes,NativeCamelJsonContext.Default.TreeRecord);}catch(JsonException){throw new IOException("TREE_RECORD_INVALID");}
         if(value.Format!=CurrentFormat||!SemVer.IsVersion(value.Version)||!IsCommit(value.SourceCommit)||value.Files is not {Length:>=1 and <=MaximumMembers})throw new IOException("TREE_RECORD_INVALID");
         var names=new HashSet<string>(StringComparer.OrdinalIgnoreCase);long total=0;string? previous=null;
         foreach(var member in value.Files)

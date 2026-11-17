@@ -114,8 +114,8 @@ language:
 
 **Not changed by this plan, noted for the infrastructure track.** These shrink
 the rare Setup download and don't affect the app track:
-- the host, Updater and Platform each carry their own self-contained .NET
-  runtime (decision 6);
+- the host, Updater and Platform each carried their own self-contained .NET
+  runtime (decision 6; NativeAOT since infrastructure 1.0.2);
 
 ## 3. What can only change through Setup
 
@@ -237,15 +237,28 @@ by hand by an administrator is inside it, as it is today.
 
 ### 4.4 The installed Setup engine
 
-The distributable `Yahad.Setup-<v>.exe` embeds the app (`Yahad.Setup.csproj:9`),
-and its package must match its own version and commit
-(`InstallPackage.cs:23-24`). Two app releases on the same infrastructure would
-therefore produce different bytes for the same `infra\<v>\` path.
+The distributable `Yahad.Setup-<v>.exe` carries the app, so two app releases on
+the same infrastructure differ in bytes. The installed engine must not: it is the
+infra member `setup\Yahad.Setup.exe`, one image per infrastructure version.
 
-So the installed engine is a separate artifact:
-- the same `Yahad.Setup` project, published **without** `SetupPayloadDirectory`;
-- built once per infrastructure version;
-- shipped as an infra member `setup\Yahad.Setup.exe`.
+So there is one engine image, built once per infrastructure version, and the
+distributable Setup is that image with the release's install package appended
+(infrastructure 1.0.2; `SetupImage` in `InstallPackage.cs`,
+`installer/windows/setup_package.py` `write_image`):
+
+    [engine][install.zip][install-manifest.json][40-byte trailer]
+
+The trailer is a 16-byte magic and the three part lengths, which with the trailer
+sum to exactly the file length; any other trailer is refused (`PACKAGE_IMAGE`).
+The manifest and `infra-tree.json` list the engine member, but `install.zip` does
+not carry it: its bytes are the image's own prefix, checked against the
+manifest's size and SHA-256 when the package opens (`PACKAGE_ENGINE`) and again
+as each copy is written. The installed engine is the bare prefix: no trailer,
+no package.
+The running Setup reads every part through one handle that denies write and
+rename, and only after proving that handle is the file the process was loaded
+from (`PACKAGE_IMAGE_IDENTITY`): its path may have been renamed away and replaced
+after the elevation prompt.
 
 That engine serves `--apply-app`, `--repair`, `--uninstall` and the Apps &
 Features entry (`NativeSetupHost.cs:186`). None of these modes may require an
@@ -648,9 +661,9 @@ It moves to this exact set of nine names, and checks:
 - that the manifest names this version and the Setup bytes;
 - that the app zip matches its size and hash, and that the `app-tree.json` inside
   it matches `treeSha256`;
-- that the package embedded in the Setup is the one the manifest signs. The Setup is a
-  compressed single-file bundle, so the check runs the release's own Setup with
-  `--verify-package` (which verifies the embedded zip, its members and both tree records)
+- that the package the Setup carries is the one the manifest signs. The check runs
+  the release's own Setup with `--verify-package` (which verifies the appended zip,
+  the engine prefix, every member and both tree records)
   and compares its reported identity field by field with the signed manifest.
 
 **Signing stays local.** `windows-release-key.mjs sign` always uses
@@ -855,9 +868,13 @@ The maintainer accepted every recommendation (2026-11-15):
 6. **Shrinking the infrastructure download:** NativeAOT for the host, Updater and
    Platform, as its own infrastructure-track change with
    an AOT test in CI. Neither blocks this plan.
-7. **Per-release distributable Setup:** publish `Yahad.Setup` from a worktree at
-   the infra source commit, embedding the cached infra and the new app. No new
-   executable.
+   Done in infrastructure 1.0.2: each is one native exe, and the Setup fell from
+   287 to 128.5 MB with the single engine of 4.4
+   ([WINDOWS-SETUP-SIZE-AND-DELIVERY.md](WINDOWS-SETUP-SIZE-AND-DELIVERY.md)).
+7. **Per-release distributable Setup:** the cached infrastructure's engine with
+   the release's install package appended (4.4). No .NET publish per release and
+   no new executable. (Revised 2026-11-17; it was a `Yahad.Setup` publish from a
+   worktree at the infra source commit that embedded a second engine copy.)
 8. **Loopback writes during the health gate:** kept as today
    (`UpgradeHost.cs:171,176-177,242`). A read-only maintenance state is its own
    later change, for both tracks.

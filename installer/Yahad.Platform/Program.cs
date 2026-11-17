@@ -1,16 +1,17 @@
 using System.ComponentModel;
 using System.Security.Cryptography;
-using System.Text.Json;
+using System.Text.Json.Nodes;
 using Yahad.Install;
 
 // Unprivileged app helper. No installation, permission repair or service control.
-void Reply(object value) => Console.WriteLine(JsonSerializer.Serialize(value));
+// Every reply is a JsonObject written with the default writer options: no reflection.
+void Reply(JsonObject value) => Console.WriteLine(value.ToJsonString());
 try
 {
     if (args is ["--describe"])
     {
-        Reply(new { artifact="Yahad.Platform", infrastructureVersion=InfrastructureRelease.Version, contractMin=InfrastructureRelease.ContractMin, contractMax=InfrastructureRelease.ContractMax, sourceCommit=InfrastructureRelease.SourceCommit,
-            version=System.Reflection.Assembly.GetExecutingAssembly().GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute),false).Cast<System.Reflection.AssemblyInformationalVersionAttribute>().Single().InformationalVersion });
+        Reply(new JsonObject { ["artifact"]="Yahad.Platform", ["infrastructureVersion"]=InfrastructureRelease.Version, ["contractMin"]=InfrastructureRelease.ContractMin, ["contractMax"]=InfrastructureRelease.ContractMax, ["sourceCommit"]=InfrastructureRelease.SourceCommit, ["runtimeVersion"]=InfrastructureRelease.RuntimeVersion,
+            ["version"]=System.Reflection.Assembly.GetExecutingAssembly().GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute),false).Cast<System.Reflection.AssemblyInformationalVersionAttribute>().Single().InformationalVersion });
         return 0;
     }
     if(args is ["windows-updates"])
@@ -25,19 +26,19 @@ try
         {
             using var file = WindowsFileBoundary.OpenRead(path);
             var bytes = file.Small(role == "master-key" ? 4096 : 1024);
-            try { Reply(new { schema = 1, ok = true, exists = true, bytes = Convert.ToBase64String(bytes) }); }
+            try { Reply(new JsonObject { ["schema"] = 1, ["ok"] = true, ["exists"] = true, ["bytes"] = Convert.ToBase64String(bytes) }); }
             finally { CryptographicOperations.ZeroMemory(bytes); }
         }
         catch (Win32Exception e) when (role == "setup-capability" && e.NativeErrorCode is 2 or 3)
-        { Reply(new { schema = 1, ok = true, exists = false }); }
+        { Reply(new JsonObject { ["schema"] = 1, ["ok"] = true, ["exists"] = false }); }
         return 0;
     }
     if(args is ["adopt-host-lease",var descriptor,var data,var pidText,var nonce]&&int.TryParse(pidText,out var pid))
-    {WindowsFileBoundary.ValidateHostLease(descriptor,data,pid,nonce);Reply(new{schema=1,ok=true,locked=true});return 0;}
+    {WindowsFileBoundary.ValidateHostLease(descriptor,data,pid,nonce);Reply(new JsonObject{["schema"]=1,["ok"]=true,["locked"]=true});return 0;}
     if (args is ["lock-data", var directory])
     {
         using var lease = WindowsFileBoundary.AcquireDataLease(directory);
-        Reply(new { schema = 1, ok = true, locked = true });
+        Reply(new JsonObject { ["schema"] = 1, ["ok"] = true, ["locked"] = true });
         // Parent's stdin is a private lifetime pipe. EOF on parent death releases
         // the kernel lock. A bounded explicit release line permits normal shutdown.
         var line = new char[8]; var count = 0; int c;
@@ -45,10 +46,10 @@ try
         { if (count == line.Length) return 2; line[count++] = (char)c; }
         return c == -1 || new string(line, 0, count) == "release" ? 0 : 2;
     }
-    Reply(new { schema = 1, ok = false, code = "NATIVE_PROTOCOL" }); return 2;
+    Reply(new JsonObject { ["schema"] = 1, ["ok"] = false, ["code"] = "NATIVE_PROTOCOL" }); return 2;
 }
 catch
 {
     // Never serialize exceptions, file paths, secret bytes or tokens.
-    Reply(new { schema = 1, ok = false, code = "NATIVE_BOUNDARY_REFUSED" }); return 1;
+    Reply(new JsonObject { ["schema"] = 1, ["ok"] = false, ["code"] = "NATIVE_BOUNDARY_REFUSED" }); return 1;
 }

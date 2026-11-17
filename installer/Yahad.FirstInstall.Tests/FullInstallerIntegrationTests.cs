@@ -188,7 +188,7 @@ internal static class FullInstallerIntegrationTests
         await check("install package accepts only Format 2 of this infrastructure with exact infra/ and apps/ trees",()=>
         {
             using(var exact=PairFixture.Open(PairFixture.Package()))Assert(exact.Manifest.Format==2&&exact.Members(TreeKind.App).All(f=>f.Path==InstalledLayout.AppTreeName||f.Path.StartsWith("app/",StringComparison.Ordinal)));
-            void Refused(string code,Func<(byte[] Zip,byte[] Manifest)> fixture){var bytes=fixture();DenyCode(code,()=>{using var p=PairFixture.Open(bytes);});}
+            void Refused(string code,Func<(byte[] Zip,byte[] Manifest,byte[] Engine)> fixture){var bytes=fixture();DenyCode(code,()=>{using var p=PairFixture.Open(bytes);});}
             Refused("PACKAGE_FORMAT",()=>PairFixture.Package(change:m=>m with{Format=1}));
             Refused("PACKAGE_FORMAT",()=>PairFixture.Package(change:m=>m with{Infrastructure=null!}));
             Refused("PACKAGE_FORMAT",()=>PairFixture.Package(change:m=>m with{App=m.App with{Version="1.0"}}));
@@ -221,6 +221,104 @@ internal static class FullInstallerIntegrationTests
             // and two manifest paths that are one Windows path are refused.
             Refused("PACKAGE_MEMBER_TYPE",()=>PairFixture.Package(change:m=>m with{Files=m.Files.Select(f=>f.Path=="infra/legal/fixture.json"?f with{Path="infra/legal/FIXTURE.json"}:f).ToArray()}));
             Refused("PACKAGE_BOUND",()=>PairFixture.Package(change:m=>m with{Files=[..m.Files,m.Files.Single(f=>f.Path=="infra/legal/fixture.json") with{Path="infra/legal/FIXTURE.json"}]}));
+            return Task.CompletedTask;
+        });
+        await check("the Setup image is the engine followed by its package, and the engine member is the image's own prefix",()=>
+        {
+            var fixture=PairFixture.Package();var image=PairFixture.Image(fixture);var session=PrivateSession.Create(Path.GetTempPath());var path=Path.Combine(session,"Yahad.Setup.exe");
+            void Write(byte[] bytes)=>File.WriteAllBytes(path,bytes);
+            void ImageRefused(string code,byte[] bytes){Write(bytes);DenyCode(code,()=>{using var p=InstallPackage.FromImage(path);});}
+            static byte[] Length(byte[] bytes,int field,long delta)
+            {
+                var copy=bytes.ToArray();var at=copy.Length-SetupImage.TrailerLength+field;
+                System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(copy.AsSpan(at),System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(copy.AsSpan(at))+delta);return copy;
+            }
+            try
+            {
+                Write(image);
+                using(var package=InstallPackage.FromImage(path))
+                {
+                    Assert(package.Manifest.App.Version=="1.0.0");var root=Path.Combine(session,"tree");
+                    package.Extract(TreeKind.Infrastructure,root,_=>{},default,TestTarget);
+                    Assert(File.ReadAllBytes(Path.Combine(root,"setup","Yahad.Setup.exe")).SequenceEqual(fixture.Engine));
+                    // The open package holds the image: it can be neither renamed away nor rewritten.
+                    Deny(()=>File.Move(path,path+".moved"));
+                    Deny(()=>{using var w=new FileStream(path,FileMode.Open,FileAccess.Write,FileShare.ReadWrite|FileShare.Delete);});
+                }
+                // The running image is accepted only as the file this process was loaded
+                // from: its own image is, a byte-identical copy at another path is not.
+                {
+                    using(var loaded=File.OpenHandle(Environment.ProcessPath!,FileMode.Open,FileAccess.Read,FileShare.Read))Assert(LoadedImage.Is(loaded));
+                    var copy=Path.Combine(session,"copy.exe");File.Copy(Environment.ProcessPath!,copy);
+                    using(var other=File.OpenHandle(copy,FileMode.Open,FileAccess.Read,FileShare.Read))Assert(!LoadedImage.Is(other));
+                    using(var foreign=File.OpenHandle(path,FileMode.Open,FileAccess.Read,FileShare.Read))Assert(!LoadedImage.Is(foreign));
+                    using(var running=SetupImage.OpenRunning())Assert(running is null);
+                    // The attack itself: the running image renamed away and another file
+                    // put at its path. The path now names a file this process was not loaded from.
+                    var own=Environment.ProcessPath!;var away=own+".away-"+Guid.NewGuid().ToString("N");
+                    File.Move(own,away);
+                    try{File.WriteAllBytes(own,image);DenyCode("PACKAGE_IMAGE_IDENTITY",()=>{using var p=InstallPackage.Embedded();});DenyCode("PACKAGE_IMAGE_IDENTITY",()=>_=InstallPackage.IsEmbedded);}
+                    finally{File.Delete(own);File.Move(away,own);}
+                    using(var restored=File.OpenHandle(own,FileMode.Open,FileAccess.Read,FileShare.Read))Assert(LoadedImage.Is(restored));
+                    // The same image under another spelling of its path is still the image.
+                    using(var upper=File.OpenHandle(own.ToUpperInvariant(),FileMode.Open,FileAccess.Read,FileShare.Read))Assert(LoadedImage.Is(upper));
+                }
+                // In a case-sensitive directory the loaded image renamed to setup.exe and
+                // another Setup.exe planted: the names differ only in case, the files differ.
+                {
+                    var folder=Path.Combine(session,"cased");Directory.CreateDirectory(folder);
+                    using(var fsutil=System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Path.Combine(Environment.SystemDirectory,"fsutil.exe"),["file","setCaseSensitiveInfo",folder,"enable"]){UseShellExecute=false,RedirectStandardOutput=true})!)
+                    {fsutil.StandardOutput.ReadToEnd();fsutil.WaitForExit();Assert(fsutil.ExitCode==0);}
+                    var loaded=Path.Combine(folder,"setup.exe");var planted=Path.Combine(folder,"Setup.exe");
+                    File.WriteAllBytes(loaded,fixture.Engine);File.WriteAllBytes(planted,image);
+                    Assert(File.ReadAllBytes(loaded).Length==fixture.Engine.Length&&File.ReadAllBytes(planted).Length==image.Length);
+                    using var image1=File.OpenHandle(loaded,FileMode.Open,FileAccess.Read,FileShare.Read);var mapped=LoadedImage.NtName(image1)!;
+                    using(var other=File.OpenHandle(planted,FileMode.Open,FileAccess.Read,FileShare.Read))
+                    {
+                        Assert(string.Equals(LoadedImage.NtName(other),mapped,StringComparison.OrdinalIgnoreCase));
+                        Assert(!LoadedImage.Is(other,()=>mapped));
+                    }
+                    Assert(LoadedImage.Is(image1,()=>mapped));
+                    // A name that moves while it is checked is refused.
+                    var reads=0;Assert(!LoadedImage.Is(image1,()=>++reads==1?mapped:mapped+".moved"));
+                    Assert(!LoadedImage.Is(image1,()=>null));
+                }
+                // The loaded image's default stream renamed to a named stream and a new
+                // default stream written: one file ID, two streams. Only the default
+                // stream is the image.
+                {
+                    var file=Path.Combine(session,"streams.exe");File.WriteAllBytes(file,image);File.WriteAllBytes(file+":original",fixture.Engine);
+                    Assert(File.ReadAllBytes(file+":original").SequenceEqual(fixture.Engine)&&File.ReadAllBytes(file).SequenceEqual(image));
+                    using var planted=File.OpenHandle(file,FileMode.Open,FileAccess.Read,FileShare.Read);var name=LoadedImage.NtName(planted)!;
+                    Assert(LoadedImage.Is(planted,()=>name));
+                    Assert(!LoadedImage.Is(planted,()=>name+":original"));Assert(!LoadedImage.Is(planted,()=>name+"::$DATA"));
+                    using var stream=File.OpenHandle(file+":original",FileMode.Open,FileAccess.Read,FileShare.Read);
+                    Assert(LoadedImage.NtName(stream)!.EndsWith(":original",StringComparison.Ordinal));Assert(!LoadedImage.Is(stream,()=>LoadedImage.NtName(stream)));
+                }
+                // The archive never carries the engine a second time.
+                using(var archive=new ZipArchive(new MemoryStream(fixture.Zip)))Assert(archive.GetEntry(InstallPackage.EnginePath) is null);
+                // The bare engine (no trailer) carries no package.
+                ImageRefused("PACKAGE_NOT_EMBEDDED",fixture.Engine);ImageRefused("PACKAGE_NOT_EMBEDDED",[..image,0]);
+                // A trailer whose lengths do not add up to the file is refused, never trimmed.
+                ImageRefused("PACKAGE_IMAGE",[..image[..(image.Length-SetupImage.TrailerLength-1)],..image[^SetupImage.TrailerLength..]]);
+                ImageRefused("PACKAGE_IMAGE",[0,..image]);
+                foreach(var field in new[]{16,24,32})ImageRefused("PACKAGE_IMAGE",Length(image,field,1));
+                ImageRefused("PACKAGE_IMAGE",Length(Length(image,16,-fixture.Engine.Length),24,fixture.Engine.Length));
+                // A boundary moved between two parts breaks the archive's digest.
+                ImageRefused("PACKAGE_HASH",Length(Length(image,16,1),24,-1));
+                // A changed prefix is not the engine the manifest and the tree record name.
+                {var changed=image.ToArray();changed[fixture.Engine.Length/2]^=1;ImageRefused("PACKAGE_ENGINE",changed);}
+                DenyCode("PACKAGE_ENGINE",()=>{using var p=PairFixture.Open(PairFixture.Package(tamper:InstallPackage.EnginePath));});
+                DenyCode("PACKAGE_ENGINE",()=>{using var p=PairFixture.Open(fixture with{Engine=[..fixture.Engine,0]});});
+                // An archive that also carries the engine entry is not this package.
+                {
+                    using var data=new MemoryStream();data.Write(fixture.Zip);
+                    using(var archive=new ZipArchive(data,ZipArchiveMode.Update,true))using(var entry=archive.CreateEntry(InstallPackage.EnginePath).Open())entry.Write(fixture.Engine);
+                    var zip=data.ToArray();var manifest=JsonSerializer.Deserialize<InstallPackageManifest>(fixture.Manifest)! with{ZipSha256=Hash(zip)};
+                    DenyCode("PACKAGE_MEMBERS",()=>{using var p=PairFixture.Open((zip,JsonSerializer.SerializeToUtf8Bytes(manifest),fixture.Engine));});
+                }
+            }
+            finally{Directory.Delete(session,true);}
             return Task.CompletedTask;
         });
         await check("a tree record refuses a member that is also a directory, and one directory spelled two ways",()=>

@@ -71,7 +71,7 @@ internal sealed class WindowsLanProxyAdmission : ILanProxyAdmission
     {
         cancellation.ThrowIfCancellationRequested();
         ActivePointer.ReadVerified(app: false);
-        var candidate = NativeJson.Read<LanProxyReceipt>(NativeInstallFiles.ReadRecord(LanProxyPaths.Receipt, 4096));
+        var candidate = NativeJson.Read(NativeInstallFiles.ReadRecord(LanProxyPaths.Receipt, 4096), ServiceHostJsonContext.Default.LanProxyReceipt);
         if (!LanProxyPolicy.AddressPresent(candidate, LanProxyPolicy.Addresses())) throw new IOException("LAN_ADDRESS_CHANGED");
         receipt = candidate;
         cancellation.ThrowIfCancellationRequested();

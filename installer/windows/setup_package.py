@@ -3,16 +3,20 @@
 From a verified cached infrastructure tree (infra_package.py) and this checkout's
 staged app tree (prepare_core_fixture.py) it writes:
 - install.zip and install-manifest.json, the Format 2 package the distributable
-  Setup embeds (docs/WINDOWS-APP-PACKAGE-PLAN.md 4.1, 5.3): infra/infra-tree.json
+  Setup carries (docs/WINDOWS-APP-PACKAGE-PLAN.md 4.1, 5.3): infra/infra-tree.json
   and the infrastructure members exactly as cached (host/, updater/, platform/,
-  runtime/, legal/, setup/), and apps/app-tree.json with apps/app/...;
+  runtime/, legal/, setup/), and apps/app-tree.json with apps/app/... The manifest
+  lists every member; the archive holds every member but the engine
+  (infra/setup/Yahad.Setup.exe), whose bytes are the Setup image's own prefix;
+- Yahad.Setup.exe, the distributable Setup: the cached payload-free engine, then
+  install.zip, install-manifest.json and a 40-byte trailer (write_image);
 - yahad-windows-app-<v>.zip, the app-only release asset (5.2): exactly
   app-tree.json and app/..., its app-tree.json the same bytes as the install
   package's apps/app-tree.json.
 Each half carries its own identity: the infrastructure its version, contract
 range and infra source commit (from the cache record); the app package.json's
 version, its contract and the release commit (this checkout's HEAD).
-install-manifest.json is written last. Never installs or fabricates release
+The Setup image is written last. Never installs or fabricates release
 receipts; only audit-only --describe entry points of verified local project
 builds run. Outputs remain private candidates.
 """
@@ -23,6 +27,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
+import struct
 import subprocess
 import zipfile
 
@@ -58,10 +63,15 @@ ENGINE = 'Yahad.Setup.exe'
 # The infrastructure tree's own legal records (infra_package.py) and the app's (bundle.APP_LEGAL).
 INFRA_LEGAL = ('legal/runtime-lock.json', 'legal/SBOM.json', 'legal/Node-LICENSE.txt', 'legal/DotNet-LICENSE.txt',
                'legal/DotNet-ThirdPartyNotices.txt', 'legal/Caddy-LICENSE.txt', 'legal/Yahad-LICENSE.txt')
-INFRA_REQUIRED = frozenset({'host/Yahad.ServiceHost.exe','host/Yahad.ServiceHost.runtimeconfig.json',
-    'updater/Yahad.Updater.exe','updater/Yahad.Updater.runtimeconfig.json',
-    'platform/Yahad.Platform.exe','platform/Yahad.Platform.runtimeconfig.json',
+INFRA_REQUIRED = frozenset({'host/Yahad.ServiceHost.exe','updater/Yahad.Updater.exe','platform/Yahad.Platform.exe',
     'runtime/node/node.exe','runtime/caddy/caddy.exe','setup/'+ENGINE, *INFRA_LEGAL})
+# The engine member is not an archive entry: the Setup image's prefix is its bytes.
+ENGINE_MEMBER = INFRA+'setup/'+ENGINE
+# The Setup image trailer (installer/Yahad.Setup/InstallPackage.cs SetupImage): the magic,
+# then the engine, archive and manifest lengths, little-endian int64.
+IMAGE_MAGIC = b'Yahad.SetupImage'
+IMAGE_TRAILER = struct.Struct('<16sqqq')
+MAX_MANIFEST = 16*1024**2
 APP_REQUIRED = frozenset(bundle.REQUIRED)
 REQUIRED_MEMBERS = frozenset({INFRA_TREE, APP_TREE, *(INFRA+name for name in INFRA_REQUIRED), *(APPS+name for name in APP_REQUIRED)})
 COMPONENTS = (('host/','Yahad.ServiceHost'), ('updater/','Yahad.Updater'), ('platform/','Yahad.Platform'))
@@ -106,7 +116,8 @@ def _safe_path(name, *, component=False):
     return name
 
 
-def _unlinked(path, *, file=False):
+def _unlinked(path, *, file=False, maximum=None):
+    # maximum bounds a file input; one member's bound unless the caller names another.
     path = Path(path).absolute()
     for current in (path, *path.parents):
         info = current.lstat()
@@ -114,7 +125,7 @@ def _unlinked(path, *, file=False):
             raise PackageError('Linked input or ancestor')
     if file:
         info = path.lstat()
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > MAX_FILE:
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > (MAX_FILE if maximum is None else maximum):
             raise PackageError('Unsafe input file')
     return path
 
@@ -217,32 +228,28 @@ def validate_payload_source(repo, prepared, records, version, source, tracked):
     return schema, migrations
 
 
+# The symbol ILC exports from every NativeAOT image for debuggers; an apphost, a
+# single-file bundle or a C++ image has none.
+NATIVE_AOT_EXPORT = 'DotNetRuntimeDebugHeader'
+
+
+def _runtime_remnant(name):
+    # What a framework-dependent or self-contained publish leaves beside its apphost.
+    folded = name.casefold()
+    return folded.endswith(('.dll', '.runtimeconfig.json', '.deps.json'))
+
+
 def validate_native(root, artifact, infrastructure, source, repo):
-    files = _VerifiedFiles(_inventory(root),root=root); entry = artifact+'.exe'; stem = artifact
-    required = {entry, stem+'.dll', stem+'.runtimeconfig.json', stem+'.deps.json',
-                'coreclr.dll', 'hostfxr.dll', 'hostpolicy.dll', 'System.Private.CoreLib.dll'}
-    if not required<=files.keys(): raise PackageError('Incomplete private .NET runtime')
-    runtime = _json(files[stem+'.runtimeconfig.json'].read_bytes(), 65536)['runtimeOptions']
-    expected = {'Microsoft.NETCore.App'}
-    frameworks = runtime.get('includedFrameworks', [])
-    if ('framework' in runtime or 'frameworks' in runtime or not isinstance(frameworks, list) or
-            len(frameworks)!=len(expected) or {f.get('name') for f in frameworks}!=expected or any(f.get('version')!=RUNTIME_VERSION for f in frameworks)):
-        raise PackageError('Private .NET 10.0.14 framework closure required')
-    deps = _json(files[stem+'.deps.json'].read_bytes()); target = deps.get('runtimeTarget', {}).get('name', '')
-    if not target.endswith('/win-x64') or target not in deps.get('targets', {}): raise PackageError('Private .NET dependency target')
-    for identifier,library in deps['targets'][target].items():
-        if any(name+'.Runtime.' in identifier for name in expected) and identifier.rsplit('/',1)[-1]!=RUNTIME_VERSION:
-            raise PackageError('Mixed private .NET runtime version')
-        for category in ('runtime', 'native', 'resources', 'runtimeTargets'):
-            for asset, metadata in library.get(category, {}).items():
-                _safe_path(asset, component=True); leaf = asset.rsplit('/', 1)[-1]
-                if category=='resources':
-                    locale = metadata.get('locale'); _safe_path(locale, component=True); leaf = locale+'/'+leaf
-                if category=='runtimeTargets' and metadata.get('rid') not in ('win-x64', 'win', 'any'):
-                    raise PackageError('Foreign private .NET dependency')
-                if leaf not in files: raise PackageError('Missing private .NET dependency')
+    # A host, Updater or Platform component is exactly one NativeAOT x64 image
+    # (plan decision 6): no managed entry, no .NET runtime and no other file beside it.
+    files = _VerifiedFiles(_inventory(root),root=root); entry = artifact+'.exe'
+    others = sorted(name for name in files if name!=entry)
+    if any(_runtime_remnant(name) for name in others): raise PackageError('.NET runtime remnant beside a NativeAOT image')
+    if others: raise PackageError('NativeAOT component holds only '+entry)
+    if entry not in files: raise PackageError('NativeAOT image required')
     _inspect(files,native_entry=entry)
-    require_native_build_identity(describe_build_artifact(files[entry], '--describe', repo), artifact, infrastructure, source)
+    if NATIVE_AOT_EXPORT not in pe.inspect(_unlinked(files[entry], file=True), exports=True)['exports']: raise PackageError('NativeAOT image required')
+    require_native_build_identity(describe_build_artifact(files[entry], '--describe', repo), artifact, infrastructure, source, RUNTIME_VERSION)
     files.require_unchanged()
     return files
 
@@ -254,7 +261,7 @@ def validate_engine(path, infrastructure, source, repo):
     if path.name != ENGINE: raise PackageError('Setup engine image required')
     files = _VerifiedFiles({ENGINE:path})
     _inspect(files, native_entry=ENGINE)
-    description = require_native_build_identity(describe_build_artifact(path, '--describe', repo), 'Yahad.Setup', infrastructure, source)
+    description = require_native_build_identity(describe_build_artifact(path, '--describe', repo), 'Yahad.Setup', infrastructure, source, RUNTIME_VERSION)
     if description.get('embeddedPackage') is not False: raise PackageError('Setup engine must be payload-free')
     files.require_unchanged()
     return files
@@ -370,6 +377,39 @@ def _write_archive(output, entries, expected=None, member=_tree_member):
     return records
 
 
+def _copy_verified(source, destination, size, sha256, maximum):
+    # One read of a verified input, hashed as it is copied; maximum is that part's bound.
+    hashed=hashlib.sha256();copied=0
+    with _unlinked(source,file=True,maximum=maximum).open('rb') as stream:
+        while chunk:=stream.read(1024*1024):
+            copied+=len(chunk)
+            if copied>size: raise PackageError('Input changed during image')
+            hashed.update(chunk);destination.write(chunk)
+    if copied!=size or hashed.hexdigest()!=sha256: raise PackageError('Input changed during image')
+
+
+def write_image(output, engine, engine_record, archive, archive_sha256, metadata):
+    """[engine][install.zip][install-manifest.json][trailer], each part proven as it is written."""
+    archive_size=Path(archive).stat().st_size
+    if not (1<=engine_record['size']<=MAX_FILE and 1<=archive_size<=MAX_TOTAL and 1<=len(metadata)<=MAX_MANIFEST): raise PackageError('Setup image bound')
+    with Path(output).open('xb') as destination:
+        _copy_verified(engine,destination,engine_record['size'],engine_record['sha256'],MAX_FILE)
+        _copy_verified(archive,destination,archive_size,archive_sha256,MAX_TOTAL)
+        destination.write(metadata);destination.write(IMAGE_TRAILER.pack(IMAGE_MAGIC,engine_record['size'],archive_size,len(metadata)))
+        destination.flush();os.fsync(destination.fileno())
+    if Path(output).stat().st_size!=engine_record['size']+archive_size+len(metadata)+IMAGE_TRAILER.size: raise PackageError('Setup image changed')
+
+
+def read_image(path):
+    """The three parts' lengths of a Setup image, refusing a trailer that does not describe the file."""
+    data=Path(path).read_bytes()
+    if len(data)<IMAGE_TRAILER.size: raise PackageError('Setup image trailer')
+    magic,engine,archive,manifest=IMAGE_TRAILER.unpack(data[-IMAGE_TRAILER.size:])
+    if (magic!=IMAGE_MAGIC or not 1<=engine<=MAX_FILE or not 1<=archive<=MAX_TOTAL or not 1<=manifest<=MAX_MANIFEST or
+            engine+archive+manifest+IMAGE_TRAILER.size!=len(data)): raise PackageError('Setup image trailer')
+    return dict(engine=data[:engine],archive=data[engine:engine+archive],manifest=data[engine+archive:engine+archive+manifest])
+
+
 def require_members(names):
     names = set(names)
     if not REQUIRED_MEMBERS<=names: raise PackageError('Required package member missing')
@@ -403,8 +443,11 @@ def build(repo, app_stage, infra_entry, output, app_archive):
     entries[APP_TREE]=app_tree;expected[APP_TREE]=_record(APP_TREE,app_tree)
     for name,path in app_files.items(): entries[APPS+name]=path;expected[APPS+name]=dict(app_files.records[name],path=APPS+name)
     require_members(entries)
+    # The engine travels as the Setup image's prefix, never as an archive entry.
+    engine,engine_record=entries.pop(ENGINE_MEMBER),expected.pop(ENGINE_MEMBER)
     output.mkdir(parents=True,exist_ok=False)
     archive=output/'install.zip';records=_write_archive(archive,entries,expected)
+    records=sorted([*records,dict(Path=ENGINE_MEMBER,Size=engine_record['size'],Sha256=engine_record['sha256'])],key=lambda r:_ordinal(r['Path']))
     # The app-only asset: the same verified members and the same app-tree.json bytes.
     shipped={APP_TREE_NAME:app_tree,**app_files}
     _write_archive(app_archive,shipped,{APP_TREE_NAME:_record(APP_TREE_NAME,app_tree),**app_files.records},member=_app_archive_member)
@@ -416,12 +459,13 @@ def build(repo, app_stage, infra_entry, output, app_archive):
                MinimumFrom=dict(App=minimum['app'],Infrastructure=minimum['infrastructure']),
                ZipSha256=bundle.digest(archive),Files=records)
     metadata=_encode(saved)
-    if len(metadata)>16*1024**2: raise PackageError('Installer manifest bound')
+    if len(metadata)>MAX_MANIFEST: raise PackageError('Installer manifest bound')
     # Every archived member was proven against its verified record as it was written.
     if _source_identity(repo,infra.identity)!=identity: raise PackageError('Build source changed')
-    # Last output is the success prerequisite for Setup's embedded input.
     with (output/'install-manifest.json').open('xb') as destination: destination.write(metadata)
-    return dict(output=str(output),appArchive=str(app_archive),infrastructureVersion=infra.identity.version,infraSourceCommit=infra.source_commit,
+    # Last output, the success prerequisite: the Setup image.
+    image=output/ENGINE;write_image(image,engine,engine_record,archive,saved['ZipSha256'],metadata)
+    return dict(output=str(output),setup=str(image),setupSha256=bundle.digest(image),appArchive=str(app_archive),infrastructureVersion=infra.identity.version,infraSourceCommit=infra.source_commit,
                 infraTreeSha256=infra.tree_sha256,appVersion=version,sourceCommit=source,appTreeSha256=saved['App']['TreeSha256'],
                 installSha256=saved['ZipSha256'],files=len(records),machineAcceptance=False,releaseSignatureVerified=False)
 
