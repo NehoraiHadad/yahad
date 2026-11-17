@@ -106,8 +106,10 @@
     <Border x:Name="Notice" Background="#EAF1EA" CornerRadius="13" Padding="16" Margin="0,16,0,0"><TextBlock x:Name="NoticeText" Text="לאחר ההתקנה יחד תפעל ברקע ותופעל עם המחשב." FontSize="13" Foreground="#46665B" LineHeight="22"/></Border>
     <Border x:Name="FailurePanel" Visibility="Collapsed" Background="#FDF6EC" BorderBrush="#EAD3B0" BorderThickness="1" CornerRadius="13" Padding="16" Margin="0,16,0,0">
      <StackPanel>
-      <TextBlock Text="מה עושים עכשיו" FontSize="15" FontWeight="SemiBold"/>
-      <TextBlock x:Name="FailureNext" FontSize="13" TextWrapping="Wrap" LineHeight="21" Margin="0,6,0,0"/>
+      <TextBlock x:Name="FailureTitle" FontSize="17" FontWeight="SemiBold" TextWrapping="Wrap"/>
+      <TextBlock x:Name="FailureWhat" FontSize="13" TextWrapping="Wrap" LineHeight="21" Margin="0,4,0,0"/>
+      <TextBlock Text="מה עושים עכשיו" FontSize="14" FontWeight="SemiBold" Margin="0,12,0,0"/>
+      <TextBlock x:Name="FailureNext" FontSize="13" TextWrapping="Wrap" LineHeight="21" Margin="0,4,0,0"/>
       <TextBlock x:Name="FailureContext" Visibility="Collapsed" FontSize="13" TextWrapping="Wrap" LineHeight="21" Margin="0,8,0,0"/>
       <WrapPanel Margin="0,12,0,0">
        <Button x:Name="FailureAction" Visibility="Collapsed" Click="FailureAction_Click" FontSize="13" Padding="14,6" Margin="0,0,8,6"/>

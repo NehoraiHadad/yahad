@@ -256,13 +256,14 @@ internal static class LanIntegrationTests
                     Invoke(failed,"Failure","SERVICE_START_FAILED",new SetupFailureDetail("FullStartService",1053,unchecked((int)0x8007041D),Exception:"System.ComponentModel.Win32Exception"));
                     Require(written.Count==1&&written[0] is {Code:"SERVICE_START_FAILED",Operation:"install",Phase:"FullStartService",Win32:1053});
                     Require(Failed<Border>("FailurePanel").Visibility==Visibility.Visible&&Failed<Border>("Notice").Visibility==Visibility.Collapsed);
+                    Require(Failed<TextBlock>("FailureTitle").Text=="ההתקנה לא הושלמה"&&Failed<TextBlock>("FailureWhat").Text==service.What);
                     Require(Failed<TextBlock>("SupportCode").Text=="קוד לתמיכה: SERVICE_START_FAILED"&&Failed<TextBlock>("Description").Text==service.What&&Failed<TextBlock>("FailureNext").Text==service.Next);
                     Require(!Failed<Expander>("FailureTechnical").IsExpanded&&Failed<TextBox>("FailureTechnicalText").Text.Contains(log,StringComparison.Ordinal)&&Failed<TextBox>("FailureTechnicalText").FlowDirection==FlowDirection.LeftToRight);
                     Require(Failed<Button>("FailureAction").Visibility==(service.Action==SetupErrorAction.None?Visibility.Collapsed:Visibility.Visible)&&(string)Failed<Button>("Primary").Content=="ניסיון נוסף");
-                    ((ScrollViewer)failed.FindName("ContentScroll")).ScrollToEnd();Snapshot(failed,size,output,"setup-failure");
+                    Reveal(failed,size);Snapshot(failed,size,output,"setup-failure");
                     Invoke(failed,"Failure","LAN_PRIVATE_PROFILE_REQUIRED",new SetupFailureDetail("LanConfigure",null,unchecked((int)0x80131620)));
                     Require(Failed<Button>("FailureAction").Visibility==Visibility.Visible&&(string)Failed<Button>("FailureAction").Content==SetupErrorCatalog.Label(SetupErrorAction.OpenNetworkSettings)&&written.Count==2);
-                    ((ScrollViewer)failed.FindName("ContentScroll")).ScrollToEnd();Snapshot(failed,size,output,"setup-failure-network");
+                    Reveal(failed,size);Snapshot(failed,size,output,"setup-failure-network");
                     // A refused choice is a failure screen too, never an exception out of the click.
                     var refused=new MainWindow(lanChoices:choices,lanCategory:Category,failureLog:report=>{written.Add(report);return null;});
                     ((RadioButton)refused.FindName("HomeLan")).IsChecked=true;((ComboBox)refused.FindName("LanAddress")).SelectedIndex=0;
@@ -286,9 +287,10 @@ internal static class LanIntegrationTests
                     ((RadioButton)stopped.FindName("DeleteOption")).IsChecked=true;((TextBox)stopped.FindName("ConfirmationInput")).Text=UninstallChoice.ConfirmationPhrase;
                     Invoke(stopped,"Failure","FILE_LOCKED",new SetupFailureDetail("DeleteData",32,unchecked((int)0x80070020),Exception:"System.IO.IOException"));
                     Require(written[^1] is {Code:"FILE_LOCKED",Operation:"uninstall"}&&((TextBlock)stopped.FindName("Heading")).Text=="ההסרה נעצרה.");
+                    Require(((TextBlock)stopped.FindName("FailureTitle")).Text=="ההסרה נעצרה"&&((TextBlock)stopped.FindName("FailureWhat")).Text==SetupErrorCatalog.Resolve("FILE_LOCKED").What);
                     Require(((TextBlock)stopped.FindName("FailureContext")).Visibility==Visibility.Visible&&(string)((Button)stopped.FindName("Primary")).Content=="המשך המחיקה");
                     Require(((Button)stopped.FindName("FailureAction")).Visibility==(SetupErrorCatalog.Resolve("FILE_LOCKED").Action is SetupErrorAction.None or SetupErrorAction.ContinueRemoval?Visibility.Collapsed:Visibility.Visible));
-                    ((ScrollViewer)stopped.FindName("ContentScroll")).ScrollToEnd();Snapshot(stopped,size,output,"setup-uninstall-failure");
+                    Reveal(stopped,size);Snapshot(stopped,size,output,"setup-uninstall-failure");
                 }
                 completion.SetResult();
             }
@@ -302,6 +304,18 @@ internal static class LanIntegrationTests
         try { return target.GetType().GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(target, args); }
         catch (TargetInvocationException error) when (error.InnerException is not null)
         { ExceptionDispatchInfo.Capture(error.InnerException).Throw(); throw; }
+    }
+    // Lays the window out at this size, runs the window's own reveal (queued after layout
+    // when shown), and requires the whole failure card inside the scrolled viewport.
+    private static void Reveal(MainWindow window, Size size)
+    {
+        var content = (FrameworkElement)window.Content; content.Width = size.Width; content.Height = size.Height;
+        content.Measure(size); content.Arrange(new Rect(size)); content.UpdateLayout();
+        var scroll = (ScrollViewer)window.FindName("ContentScroll"); scroll.ScrollToTop(); content.UpdateLayout();
+        Invoke(window, "RevealFailure"); content.UpdateLayout();
+        var card = (FrameworkElement)window.FindName("FailurePanel");
+        var bounds = card.TransformToAncestor(scroll).TransformBounds(new Rect(card.RenderSize));
+        Require(bounds.Top >= -0.5 && bounds.Bottom <= scroll.ViewportHeight + 0.5, "FAILURE_CARD_OUT_OF_VIEW");
     }
     private static void Snapshot(MainWindow window, Size size, string? output, string name)
     {

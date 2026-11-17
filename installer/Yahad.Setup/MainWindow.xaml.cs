@@ -112,7 +112,10 @@ public partial class MainWindow:Window
         var entry=SetupErrorCatalog.Resolve(report.Code);failureReport=report;failureLog=log;
         ProgressBar.IsIndeterminate=false;
         Heading.Text=uninstall?"ההסרה נעצרה.":completed?"יחד מותקנת.\nהקישור להגדרה לא נפתח.":"נעצרנו כאן.\nההתקנה לא הושלמה.";
-        Description.Text=entry.What;FailureNext.Text=SetupErrorCatalog.Next(report.Code,entry,requiredFreeBytes);
+        // The card is self-contained: the choices above stay in place for a retry, so the
+        // heading may be out of view while the card is what the user reads.
+        FailureTitle.Text=uninstall?"ההסרה נעצרה":completed?"הקישור להגדרה לא נפתח":"ההתקנה לא הושלמה";
+        Description.Text=FailureWhat.Text=entry.What;FailureNext.Text=SetupErrorCatalog.Next(report.Code,entry,requiredFreeBytes);
         // A removal that deletes data may already have deleted some of it, whatever stopped it.
         var partial=uninstall&&choice.Mode==UninstallMode.DeleteData;
         FailureContext.Text=partial?"ייתכן שחלק מהנתונים כבר נמחקו. אפשר להמשיך את המחיקה באותה בחירה; אל תתקינו את יחד מחדש לפני שהיא מסתיימת.":"";
@@ -123,6 +126,13 @@ public partial class MainWindow:Window
         SupportCode.Text="קוד לתמיכה: "+report.Code;FailureTechnicalText.Text=report.Text(log);FailureTechnical.IsExpanded=false;
         Notice.Visibility=Visibility.Collapsed;FailurePanel.Visibility=Visibility.Visible;
         Status.Text="הפעולה טרם הושלמה";Primary.Content=partial?"המשך המחיקה":"ניסיון נוסף";
+        // Once the card has its size, scroll it into view.
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded,new Action(RevealFailure));
+    }
+    private void RevealFailure()
+    {
+        if(FailurePanel.Visibility!=Visibility.Visible)return;
+        UpdateLayout();FailurePanel.BringIntoView();
     }
     private void ClearFailure(){failureReport=null;failureLog=null;failureAction=SetupErrorAction.None;FailurePanel.Visibility=Visibility.Collapsed;Notice.Visibility=Visibility.Visible;}
     private static long? RequiredFreeBytes()
