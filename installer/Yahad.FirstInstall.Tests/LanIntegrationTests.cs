@@ -184,7 +184,9 @@ internal static class LanIntegrationTests
                 if (output is not null) { Require(Path.IsPathFullyQualified(output)); Directory.CreateDirectory(output); }
                 foreach (var size in new[] { new Size(980, 730), new Size(760, 620) })
                 {
-                    var window = new MainWindow(lanChoices: choices);
+                    var categories = new Dictionary<string, int> { ["fixture-home"] = 1, ["fixture-other"] = 1 };
+                    int Category(string adapter) => categories.TryGetValue(adapter, out var c) ? c : throw new IOException("LAN_NETWORK_PROFILE_UNAVAILABLE");
+                    var window = new MainWindow(lanChoices: choices, lanCategory: Category);
                     T Control<T>(string name) where T : FrameworkElement => (T)window.FindName(name);
                     var address = Control<ComboBox>("LanAddress"); var consent = Control<CheckBox>("LanConsent");
                     var primary = Control<Button>("Primary"); var home = Control<RadioButton>("HomeLan");
@@ -209,6 +211,25 @@ internal static class LanIntegrationTests
                     Require(!Control<TextBlock>("LanConsentLabel").Text.Contains("TCP",StringComparison.Ordinal)&&Control<TextBlock>("LanConsentLabel").Text.Contains("אני מאשר",StringComparison.Ordinal));
                     address.SelectedIndex = 1; Require(!primary.IsEnabled && consent.IsChecked == false);
                     address.SelectedIndex = 0; consent.IsChecked = true;
+                    // A Public network is explained before anything is installed; the
+                    // consent area hides and the primary action waits for Private.
+                    var help = Control<Border>("LanProfileHelp"); var consentArea = Control<StackPanel>("LanConsentArea");
+                    Require(help.Visibility == Visibility.Collapsed && consentArea.Visibility == Visibility.Visible && primary.IsEnabled);
+                    categories["fixture-home"] = 0; Invoke(window, "RecheckNetwork_Click", window, new RoutedEventArgs());
+                    Require(help.Visibility == Visibility.Visible && consentArea.Visibility == Visibility.Collapsed && !primary.IsEnabled);
+                    Require(Control<TextBlock>("LanProfileHeading").Text.Contains("ציבורית", StringComparison.Ordinal));
+                    Require(Control<StackPanel>("LanProfileSteps").Visibility == Visibility.Visible && Control<Button>("OpenNetworkSettings").Visibility == Visibility.Visible);
+                    Require(Invoke(window, "ReadProfile", "fixture-home")!.ToString() == "Public");
+                    Control<ScrollViewer>("ContentScroll").ScrollToEnd(); Snapshot(window, size, output, "lan-public-network");
+                    Control<RadioButton>("KeepLan").IsChecked = true; Require(primary.IsEnabled && help.Visibility == Visibility.Collapsed);
+                    home.IsChecked = true; Require(!primary.IsEnabled && help.Visibility == Visibility.Visible);
+                    categories["fixture-home"] = 2; Invoke(window, "RecheckNetwork_Click", window, new RoutedEventArgs());
+                    Require(!primary.IsEnabled && Control<Button>("OpenNetworkSettings").Visibility == Visibility.Collapsed && Control<TextBlock>("LanProfileHeading").Text.Contains("עבודה", StringComparison.Ordinal));
+                    categories.Remove("fixture-home"); Invoke(window, "RecheckNetwork_Click", window, new RoutedEventArgs());
+                    Require(!primary.IsEnabled && help.Visibility == Visibility.Visible && Control<Button>("RecheckNetwork").Visibility == Visibility.Visible);
+                    categories["fixture-home"] = 1; Invoke(window, "RecheckNetwork_Click", window, new RoutedEventArgs());
+                    Require(help.Visibility == Visibility.Collapsed && consentArea.Visibility == Visibility.Visible && consent.IsChecked == true && primary.IsEnabled);
+                    Require(((LanSetupRequest)Invoke(window, "SelectedLanRequest")!).AdapterId == "fixture-home");
                     Control<ScrollViewer>("ContentScroll").ScrollToEnd(); Snapshot(window, size, output, "lan-home-consent");
                     var fingerprint = string.Join(':', Enumerable.Repeat("AB", 32));
                     Invoke(window, "ShowLanResult", new LanSetupResult("https://192.168.4.5", "http://192.168.4.5", fingerprint));
@@ -217,7 +238,7 @@ internal static class LanIntegrationTests
                     Require(Control<TextBlock>("LanResultText").Text.Contains("https://192.168.4.5", StringComparison.Ordinal));
                     Control<ScrollViewer>("ContentScroll").ScrollToEnd(); Snapshot(window, size, output, "lan-result-host-only");
 
-                    var existing=new MainWindow(lanChoices:choices,existingAccess:true);
+                    var existing=new MainWindow(lanChoices:choices,existingAccess:true,lanCategory:Category);
                     Require((string)((RadioButton)existing.FindName("KeepLan")).Content=="להשאיר את אפשרויות הגישה הקיימות");
                     Require(Invoke(existing,"SelectedLanRequest") is null);
                     var disable=(RadioButton)existing.FindName("DisableLan");Require(disable.Visibility==Visibility.Visible);
