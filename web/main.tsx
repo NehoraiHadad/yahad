@@ -89,6 +89,7 @@ import './child-management.css';
 import { DiagnosticsPanel } from './DiagnosticsPanel';
 import { ConnectionGuidance, useBrowserOnline } from './ConnectionGuidanceView';
 import { UpdatesPanel } from './UpdatesPanel';
+import { HomeAddress } from './HomeAddress';
 import type { PublicMessage } from '../src/service';
 import type { Capabilities } from '../src/connectors/types';
 import { VOICE_CONSTRAINTS, VOICE_RECORDER_OPTIONS, VOICE_SUPPORT_MESSAGE, finishVoice, voiceSupport } from './voiceRecording';
@@ -110,6 +111,7 @@ type Me = {
   idleMs: number | null;
   maxMedia: number;
   senderLabel?: string;
+  siteOrigin?: string;
 };
 type Group = { id: string; title: string; canRead: boolean; last?: PublicMessage; lastMessageTime?: number; unreadCount?: number; kind?: 'group' | 'direct' };
 const emojiChoices = ['💚', '❤️', '👍', '😂', '✨', '🌸', '🎉', '🙏'];
@@ -2114,7 +2116,7 @@ function Parent({
               }}/>
           </ChildManagement>
           <ChildTabletSetup child={selectedChild} loaded={!!data} stale={overviewStale} busy={busy}
-            origin={location.origin} openChat={openChat}
+            origin={location.origin} siteOrigin={me.siteOrigin} openChat={openChat}
             onPassword={id => { setSettingsChild(id); setSettingsMode('password'); setSettings(true); }}/>
         </> : <section className="parent-card" aria-label="השלבים הבאים" aria-live="polite">
           <h2>אחרי חיבור החשבון</h2>
@@ -2122,6 +2124,7 @@ function Parent({
           <p>{!data ? 'טוענים את מצב החשבון…' : 'קודם מחברים את WhatsApp למעלה. לאחר החיבור אפשר להמשיך להגדרת הילדים והשיחות.'}</p>
           {overviewFailed && <button type="button" className="outline-button" disabled={busy} onClick={() => void load()}>ניסיון נוסף</button>}
         </section>}
+        <HomeAddress siteOrigin={me.siteOrigin} currentOrigin={location.origin} />
         <DiagnosticsPanel />
         <UpdatesPanel />
         <details className="transparency">

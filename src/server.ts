@@ -295,6 +295,9 @@ export async function createApp(
       idleMs: s.user.role === 'child' ? config.childIdleMs : null,
       maxMedia: config.maxMedia,
       senderLabel: store.identityLabel(s.user.familyId, s.user.id),
+      // The address other devices open. A parent may be on another accepted entry
+      // point, such as the loopback address Windows Setup opens.
+      siteOrigin: s.user.role === 'parent' ? config.origin : undefined,
     };
   });
   app.post('/api/activity', async () => ({ ok: true }));
