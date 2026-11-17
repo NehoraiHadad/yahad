@@ -235,7 +235,11 @@ function InstallThroughUpdater($Release, [string]$Track, [string]$Name, [scriptb
     Restart-Service -Name $updater
     $status = UpdatesStatus
     $fingerprint = Fingerprint $Release $Track
-    if ($status.phase -ne 'available' -or $status.latestVersion -ne $Release.Version -or $status.installTarget.fingerprint -ne $fingerprint) { throw "The Updater offers $($status.phase)/$($status.latestVersion)/$($status.installTarget.fingerprint), expected $($Release.Version)/$fingerprint" }
+    if ($status.phase -ne 'available' -or $status.latestVersion -ne $Release.Version -or $status.installTarget.fingerprint -ne $fingerprint) {
+        # What the Updater saw: its whole status and the stage it was given.
+        $staged = @(Get-ChildItem -LiteralPath $stage -Force -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name):$($_.Length)" }) -join ','
+        throw "The Updater offers $($status.phase)/$($status.latestVersion)/$($status.installTarget.fingerprint), expected $($Release.Version)/$fingerprint; status $($status | ConvertTo-Json -Compress -Depth 4); stage [$staged]"
+    }
     # A target that is not the staged release is refused before anything runs.
     $stale = $false
     try { UpdatesRequest @{ action='install'; target=@{ version=$Release.Version; fingerprint=('0' * 64) } } | Out-Null } catch { $stale = [int]$_.Exception.Response.StatusCode -eq 409 }
