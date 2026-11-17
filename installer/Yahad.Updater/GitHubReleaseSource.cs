@@ -62,7 +62,8 @@ internal sealed class GitHubReleaseSource:IDisposable
             if(response.StatusCode==HttpStatusCode.OK)
             {if(response.Content.Headers.ContentEncoding.Count!=0){response.Dispose();throw new IOException("GITHUB_CONTENT_ENCODING");}return response;}
             var status=(int)response.StatusCode;var location=response.Headers.Location;response.Dispose();
-            if(status is not(301 or 302 or 303 or 307 or 308)||location is null)throw new HttpRequestException("GITHUB_HTTP");
+            // The status names the cause for support, such as 403 for GitHub's rate limit.
+            if(status is not(301 or 302 or 303 or 307 or 308)||location is null)throw new HttpRequestException("GITHUB_HTTP",null,(HttpStatusCode)status);
             next=new Uri(next,location);
         }
         throw new IOException("GITHUB_REDIRECT_LIMIT");

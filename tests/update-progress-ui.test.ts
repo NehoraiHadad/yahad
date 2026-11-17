@@ -11,6 +11,8 @@ import { createRequire } from 'node:module';
 import vm from 'node:vm';
 import ts from 'typescript';
 import * as progressModule from '../web/updateProgress.js';
+import * as errorsModule from '../web/updateErrors.js';
+import { updateErrorTexts } from '../web/updateErrors.js';
 
 const before = '11111111-1111-4111-8111-111111111111';
 const requestId = '22222222-2222-4222-8222-222222222222';
@@ -71,7 +73,8 @@ test('terminal results distinguish check-only availability, verified installatio
     assert.doesNotMatch(updateProgress(failed).title, /הושלם בהצלחה/);
   }
   assert.equal(updateProgress({ ...healthy, phase: 'failed' }).kind, 'failure', 'a later scheduled failure must not reuse old request success');
-  assert.equal(updateProgress({ ...base, phase: 'idle', lastRequest: journal('failed') }).title, 'הפעולה לא הושלמה');
+  assert.equal(updateProgress({ ...base, phase: 'idle', lastRequest: journal('failed') }).title, updateErrorTexts.health.title, 'a failed journal is explained by its own error');
+  assert.equal(updateProgress({ ...base, phase: 'idle', lastRequest: { ...journal('failed'), error: null } }).title, 'הפעולה לא הושלמה');
   const later = { ...base, phase: 'healthy' as const, lastRequest: journal('failed'), checkedAt: 4000, updatedAt: 5000 };
   assert.equal(updateProgress(later).kind, 'success', 'a later scheduled success must not reuse old request failure');
   assert.equal(updateProgress({ ...later, phase: 'available' }).kind, 'idle');
@@ -306,7 +309,7 @@ function panelHarness(data: ConfiguredUpdate | null, reconnecting = false, trans
       useState(initial: any) { const index = cursor++; if (!(index in slots)) slots[index] = initial; return [slots[index], (value: any) => { slots[index] = typeof value === 'function' ? value(slots[index]) : value; }]; },
       useRef(initial: any) { const index = cursor++; return slots[index] ||= { current: initial }; },
       useEffect() {},
-    } : name === './api' ? { csrf: 'synthetic' } : name === './updateProgress' ? progressModule : require(name),
+    } : name === './api' ? { csrf: 'synthetic' } : name === './updateProgress' ? progressModule : name === './updateErrors' ? errorsModule : require(name),
   });
   const render = () => { cursor = 0; return module.exports.UpdatesPanel(); };
   const nodes = (node: any): any[] => !node || typeof node !== 'object' ? [] : [node, ...[node.props?.children].flat(Infinity).flatMap(nodes)];
@@ -401,7 +404,7 @@ test('queued and restarted progress retain requested X rather than newer availab
   const rejected = { ...base, phase: 'failed' as const, lastRequest: { ...journal('failed'), target, error: 'target_changed' as const } };
   assert.equal(reconcileUpdateRequest(rejected, tracked), null);
   assert.match(updateProgress(rejected).title, /יעד העדכון השתנה/);
-  assert.match(updateProgress(rejected).detail, /לא נשלחת התקנה נוספת/);
+  assert.match(updateProgress(rejected).todo!, /לא נשלחת התקנה נוספת/);
 });
 
 test('actual confirmation snapshots X; refresh to Y or changed bytes invalidates consent without silently installing Y', async () => {
