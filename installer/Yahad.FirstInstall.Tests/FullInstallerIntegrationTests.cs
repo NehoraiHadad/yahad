@@ -29,7 +29,8 @@ internal static class FullInstallerIntegrationTests
              Assert(InstalledHomeNetworkRecord.Parse(Record(page,sha),origin)==new InstalledHomeNetwork(1,page,sha));
             foreach(var bytes in new[]{Record("http://192.168.4.26/",sha),Record("http://192.168.4.25",sha),Record("https://192.168.4.25/",sha),
              Record("https://evil.example/home-network",sha),Record("http://192.168.4.25/",sha.ToLowerInvariant()),Record("http://192.168.4.25/",sha[3..]),
-             Record("http://192.168.4.25/",sha,format:2),"{\"Format\":1,\"JoinPage\":\"http://192.168.4.25/\",\"RootSha256\":\"x\",\"Extra\":1}"u8.ToArray()})
+             Record("http://192.168.4.25/",sha,format:2),"{\"Format\":1,\"JoinPage\":\"http://192.168.4.25/\",\"RootSha256\":null}"u8.ToArray(),
+                "{\"Format\":1,\"JoinPage\":null,\"RootSha256\":\"AB\"}"u8.ToArray(),"{\"Format\":1,\"JoinPage\":\"http://192.168.4.25/\",\"RootSha256\":\"x\",\"Extra\":1}"u8.ToArray()})
             {
              var copy=bytes;try{InstalledHomeNetworkRecord.Parse(copy,origin);Assert(false);}catch(Exception error)when(error is IOException or System.Text.Json.JsonException){}
              var path=Path.Combine(Path.GetTempPath(),"home-network-"+Guid.NewGuid().ToString("N")+".json");File.WriteAllBytes(path,bytes);

@@ -58,6 +58,8 @@ internal static class InstalledHomeNetworkRecord
         if(bytes.Length is <1 or >4096)throw new IOException("HOME_NETWORK_BOUND");
         var value=NativeJson.Read(bytes,ServiceHostJsonContext.Default.InstalledHomeNetwork);
         if(value.Format!=1)throw new IOException("HOME_NETWORK_FORMAT");
+        // JSON null passes the strict reader for a non-nullable string.
+        if(value.JoinPage is null||value.RootSha256 is null)throw new IOException("HOME_NETWORK_FIELDS");
         if(!System.Text.RegularExpressions.Regex.IsMatch(value.RootSha256,"^([0-9A-F]{2}:){31}[0-9A-F]{2}$"))throw new IOException("HOME_NETWORK_FINGERPRINT");
         // Only the two pages the proxy serves for this very address.
         if(value.JoinPage!="http://"+origin.Host+"/"&&value.JoinPage!=origin.GetLeftPart(UriPartial.Authority)+LanDeployment.HelpPath)throw new IOException("HOME_NETWORK_JOIN_PAGE");
@@ -68,7 +70,7 @@ internal static class InstalledHomeNetworkRecord
     internal static InstalledHomeNetwork? TryRead(string path,Uri origin)
     {
         try{return File.Exists(path)?Parse(NativeInstallFiles.ReadRecord(path,4096),origin):null;}
-        catch(Exception error)when(error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException){return null;}
+        catch(Exception error)when(error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException or System.ComponentModel.Win32Exception){return null;}
     }
 }
 internal sealed class InstalledLaunchResolver:IServiceStartAuthorizer

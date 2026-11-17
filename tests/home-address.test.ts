@@ -49,14 +49,15 @@ test('on the loopback entry the parent sees the home address, the plain join pag
   assert.match(html, /דף ההצטרפות<input readOnly="" dir="ltr" value="http:\/\/192.168.4.25\/"/);
   assert.ok(html.includes('value="' + fingerprint + '"'));
   assert.match(html, /להוריד את תעודת הבית ולבדוק אותה/);
-  assert.doesNotMatch(html, /גם לפני דף ההצטרפות/);
+  assert.doesNotMatch(html, /חוסם אותו באזהרת אבטחה/);
   assert.equal((html.match(/העתקה/g) || []).length, 3);
 });
 
 test('an HTTPS-only join page is described as coming after the browser warning', () => {
   const html = render({ siteOrigin: lan, homeNetwork: secure, currentOrigin: loopback });
   assert.match(html, /value="https:\/\/192.168.4.25\/home-network"/);
-  assert.match(html, /אזהרת אבטחה גם לפני דף ההצטרפות/);
+  assert.match(html, /חוסם אותו באזהרת אבטחה. אל תדלגו על האזהרה/);
+  assert.match(html, /להוסיף כתובת HTTP לדף העזרה/);
 });
 
 test('without the server record there are no join instructions, and away from the loopback entry no card', () => {
