@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>יחד: הילדים מדברים. אתם בוחרים.</title>
-<meta name="description" content="הילדים מתכתבים בקבוצות ובשיחות שאישרתם, דרך חשבון ה־WhatsApp של ההורה, בלי טלפון ובלי מספר משלהם. מכסת זמן לכל ילד. רץ על המחשב שלכם בבית.">
+<meta name="description" content="בוחרים אילו קבוצות ווטסאפ יהיו זמינות בטאבלט או במחשב, כדי שהילדים יוכלו להתכתב בלי לקחת את הטלפון של ההורים.">
 <meta name="theme-color" content="#f2f5f4">
 <link rel="canonical" href="https://nehoraihadad.github.io/yahad/">
 <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
@@ -21,139 +21,69 @@
 <meta property="og:image:alt" content="נועה ומיה עם כדור, לצד הכיתוב: יחד. הילדים מדברים. אתם בוחרים.">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="preload" href="assets/hebrew.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="style.css?v=5">
-<link rel="stylesheet" href="film.css?v=1">
+<link rel="stylesheet" href="style.css?v=6">
+<link rel="stylesheet" href="film.css?v=2">
 <script src="film-scene.js?v=2" defer></script>
-<script src="film.js?v=1" defer></script>
+<script src="film.js?v=2" defer></script>
 </head>
 <body>
-<a class="skip" href="#main">דלגו לתוכן</a>
-<header class="masthead shell">
-  <a class="brand" href="#main" aria-label="יחד, לראש העמוד">יחד</a>
-  <nav aria-label="ניווט ראשי">
-    <a href="#how-it-works">איך זה עובד</a>
-    <a class="nav-extra" href="#home">מה צריך</a>
-    <a class="nav-extra" href="#faq">שאלות</a>
-    <a class="nav-download" href="#download">הורדה</a>
-  </nav>
-</header>
 <main id="main">
-
-<section class="opening shell" aria-labelledby="hero-title">
-  <div class="hero-story">
+  <section class="opening shell" aria-labelledby="hero-title">
+    <img class="opening-art" src="assets/friends-at-the-park.webp" srcset="assets/friends-at-the-park-768.webp 768w, assets/friends-at-the-park.webp 1536w" sizes="(max-width: 420px) calc(100vw - 40px), 380px" width="1536" height="1024" fetchpriority="high" alt="נועה ומיה מחייכות זו לזו, כשנועה מחזיקה כדור">
     <h1 id="hero-title">הילדים מדברים.<br>אתם בוחרים.</h1>
-    <p class="lead">נועה קובעת עם החברות להיפגש בפארק, מהטאבלט שבבית, בלי טלפון ובלי מספר משלה. היא רואה רק את השיחות שאישרתם.</p>
-    <div class="hero-actions">
-      <a class="primary" href="#download">הורדה ל־<bdi>Windows</bdi></a>
-      <a class="text-link" href="#how-it-works">איך זה עובד</a>
+    <p class="lead">עם יחד בוחרים אילו קבוצות ווטסאפ יהיו זמינות בטאבלט או במחשב. כך הבנות יכולות להתכתב עם החברות, בלי גישה לשאר הווטסאפ שלכם ובלי לקחת לכם את הטלפון.</p>
+    <a id="download" class="primary download-action" href="https://github.com/NehoraiHadad/yahad/releases/latest/download/Yahad.Setup.exe">הורדה והתקנה ל־<bdi>Windows</bdi></a>
+  </section>
+
+  <section class="how shell" id="how-it-works" aria-label="סרטון ההדגמה של יחד">
+    <div class="film" hidden>
+      <div class="film-frame" aria-hidden="true"></div>
+      <button class="film-toggle" type="button" data-state="play"><svg class="i-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg><svg class="i-pause" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></svg><svg class="i-replay" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg><span class="film-toggle-text">הפעלה</span></button>
     </div>
-    <p class="hero-note">תוכנה חינמית בקוד פתוח, שרצה על המחשב שלכם בבית.</p>
-  </div>
-  <div class="family-art">
-    <img src="assets/friends-at-the-park.webp" srcset="assets/friends-at-the-park-768.webp 768w, assets/friends-at-the-park.webp 1536w" sizes="(max-width: 899px) calc(100vw - 40px), 52vw" width="1536" height="1024" fetchpriority="high" alt="איור של נועה ומיה מחייכות זו לזו, כשנועה מחזיקה כדור">
-  </div>
-</section>
+    <p class="film-description">נועה רוצה לכתוב לחברות. ההורים בוחרים אילו קבוצות יהיו זמינות לה, ונועה נכנסת לחשבון שלה בטאבלט. היא קובעת עם החברות להיפגש בפארק, וההודעה מגיעה אליהן בווטסאפ עם השם שלה.</p>
+  </section>
 
-<a class="skip-demo shell" href="#control">דלגו על ההדגמה</a>
-<section class="how" id="how-it-works" aria-labelledby="how-title">
-<div class="how-inner shell">
-<h2 class="how-title" id="how-title">איך זה עובד</h2>
-<div class="film" hidden>
-<div class="film-frame" aria-hidden="true"></div>
-<button class="film-toggle" type="button" data-state="play"><svg class="i-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg><svg class="i-pause" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></svg><svg class="i-replay" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg><span class="film-toggle-text">הפעלה</span></button>
-</div>
-<ol class="beats">
-<li class="beat" data-at="0" data-still="2.9"><h3>נועה רוצה לכתוב לחברות</h3><p>אבל לתת לה את כל ה־<bdi>WhatsApp</bdi> שלכם? יש שם עבודה, ועד הבית ומספרים לא מוכרים.</p></li>
-<li class="beat" data-at="3.3" data-still="7.6"><h3>אתם בוחרים מה היא רואה</h3><p>מסמנים רק את מה שמתאים לה, למשל המשפחה, הכיתה והחברות. כל השאר נשאר אצלכם.</p></li>
-<li class="beat" data-at="9.5" data-still="15.5"><h3>לנועה יש כניסה משלה</h3><p>בטאבלט של הבית היא רואה רק את השיחות שסימנתם.</p></li>
-<li class="beat" data-at="16" data-still="21.6"><h3>החברות נשארות ב־<bdi>WhatsApp</bdi></h3><p>מיה שואלת אם נפגשות בפארק. נועה עונה מהטאבלט, והחברות מקבלות את ההודעה ב־<bdi>WhatsApp</bdi> שלהן, מהמספר שלכם ועם „נועה:” בהתחלה.</p></li>
-</ol>
-</div>
-</section>
-
-<section class="control shell" id="control" aria-labelledby="control-title">
-  <h2 id="control-title">רק מה שאישרתם עובר.</h2>
-  <div class="split">
-    <div class="side side-pass">
-      <h3>מגיע לנועה</h3>
-      <ul>
-        <li>הקבוצות והשיחות שסימנתם, ושום דבר מעבר להן.</li>
-        <li>הודעות, תמונות, סרטונים, הקלטות קוליות ומדבקות, בשני הכיוונים.</li>
-        <li>ההודעות שלה יוצאות מהחשבון שלכם, עם תווית שאתם קובעים, למשל „נועה:”.</li>
-      </ul>
+  <details class="technical shell" id="technical">
+    <summary>התקנה, דרישות ושאלות נפוצות</summary>
+    <div class="technical-content">
+      <section id="home" aria-labelledby="home-title">
+        <h2 id="home-title">מה צריך בבית?</h2>
+        <p>יחד רצה על מחשב עם <bdi>Windows 11</bdi> בגרסת 64 ביט. המחשב צריך להישאר דולק ומחובר, והטאבלט או המחשב שממנו הילדים נכנסים צריך להיות באותה רשת ביתית. גרסת <bdi>Linux</bdi> בהכנה.</p>
+        <p>ההודעות והתמונות נשמרות מוצפנות במחשב שבבית. אפשר להגדיר מכסת זמן לכל ילד, להוסיף דקות או להשהות גישה.</p>
+      </section>
+      <section id="setup" aria-labelledby="setup-title">
+        <h2 id="setup-title">איך מתקינים?</h2>
+        <ol>
+          <li>מורידים ומפעילים את המתקין במחשב. הקובץ שוקל כ־130 <bdi>MB</bdi> ונדרשות הרשאות מנהל.</li>
+          <li>בסוף ההתקנה נפתח הדפדפן. יוצרים חשבון הורה, פותחים ״מכשירים מקושרים״ בווטסאפ בטלפון וסורקים את קוד ה־<bdi>QR</bdi>.</li>
+          <li>יוצרים חשבון לכל ילד ובוחרים אילו קבוצות ושיחות יהיו זמינות לו.</li>
+        </ol>
+        <details class="technical-note">
+          <summary>אזהרת <bdi>Windows SmartScreen</bdi></summary>
+          <p>המתקין עדיין לא חתום. במסך האזהרה לוחצים על ״מידע נוסף״ (<bdi>More info</bdi>), בוחרים ״הפעל בכל זאת״ (<bdi>Run anyway</bdi>) ומאשרים את חלון ההרשאות.</p>
+        </details>
+      </section>
+      <section id="risk" class="risk" aria-labelledby="risk-title">
+        <h2 id="risk-title">לפני שמחברים חשבון</h2>
+        <p>יחד היא פרויקט עצמאי שמשתמש בחיבור לא רשמי לווטסאפ. הוא עלול להפסיק לעבוד או להוביל להגבלה של החשבון. יחד אינה קשורה ל־<bdi>WhatsApp</bdi> או ל־<bdi>Meta</bdi>.</p>
+      </section>
+      <section id="faq" aria-labelledby="faq-title">
+        <h2 id="faq-title">שאלות נפוצות</h2>
+        <div class="questions">
+          <details><summary>האם הילד צריך מספר טלפון או חשבון <bdi>WhatsApp</bdi>?</summary><p>לא. הוא נכנס ליחד בשם ובסיסמה, וההודעות שלו יוצאות מהחשבון שלכם, עם התווית שקבעתם לו.</p></details>
+          <details><summary>האם הילד רואה את כל השיחות שלי?</summary><p>לא. בהתחלה אף שיחה לא מאושרת. אתם מסמנים קבוצות או שיחות אחת אחת, ויכולים לבטל או להשהות גישה בכל רגע.</p></details>
+          <details><summary>ואני רואה מה הילד כותב?</summary><p>כן. ההודעות יוצאות מהחשבון שלכם, ולכן הן מופיעות אצלכם בטלפון כמו כל הודעה אחרת, וגם ביחד.</p></details>
+          <details><summary>מה קורה כשהמחשב כבוי?</summary><p>הילדים לא יכולים להיכנס עד שהוא נדלק. ה־<bdi>WhatsApp</bdi> בטלפון שלכם ממשיך לעבוד כרגיל.</p></details>
+          <details><summary>איך מתעדכנים לגרסה חדשה?</summary><p>בהתקנה בוחרים: עדכון אוטומטי בזמן שלא משתמשים ביחד, או הודעה שמחכה לאישור שלכם. לפני כל עדכון נשמר גיבוי.</p></details>
+          <details><summary>איך מסירים?</summary><p>מהגדרות <bdi>Windows</bdi>, כמו כל תוכנה. כברירת מחדל המידע נשמר למקרה שתתקינו שוב, ואפשר לבחור במחיקה מלאה.</p></details>
+          <details><summary>כמה זה עולה?</summary><p>כלום. יחד היא פרויקט קוד פתוח, והקוד שלה פתוח לכל אחד ב־<bdi>GitHub</bdi>.</p></details>
+        </div>
+        <p><a class="text-link" href="https://github.com/NehoraiHadad/yahad/releases/latest">מה חדש בגרסה האחרונה</a></p>
+      </section>
     </div>
-    <div class="side side-held">
-      <h3>נשאר אצלכם</h3>
-      <ul>
-        <li>כל שיחה שלא סימנתם. בהתחלה אף שיחה לא מאושרת.</li>
-        <li>הטלפון שלכם. נועה לא צריכה אותו, וגם לא חשבון <bdi>WhatsApp</bdi> משלה.</li>
-        <li>ההחלטה. אפשר לבטל שיחה או להשהות את הגישה של ילד בכל רגע.</li>
-      </ul>
-    </div>
-  </div>
-</section>
-
-<section class="time shell" id="time" aria-labelledby="time-title">
-  <div class="time-copy">
-    <h2 id="time-title">זמן מסך שאתם קובעים.</h2>
-    <p>מכסה יומית נפרדת לכל ילד. הילדים רואים כמה זמן נשאר להם, וכשהוא נגמר הם יכולים לבקש עוד. אתם מוסיפים דקות להיום, או משאירים כמו שזה.</p>
-  </div>
-  <div class="quota" role="img" aria-label="דוגמה: לנועה נשארו 12 דקות מתוך 45, ליואב נשארו 38 דקות מתוך 60">
-    <div class="quota-row"><span class="quota-name">נועה</span><span class="quota-left"><bdi>12:40</bdi></span><span class="quota-bar"><i style="--left:.28"></i></span></div>
-    <div class="quota-row"><span class="quota-name">יואב</span><span class="quota-left"><bdi>38:05</bdi></span><span class="quota-bar"><i style="--left:.63"></i></span></div>
-  </div>
-</section>
-
-<section class="home shell" id="home" aria-labelledby="home-title">
-  <h2 id="home-title">הכול קורה אצלכם בבית.</h2>
-  <p class="home-lead">יחד רצה על מחשב בבית, לא בשרת שלנו. ההודעות והתמונות נשמרות בו מוצפנות, ולנו אין אליהן גישה.</p>
-  <ul class="home-map">
-    <li class="node node-phone"><h3>הטלפון שלכם</h3><p><bdi>WhatsApp</bdi> רגיל. סורקים ממנו קוד <bdi>QR</bdi> פעם אחת, כמו בחיבור מחשב.</p></li>
-    <li class="node node-computer"><h3>מחשב בבית</h3><p><bdi>Windows 11</bdi> בגרסת 64 ביט. צריך להישאר דולק ומחובר, כי הוא מה שמחבר בין כולם.</p></li>
-    <li class="node node-child"><h3>המכשיר של הילד</h3><p>דפדפן בטאבלט, בטלפון או באותו מחשב, ברשת הביתית.</p></li>
-  </ul>
-</section>
-
-<section class="setup shell" id="setup" aria-labelledby="setup-title">
-  <h2 id="setup-title">שלושה צעדים, וזה עובד.</h2>
-  <ol class="steps">
-    <li><h3>מתקינים במחשב</h3><p>המתקין שואל אם הילדים ייכנסו גם מטאבלט או מטלפון ברשת הביתית, ואיך לקבל עדכונים.</p></li>
-    <li><h3>מחברים את <bdi>WhatsApp</bdi></h3><p>ב־<bdi>WhatsApp</bdi> בטלפון פותחים „מכשירים מקושרים” ואז „קישור מכשיר”, וסורקים את הקוד שמופיע במסך.</p></li>
-    <li><h3>פותחים חשבון לכל ילד</h3><p>שם וסיסמה קצרה. מסמנים אילו שיחות הוא רואה וכמה זמן ביום.</p></li>
-  </ol>
-</section>
-
-<section class="risk shell" id="risk" aria-labelledby="risk-title">
-  <h2 id="risk-title">לפני שמחברים חשבון</h2>
-  <p>יחד משתמשת בחיבור לא רשמי ל־<bdi>WhatsApp</bdi>. הוא עלול להפסיק לעבוד, ובמקרה גרוע להוביל להגבלה של החשבון שלכם. יחד היא פרויקט עצמאי ואינה קשורה ל־<bdi>WhatsApp</bdi> או ל־<bdi>Meta</bdi>. זו גרסה מוקדמת, שעדיין נבדקת על מחשבים של משפחות.</p>
-</section>
-
-<section class="faq shell" id="faq" aria-labelledby="faq-title">
-  <h2 id="faq-title">שאלות ששואלים אותנו.</h2>
-  <div class="questions">
-    <details><summary>האם הילד צריך מספר טלפון או חשבון <bdi>WhatsApp</bdi>?</summary><p>לא. הוא נכנס ליחד בשם ובסיסמה, וההודעות שלו יוצאות מהחשבון שלכם, עם התווית שקבעתם לו.</p></details>
-    <details><summary>האם הילד רואה את כל השיחות שלי?</summary><p>לא. בהתחלה אף שיחה לא מאושרת. אתם מסמנים קבוצות או שיחות אחת אחת, ויכולים לבטל או להשהות גישה בכל רגע.</p></details>
-    <details><summary>ואני רואה מה הילד כותב?</summary><p>כן. ההודעות יוצאות מהחשבון שלכם, ולכן הן מופיעות אצלכם בטלפון כמו כל הודעה אחרת, וגם ביחד.</p></details>
-    <details><summary>מה קורה כשהמחשב כבוי?</summary><p>הילדים לא יכולים להיכנס עד שהוא נדלק. ה־<bdi>WhatsApp</bdi> בטלפון שלכם ממשיך לעבוד כרגיל.</p></details>
-    <details><summary>איך מתעדכנים לגרסה חדשה?</summary><p>בהתקנה בוחרים: עדכון אוטומטי בזמן שלא משתמשים ביחד, או הודעה שמחכה לאישור שלכם. לפני כל עדכון נשמר גיבוי.</p></details>
-    <details><summary>איך מסירים?</summary><p>מהגדרות <bdi>Windows</bdi>, כמו כל תוכנה. כברירת מחדל המידע נשמר למקרה שתתקינו שוב, ואפשר לבחור במחיקה מלאה.</p></details>
-    <details><summary>כמה זה עולה?</summary><p>כלום. יחד היא פרויקט קוד פתוח, והקוד שלה פתוח לכל אחד ב־<bdi>GitHub</bdi>.</p></details>
-  </div>
-</section>
-
-<section class="download shell" id="download" aria-labelledby="download-title">
-  <h2 id="download-title">מורידים ומתקינים.</h2>
-  <p class="download-intro">בסוף ההתקנה נפתח הדפדפן, ושם יוצרים את חשבון ההורה ומחברים את <bdi>WhatsApp</bdi>.</p>
-  <ul class="download-list">
-<!-- שילוב קובץ מוכן: מחליפים את הכפתור ב־a class="primary download-action" עם href לקובץ הגרסה האמיתי ב־GitHub Releases של הריפו, מעדכנים את data-state ל־ready ואת טקסט הסטטוס. הבדיקה הסטטית מקבלת רק קישורי releases של הריפו בכרטיס ready. -->
-<li class="download-card" data-platform="windows" data-state="ready"><h3><bdi>Windows 11</bdi></h3><p class="download-status">גרסת 64 ביט. הקובץ שוקל כ־130MB, ונדרשות הרשאות מנהל.</p><a class="primary download-action" href="https://github.com/NehoraiHadad/yahad/releases/latest/download/Yahad.Setup.exe">הורדה ל־<bdi>Windows</bdi></a>
-<div class="smartscreen"><p>הקובץ עדיין לא חתום, ולכן <bdi>Windows</bdi> יציג אזהרה:</p><ol><li>לוחצים „מידע נוסף” (<bdi>More info</bdi>).</li><li>לוחצים „הפעל בכל זאת” (<bdi>Run anyway</bdi>).</li><li>מאשרים את חלון ההרשאות.</li></ol></div></li>
-<li class="download-card" data-platform="linux" data-state="pending"><h3><bdi>Linux</bdi></h3><p class="download-status">בהכנה. ההורדה תיפתח כשהקובץ יהיה מוכן וייבדק.</p><button class="primary download-action" type="button" disabled>הורדה ל־<bdi>Linux</bdi></button></li>
-  </ul>
-  <p class="release-link"><a class="text-link" href="https://github.com/NehoraiHadad/yahad/releases/latest">מה חדש בגרסה האחרונה</a></p>
-</section>
-
+  </details>
 </main>
+
 <footer class="shell">
   <a class="brand" href="#main">יחד</a>
   <ul class="footer-links">
@@ -161,7 +91,6 @@
     <li><a href="https://github.com/NehoraiHadad/yahad/issues">דיווח על בעיה</a></li>
     <li><a href="https://github.com/NehoraiHadad/yahad/blob/main/LICENSE">רישיון</a></li>
   </ul>
-  <p>יחד אינה מוצר של <bdi>WhatsApp</bdi> או של <bdi>Meta</bdi>.</p>
   <a class="credit" href="https://maklikim.co.il/l/me"><img src="assets/nehorai.svg" alt="" width="24" height="24">פותח ע״י נהוראי</a>
 </footer>
 </body>
