@@ -5,6 +5,8 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-11-03",
   "workers_dev": false,
+  // The installer's YahadHomeNameService. Outside ZONE_NAME, so its CAA does not apply here.
+  "routes": [{ "pattern": "yahad-names.nehoraihadad.com", "custom_domain": true }],
   "durable_objects": {
     "bindings": [
       { "name": "LABELS", "class_name": "LabelObject" },
@@ -19,11 +21,10 @@
     { "name": "REGISTER_LIMITER", "namespace_id": "1001", "simple": { "limit": 3, "period": 60 } }
   ],
   "vars": {
-    // The maintainer fills these two before deploying; until then every call answers 503.
-    // ZONE_NAME: the DNS suffix the labels live under, e.g. "yahad.nehoraihadad.com".
-    "ZONE_NAME": "",
-    // ZONE_ID: the Cloudflare zone id (32 hex) of the zone that contains ZONE_NAME.
-    "ZONE_ID": "",
+    // ZONE_NAME: the DNS suffix the labels live under (the installer's YahadHomeNameZone).
+    "ZONE_NAME": "yahad.nehoraihadad.com",
+    // ZONE_ID: the Cloudflare zone id (32 hex) of the zone that contains ZONE_NAME (not a secret).
+    "ZONE_ID": "4b61e4b46f0d59b857783f879f04580e",
     // Live labels (each holds up to 3 records against the zone's record cap).
     "LIVE_LABELS_CAP": "60",
     // Cloudflare API writes (create, update, delete) per UTC day, across all labels.
