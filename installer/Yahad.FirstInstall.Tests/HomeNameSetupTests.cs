@@ -51,7 +51,7 @@ internal static class HomeNameSetupTests
     private sealed class Remote(Fixture fixture):IHomeNameRemote
     {
         internal readonly Queue<string> Labels=new([LabelA,LabelB]);internal readonly List<string> Calls=[];
-        internal int GoneOnSetAddress;internal Exception? IssueFailure,DeleteFailure;
+        internal int GoneOnSetAddress;internal Exception? IssueFailure,DeleteFailure,AddressFailure;
         internal TimeSpan Validity=TimeSpan.FromDays(90);
         public Task<HomeNameCredential> RegisterAsync(CancellationToken cancellation)
         {fixture.Ordering();Calls.Add("register");return Task.FromResult(new HomeNameCredential(Labels.Dequeue(),new string('A',43)));}
@@ -61,6 +61,7 @@ internal static class HomeNameSetupTests
             // The credential is on disk before any call that uses it.
             Assert(fixture.Store.ReadCredential()==credential,"HOME_NAME_CREDENTIAL_NOT_PERSISTED");
             if(GoneOnSetAddress>0){GoneOnSetAddress--;throw new HomeNameGoneException();}
+            if(AddressFailure is {} failure)return Task.FromException(failure);
             return Task.CompletedTask;
         }
         public Task<AcmeCertificate> IssueAsync(HomeNameCredential credential,string name,AcmeAccountKey account,CancellationToken cancellation)
@@ -90,7 +91,11 @@ internal static class HomeNameSetupTests
             return Task.CompletedTask;
         }
         public Task RestartRuntimeAsync(CancellationToken cancellation)
-        {fixture.Ordering();Calls.Add("runtime");Assert(fixture.Committed&&fixture.Owner?.Phase=="active");return Task.CompletedTask;}
+        {
+            // The Runtime is restarted onto a committed, active name, or back to the IP origin after a failure.
+            fixture.Ordering();Calls.Add("runtime:"+(fixture.Committed?"name":"ip"));
+            Assert(fixture.Committed?fixture.Owner?.Phase=="active":fixture.Owner?.Phase=="failed");return Task.CompletedTask;
+        }
     }
 
     internal static async Task RunAsync(Func<string,Func<Task>,Task> check)
@@ -104,11 +109,12 @@ internal static class HomeNameSetupTests
                 var f=new Fixture(root);var outcome=await f.Setup().RunAsync(Address,default);
                 Assert(outcome==new HomeNameOutcome(nameA,null));
                 Assert(f.Remote.Calls.SequenceEqual(["register","address "+LabelA+" "+Address,"issue "+nameA]));
-                Assert(f.Environment.Calls.SequenceEqual(["proxy:name","resolve","probe","runtime"]));
+                Assert(f.Environment.Calls.SequenceEqual(["proxy:name","resolve","probe","runtime:name"]));
                 Assert(f.Owner==new HomeNameOwner(1,"active",LabelA,nameA,null)&&InstalledHomeNameRecord.Parse(File.ReadAllBytes(f.Paths.NameRecord))==new InstalledHomeName(1,nameA,Address));
                 Assert(f.Store.Read(f.Store.Live,nameA) is not null&&f.Caddyfile.Contains("name "+nameA+" "+HomeNameStore.CertificateFile(f.Store.Live),StringComparison.Ordinal));
-                // Committed: a rerun asks nothing of anyone.
-                Assert(await f.Setup().RunAsync(Address,default)==new HomeNameOutcome(nameA,null)&&f.Remote.Calls.Count==3&&f.Environment.Calls.Count==4);
+                // Committed: a rerun only checks with the name service that the label is still there.
+                Assert(await f.Setup().RunAsync(Address,default)==new HomeNameOutcome(nameA,null)&&f.Environment.Calls.Count==4);
+                Assert(f.Remote.Calls.Count==4&&f.Remote.Calls[3]=="address "+LabelA+" "+Address);
                 Assert(f.Setup().ActiveName()==nameA&&!f.Setup().Unfinished());
             });
             await check("home name failure goes back to the IP Caddyfile without home-name.json and records the code; a rerun resumes",async()=>
@@ -138,10 +144,13 @@ internal static class HomeNameSetupTests
                     File.Delete(f.Paths.NameRecord);File.WriteAllBytes(f.Paths.Owner,HomeNameOwnerRecord.Encode(new(1,phase,LabelA,nameA,null)));
                     f.Remote.Calls.Clear();f.Environment.Calls.Clear();Assert(f.Setup().Unfinished());
                     Assert(await f.Setup().RunAsync(Address,default)==new HomeNameOutcome(nameA,null));
-                    Assert(f.Remote.Calls.SequenceEqual(["address "+LabelA+" "+Address])&&f.Environment.Calls.SequenceEqual(["proxy:name","resolve","probe","runtime"]));
+                    Assert(f.Remote.Calls.SequenceEqual(["address "+LabelA+" "+Address])&&f.Environment.Calls.SequenceEqual(["proxy:name","resolve","probe","runtime:name"]));
                 }
-                // A credential on disk without any owner record: the label is reused, never registered again.
-                var g=new Fixture(root);g.Store.WriteCredential(new(LabelB,new string('A',43)));
+                // A credential on disk without any owner record (a crash right after registering): unfinished,
+                // and the label is reused, never registered again. The same after an earlier removal.
+                var g=new Fixture(root);g.Store.WriteCredential(new(LabelB,new string('A',43)));Assert(g.Setup().Unfinished());
+                var removed=new Fixture(root);await removed.Setup().RemoveAsync(true,default);File.WriteAllBytes(removed.Paths.Owner,HomeNameOwnerRecord.Encode(new(1,"removed","","",null)));
+                Assert(!removed.Setup().Unfinished());removed.Store.WriteCredential(new(LabelB,new string('A',43)));Assert(removed.Setup().Unfinished());
                 Assert(await g.Setup().RunAsync(Address,default)==new HomeNameOutcome(nameB,null)&&!g.Remote.Calls.Contains("register"));
             });
             await check("home name rerun reissues a certificate that is due and keeps one that is not",async()=>
@@ -162,6 +171,31 @@ internal static class HomeNameSetupTests
                 // Gone twice: a failure, not a loop.
                 var g=new Fixture(root);g.Remote.GoneOnSetAddress=2;
                 Assert(await g.Setup().RunAsync(Address,default)==new HomeNameOutcome(null,"HOME_NAME_GONE")&&g.Remote.Calls.Count(c=>c=="register")==2);
+            });
+            await check("active home name is checked on a rerun: a label gone at the name service is registered again",async()=>
+            {
+                var f=new Fixture(root);await f.Setup().RunAsync(Address,default);
+                f.Remote.GoneOnSetAddress=1;f.Remote.Calls.Clear();f.Environment.Calls.Clear();
+                Assert(await f.Setup().RunAsync(Address,default)==new HomeNameOutcome(nameB,null));
+                Assert(f.Remote.Calls.SequenceEqual(["address "+LabelA+" "+Address,"register","address "+LabelB+" "+Address,"issue "+nameB]));
+                Assert(f.Environment.Calls.SequenceEqual(["proxy:name","resolve","probe","runtime:name"])&&f.Owner==new HomeNameOwner(1,"active",LabelB,nameB,null));
+                Assert(InstalledHomeNameRecord.Parse(File.ReadAllBytes(f.Paths.NameRecord)).Name==nameB);
+            });
+            await check("active home name stays when the name service cannot be reached, and is redone when its certificate expired",async()=>
+            {
+                var f=new Fixture(root);await f.Setup().RunAsync(Address,default);
+                f.Remote.AddressFailure=new HttpRequestException("offline");f.Remote.Calls.Clear();f.Environment.Calls.Clear();
+                Assert(await f.Setup().RunAsync(Address,default)==new HomeNameOutcome(nameA,null)&&f.Environment.Calls.Count==0&&f.Committed);
+                f.Remote.AddressFailure=null;f.Now=f.Now.AddDays(91);f.Remote.Calls.Clear();
+                Assert(await f.Setup().RunAsync(Address,default)==new HomeNameOutcome(nameA,null)&&f.Remote.Calls.SequenceEqual(["address "+LabelA+" "+Address,"issue "+nameA]));
+                Assert(f.Environment.Calls.SequenceEqual(["proxy:name","resolve","probe","runtime:name"]));
+            });
+            await check("active home name that fails its redo sends the Runtime back to the IP origin",async()=>
+            {
+                var f=new Fixture(root);await f.Setup().RunAsync(Address,default);
+                f.Now=f.Now.AddDays(91);f.Remote.IssueFailure=new AcmeException("ACME_RATE_LIMITED");f.Environment.Calls.Clear();
+                Assert(await f.Setup().RunAsync(Address,default)==new HomeNameOutcome(null,"ACME_RATE_LIMITED"));
+                Assert(f.Environment.Calls.SequenceEqual(["proxy:ip","runtime:ip"])&&!f.Committed&&f.Caddyfile=="ip\n"&&f.Owner!.Phase=="failed");
             });
             await check("home name failure codes come from the name service, the CA or the step, never free text",async()=>
             {

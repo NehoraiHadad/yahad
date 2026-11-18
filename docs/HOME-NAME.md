@@ -88,7 +88,13 @@ Setup (option „כתובת קבועה בלי תעודה במכשירים”, sh
    idempotent, so a crash resumes. Ordering makes every intermediate state safe: the Caddyfile may carry
    the name site before `home-name.json` exists (the app still runs on the IP origin and rejects the
    name's origin), never the reverse. On a rerun with a phase other than `active`, Setup first restores
-   the IP-only Caddyfile and removes `home-name.json`, then resumes.
+   the IP-only Caddyfile and removes `home-name.json`, then resumes. A credential with no owner phase after
+   it (a crash right after registering) is also unfinished, so the label is reused.
+   An `active` name is checked on every rerun, not trusted: its credential and a valid live certificate are
+   present and the name service still knows the label (setting the unchanged address is a no-op there that
+   refreshes it). A 410 discards the credential and certificates and the transaction runs again with a new
+   label; an expired certificate runs it again too; an unreachable service keeps the name. If such a redo
+   fails, the Runtime is restarted onto the IP origin as well.
 3. Any failure: the Caddyfile is written without the name site, `home-name.json` does not exist, the
    owner record says `failed` with a code, the proxy is restarted on the IP site. The IP path stays
    committed. Running Setup again resumes.
@@ -108,9 +114,9 @@ which the app uses (instead of `APP_ORIGIN`) to validate the join page and finge
 LAN service renewal: the controller checks daily. When due: ACME into `name/next` (both files written and
 flushed), validate, then a planned replacement: stop the Caddy child with the existing confirmed-stop
 path, write `name/swap.json`, rename `live`→`prev`, rename `next`→`live`, delete `swap.json`, start the
-child, verify the name serves the new leaf; on failure swap back
-and start again. Before every Caddy start the service recovers an interrupted swap: with `swap.json`
-present, a missing `live` is restored from `next` if complete, otherwise from `prev`; then the journal
+child, verify the name serves the new leaf; on failure (the child does not start, or does not serve the
+new leaf) swap back and start again. A swap that fails at `next`→`live` puts `prev` back before it throws. Before every Caddy start the service recovers an interrupted swap: with `swap.json`
+present, a missing `live` is restored from `next` if complete and movable, otherwise from `prev`; then the journal
 is removed. The address check and STOP keep their current precedence. Calls go out from the
 service identity with no proxy, like Setup's probes.
 

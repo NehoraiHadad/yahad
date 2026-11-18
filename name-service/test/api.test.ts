@@ -238,6 +238,64 @@ describe("address", () => {
   });
 });
 
+describe("request body limit", () => {
+  const tooBig = "x".repeat(2000);
+
+  function put(body: BodyInit, headers: Record<string, string> = {}) {
+    return worker.fetch(
+      new Request("https://names.example.com/v1/address", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", "CF-Connecting-IP": `198.51.100.${++ipCounter % 250}`, ...headers },
+        body,
+        // @ts-expect-error duplex is required for stream bodies and missing from the DOM typings
+        duplex: "half",
+      }),
+      env,
+    );
+  }
+
+  function streamOf(text: string, chunk: number): ReadableStream<Uint8Array> {
+    const bytes = new TextEncoder().encode(text);
+    let offset = 0;
+    return new ReadableStream({
+      pull(controller) {
+        if (offset >= bytes.length) return controller.close();
+        controller.enqueue(bytes.slice(offset, offset + chunk));
+        offset += chunk;
+      },
+    });
+  }
+
+  it("rejects an oversize streamed body that has no Content-Length", async () => {
+    const { auth } = await register();
+    const response = await put(streamOf(JSON.stringify({ ipv4: "192.168.1.10", pad: tooBig }), 256), { Authorization: auth });
+    expect(response.status).toBe(400);
+    expect(await errorCode(response)).toBe("bad_request");
+  });
+
+  it("rejects an oversize Content-Length", async () => {
+    const { auth } = await register();
+    const response = await put(JSON.stringify({ ipv4: "192.168.1.10", pad: tooBig }), { Authorization: auth, "Content-Length": "2100" });
+    expect(response.status).toBe(400);
+    expect(await errorCode(response)).toBe("bad_request");
+  });
+
+  it("accepts a body of exactly the limit and rejects one byte more", async () => {
+    const { auth } = await register();
+    const bodyOf = (size: number) => {
+      const pad = size - JSON.stringify({ ipv4: "" }).length;
+      return JSON.stringify({ ipv4: "x".repeat(pad) });
+    };
+    // Past the size gate the request reaches validation, which answers invalid_address instead of bad_request.
+    const atLimit = await put(streamOf(bodyOf(1024), 100), { Authorization: auth });
+    expect(await errorCode(atLimit)).toBe("invalid_address");
+    const over = await put(streamOf(bodyOf(1025), 100), { Authorization: auth });
+    expect(await errorCode(over)).toBe("bad_request");
+    const valid = await put(streamOf(JSON.stringify({ ipv4: "192.168.1.10" }), 5), { Authorization: auth });
+    expect(valid.status).toBe(204);
+  });
+});
+
 describe("challenge", () => {
   const txtName = (label: string) => `_acme-challenge.${label}.${ZONE}`;
 

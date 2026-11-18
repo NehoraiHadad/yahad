@@ -125,6 +125,16 @@ internal static class HomeNameTests
             Assert(c.Read(c.Live,Name)!.LeafSha256==Leaf(older));
             // Crash after next→live, before the journal went: nothing to restore.
             var d=Prepared("done");d.Swap();Journal(d);d.Recover();Assert(d.Read(d.Live,Name)!.LeafSha256==Leaf(newer)&&!File.Exists(d.JournalFile));
+            // Same point with a next that cannot be moved (a file in it is open): prev comes back.
+            var f=Prepared("locked");Journal(f);Directory.Move(f.Live,f.Prev);
+            using(new FileStream(HomeNameStore.KeyFile(f.Next),FileMode.Open,FileAccess.Read,FileShare.Read))f.Recover();
+            Assert(f.Read(f.Live,Name)!.LeafSha256==Leaf(older)&&!File.Exists(f.JournalFile));
+            // A swap whose next→live fails puts the previous certificate back before it throws.
+            var g=Prepared("swap-fails");
+            using(new FileStream(HomeNameStore.KeyFile(g.Next),FileMode.Open,FileAccess.Read,FileShare.Read))
+                try{g.Swap();throw new Exception("expected the swap to fail");}catch(IOException){}catch(UnauthorizedAccessException){}
+            Assert(g.Read(g.Live,Name)!.LeafSha256==Leaf(older));g.Recover();
+            Assert(!File.Exists(g.JournalFile)&&g.Read(g.Live,Name)!.LeafSha256==Leaf(older)&&g.IsComplete(g.Next));
             // No journal: recovery touches nothing.
             var e=Prepared("none");Directory.Move(e.Live,e.Prev+"-aside");e.Recover();Assert(!Directory.Exists(e.Live));
             return Task.CompletedTask;

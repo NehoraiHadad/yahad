@@ -311,7 +311,8 @@ internal sealed class NativeLanInstall(InstallerState application,InstalledPair 
             if(names.ReadOwner() is {Phase:not HomeNameOwnerRecord.Removed})await names.RemoveAsync(true,cancellation);
             return null;
         }
-        if(choice is null&&!names.Unfinished())return names.ActiveName() is {} active?new(active,null):null;
+        // Without a choice: an unfinished transaction is finished, and an active name is checked (RunAsync).
+        if(choice is null&&!names.Unfinished()&&names.ActiveName() is null)return null;
         // The app the Runtime runs must take the name as its origin, or the name would only show the app's refusal.
         if(!InstalledHomeNameRecord.Declared(AppBytes(pair.App,"app/deploy/lan-capabilities.json",4096)))return new(null,"HOME_NAME_APP_UNSUPPORTED");
         MakeDirectory(LanProxyPaths.Name,NativeInstallFiles.DataAcl(InstallLocations.ServiceSidFor(LanProxyPaths.ServiceName)));

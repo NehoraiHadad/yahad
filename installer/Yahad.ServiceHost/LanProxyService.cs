@@ -144,13 +144,23 @@ internal sealed class LanProxyServiceController(ILanProxyAdmission admission, Ti
         async Task<bool> ReplaceAsync(ILanHomeNameRenewal name)
         {
             if (!await StopChildAsync()) return false;
+            // A Swap that throws leaves the previous certificate live (or journaled for the admission's recovery).
             var swapped = true;
             try { name.Swap(); } catch { swapped = false; }
-            if (!await StartChildAsync()) return false;
-            if (!swapped || await ServedAsync(name)) return true;
-            if (stop.Task.IsCompleted || !await StopChildAsync()) return false;
+            bool started;
+            try { started = await StartChildAsync(); }
+            catch { started = false; failure = ServiceFailure.StartFailed; }
+            if (started)
+            {
+                if (!swapped || await ServedAsync(name)) return true;
+                if (stop.Task.IsCompleted || !await StopChildAsync()) return false;
+            }
+            // The new certificate did not start: the previous one goes back, but only when the failed
+            // start owns nothing (no child, no start still running) and no STOP is pending.
+            else if (!swapped || child is not null || !quiescent || starting is not { IsCompleted: true } || stop.Task.IsCompleted) return false;
             // A failed swap back leaves its journal; the admission's recovery settles live/ first.
             try { name.SwapBack(); } catch { }
+            failure = ServiceFailure.None;
             return await StartChildAsync();
         }
         async Task<bool> ServedAsync(ILanHomeNameRenewal name)

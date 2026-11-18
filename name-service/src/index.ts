@@ -35,15 +35,42 @@ function fromOutcome(outcome: Outcome): Response {
   return failure(outcome.status, outcome.code ?? "error", outcome.retryAfter);
 }
 
+/** Reads a body stream up to `limit` bytes. Cancels the stream and returns null as soon as the limit is exceeded. */
+async function readCapped(body: ReadableStream<Uint8Array> | null, limit: number): Promise<Uint8Array | null> {
+  if (body === null) return new Uint8Array(0);
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
 /** Reads a JSON object whose keys are exactly `keys`. Null for anything else. */
 async function readBody(request: Request, keys: string[]): Promise<Record<string, unknown> | null> {
   const type = request.headers.get("Content-Type") ?? "";
   if (!/^application\/json(\s*;.*)?$/i.test(type)) return null;
-  const text = await request.text();
-  if (new TextEncoder().encode(text).length > MAX_BODY_BYTES) return null;
+  const declared = request.headers.get("Content-Length");
+  if (declared !== null && Number(declared) > MAX_BODY_BYTES) return null;
+  const bytes = await readCapped(request.body, MAX_BODY_BYTES);
+  if (bytes === null) return null;
   let value: unknown;
   try {
-    value = JSON.parse(text);
+    value = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes));
   } catch {
     return null;
   }

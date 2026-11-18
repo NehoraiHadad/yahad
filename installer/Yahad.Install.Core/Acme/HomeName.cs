@@ -124,13 +124,19 @@ internal sealed class HomeNameStore(string root)
         NativeInstallFiles.WriteNew(KeyFile(Next),Encoding.UTF8.GetBytes(certificate.KeyPem));
         NativeInstallFiles.WriteNew(CertificateFile(Next),Encoding.UTF8.GetBytes(certificate.CertificatePem));
     }
-    /// <summary>live→prev, next→live under the journal. A crash at any point is repaired by <see cref="Recover"/>.</summary>
+    /// <summary>
+    /// live→prev, next→live under the journal. A crash at any point is repaired by <see cref="Recover"/>. When it throws,
+    /// the previous certificate is live again, or (if even that move failed) the journal makes <see cref="Recover"/> settle it.
+    /// next→live is the commit point: a journal left after it is removed by the next <see cref="Recover"/>.
+    /// </summary>
     internal void Swap()
     {
         if(!IsComplete(Next))throw new IOException("HOME_NAME_STAGE_INCOMPLETE");
         WriteJournal();RemoveDirectory(Prev);
         if(Directory.Exists(Live))Directory.Move(Live,Prev);
-        Directory.Move(Next,Live);WindowsFileBoundary.DeleteNoFollow(JournalFile,false);
+        try{Directory.Move(Next,Live);}
+        catch{if(!Directory.Exists(Live)&&Directory.Exists(Prev))Directory.Move(Prev,Live);throw;}
+        try{WindowsFileBoundary.DeleteNoFollow(JournalFile,false);}catch(Exception error)when(error is IOException or UnauthorizedAccessException){}
     }
     /// <summary>Puts prev back as live after a new certificate failed: live→failed, prev→live, then failed goes.</summary>
     internal void SwapBack()
@@ -142,15 +148,18 @@ internal sealed class HomeNameStore(string root)
     }
     /// <summary>
     /// Before every Caddy start: with the journal present, a missing live is restored from next if that
-    /// is complete, otherwise from prev; then the journal goes.
+    /// is complete and can be moved, otherwise from prev; then the journal goes.
     /// </summary>
     internal void Recover()
     {
         if(!File.Exists(JournalFile))return;
         if(!Directory.Exists(Live))
         {
-            if(IsComplete(Next))Directory.Move(Next,Live);
-            else if(Directory.Exists(Prev))Directory.Move(Prev,Live);
+            var promoted=false;
+            if(IsComplete(Next))
+                try{Directory.Move(Next,Live);promoted=true;}
+                catch(Exception error)when(error is IOException or UnauthorizedAccessException){}
+            if(!promoted&&Directory.Exists(Prev))Directory.Move(Prev,Live);
         }
         WindowsFileBoundary.DeleteNoFollow(JournalFile,false);RemoveDirectory(Failed);
     }

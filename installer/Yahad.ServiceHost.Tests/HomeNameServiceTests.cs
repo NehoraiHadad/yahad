@@ -100,6 +100,18 @@ internal static class HomeNameServiceTests
             Assert(result==new ServiceRunResult(ServiceFailure.None,true)&&renewal.Swaps==1&&renewal.SwapBacks==1&&admission.AllStoppedAndDisposed);
             Assert(renewal.ChildrenStoppedAtSwapBack==2);
         });
+        await check("LAN renewal: a new certificate that fails to start is swapped back and the child started again",async()=>
+        {
+            var admission=new Admission{Fails=attempt=>attempt==2};var renewal=new FakeRenewal();
+            var (result,_)=await RunUntil(Controller(admission,renewal),()=>admission.Starts==2);
+            Assert(result==new ServiceRunResult(ServiceFailure.None,true)&&admission.Attempts==3&&renewal.Swaps==1&&renewal.SwapBacks==1&&admission.AllStoppedAndDisposed);
+        });
+        await check("LAN renewal: a swap that fails starts the child again on the previous certificate",async()=>
+        {
+            var admission=new Admission();var renewal=new FakeRenewal{SwapFails=true};
+            var (result,_)=await RunUntil(Controller(admission,renewal),()=>admission.Starts==2);
+            Assert(result==new ServiceRunResult(ServiceFailure.None,true)&&renewal.Swaps==1&&renewal.SwapBacks==0&&renewal.Verifies==0&&admission.AllStoppedAndDisposed);
+        });
         await check("LAN renewal: a failed staging leaves the running child alone",async()=>
         {
             var admission=new Admission();var renewal=new FakeRenewal{Stage=_=>Task.FromException(new IOException("HOME_NAME_GONE"))};
@@ -128,10 +140,15 @@ internal static class HomeNameServiceTests
     private sealed class Admission:ILanProxyAdmission
     {
         internal volatile bool AddressPresent=true;internal readonly List<Child> Children=[];
+        internal Func<int,bool> Fails=_=>false;internal int Attempts;
         internal int Starts{get{lock(Children)return Children.Count;}}
         internal int Stopped{get{lock(Children)return Children.Count(c=>c.Disposed);}}
         internal bool AllStoppedAndDisposed{get{lock(Children)return Children.All(c=>c.Disposed);}}
-        public Task<ILanProxyProcess> StartAsync(CancellationToken cancellation){var child=new Child();lock(Children)Children.Add(child);return Task.FromResult<ILanProxyProcess>(child);}
+        public Task<ILanProxyProcess> StartAsync(CancellationToken cancellation)
+        {
+            if(Fails(Interlocked.Increment(ref Attempts)))return Task.FromException<ILanProxyProcess>(new IOException("HOME_NAME_CERTIFICATE_KEY"));
+            var child=new Child();lock(Children)Children.Add(child);return Task.FromResult<ILanProxyProcess>(child);
+        }
         public bool SelectedAddressPresent()=>AddressPresent;
     }
     private sealed class Child:ILanProxyProcess
@@ -145,11 +162,11 @@ internal static class HomeNameServiceTests
     private sealed class FakeRenewal:ILanHomeNameRenewal
     {
         internal Admission? Owner;
-        internal bool IsDue=true,Serves=true;internal Func<CancellationToken,Task> Stage=_=>Task.CompletedTask;
+        internal bool IsDue=true,Serves=true,SwapFails;internal Func<CancellationToken,Task> Stage=_=>Task.CompletedTask;
         internal volatile int Dues,Stages,Swaps,SwapBacks,Verifies;internal int ChildrenStoppedAtSwap=-1,ChildrenStoppedAtSwapBack=-1;
         public bool Due(DateTimeOffset now){Dues++;var due=IsDue;IsDue=false;return due;}
         public Task StageAsync(CancellationToken cancellation){Stages++;return Stage(cancellation);}
-        public void Swap(){Swaps++;ChildrenStoppedAtSwap=Stopped();}
+        public void Swap(){Swaps++;ChildrenStoppedAtSwap=Stopped();if(SwapFails)throw new IOException("locked");}
         public void SwapBack(){SwapBacks++;ChildrenStoppedAtSwapBack=Stopped();}
         public Task<bool> ServesLiveAsync(CancellationToken cancellation){Verifies++;return Task.FromResult(Serves);}
         private int Stopped()=>Owner?.Stopped??-1;
