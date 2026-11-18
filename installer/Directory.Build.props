@@ -9,14 +9,23 @@
     <!-- The infrastructure track's own identity (docs/WINDOWS-APP-PACKAGE-PLAN.md 4.3, decision 1):
          an independent semver, and the contiguous contract range it serves to apps (section 6).
          The app version stays package.json and is never compiled into a .NET image. -->
-    <YahadInfrastructureVersion>1.0.4</YahadInfrastructureVersion>
+    <YahadInfrastructureVersion>1.0.5</YahadInfrastructureVersion>
     <YahadInfrastructureContractMin>1</YahadInfrastructureContractMin>
     <YahadInfrastructureContractMax>1</YahadInfrastructureContractMax>
     <Version>$(YahadInfrastructureVersion)</Version>
+    <!-- The home name (docs/HOME-NAME.md): the name service Worker and the DNS zone it serves.
+         Infrastructure inputs; both empty hides the option and leaves every name path inert. -->
+    <YahadHomeNameService>https://yahad-names.nehoraihadad.com</YahadHomeNameService>
+    <YahadHomeNameZone>yahad.nehoraihadad.com</YahadHomeNameZone>
   </PropertyGroup>
   <ItemGroup>
     <AssemblyMetadata Include="YahadInfrastructureVersion" Value="$(YahadInfrastructureVersion)" />
     <AssemblyMetadata Include="YahadInfrastructureContractMin" Value="$(YahadInfrastructureContractMin)" />
     <AssemblyMetadata Include="YahadInfrastructureContractMax" Value="$(YahadInfrastructureContractMax)" />
+    <AssemblyMetadata Include="YahadHomeNameService" Value="$(YahadHomeNameService)" />
+    <AssemblyMetadata Include="YahadHomeNameZone" Value="$(YahadHomeNameZone)" />
   </ItemGroup>
+  <Target Name="YahadRequireHomeNamePair" BeforeTargets="BeforeBuild">
+    <Error Condition="('$(YahadHomeNameService)'=='' and '$(YahadHomeNameZone)'!='') or ('$(YahadHomeNameService)'!='' and '$(YahadHomeNameZone)'=='')" Text="YahadHomeNameService and YahadHomeNameZone are set together or both left empty." />
+  </Target>
 </Project>

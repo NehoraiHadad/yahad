@@ -21,4 +21,5 @@ internal sealed record LanSetupRequest(LanSetupAction Action, string? AdapterId 
     }
     internal static IReadOnlyList<LanChoice> Choices() => NetworkPlan.Candidates(LanProxyPolicy.Addresses());
 }
-internal sealed record LanSetupResult(string Origin, string? HelpOrigin, string RootSha256, string? CertificateDerBase64 = null);
+// HomeName: the active home name; HomeNameFailure: the code of a name transaction that did not complete.
+internal sealed record LanSetupResult(string Origin, string? HelpOrigin, string RootSha256, string? CertificateDerBase64 = null, string? HomeName = null, string? HomeNameFailure = null);

@@ -28,6 +28,17 @@ if(args is ["--lan-only"])
     Console.WriteLine(JsonSerializer.Serialize(new { suite = "lan-only", failed = lanFailures, results = lanResults }));
     return lanFailures == 0 ? 0 : 1;
 }
+// ACME and name service client tests only (no native fixture). The Pebble run is opt-in: YAHAD_TEST_PEBBLE.
+if(args is ["--acme-only"])
+{
+    var acmeFailures = 0;
+    await AcmeTests.Run(async (name, test) =>
+    {
+        try { await test(); Console.WriteLine("PASS " + name); }
+        catch (Exception error) { acmeFailures++; Console.WriteLine("FAIL " + name + " " + error.GetType().Name + " " + error.Message); }
+    });
+    return acmeFailures == 0 ? 0 : 1;
+}
 if(args is ["--environment",var environmentOutput])
 {
     var names=new[]{"NODE_OPTIONS","NODE_PATH","DOTNET_STARTUP_HOOKS","CORECLR_ENABLE_PROFILING","COR_ENABLE_PROFILING","OPENSSL_CONF","ESBUILD_BINARY_PATH","PATH","TEMP","SystemRoot","SystemDrive"};
@@ -170,6 +181,8 @@ await InfrastructureReleaseTests.Run(Check);
 await ActivePointerTests.Run(Check);
 await ReleaseManifestTests.Run(Check);
 await TreeRecordTests.Run(root,Check);
+await AcmeTests.Run(Check);
+await HomeNameTests.Run(root,Check);
 var report = JsonSerializer.Serialize(new { platform = "Windows x64", kind = "synthetic-nonprivileged", passed = results.Count - failed, failed, tests = results }, new JsonSerializerOptions { WriteIndented = true });
 if (args is ["--report", var reportPath]) File.WriteAllText(reportPath, report);
 Console.WriteLine($"{results.Count - failed} passed; {failed} failed. Synthetic fixtures only. Session: {root}");

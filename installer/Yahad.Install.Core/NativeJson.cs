@@ -16,6 +16,8 @@ internal sealed partial class NativeJsonContext:JsonSerializerContext;
 [JsonSourceGenerationOptions(UnmappedMemberHandling=JsonUnmappedMemberHandling.Disallow,RespectRequiredConstructorParameters=true,
     RespectNullableAnnotations=true,PropertyNamingPolicy=JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(ActivePointer))][JsonSerializable(typeof(TreeRecord))]
+[JsonSerializable(typeof(HomeNameCredential))][JsonSerializable(typeof(HomeNameAddress))][JsonSerializable(typeof(HomeNameChallenge))]
+[JsonSerializable(typeof(HomeNameAccount))][JsonSerializable(typeof(HomeNameSwapJournal))]
 internal sealed partial class NativeCamelJsonContext:JsonSerializerContext;
 internal static class NativeJson
 {

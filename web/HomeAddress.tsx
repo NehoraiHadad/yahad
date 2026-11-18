@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Copy } from 'lucide-react';
 import { copyText } from './ErrorReference';
-import { isLoopbackOrigin, sharedAddress, type HomeNetwork } from './siteAddress';
+import { isLoopbackOrigin, isNameAddress, sharedAddress, type HomeNetwork } from './siteAddress';
 
 /** A read-only value with a copy button. */
 export function CopyField({ label, value }: { label: string; value: string }) {
@@ -31,6 +31,16 @@ export function JoinSteps({ home }: { home: HomeNetwork }) {
   </>;
 }
 
+/** Shown under a name address: the home-network address and its join steps, for a
+ * device that cannot open the name. */
+export function NameFallback({ home }: { home: HomeNetwork }) {
+  return <>
+    <p className="tablet-step-note">אם הכתובת לא נפתחת במכשיר (חלק מהנתבים הביתיים חוסמים אותה, וגם ברשת אורחים), משתמשים בכתובת הרשת הביתית. כל מכשיר נכנס שוב ליחד בכתובת החדשה.</p>
+    {home.homeAddress && <CopyField label="כתובת הרשת הביתית" value={home.homeAddress}/>}
+    <JoinSteps home={home}/>
+  </>;
+}
+
 /** The parent's lasting place, on the computer Yahad runs on, for the address other
  * devices open, so it does not depend on the Setup window that first showed it. */
 export function HomeAddress({ siteOrigin, homeNetwork, currentOrigin }: {
@@ -42,9 +52,9 @@ export function HomeAddress({ siteOrigin, homeNetwork, currentOrigin }: {
     <h2 id="home-address-title">כתובת יחד למכשירים אחרים</h2>
     <p>הכתובת שבדפדפן כאן פועלת רק במחשב הזה. בטלפון או בטאבלט פותחים את הכתובת הזו:</p>
     <CopyField label="כתובת יחד" value={address}/>
-    {homeNetwork && <>
+    {homeNetwork && (isNameAddress(address) ? <NameFallback home={homeNetwork}/> : <>
       <p className="tablet-step-note">המכשיר צריך להיות מחובר לאותה רשת ביתית.</p>
       <JoinSteps home={homeNetwork}/>
-    </>}
+    </>)}
   </section>;
 }

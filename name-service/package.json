@@ -1,0 +1,19 @@
+{
+  "name": "yahad-name-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "DNS-only name service for Yahad home names (Cloudflare Worker).",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.5.1",
+    "@cloudflare/workers-types": "5.20261104.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.12",
+    "wrangler": "4.157.0"
+  }
+}

@@ -116,6 +116,8 @@ if(args is ["--full-installer-only"])
     {try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);}});
     await UpdaterTests.RunAsync(async(name,run)=>
     {try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);}});
+    await HomeNameSetupTests.RunAsync(async(name,run)=>
+    {try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);}});
     await InstallAclTests.RunAsync(async(name,run)=>
     {try{await run();passed++;Console.WriteLine("PASS "+name);}catch(Exception error){failed++;Console.WriteLine("FAIL "+name+" "+error);}});
     Console.WriteLine(JsonSerializer.Serialize(new{suite="full-installer-integration-pure",passed,failed,nativeOperations=false}));return failed==0?0:1;
@@ -294,7 +296,7 @@ internal sealed class FakeHost:ISetupHostOperations
  private Task Call(string name,CancellationToken c){c.ThrowIfCancellationRequested();Calls.Add(name);if(Failure==name)throw new IOException("injected");return Task.CompletedTask;}
  public async Task PrepareAsync(SetupOwner o,Action<SetupProgress> p,CancellationToken c){await Call("prepare",c);AfterPrepare?.Invoke();}
  public Task ProvisionAsync(Action<SetupProgress> p,CancellationToken c)=>Call("provision",c);
- public Task ConfigureLanAsync(LanSetupRequest r,Action<SetupProgress> p,CancellationToken c)=>Call("lan",c);
+ public Task ConfigureLanAsync(LanSetupRequest r,bool h,Action<SetupProgress> p,CancellationToken c)=>Call("lan",c);
  public async Task<SetupResult> StartAndObserveAsync(Action<SetupProgress> p,CancellationToken c){await Call("ready",c);return Result;}
  public Task CommitAsync(Action<SetupProgress> p,CancellationToken c)=>Call("commit",c);
  public async Task<SetupResult> UninstallAsync(Action<SetupProgress> p,CancellationToken c,UninstallMode mode=UninstallMode.KeepData){LastRemoval=mode;await Call("uninstall",c);return new(true,"REMOVED",DataPreserved:mode==UninstallMode.KeepData);}

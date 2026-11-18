@@ -69,3 +69,38 @@ test('without the server record there are no join instructions, and away from th
     { siteOrigin: loopback, currentOrigin: loopback }, { currentOrigin: loopback }])
     assert.equal(render(props), '', JSON.stringify(props));
 });
+
+const named = 'https://home.example.test';
+const namedHome = { ...plain, homeAddress: lan };
+
+test('with APP_HOME_ADDRESS the join page is checked against it, not against the name', () => {
+  assert.deepEqual(parseHomeNetwork(plain.joinPage, fingerprint, named, lan), namedHome);
+  assert.deepEqual(parseHomeNetwork(secure.joinPage, fingerprint, named, lan), { ...secure, homeAddress: lan });
+  for (const [page, address] of [
+    ['http://192.168.4.26/', lan], ['https://home.example.test/home-network', lan], ['http://home.example.test/', lan],
+    [plain.joinPage, 'http://192.168.4.25'], [plain.joinPage, 'https://192.168.4.25/x'],
+    [plain.joinPage, 'https://8.8.8.8'], [plain.joinPage, 'https://home.example.test'], [plain.joinPage, 'https://010.168.4.25'],
+    [plain.joinPage, 'https://172.32.0.1'], ['http://8.8.8.8/', 'https://8.8.8.8']] as const)
+    assert.throws(() => parseHomeNetwork(page, fingerprint, named, address), String([page, address]));
+  assert.equal(parseHomeNetwork(undefined, undefined, named, lan), undefined);
+  assert.throws(() => parseHomeNetwork(plain.joinPage, fingerprint, named), /APP_ORIGIN/);
+});
+
+test('on the loopback entry a name is shown with the home-network address as the fallback', () => {
+  const html = render({ siteOrigin: named, homeNetwork: namedHome, currentOrigin: loopback });
+  assert.match(html, /כתובת יחד<input readOnly="" dir="ltr" value="https:\/\/home.example.test"/);
+  assert.match(html, /אם הכתובת לא נפתחת במכשיר/);
+  assert.match(html, /נכנס שוב ליחד בכתובת החדשה/);
+  assert.match(html, /כתובת הרשת הביתית<input readOnly="" dir="ltr" value="https:\/\/192.168.4.25"/);
+  assert.match(html, /דף ההצטרפות<input readOnly="" dir="ltr" value="http:\/\/192.168.4.25\/"/);
+  assert.doesNotMatch(html, /המכשיר צריך להיות מחובר לאותה רשת ביתית/);
+  const bare = render({ siteOrigin: named, currentOrigin: loopback });
+  assert.match(bare, /value="https:\/\/home.example.test"/);
+  assert.doesNotMatch(bare, /דף ההצטרפות|נכנס שוב/);
+});
+
+test('an IP address is shown exactly as before, without the fallback', () => {
+  const html = render({ siteOrigin: lan, homeNetwork: plain, currentOrigin: loopback });
+  assert.doesNotMatch(html, /אם הכתובת לא נפתחת|נכנס שוב|כתובת הרשת הביתית/);
+  assert.match(html, /המכשיר צריך להיות מחובר לאותה רשת ביתית/);
+});

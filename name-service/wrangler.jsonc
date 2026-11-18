@@ -1,0 +1,33 @@
+// Yahad name service. See README.md for the deploy steps and docs/HOME-NAME.md for the design.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "yahad-name-service",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-03",
+  "workers_dev": false,
+  "durable_objects": {
+    "bindings": [
+      { "name": "LABELS", "class_name": "LabelObject" },
+      { "name": "BUDGET", "class_name": "Budget" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LabelObject", "Budget"] }],
+  // Daily expiry of labels unseen for 150 days (03:17 UTC).
+  "triggers": { "crons": ["17 3 * * *"] },
+  // Per client IP on POST /v1/register. Approximate and per Cloudflare location.
+  "ratelimits": [
+    { "name": "REGISTER_LIMITER", "namespace_id": "1001", "simple": { "limit": 3, "period": 60 } }
+  ],
+  "vars": {
+    // The maintainer fills these two before deploying; until then every call answers 503.
+    // ZONE_NAME: the DNS suffix the labels live under, e.g. "yahad.nehoraihadad.com".
+    "ZONE_NAME": "",
+    // ZONE_ID: the Cloudflare zone id (32 hex) of the zone that contains ZONE_NAME.
+    "ZONE_ID": "",
+    // Live labels (each holds up to 3 records against the zone's record cap).
+    "LIVE_LABELS_CAP": "60",
+    // Cloudflare API writes (create, update, delete) per UTC day, across all labels.
+    "CF_WRITES_PER_DAY": "500"
+  }
+  // Secret, never in a file: CF_API_TOKEN (npx wrangler secret put CF_API_TOKEN).
+}
