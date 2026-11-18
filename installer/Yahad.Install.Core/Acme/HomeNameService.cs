@@ -7,10 +7,28 @@ namespace Yahad.Install;
 internal sealed record HomeNameCredential(string Label,string Secret)
 {
     public override string ToString()=>"HomeNameCredential { Label = "+Label+" }";
-    /// <summary>Label: 12 base32 characters (lowercase). Secret: 256 bits as 43 base64url characters.</summary>
+    /// <summary>Label: random or chosen, by <see cref="HomeNameLabel"/>. Secret: 256 bits as 43 base64url characters.</summary>
     internal static bool IsValid(HomeNameCredential value)
-        =>value.Label.Length==12&&value.Label.All(c=>c is >='a' and <='z' or >='2' and <='7')&&value.Secret.Length==43&&AcmeJws.IsBase64Url(value.Secret);
+        =>HomeNameLabel.IsValid(value.Label)&&value.Secret.Length==43&&AcmeJws.IsBase64Url(value.Secret);
 }
+/// <summary>
+/// The label rule, the same as the name service's (name-service/src/format.ts, isLabel; both test the shared
+/// name-service/test/label-cases.json): 3-20 characters of [a-z0-9-], a letter or digit at both ends, no "--"
+/// anywhere (so never an "xn--" punycode label), and not reserved. A random label (12 base32 characters) is one.
+/// Uppercase is refused, never folded: the window lowercases what the parent types before it is checked.
+/// </summary>
+internal static class HomeNameLabel
+{
+    internal const int MinimumLength=3,MaximumLength=20;
+    internal static readonly IReadOnlyList<string> Reserved=["www","api","mail","admin","root","login","auth","secure","account","support","help",
+        "status","test","ns1","ns2","smtp","imap","ftp","webmail","localhost","autodiscover","autoconfig","yahad"];
+    internal static bool IsValid(string? label)
+        =>label is {Length:>=MinimumLength and <=MaximumLength}&&Alphanumeric(label[0])&&Alphanumeric(label[^1])&&label.All(c=>Alphanumeric(c)||c=='-')&&
+            !label.Contains("--",StringComparison.Ordinal)&&!Reserved.Contains(label,StringComparer.Ordinal);
+    private static bool Alphanumeric(char c)=>c is >='a' and <='z' or >='0' and <='9';
+}
+internal sealed record HomeNameRegistration(string Label);
+internal sealed record HomeNameError(string Error);
 internal sealed record HomeNameAddress(string Ipv4);
 internal sealed record HomeNameChallenge(string[] Values);
 
@@ -19,6 +37,14 @@ internal class HomeNameServiceException(string code,int? status=null):IOExceptio
 {
     internal string Code{get;}=code;
     internal int? Status{get;}=status;
+}
+/// <summary>
+/// A chosen label the name service refused: HOME_NAME_LABEL_TAKEN (409 label_taken: the service holds the label in any
+/// status, so a name once used never comes back) or HOME_NAME_LABEL_INVALID (400 invalid_label).
+/// </summary>
+internal sealed class HomeNameLabelException(string code,int status):HomeNameServiceException(code,status)
+{
+    internal const string Taken="HOME_NAME_LABEL_TAKEN",Invalid="HOME_NAME_LABEL_INVALID";
 }
 /// <summary>410: the label is tombstoned or expired. The caller discards the credential and registers again.</summary>
 internal sealed class HomeNameGoneException():HomeNameServiceException("HOME_NAME_GONE",410);
@@ -40,15 +66,30 @@ internal sealed class HomeNameServiceClient:IDisposable
         client=new HttpClient(handler){Timeout=Timeout.InfiniteTimeSpan};
         client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent","Yahad-HomeName");
     }
-    internal async Task<HomeNameCredential> RegisterAsync(CancellationToken cancellation)
+    /// <summary>
+    /// A new label: a random one without <paramref name="label"/> (no body), otherwise exactly that label (body {"label": ...}).
+    /// A chosen label the service refuses is a <see cref="HomeNameLabelException"/>.
+    /// </summary>
+    internal async Task<HomeNameCredential> RegisterAsync(string? label,CancellationToken cancellation)
     {
-        var (status,body,media)=await SendAsync(HttpMethod.Post,"v1/register",null,null,cancellation);
+        if(label is not null&&!HomeNameLabel.IsValid(label))throw new ArgumentException(HomeNameLabelException.Invalid);
+        var request=label is null?null:NativeJson.WriteCamel(new HomeNameRegistration(label),NativeCamelJsonContext.Default.HomeNameRegistration);
+        var (status,body,media)=await SendAsync(HttpMethod.Post,"v1/register",null,request,cancellation);
+        // Only the two answers the service gives a chosen label, with its own code, are a refused label.
+        if(label is not null&&media=="application/json"&&(status,ErrorCode(body)) switch{(409,"label_taken")=>HomeNameLabelException.Taken,(400,"invalid_label")=>HomeNameLabelException.Invalid,_=>null} is {} refused)
+            throw new HomeNameLabelException(refused,status);
         if(status is not(200 or 201)||media!="application/json")throw new HomeNameServiceException("HOME_NAME_REGISTER",status);
         HomeNameCredential credential;
         try{credential=NativeJson.ReadCamel(body,NativeCamelJsonContext.Default.HomeNameCredential);}
         catch(Exception error) when(error is System.Text.Json.JsonException or IOException){throw new HomeNameServiceException("HOME_NAME_REGISTER_INVALID",status);}
-        if(!HomeNameCredential.IsValid(credential))throw new HomeNameServiceException("HOME_NAME_REGISTER_INVALID",status);
+        if(!HomeNameCredential.IsValid(credential)||label is not null&&credential.Label!=label)throw new HomeNameServiceException("HOME_NAME_REGISTER_INVALID",status);
         return credential;
+    }
+    // The service's {"error": "<code>"}; null for any other body.
+    private static string? ErrorCode(byte[] body)
+    {
+        try{return NativeJson.ReadCamel(body,NativeCamelJsonContext.Default.HomeNameError).Error;}
+        catch(Exception error) when(error is System.Text.Json.JsonException or IOException){return null;}
     }
     /// <summary>Points the label's A record at a private (RFC 1918) IPv4 address.</summary>
     internal Task SetAddressAsync(HomeNameCredential credential,string ipv4,CancellationToken cancellation)

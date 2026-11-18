@@ -208,6 +208,24 @@ internal static class LanIntegrationTests
                     Control<CheckBox>("LanHttpHelp").IsChecked=false;
                     Require(((LanSetupRequest)Invoke(window,"SelectedLanRequest")!).HttpHelp==false);
                     Control<CheckBox>("LanHttpHelp").IsChecked=true;
+                    // The chosen label: used only with the name option, lowercased, previewed and held to the shared rule.
+                    var nameOption = Control<CheckBox>("LanHomeName"); var labelInput = Control<TextBox>("LanHomeNameLabelInput");
+                    Require(!Control<StackPanel>("LanHomeNameLabelArea").IsEnabled && labelInput.FlowDirection == FlowDirection.LeftToRight && labelInput.Text.Length == 0);
+                    Require(Invoke(window, "SelectedHomeNameLabel") is null);
+                    nameOption.IsChecked = true; Require(Control<StackPanel>("LanHomeNameLabelArea").IsEnabled && Invoke(window, "SelectedHomeNameLabel") is null);
+                    labelInput.Text = " Hadad-Home ";
+                    Require((string?)Invoke(window, "SelectedHomeNameLabel") == "hadad-home" && primary.IsEnabled);
+                    Require(Control<TextBlock>("LanHomeNamePreview").Text == "https://hadad-home." + HomeNameRelease.Zone && Control<TextBlock>("LanHomeNameLabelError").Visibility == Visibility.Collapsed);
+                    Control<ScrollViewer>("ContentScroll").ScrollToEnd(); Snapshot(window, size, output, "lan-home-name-label");
+                    foreach (var invalid in new[] { "ab", "a--b", "-ab", "www", "שלום", "a_b" })
+                    {
+                        labelInput.Text = invalid;
+                        Require(!primary.IsEnabled && Control<TextBlock>("LanHomeNameLabelError").Visibility == Visibility.Visible && Control<TextBlock>("LanHomeNameLabelError").Text == HomeNameSetup.LabelRule, invalid);
+                        Refuse(() => Invoke(window, "SelectedHomeNameLabel"));
+                    }
+                    // Without the option the box is not used, whatever it holds.
+                    nameOption.IsChecked = false; Require(primary.IsEnabled && Invoke(window, "SelectedHomeNameLabel") is null);
+                    labelInput.Text = ""; Require(primary.IsEnabled);
                     Require(!Control<TextBlock>("LanConsentLabel").Text.Contains("TCP",StringComparison.Ordinal)&&Control<TextBlock>("LanConsentLabel").Text.Contains("אני מאשר",StringComparison.Ordinal));
                     address.SelectedIndex = 1; Require(!primary.IsEnabled && consent.IsChecked == false);
                     address.SelectedIndex = 0; consent.IsChecked = true;
@@ -235,9 +253,15 @@ internal static class LanIntegrationTests
                     Invoke(window, "ShowLanResult", new LanSetupResult("https://192.168.4.5", "http://192.168.4.5", fingerprint));
                     Require(Control<TextBox>("LanRootFingerprint").Text == fingerprint && Control<TextBox>("LanRootFingerprint").IsReadOnly);
                     Require(Control<Border>("LanResultPanel").Visibility == Visibility.Visible && Control<StackPanel>("LanPanel").Visibility == Visibility.Collapsed);
-                    Require(Control<TextBlock>("LanResultText").Text.Contains("https://192.168.4.5", StringComparison.Ordinal));
+                    // The address in its own read-only field, beside the copy button; the rest selectable too.
+                    Require(Control<TextBox>("LanMainAddress").Text == "https://192.168.4.5" && Control<TextBox>("LanMainAddress").IsReadOnly && Control<TextBox>("LanMainAddress").FlowDirection == FlowDirection.LeftToRight);
+                    Require(Control<TextBox>("LanResultText").IsReadOnly && Control<TextBox>("LanResultText").Text.Contains("http://192.168.4.5", StringComparison.Ordinal) && !Control<TextBox>("LanResultText").Text.Contains("https://", StringComparison.Ordinal));
+                    Require(Control<Button>("CopyLanAddress").Visibility == Visibility.Visible);
                     Control<ScrollViewer>("ContentScroll").ScrollToEnd(); Snapshot(window, size, output, "lan-result-host-only");
 
+                    // The window shows the label this computer already holds, unchanged unless the parent edits it.
+                    var held = new MainWindow(lanChoices: choices, lanCategory: Category, homeNameLabel: "k2abcdefgh7j");
+                    Require(((TextBox)held.FindName("LanHomeNameLabelInput")).Text == "k2abcdefgh7j");
                     var existing=new MainWindow(lanChoices:choices,existingAccess:true,lanCategory:Category);
                     Require((string)((RadioButton)existing.FindName("KeepLan")).Content=="להשאיר את אפשרויות הגישה הקיימות");
                     Require(Invoke(existing,"SelectedLanRequest") is null);
@@ -337,7 +361,7 @@ internal static class LanIntegrationTests
         { Step("prepare"); Owner = owner; AfterPrepare?.Invoke(); return Task.CompletedTask; }
         public Task ProvisionAsync(Action<SetupProgress> progress, CancellationToken cancellation)
         { Step("provision"); return Task.CompletedTask; }
-        public Task ConfigureLanAsync(LanSetupRequest request, bool homeName, Action<SetupProgress> progress, CancellationToken cancellation)
+        public Task ConfigureLanAsync(LanSetupRequest request, bool homeName, string? homeNameLabel, Action<SetupProgress> progress, CancellationToken cancellation)
         { request.Require(); Step("lan:" + request.Action); Request = request; HomeName = homeName; return Task.CompletedTask; }
         public Task<SetupResult> StartAndObserveAsync(Action<SetupProgress> progress, CancellationToken cancellation)
         { Step("start"); return Task.FromResult(new SetupResult(true, "READY", "http://127.0.0.1:47123/", new string('a', 43))); }

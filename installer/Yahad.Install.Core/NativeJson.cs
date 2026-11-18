@@ -18,6 +18,7 @@ internal sealed partial class NativeJsonContext:JsonSerializerContext;
 [JsonSerializable(typeof(ActivePointer))][JsonSerializable(typeof(TreeRecord))]
 [JsonSerializable(typeof(HomeNameCredential))][JsonSerializable(typeof(HomeNameAddress))][JsonSerializable(typeof(HomeNameChallenge))]
 [JsonSerializable(typeof(HomeNameAccount))][JsonSerializable(typeof(HomeNameSwapJournal))]
+[JsonSerializable(typeof(HomeNameRegistration))][JsonSerializable(typeof(HomeNameError))]
 internal sealed partial class NativeCamelJsonContext:JsonSerializerContext;
 internal static class NativeJson
 {

@@ -16,8 +16,8 @@ internal static class HomeNameRelease
     internal static string Service=>Configuration.Service;
     internal static string Zone=>Configuration.Zone;
     internal static bool Configured=>Service.Length!=0;
-    /// <summary>A label the name service hands out: 12 lowercase base32 characters.</summary>
-    internal static bool IsLabel(string? label)=>label is {Length:12}&&label.All(c=>c is >='a' and <='z' or >='2' and <='7');
+    /// <summary>A label the name service hands out, random or chosen (<see cref="HomeNameLabel"/>).</summary>
+    internal static bool IsLabel(string? label)=>HomeNameLabel.IsValid(label);
     internal static string NameFor(string label)=>Configured&&IsLabel(label)?label+"."+Zone:throw new IOException("HOME_NAME_INVALID");
     /// <summary>Exactly one label of this build's zone.</summary>
     internal static bool IsName(string? name)=>Configured&&name is not null&&name.EndsWith("."+Zone,StringComparison.Ordinal)&&IsLabel(name[..^(Zone.Length+1)]);
@@ -61,20 +61,84 @@ internal sealed class HomeNameStore(string root)
     internal static string KeyFile(string directory)=>Path.Combine(directory,"key.pem");
 
     internal void EnsureRoot(string? acl){if(!Directory.Exists(root))NativeInstallFiles.NewDirectory(root,acl);}
-    internal HomeNameCredential? ReadCredential()
+    internal HomeNameCredential? ReadCredential()=>ReadCredentialFile(CredentialFile);
+    internal void WriteCredential(HomeNameCredential credential)=>WriteCredentialFile(CredentialFile,credential);
+    internal void DiscardCredential(){if(File.Exists(CredentialFile))WindowsFileBoundary.DeleteNoFollow(CredentialFile,false);}
+
+    // A rename (Setup only; the LAN service never reads these): the claimed label's credential in rename.json and its
+    // certificate in rename/, prepared beside the active name; and retired/<label>.json, credentials of labels given up,
+    // kept until the name service deleted them.
+    internal string ClaimFile=>Path.Combine(root,"rename.json");
+    internal string Claimed=>Path.Combine(root,"rename");
+    internal string Retired=>Path.Combine(root,"retired");
+    private string RetiredFile(string label)=>Path.Combine(Retired,label+".json");
+    internal HomeNameCredential? ReadClaim()=>ReadCredentialFile(ClaimFile);
+    internal void WriteClaim(HomeNameCredential credential)=>WriteCredentialFile(ClaimFile,credential);
+    /// <summary>The claimed label's certificate into rename/, both files written and flushed.</summary>
+    internal void StageClaim(AcmeCertificate certificate)
     {
-        if(!File.Exists(CredentialFile))return null;
+        RemoveDirectory(Claimed);NativeInstallFiles.NewDirectory(Claimed);
+        NativeInstallFiles.WriteNew(KeyFile(Claimed),Encoding.UTF8.GetBytes(certificate.KeyPem));
+        NativeInstallFiles.WriteNew(CertificateFile(Claimed),Encoding.UTF8.GetBytes(certificate.CertificatePem));
+    }
+    /// <summary>The claim goes: its certificate first, then its credential, so a credential is never left behind alone by accident.</summary>
+    internal void DiscardClaim(){RemoveDirectory(Claimed);if(File.Exists(ClaimFile))WindowsFileBoundary.DeleteNoFollow(ClaimFile,false);}
+    /// <summary>Keeps a credential whose label is given up, until the name service deleted it.</summary>
+    internal void Retire(HomeNameCredential credential)
+    {
+        if(!Directory.Exists(Retired))NativeInstallFiles.NewDirectory(Retired);
+        WriteCredentialFile(RetiredFile(credential.Label),credential);
+    }
+    /// <summary>The retired credentials. One that cannot be read is discarded: it can no longer delete anything, and the name service's expiry removes its label.</summary>
+    internal IReadOnlyList<HomeNameCredential> ReadRetired()
+    {
+        if(!Directory.Exists(Retired))return [];
+        var found=new List<HomeNameCredential>();
+        foreach(var file in Directory.EnumerateFiles(Retired).Order(StringComparer.Ordinal))
+        {
+            HomeNameCredential? credential;
+            try{credential=ReadCredentialFile(file);}catch(IOException){credential=null;}
+            if(credential is not null&&Path.GetFileName(file)==credential.Label+".json")found.Add(credential);
+            else WindowsFileBoundary.DeleteNoFollow(file,false);
+        }
+        return found;
+    }
+    internal void DiscardRetired(string label){var file=RetiredFile(label);if(File.Exists(file))WindowsFileBoundary.DeleteNoFollow(file,false);}
+    /// <summary>
+    /// Makes the claim the home's label. Each step is idempotent, so a crash anywhere is finished by running it again:
+    /// the current credential is retired, credential.json becomes the claim (the commit point: from here the claim is the
+    /// current label, whatever runs next), the claim's certificate is swapped in as live, then rename.json goes.
+    /// The caller has uncommitted the name first: nothing serves from live/ while it changes.
+    /// </summary>
+    internal void Promote()
+    {
+        var claim=ReadClaim()??throw new IOException("HOME_NAME_CLAIM_MISSING");var name=HomeNameRelease.NameFor(claim.Label);
+        var current=ReadCredential();
+        if(current is not null&&current.Label!=claim.Label)Retire(current);
+        if(current?.Label!=claim.Label)WriteCredential(claim);
+        if(ReadOrNull(Claimed,name) is not null){RemoveDirectory(Next);Directory.Move(Claimed,Next);}
+        // Also a crash right after that move, which left the claim's certificate in next/.
+        if(ReadOrNull(Next,name) is not null)Swap();
+        DiscardClaim();
+    }
+    private HomeNameCertificate? ReadOrNull(string directory,string name)
+    {
+        try{return Read(directory,name);}
+        catch(Exception error)when(error is IOException or UnauthorizedAccessException or ArgumentException or CryptographicException){return null;}
+    }
+    private static HomeNameCredential? ReadCredentialFile(string path)
+    {
+        if(!File.Exists(path))return null;
         HomeNameCredential value;
-        try{value=NativeJson.ReadCamel(NativeInstallFiles.ReadRecord(CredentialFile,1024),NativeCamelJsonContext.Default.HomeNameCredential);}
+        try{value=NativeJson.ReadCamel(NativeInstallFiles.ReadRecord(path,1024),NativeCamelJsonContext.Default.HomeNameCredential);}
         catch(JsonException){throw new IOException("HOME_NAME_CREDENTIAL_INVALID");}
         return HomeNameCredential.IsValid(value)?value:throw new IOException("HOME_NAME_CREDENTIAL_INVALID");
     }
-    internal void WriteCredential(HomeNameCredential credential)
+    private static void WriteCredentialFile(string path,HomeNameCredential credential)
     {
         if(!HomeNameCredential.IsValid(credential))throw new ArgumentException("HOME_NAME_CREDENTIAL_INVALID");
-        NativeInstallFiles.Publish(CredentialFile,NativeJson.WriteCamel(credential,NativeCamelJsonContext.Default.HomeNameCredential));
+        NativeInstallFiles.Publish(path,NativeJson.WriteCamel(credential,NativeCamelJsonContext.Default.HomeNameCredential));
     }
-    internal void DiscardCredential(){if(File.Exists(CredentialFile))WindowsFileBoundary.DeleteNoFollow(CredentialFile,false);}
     /// <summary>The ACME account key, created and stored on first use.</summary>
     internal AcmeAccountKey Account()
     {
@@ -179,6 +243,12 @@ internal sealed class HomeNameStore(string root)
         foreach(var directory in new[]{Next,Prev,Failed,Live})RemoveDirectory(directory);
         DiscardCredential();
     }
+    /// <summary>The name is given up: <see cref="Clear"/>, and also a claim and the retired credentials. The ACME account key stays.</summary>
+    internal void ClearAll()
+    {
+        if(!Directory.Exists(root))return;
+        Clear();DiscardClaim();RemoveDirectory(Retired);
+    }
     private void WriteJournal()=>NativeInstallFiles.Publish(JournalFile,NativeJson.WriteCamel(new HomeNameSwapJournal(1),NativeCamelJsonContext.Default.HomeNameSwapJournal));
     private static string Text(string path)
     {
@@ -202,7 +272,8 @@ internal sealed class HomeNameStore(string root)
 /// <summary>What the name path asks of the outside world: the name service and the CA. Tests replace it.</summary>
 internal interface IHomeNameRemote
 {
-    Task<HomeNameCredential> RegisterAsync(CancellationToken cancellation);
+    /// <summary>A new label: random without <paramref name="label"/>, otherwise exactly that one or a <see cref="HomeNameLabelException"/>.</summary>
+    Task<HomeNameCredential> RegisterAsync(string? label,CancellationToken cancellation);
     Task SetAddressAsync(HomeNameCredential credential,string address,CancellationToken cancellation);
     Task<AcmeCertificate> IssueAsync(HomeNameCredential credential,string name,AcmeAccountKey account,CancellationToken cancellation);
     Task DeleteNameAsync(HomeNameCredential credential,CancellationToken cancellation);
@@ -211,8 +282,8 @@ internal interface IHomeNameRemote
 internal sealed class HomeNameRemote:IHomeNameRemote
 {
     private static Uri Service=>HomeNameRelease.Configured?new(HomeNameRelease.Service):throw new IOException("HOME_NAME_NOT_CONFIGURED");
-    public async Task<HomeNameCredential> RegisterAsync(CancellationToken cancellation)
-    {using var client=new HomeNameServiceClient(Service);return await client.RegisterAsync(cancellation);}
+    public async Task<HomeNameCredential> RegisterAsync(string? label,CancellationToken cancellation)
+    {using var client=new HomeNameServiceClient(Service);return await client.RegisterAsync(label,cancellation);}
     public async Task SetAddressAsync(HomeNameCredential credential,string address,CancellationToken cancellation)
     {using var client=new HomeNameServiceClient(Service);await client.SetAddressAsync(credential,address,cancellation);}
     public async Task DeleteNameAsync(HomeNameCredential credential,CancellationToken cancellation)

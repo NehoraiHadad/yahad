@@ -296,7 +296,7 @@ internal sealed class FakeHost:ISetupHostOperations
  private Task Call(string name,CancellationToken c){c.ThrowIfCancellationRequested();Calls.Add(name);if(Failure==name)throw new IOException("injected");return Task.CompletedTask;}
  public async Task PrepareAsync(SetupOwner o,Action<SetupProgress> p,CancellationToken c){await Call("prepare",c);AfterPrepare?.Invoke();}
  public Task ProvisionAsync(Action<SetupProgress> p,CancellationToken c)=>Call("provision",c);
- public Task ConfigureLanAsync(LanSetupRequest r,bool h,Action<SetupProgress> p,CancellationToken c)=>Call("lan",c);
+ public Task ConfigureLanAsync(LanSetupRequest r,bool h,string? l,Action<SetupProgress> p,CancellationToken c)=>Call("lan",c);
  public async Task<SetupResult> StartAndObserveAsync(Action<SetupProgress> p,CancellationToken c){await Call("ready",c);return Result;}
  public Task CommitAsync(Action<SetupProgress> p,CancellationToken c)=>Call("commit",c);
  public async Task<SetupResult> UninstallAsync(Action<SetupProgress> p,CancellationToken c,UninstallMode mode=UninstallMode.KeepData){LastRemoval=mode;await Call("uninstall",c);return new(true,"REMOVED",DataPreserved:mode==UninstallMode.KeepData);}

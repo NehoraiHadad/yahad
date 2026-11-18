@@ -300,8 +300,9 @@ internal sealed class NativeLanInstall(InstallerState application,InstalledPair 
         return new(plan.Origin,plan.HelpOrigin,root.Sha256Fingerprint,Convert.ToBase64String(root.Der));
     }
     // The name transaction runs once the IP path is committed and served (docs/HOME-NAME.md 3). choice: the
-    // owner's option on an Enable request; null without one, which only finishes an unfinished transaction.
-    internal async Task<HomeNameOutcome?> HomeNameAsync(bool? choice,Func<CancellationToken,Task> restartRuntime,CancellationToken cancellation)
+    // owner's option on an Enable request; null without one, which only finishes an unfinished transaction. label: the
+    // label the owner chose with that option, or null, which keeps the current label (a run without the owner's choice always does).
+    internal async Task<HomeNameOutcome?> HomeNameAsync(bool? choice,string? label,Func<CancellationToken,Task> restartRuntime,CancellationToken cancellation)
     {
         if(!HomeNameRelease.Configured||Read() is not {Phase:"enabled"} owned)return null;
         var names=Names(owned,restartRuntime);
@@ -317,7 +318,7 @@ internal sealed class NativeLanInstall(InstallerState application,InstalledPair 
         // The app the Runtime runs must take the name as its origin, or the name would only show the app's refusal.
         if(!InstalledHomeNameRecord.Declared(AppBytes(pair.App,"app/deploy/lan-capabilities.json",4096)))return new(null,"HOME_NAME_APP_UNSUPPORTED");
         MakeDirectory(LanProxyPaths.Name,NativeInstallFiles.DataAcl(InstallLocations.ServiceSidFor(LanProxyPaths.ServiceName)));
-        return await names.RunAsync(owned.Address,cancellation);
+        return await names.RunAsync(owned.Address,choice==true?label:null,cancellation);
     }
     // The proxy reloads its Caddyfile: the confirmed stop, a start, and the IP site answering as the app.
     private async Task RestartProxyAsync(CancellationToken cancellation)

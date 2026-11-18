@@ -36,11 +36,30 @@ internal static class HomeNameTests
                 Rejects<InvalidOperationException>(()=>HomeNameRelease.Require(service,zone),"HOME_NAME_CONFIGURATION");
             return Task.CompletedTask;
         });
-        await check("home name labels and names are exactly one 12-character base32 label of the zone",()=>
+        await check("home name labels follow the name service's rule, from the table both sides test (label-cases.json)",()=>
+        {
+            // name-service/test/label-cases.json, embedded: the Worker's format.test.ts reads the same file.
+            using var stream=typeof(HomeNameTests).Assembly.GetManifestResourceStream("label-cases.json")??throw new Exception("label-cases.json missing");
+            using var cases=System.Text.Json.JsonDocument.Parse(stream);
+            string[] List(string key)=>cases.RootElement.GetProperty(key).EnumerateArray().Select(e=>e.GetString()!).ToArray();
+            Assert(HomeNameLabel.Reserved.Order(StringComparer.Ordinal).SequenceEqual(List("reserved").Order(StringComparer.Ordinal)));
+            foreach(var label in List("valid"))
+            {
+                if(!HomeNameLabel.IsValid(label))throw new Exception("valid label refused: "+label);
+                Assert(HomeNameRelease.IsLabel(label)&&HomeNameRelease.NameFor(label)==label+".yahad.nehoraihadad.com"&&HomeNameRelease.IsName(label+".yahad.nehoraihadad.com"));
+            }
+            foreach(var label in List("invalid"))
+            {
+                if(HomeNameLabel.IsValid(label))throw new Exception("invalid label accepted: "+label);
+                Rejects<IOException>(()=>HomeNameRelease.NameFor(label),"HOME_NAME_INVALID");
+                Assert(!HomeNameCredential.IsValid(new(label,new string('A',43))));
+            }
+            Assert(!HomeNameLabel.IsValid(null));
+            return Task.CompletedTask;
+        });
+        await check("home name names are exactly one label of the zone",()=>
         {
             Assert(HomeNameRelease.IsLabel(Label)&&Name==Label+".yahad.nehoraihadad.com"&&HomeNameRelease.IsName(Name));
-            foreach(var label in new[]{"","k2abcdefgh7","k2abcdefgh7jk","K2abcdefgh7j","k2abcdefgh1j","k2abcdefgh-j"})
-            {Assert(!HomeNameRelease.IsLabel(label));Rejects<IOException>(()=>HomeNameRelease.NameFor(label),"HOME_NAME_INVALID");}
             foreach(var name in new[]{Label+".yahad.nehoraihadad.com.",Label+".other.example.com","x."+Name,"yahad.nehoraihadad.com",Label.ToUpperInvariant()+".yahad.nehoraihadad.com"})
                 Assert(!HomeNameRelease.IsName(name));
             return Task.CompletedTask;
@@ -148,7 +167,9 @@ internal static class HomeNameTests
         {
             var store=new HomeNameStore(Fresh("credential"));Assert(store.ReadCredential() is null);
             var credential=new HomeNameCredential(Label,new string('A',43));store.WriteCredential(credential);Assert(store.ReadCredential()==credential);
-            Rejects<ArgumentException>(()=>store.WriteCredential(credential with{Label="short"}));
+            Rejects<ArgumentException>(()=>store.WriteCredential(credential with{Label="Short"}));
+            Rejects<ArgumentException>(()=>store.WriteCredential(credential with{Label="www"}));
+            store.WriteCredential(credential with{Label="hadad-home"});Assert(store.ReadCredential()!.Label=="hadad-home");
             foreach(var text in new[]{"{\"label\":\""+Label+"\",\"secret\":\""+new string('A',43)+"\",\"extra\":1}","{\"label\":\""+Label+"\"}","{\"label\":\"x\",\"secret\":\""+new string('A',43)+"\"}","[]",""})
             {File.WriteAllText(store.CredentialFile,text);Rejects<IOException>(()=>store.ReadCredential());}
             store.WriteCredential(credential);
@@ -156,6 +177,41 @@ internal static class HomeNameTests
             var key=File.ReadAllBytes(store.AccountFile);using(var again=store.Account()){}Assert(File.ReadAllBytes(store.AccountFile).SequenceEqual(key));
             store.Stage(Certificate(Name,now,now.AddDays(90)));store.Swap();store.Clear();
             Assert(store.ReadCredential() is null&&!Directory.Exists(store.Live)&&File.ReadAllBytes(store.AccountFile).SequenceEqual(key));
+            return Task.CompletedTask;
+        });
+        await check("name store promotes a claim from every crash point, retires the label it replaces, and clears everything on removal",()=>
+        {
+            const string chosen="hadad-home";var claimed=HomeNameRelease.NameFor(chosen);
+            var current=new HomeNameCredential(Label,new string('A',43));var claim=new HomeNameCredential(chosen,new string('B',43));
+            var newer=Certificate(claimed,now.AddDays(-1),now.AddDays(89));
+            // Each point a crash may leave behind; Promote finishes all of them the same way, and again is a no-op.
+            var points=new (string Name,Action<HomeNameStore> Crash)[]
+            {
+                ("claimed",s=>{}),
+                ("retired",s=>s.Retire(current)),
+                ("committed",s=>{s.Retire(current);s.WriteCredential(claim);}),
+                ("moved",s=>{s.Retire(current);s.WriteCredential(claim);Directory.Move(s.Claimed,s.Next);}),
+                ("swapped",s=>{s.Retire(current);s.WriteCredential(claim);Directory.Move(s.Claimed,s.Next);s.Swap();}),
+            };
+            foreach(var (point,crash) in points)
+            {
+                var store=new HomeNameStore(Fresh("promote-"+point));
+                store.WriteCredential(current);store.Stage(Certificate(Name,now.AddDays(-1),now.AddDays(89)));store.Swap();
+                store.WriteClaim(claim);store.StageClaim(newer);Assert(store.Read(store.Claimed,claimed) is not null);
+                crash(store);store.Promote();
+                Assert(store.ReadCredential()==claim&&store.ReadClaim() is null&&!Directory.Exists(store.Claimed)&&!Directory.Exists(store.Next));
+                Assert(store.Read(store.Live,claimed) is not null&&store.ReadRetired().SequenceEqual([current]));
+                Rejects<IOException>(()=>store.Promote(),"HOME_NAME_CLAIM_MISSING");
+                store.DiscardRetired(Label);Assert(store.ReadRetired().Count==0);
+            }
+            // A retired file that cannot be read, or names another label, is dropped: it can no longer delete anything.
+            var odd=new HomeNameStore(Fresh("retired"));odd.Retire(current);
+            File.WriteAllText(Path.Combine(odd.Retired,"x.json"),"junk");File.Copy(Path.Combine(odd.Retired,Label+".json"),Path.Combine(odd.Retired,"other-name.json"));
+            Assert(odd.ReadRetired().SequenceEqual([current])&&Directory.EnumerateFiles(odd.Retired).Count()==1);
+            // Removal: credential, claim, retired and certificates go; the ACME account key stays.
+            odd.WriteCredential(current);odd.WriteClaim(claim);odd.StageClaim(newer);using(var account=odd.Account()){}
+            odd.ClearAll();
+            Assert(odd.ReadCredential() is null&&odd.ReadClaim() is null&&!Directory.Exists(odd.Claimed)&&!Directory.Exists(odd.Retired)&&File.Exists(odd.AccountFile));
             return Task.CompletedTask;
         });
     }

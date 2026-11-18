@@ -52,7 +52,8 @@ internal sealed class HomeNameSetup(IHomeNameRemote remote,IHomeNameEnvironment 
         return ReadOwner()?.Phase switch
         {
             HomeNameOwnerRecord.Registered or HomeNameOwnerRecord.Issued or HomeNameOwnerRecord.Configured or HomeNameOwnerRecord.Failed=>true,
-            null or HomeNameOwnerRecord.Removed=>File.Exists(Store.CredentialFile),
+            // A claim with no label beside it is a first, chosen registration that stopped before its commit point.
+            null or HomeNameOwnerRecord.Removed=>File.Exists(Store.CredentialFile)||File.Exists(Store.ClaimFile),
             _=>false
         };
     }
@@ -72,21 +73,55 @@ internal sealed class HomeNameSetup(IHomeNameRemote remote,IHomeNameEnvironment 
     /// Registers, points and certifies the name for <paramref name="address"/>, serves it and checks it from this
     /// computer, then commits it with home-name.json. Any failure leaves the IP path as it was and returns its code;
     /// only a failure to get back there throws.
+    /// <paramref name="desired"/>: the label the owner asked for in the window, or null (none asked, or a run without
+    /// the owner's choice), which keeps the current label, or registers a random one when there is none. A label other
+    /// than the current one is a rename: the new label is claimed, pointed and certified beside the active name, which
+    /// stays committed and served meanwhile, so a name that is taken or cannot be prepared leaves the home exactly as it
+    /// was. Only then is the name switched; the old label is deleted at the name service once the new one is committed.
+    /// A window run reaches here with the name already suspended by the LAN step, so there the current label is redone
+    /// instead when the new one cannot be prepared (docs/HOME-NAME.md, "Chosen label").
     /// </summary>
-    internal async Task<HomeNameOutcome> RunAsync(string address,CancellationToken cancellation)
+    internal async Task<HomeNameOutcome> RunAsync(string address,string? desired,CancellationToken cancellation)
     {
         if(!HomeNameRelease.Configured)return new(null,null);
-        var owner=ReadOwner();
+        if(desired is not null&&!HomeNameRelease.IsLabel(desired))throw new ArgumentException(HomeNameLabelException.Invalid);
+        var store=Store;var owner=ReadOwner();
         // Active means this very configuration was committed (a LAN change suspends it first); it is kept
         // only while it still holds. Otherwise the transaction runs again, which re-registers a gone label.
         var check=owner is {Phase:HomeNameOwnerRecord.Active}?await CheckAsync(owner,address,cancellation):NameCheck.Redo;
-        if(check==NameCheck.Holds)return new(owner!.Name,null);
+        var current=CurrentLabel(store);var claim=Claim(store);
+        // A claim credential.json already holds stopped past its commit point: it is the current label, finished below.
+        var pending=claim is not null&&claim.Label==current;
+        // A claim with no current label to keep is a first, chosen registration that stopped before its commit point:
+        // a run without the owner's choice finishes it, rather than registering a random label beside it.
+        if(desired is null&&claim is not null&&!File.Exists(store.CredentialFile))desired=claim.Label;
+        // A claim for another label than the one asked for now is given up, and retired so the name service deletes it.
+        if(desired is not null&&claim is not null&&!pending&&claim.Label!=desired){store.Retire(claim);store.DiscardClaim();}
+        var rename=desired is not null&&desired!=current;
+        Exception? renameError=null;var prepared=false;
+        if(check==NameCheck.Holds)
+        {
+            if(rename)
+                try{await PrepareAsync(store,desired!,address,cancellation);prepared=true;}
+                catch(Exception failure)when(failure is not OutOfMemoryException&&!cancellation.IsCancellationRequested){renameError=failure;}
+            // Nothing to switch to: the active name stays exactly as it was.
+            if(!prepared){await RetireAsync(store,cancellation);return new(owner!.Name,renameError is null?null:Code(renameError));}
+        }
         // The Runtime may run on the name until it is restarted; a failure below sends it back to the IP origin.
         var named=File.Exists(paths.NameRecord);
         // The name is uncommitted before anything it serves from is touched.
         Suspend();RemoveNameRecord();WriteCaddyfile(null);
         string name;
-        try{name=await TransactAsync(address,check==NameCheck.Gone,cancellation);}
+        try
+        {
+            if(pending)store.Promote();
+            // No active name to keep serving: the new label is prepared now. When it cannot be, the current label is
+            // redone as a run without the owner's choice would; without one there is only the IP path.
+            if(rename&&!prepared)
+                try{await PrepareAsync(store,desired!,address,cancellation);prepared=true;}
+                catch(Exception failure)when(current is not null&&failure is not OutOfMemoryException&&!cancellation.IsCancellationRequested){renameError=failure;}
+            name=await TransactAsync(address,check==NameCheck.Gone,prepared,cancellation);
+        }
         catch(Exception failure)when(failure is not OutOfMemoryException)
         {
             var code=Code(failure);
@@ -95,8 +130,7 @@ internal sealed class HomeNameSetup(IHomeNameRemote remote,IHomeNameEnvironment 
             {
                 using var cleanup=new CancellationTokenSource(cleanupBudget??TimeSpan.FromSeconds(45));
                 RemoveNameRecord();WriteCaddyfile(null);
-                string label;try{label=Store.ReadCredential()?.Label??"";}catch(IOException){label="";}
-                Save(HomeNameOwnerRecord.Failed,label,code);
+                Save(HomeNameOwnerRecord.Failed,CurrentLabel(store)??"",code);
                 await environment.RestartProxyAsync(cleanup.Token);
             }
             catch(Exception error){incomplete=error;}
@@ -107,28 +141,34 @@ internal sealed class HomeNameSetup(IHomeNameRemote remote,IHomeNameEnvironment 
             if(incomplete is not null)throw SetupFailureDetail.Besides(failure,incomplete);
             // The operation's own deadline or cancellation is not a name failure.
             cancellation.ThrowIfCancellationRequested();
-            return new(null,code);
+            // The owner's request comes first: a taken name is what they can act on.
+            return new(null,renameError is null?code:Code(renameError));
         }
         // Committed: a Runtime that does not come back is a failure of the Runtime, never undone as the name's.
         await environment.RestartRuntimeAsync(cancellation);
-        return new(name,null);
+        // Only now is a label given up deleted at the name service.
+        await RetireAsync(store,cancellation);
+        return new(name,renameError is null?null:Code(renameError));
     }
-    private async Task<string> TransactAsync(string address,bool gone,CancellationToken cancellation)
+    private async Task<string> TransactAsync(string address,bool gone,bool promote,CancellationToken cancellation)
     {
         var store=Store;
         // A label the name service called gone: its certificates name it, so they go with it.
         if(gone)store.Clear();
+        // The prepared claim becomes the label: the current one is retired, the claim's certificate is live.
+        if(promote)store.Promote();
         for(var attempt=0;;attempt++)
         {
             try
             {
-                // The credential is on disk before anything else is asked of the name service.
+                // The credential is on disk before anything else is asked of the name service. A label registered here
+                // is random: a chosen one is always claimed (PrepareAsync) and promoted, never registered in place.
                 var credential=store.ReadCredential();
-                if(credential is null){credential=await remote.RegisterAsync(cancellation);store.WriteCredential(credential);}
+                if(credential is null){credential=await remote.RegisterAsync(null,cancellation);store.WriteCredential(credential);}
                 var name=HomeNameRelease.NameFor(credential.Label);
                 Save(HomeNameOwnerRecord.Registered,credential.Label);
                 await remote.SetAddressAsync(credential,address,cancellation);
-                if(!Current(store,name))
+                if(!Current(store,store.Live,name))
                 {
                     using(var account=store.Account())store.Stage(await remote.IssueAsync(credential,name,account,cancellation));
                     if(store.Read(store.Next,name) is null)throw new IOException("HOME_NAME_STAGE_INCOMPLETE");
@@ -146,6 +186,69 @@ internal sealed class HomeNameSetup(IHomeNameRemote remote,IHomeNameEnvironment 
             // 410: the label is gone at the name service. Its certificates name it, so they go with it; once.
             catch(HomeNameGoneException)when(attempt==0){store.Clear();}
         }
+    }
+    /// <summary>
+    /// Claims <paramref name="label"/> and points and certifies it, in rename.json and rename/, never touching what the
+    /// active name serves from. Idempotent: a claim already on disk is reused, never registered again (the name service
+    /// would answer label_taken), and so is its certificate while it is not due. A label this home gave up and has not
+    /// deleted yet is taken back.
+    /// </summary>
+    private async Task PrepareAsync(HomeNameStore store,string label,string address,CancellationToken cancellation)
+    {
+        var name=HomeNameRelease.NameFor(label);
+        for(var attempt=0;;attempt++)
+        {
+            try
+            {
+                var claim=store.ReadClaim();
+                // Claimed before the retired copy goes, so RetireAsync never deletes it in between (it skips the claim).
+                if(claim is null&&store.ReadRetired().FirstOrDefault(r=>r.Label==label) is {} back){store.WriteClaim(back);store.DiscardRetired(label);claim=back;}
+                // The claim's credential is on disk before anything else is asked of the name service.
+                if(claim is null){claim=await remote.RegisterAsync(label,cancellation);store.WriteClaim(claim);}
+                if(claim.Label!=label)throw new IOException("HOME_NAME_CLAIM_MISMATCH");
+                await remote.SetAddressAsync(claim,address,cancellation);
+                if(!Current(store,store.Claimed,name))
+                {
+                    using(var account=store.Account())store.StageClaim(await remote.IssueAsync(claim,name,account,cancellation));
+                    if(store.Read(store.Claimed,name) is null)throw new IOException("HOME_NAME_STAGE_INCOMPLETE");
+                }
+                return;
+            }
+            // 410: the claim expired at the name service. Registering the label again answers label_taken, since a
+            // label never comes back; that is the outcome.
+            catch(HomeNameGoneException)when(attempt==0){store.DiscardClaim();}
+        }
+    }
+    /// <summary>
+    /// Labels given up are deleted at the name service (best effort, each on a short budget) and then forgotten; one that
+    /// cannot be deleted now is kept for the next run, and the service's own expiry is the backstop. Never the current
+    /// label or the claim.
+    /// </summary>
+    private async Task RetireAsync(HomeNameStore store,CancellationToken cancellation)
+    {
+        var keep=new[]{CurrentLabel(store),Claim(store)?.Label};
+        foreach(var credential in store.ReadRetired())
+        {
+            if(!keep.Contains(credential.Label))
+            {
+                using var bound=CancellationTokenSource.CreateLinkedTokenSource(cancellation);bound.CancelAfter(TimeSpan.FromSeconds(10));
+                try{await remote.DeleteNameAsync(credential,bound.Token);}
+                catch(Exception error)when(error is not OutOfMemoryException&&!cancellation.IsCancellationRequested){continue;}
+            }
+            store.DiscardRetired(credential.Label);
+        }
+    }
+    // The label credential.json holds; null without one, or with one that cannot be read (the transaction then fails on it).
+    private static string? CurrentLabel(HomeNameStore store)
+    {
+        try{return store.ReadCredential()?.Label;}
+        catch(IOException){return null;}
+    }
+    // A claim that cannot be read cannot be used: it goes, and the name service's expiry removes its label.
+    private static HomeNameCredential? Claim(HomeNameStore store)
+    {
+        try{return store.ReadClaim();}
+        catch(IOException){store.DiscardClaim();return null;}
     }
     private enum NameCheck{Holds,Redo,Gone}
     /// <summary>
@@ -168,10 +271,10 @@ internal sealed class HomeNameSetup(IHomeNameRemote remote,IHomeNameEnvironment 
         catch(HomeNameGoneException){return NameCheck.Gone;}
         catch(Exception error)when(error is not OutOfMemoryException&&!cancellation.IsCancellationRequested){return NameCheck.Holds;}
     }
-    // A live certificate for this name that is not yet due is reused: a rerun does not ask the CA again.
-    private bool Current(HomeNameStore store,string name)
+    // A certificate for this name in directory (live/, or rename/ for a claim) that is not yet due is reused: a rerun does not ask the CA again.
+    private bool Current(HomeNameStore store,string directory,string name)
     {
-        try{return store.Read(store.Live,name) is {} live&&!AcmeCertificateCheck.RenewalDue(live.NotBefore,live.NotAfter,(clock??(()=>DateTimeOffset.UtcNow))());}
+        try{return store.Read(directory,name) is {} found&&!AcmeCertificateCheck.RenewalDue(found.NotBefore,found.NotAfter,(clock??(()=>DateTimeOffset.UtcNow))());}
         catch(Exception error)when(error is IOException or System.Security.Cryptography.CryptographicException or ArgumentException){return false;}
     }
     // A router's DNS-rebind protection shows up here: the name resolves to nothing, or not to this address.
@@ -190,7 +293,8 @@ internal sealed class HomeNameSetup(IHomeNameRemote remote,IHomeNameEnvironment 
 
     /// <summary>
     /// The name is given up (LAN off, delete-data): the IP-only Caddyfile, no home-name.json, a best-effort
-    /// DELETE at the name service, then the credential and certificates go. The ACME account key stays.
+    /// DELETE at the name service of every label this home holds (the current one, a claim, the retired ones), then
+    /// the credentials and certificates go. The ACME account key stays.
     /// </summary>
     internal async Task RemoveAsync(bool writeCaddyfile,CancellationToken cancellation)
     {
@@ -199,15 +303,36 @@ internal sealed class HomeNameSetup(IHomeNameRemote remote,IHomeNameEnvironment 
         if(writeCaddyfile&&File.Exists(paths.Caddyfile))WriteCaddyfile(null);
         var store=Store;HomeNameCredential? credential;
         try{credential=store.ReadCredential();}catch(IOException){credential=null;}
-        if(credential is not null)
+        var held=new List<HomeNameCredential>();
+        if(credential is not null)held.Add(credential);
+        if(Claim(store) is {} claim)held.Add(claim);
+        held.AddRange(store.ReadRetired());
+        foreach(var label in held.DistinctBy(c=>c.Label))
         {
             using var bound=CancellationTokenSource.CreateLinkedTokenSource(cancellation);bound.CancelAfter(TimeSpan.FromSeconds(10));
             // Offline or refused: the name service's own expiry removes the name.
-            try{await remote.DeleteNameAsync(credential,bound.Token);}
+            try{await remote.DeleteNameAsync(label,bound.Token);}
             catch(Exception error)when(error is not OutOfMemoryException&&!cancellation.IsCancellationRequested){}
         }
-        store.Clear();
-        if(File.Exists(paths.Owner)||credential is not null)Save(HomeNameOwnerRecord.Removed,"");
+        store.ClearAll();
+        if(File.Exists(paths.Owner)||held.Count!=0)Save(HomeNameOwnerRecord.Removed,"");
+    }
+
+    /// <summary>The label rule (<see cref="HomeNameLabel"/>) in the owner's words.</summary>
+    internal const string LabelRule="שם לכתובת הוא 3 עד 20 תווים: אותיות קטנות באנגלית, ספרות ומקף. הוא מתחיל ומסתיים באות או בספרה, בלי שני מקפים ברצף, ואינו שם שמור כמו www.";
+    /// <summary>
+    /// The owner's words for a name failure. <paramref name="name"/>: the name the home kept (a rename that did not
+    /// happen), or null when it works at the IP origin.
+    /// </summary>
+    internal static string FailureText(string code,string? name)
+    {
+        var what=code switch
+        {
+            HomeNameLabelException.Taken=>"השם כבר תפוס. אפשר לבחור שם אחר ולהריץ את ההתקנה שוב.",
+            HomeNameLabelException.Invalid=>"השם לא תקין. "+LabelRule,
+            _=>name is null?"הכתובת הקבועה לא הוגדרה ("+code+"). הפעלה חוזרת של ההתקנה תנסה שוב.":"השם החדש לא הוגדר ("+code+"). הפעלה חוזרת של ההתקנה תנסה שוב."
+        };
+        return what+(name is null?" יחד פועלת בכתובת לפי מספר.":" הכתובת הקבועה הקודמת נשארה פעילה.");
     }
 
     internal static string Code(Exception failure)=>failure switch

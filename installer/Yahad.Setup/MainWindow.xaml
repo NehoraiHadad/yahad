@@ -50,10 +50,17 @@
        </Grid>
        <StackPanel x:Name="LanHomeNameArea" Visibility="Collapsed" Margin="0,9,0,0">
         <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-         <CheckBox x:Name="LanHomeName" VerticalAlignment="Top" AutomationProperties.LabeledBy="{Binding ElementName=LanHomeNameLabel}"/>
+         <CheckBox x:Name="LanHomeName" Checked="LanHomeNameChanged" Unchecked="LanHomeNameChanged" VerticalAlignment="Top" AutomationProperties.LabeledBy="{Binding ElementName=LanHomeNameLabel}"/>
          <TextBlock x:Name="LanHomeNameLabel" Grid.Column="1" Text="כתובת קבועה בלי תעודה במכשירים" TextWrapping="Wrap" Margin="8,0,0,0"/>
         </Grid>
         <TextBlock x:Name="LanHomeNameHint" Text="האפשרות תלויה בשירות השמות של יחד, ויש נתבים ביתיים שחוסמים אותה." FontSize="12" TextWrapping="Wrap" Foreground="#5C716B" Margin="22,5,0,0"/>
+        <StackPanel x:Name="LanHomeNameLabelArea" IsEnabled="False" Margin="22,9,0,0">
+         <TextBlock x:Name="LanHomeNameLabelCaption" Text="שם לכתובת (לא חובה)" FontSize="13"/>
+         <TextBox x:Name="LanHomeNameLabelInput" TextChanged="LanHomeNameLabelChanged" FlowDirection="LeftToRight" HorizontalAlignment="Left" Width="220" MaxLength="20" FontSize="14" Padding="6,4" Margin="0,5,0,0" AutomationProperties.LabeledBy="{Binding ElementName=LanHomeNameLabelCaption}"/>
+         <TextBlock x:Name="LanHomeNamePreview" FlowDirection="LeftToRight" HorizontalAlignment="Left" FontSize="12" Foreground="#46665B" TextWrapping="Wrap" Margin="0,5,0,0"/>
+         <TextBlock x:Name="LanHomeNameLabelError" Visibility="Collapsed" FontSize="12" Foreground="#96392D" TextWrapping="Wrap" Margin="0,5,0,0"/>
+         <TextBlock Text="השם יהיה ציבורי (כל תעודת אבטחה נרשמת ביומן פומבי), אז אל תבחרו שם שתרצו לשמור פרטי. בלי שם נשארת הכתובת הנוכחית, או שתיבחר כתובת אקראית." FontSize="12" TextWrapping="Wrap" Foreground="#5C716B" Margin="0,5,0,0"/>
+        </StackPanel>
        </StackPanel>
        <TextBlock Text="המחשב צריך להישאר דלוק כדי שיחד תעבוד בטלפון. בפעם הראשונה נדרשת הגדרה קצרה בכל טלפון או טאבלט; ההוראות יופיעו בסיום." FontSize="12" TextWrapping="Wrap" Foreground="#5C716B" Margin="0,9,0,10"/>
        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -88,7 +95,12 @@
     </StackPanel>
     <Border x:Name="LanResultPanel" Visibility="Collapsed" Background="White" BorderBrush="#DFE7E0" BorderThickness="1" CornerRadius="14" Padding="18" Margin="0,16,0,0">
      <StackPanel><TextBlock Text="הצטרפות ממכשיר נוסף בבית" FontSize="18" FontWeight="SemiBold"/>
-      <TextBlock x:Name="LanResultText" TextWrapping="Wrap" Margin="0,10,0,0"/>
+      <TextBlock x:Name="LanAddressCaption" Text="כתובת יחד בבית" FontSize="13" FontWeight="SemiBold" Margin="0,10,0,0"/>
+      <Grid Margin="0,5,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+       <TextBox x:Name="LanMainAddress" IsReadOnly="True" FlowDirection="LeftToRight" TextWrapping="Wrap" FontSize="14" Padding="6,4" VerticalContentAlignment="Center" AutomationProperties.LabeledBy="{Binding ElementName=LanAddressCaption}"/>
+       <Button x:Name="CopyLanAddress" Grid.Column="1" Content="העתקת הכתובת" Click="CopyLanAddress_Click" Padding="12,4" Margin="8,0,0,0"/>
+      </Grid>
+      <TextBox x:Name="LanResultText" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent" Padding="0" Margin="0,10,0,0" AutomationProperties.Name="פרטי ההצטרפות ממכשיר נוסף"/>
       <TextBox x:Name="LanRootFingerprint" IsReadOnly="True" FlowDirection="LeftToRight" TextWrapping="Wrap" FontSize="13" Margin="0,12,0,0" AutomationProperties.Name="טביעת SHA-256 של תעודת הבית, להשוואה ממכשיר נוסף"/>
       <Button x:Name="SaveLanCertificate" Content="שמירת התעודה הציבורית" Click="SaveLanCertificate_Click" Margin="0,10,0,0"/>
       <TextBlock Text="השוו את טביעת התעודה במכשיר החדש לטביעה שמופיעה כאן, לפני מתן אמון. הדף בטלפון אינו יודע לקרוא את הגדרות האמון. בדיקת HTTPS היא בדיקת חיבור בלבד; כשל אינו הוכחה שחסרה תעודה. אין לדלג על אזהרת דפדפן." TextWrapping="Wrap" FontSize="12" Margin="0,10,0,0"/>

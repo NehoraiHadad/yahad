@@ -2,15 +2,25 @@
 // exactly the documented shape or it is rejected.
 
 const BASE32_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567"; // RFC 4648, lowercase.
+/** Length of a random label. A random label is also a valid chosen one: 12 of [a-z2-7], no hyphen. */
 export const LABEL_LENGTH = 12;
-const LABEL_PATTERN = /^[a-z2-7]{12}$/;
+// The label rule, the same in the installer (HomeNameRelease.IsLabel): 3-20 characters of [a-z0-9-],
+// starting and ending with a letter or digit, no "--" anywhere (so never an "xn--" punycode label),
+// and not reserved. Uppercase is refused, never folded.
+const LABEL_PATTERN = /^[a-z0-9][a-z0-9-]{1,18}[a-z0-9]$/;
+export const RESERVED_LABELS: ReadonlySet<string> = new Set([
+  "www", "api", "mail", "admin", "root", "login", "auth", "secure", "account", "support", "help",
+  "status", "test", "ns1", "ns2", "smtp", "imap", "ftp", "webmail", "localhost", "autodiscover",
+  "autoconfig", "yahad",
+]);
 
 // 32 bytes in unpadded base64url are 43 characters. The last character carries 4 data bits and
 // 2 zero bits, so only 16 of the 64 symbols can appear there in a canonical encoding.
 const DIGEST_B64URL_PATTERN = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
 
+/** A label the service hands out or accepts: random (12 base32 characters) or chosen by the home. */
 export function isLabel(value: string): boolean {
-  return LABEL_PATTERN.test(value);
+  return LABEL_PATTERN.test(value) && !value.includes("--") && !RESERVED_LABELS.has(value);
 }
 
 /** A 256-bit value (a secret, or a dns-01 digest) in canonical unpadded base64url. */
@@ -20,10 +30,13 @@ export function isDigest43(value: string): boolean {
 
 export function newLabel(): string {
   // 32 divides 256, so taking the low 5 bits of each random byte is unbiased.
-  const bytes = crypto.getRandomValues(new Uint8Array(LABEL_LENGTH));
-  let label = "";
-  for (const byte of bytes) label += BASE32_ALPHABET[byte & 31];
-  return label;
+  // A reserved word can be 12 base32 characters ("autodiscover"): drawn again.
+  for (;;) {
+    const bytes = crypto.getRandomValues(new Uint8Array(LABEL_LENGTH));
+    let label = "";
+    for (const byte of bytes) label += BASE32_ALPHABET[byte & 31];
+    if (!RESERVED_LABELS.has(label)) return label;
+  }
 }
 
 export function newSecret(): string {
@@ -67,7 +80,7 @@ export function digestsEqual(a: string, b: string): boolean {
  */
 export function parseBearer(header: string | null): { label: string; secret: string } | null {
   if (header === null) return null;
-  const match = /^Bearer ([a-z2-7]{12})\.([A-Za-z0-9_-]{43})$/.exec(header);
+  const match = /^Bearer ([a-z0-9-]{3,20})\.([A-Za-z0-9_-]{43})$/.exec(header);
   if (match === null) return null;
   const [, label, secret] = match;
   if (!isLabel(label) || !isDigest43(secret)) return null;

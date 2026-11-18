@@ -64,6 +64,20 @@ export class Budget extends DurableObject<Env> {
     );
   }
 
+  /**
+   * Undoes a reservation whose label could not be created (its Label Object already existed, or creating
+   * it failed): the label becomes a tombstone, so it is never handed out again, and the registration it
+   * took from `now`'s day is given back. Idempotent: only a label still live is given back.
+   */
+  refuseRegistration(label: string, now: number): void {
+    if (this.sql.exec("SELECT 1 FROM labels WHERE label = ? AND status = 'live'", label).toArray().length === 0) return;
+    this.sql.exec("UPDATE labels SET status = 'gone' WHERE label = ?", label);
+    this.sql.exec(
+      "UPDATE counters SET used = MAX(used - 1, 0) WHERE day = ? AND kind = 'register'",
+      utcDay(now),
+    );
+  }
+
   setStatus(label: string, status: LabelStatus): void {
     this.sql.exec("UPDATE labels SET status = ? WHERE label = ?", status, label);
   }
