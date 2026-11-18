@@ -36,9 +36,9 @@ def stage_public_lan_help(repo, app):
         raise ValueError('Complete public LAN help assets required')
     marker = json.loads(sources[1].read_text(encoding='utf-8'))
     expected = dict(format=1, localHttps=True, exactAdditionalOrigins=True,
-                    ownerLoopbackBootstrap=True, publicHelpTemplate='deploy/lan-help.html')
+                    ownerLoopbackBootstrap=True, publicHelpTemplate='deploy/lan-help.html', homeName=True)
     if marker != expected or type(marker.get('format')) is not int or any(marker.get(name) is not True for name in
-            ('localHttps', 'exactAdditionalOrigins', 'ownerLoopbackBootstrap')):
+            ('localHttps', 'exactAdditionalOrigins', 'ownerLoopbackBootstrap', 'homeName')):
         raise ValueError('Unsupported LAN help contract')
     target = app/'deploy'; target.mkdir()
     for path in sources: shutil.copyfile(path, target/path.name)

@@ -18,7 +18,7 @@ class NativeLanAssetTests(unittest.TestCase):
         source = self.repo/'deploy'; source.mkdir()
         (source/'lan-help.html').write_text('<p>Public instructions only</p>', encoding='utf-8')
         (source/'lan-capabilities.json').write_text(json.dumps(dict(format=1, localHttps=True,
-            exactAdditionalOrigins=True, ownerLoopbackBootstrap=True, publicHelpTemplate='deploy/lan-help.html')), encoding='utf-8')
+            exactAdditionalOrigins=True, ownerLoopbackBootstrap=True, publicHelpTemplate='deploy/lan-help.html', homeName=True)), encoding='utf-8')
         return source
 
     def test_only_public_whitelist_is_staged(self):
