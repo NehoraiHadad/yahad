@@ -16,7 +16,7 @@ const local = 'http://127.0.0.1:47123';
 test('LAN payload advertises its origin contract and ships public help without app or script endpoints', () => {
   const marker = JSON.parse(readFileSync(new URL('../deploy/lan-capabilities.json', import.meta.url), 'utf8'));
   assert.deepEqual(marker, { format: 1, localHttps: true, exactAdditionalOrigins: true,
-    ownerLoopbackBootstrap: true, publicHelpTemplate: 'deploy/lan-help.html' });
+    ownerLoopbackBootstrap: true, publicHelpTemplate: 'deploy/lan-help.html', homeName: true });
   const help = readFileSync(new URL('../deploy/lan-help.html', import.meta.url), 'utf8');
   assert.match(help, /<html lang="he" dir="rtl">/);
   assert.equal((help.match(/__LAN_HTTPS_ORIGIN__/g) ?? []).length, 2);

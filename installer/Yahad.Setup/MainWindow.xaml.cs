@@ -56,12 +56,12 @@ public partial class MainWindow:Window
         {
             // A refused choice (consent, confirmation) reaches the same failure screen as
             // the operation; nothing is thrown out of this async void.
-            var mode=uninstall?choice.Confirmed():UninstallMode.KeepData;var network=SelectedLanRequest();var update=SelectedUpdateRequest();
+            var mode=uninstall?choice.Confirmed():UninstallMode.KeepData;var network=SelectedLanRequest();var homeName=network is not null&&SelectedHomeName();var update=SelectedUpdateRequest();
             running=true;UpdatePanel.IsEnabled=false;Primary.IsEnabled=false;Secondary.IsEnabled=false;UninstallChoices.IsEnabled=false;LanPanel.IsEnabled=false;ProgressBar.Visibility=Visibility.Visible;ProgressBar.IsIndeterminate=true;
             ClearFailure();Status.Text="בודקים מקום פנוי והרשאות.";
             Heading.Text=uninstall?(mode==UninstallMode.DeleteData?"מסירים את יחד\nואת הנתונים.":"מסירים את התוכנה.\nהנתונים יישמרו."):"מתקינים את יחד.\nעוד רגע בבית.";
             Description.Text=uninstall?"אל תכבו את המחשב במהלך הפעולה.":"מכינים את הרכיבים, מפעילים את השירות ובודקים שיחד זמינה.";
-            result=await SetupOperation.RunAsync(uninstall,p=>Dispatcher.Invoke(()=>ShowProgress(p)),CancellationToken.None,mode,network,update:update);
+            result=await SetupOperation.RunAsync(uninstall,p=>Dispatcher.Invoke(()=>ShowProgress(p)),CancellationToken.None,mode,network,update:update,homeName:homeName);
             if(!result.Ok){Failure(result.Code,result.Failure);return;}
             completed=true;ProgressBar.IsIndeterminate=false;ProgressBar.Value=100;
             Heading.Text=uninstall?(result.DataPreserved?"יחד הוסרה.\nהנתונים נשמרו.":"יחד והנתונים\nהוסרו מהמחשב."):"הכול מוכן.\nממשיכים ליחד.";

@@ -331,14 +331,14 @@ internal static class LanIntegrationTests
     {
         internal readonly List<string> Calls = [];
         internal string? Failure; internal Action? AfterPrepare; internal UninstallMode? Removal;
-        internal LanSetupRequest? Request; internal SetupOwner? Owner;
+        internal LanSetupRequest? Request; internal SetupOwner? Owner; internal bool HomeName;
         private void Step(string name) { Calls.Add(name); if (Failure == name) throw new IOException("SYNTHETIC_FAILURE"); }
         public Task PrepareAsync(SetupOwner owner, Action<SetupProgress> progress, CancellationToken cancellation)
         { Step("prepare"); Owner = owner; AfterPrepare?.Invoke(); return Task.CompletedTask; }
         public Task ProvisionAsync(Action<SetupProgress> progress, CancellationToken cancellation)
         { Step("provision"); return Task.CompletedTask; }
-        public Task ConfigureLanAsync(LanSetupRequest request, Action<SetupProgress> progress, CancellationToken cancellation)
-        { request.Require(); Step("lan:" + request.Action); Request = request; return Task.CompletedTask; }
+        public Task ConfigureLanAsync(LanSetupRequest request, bool homeName, Action<SetupProgress> progress, CancellationToken cancellation)
+        { request.Require(); Step("lan:" + request.Action); Request = request; HomeName = homeName; return Task.CompletedTask; }
         public Task<SetupResult> StartAndObserveAsync(Action<SetupProgress> progress, CancellationToken cancellation)
         { Step("start"); return Task.FromResult(new SetupResult(true, "READY", "http://127.0.0.1:47123/", new string('a', 43))); }
         public Task CommitAsync(Action<SetupProgress> progress, CancellationToken cancellation)

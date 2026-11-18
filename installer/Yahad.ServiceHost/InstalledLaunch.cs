@@ -73,6 +73,71 @@ internal static class InstalledHomeNetworkRecord
         catch(Exception error)when(error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException or System.ComponentModel.Win32Exception){return null;}
     }
 }
+// The home name the Runtime may serve as its origin (docs/HOME-NAME.md 3). Setup writes it
+// last, once the proxy serves the name; its presence is the commit point of the name path.
+// A separate file, so installed.json keeps the format older hosts read; an older host
+// ignores it and runs on the IP origin.
+internal sealed record InstalledHomeName(int Format,string Name,string Address);
+internal static class InstalledHomeNameRecord
+{
+    internal const string FileName="home-name.json",CapabilitiesFile="deploy/lan-capabilities.json";
+    internal static byte[] Encode(InstalledHomeName value)=>System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(Require(value),ServiceHostJsonContext.Default.InstalledHomeName);
+    internal static InstalledHomeName Parse(byte[] bytes)
+    {
+        if(bytes.Length is <1 or >4096)throw new IOException("HOME_NAME_BOUND");
+        return Require(NativeJson.Read(bytes,ServiceHostJsonContext.Default.InstalledHomeName));
+    }
+    private static InstalledHomeName Require(InstalledHomeName value)
+    {
+        if(value.Format!=1)throw new IOException("HOME_NAME_FORMAT");
+        // JSON null passes the strict reader for a non-nullable string.
+        if(!HomeNameRelease.IsName(value.Name)||value.Address is null||!NetworkPlan.IsPrivateLanV4(value.Address))throw new IOException("HOME_NAME_FIELDS");
+        return value;
+    }
+    // Whether the app tree declares it serves a name origin: "homeName": true, nothing less.
+    internal static bool Declared(byte[] capabilities)
+    {
+        if(capabilities.Length is <1 or >4096)return false;
+        using var document=System.Text.Json.JsonDocument.Parse(capabilities,new System.Text.Json.JsonDocumentOptions{MaxDepth=4,AllowDuplicateProperties=false});
+        return document.RootElement.ValueKind==System.Text.Json.JsonValueKind.Object&&document.RootElement.TryGetProperty("homeName",out var value)&&value.ValueKind==System.Text.Json.JsonValueKind.True;
+    }
+    /// <summary>
+    /// The name, only when all hold: the origin is private-IP HTTPS, this build has a zone, the record is valid
+    /// and names that very address, and the active app declares "homeName": true. Anything unreadable or
+    /// unparsable is the IP origin exactly as before, never a refused start.
+    /// </summary>
+    internal static InstalledHomeName? Select(Uri origin,Func<byte[]?> record,Func<byte[]?> capabilities)
+    {
+        if(origin.Scheme!="https"||!origin.IsDefaultPort||!NetworkPlan.IsPrivateLanV4(origin.Host)||!HomeNameRelease.Configured)return null;
+        try
+        {
+            if(record() is not {} bytes||Parse(bytes) is not {} name||name.Address!=origin.Host)return null;
+            return capabilities() is {} declared&&Declared(declared)?name:null;
+        }
+        catch(Exception error)when(error is not OutOfMemoryException){return null;}
+    }
+    internal static byte[]? TryReadFile(string path,int maximum)
+    {
+        try{return File.Exists(path)?NativeInstallFiles.ReadRecord(path,maximum):null;}
+        catch(Exception error)when(error is not OutOfMemoryException){return null;}
+    }
+}
+internal static class InstalledLanEnvironment
+{
+    // LAN HTTPS keeps Secure cookies. Only the fixed local loopback origin is added for
+    // bootstrap; remote origins are never inferred here. With the home name, the name is the
+    // origin and the address it stands for stays admitted, and it is the home address the
+    // app checks the join page and fingerprint against.
+    internal static void Apply(Dictionary<string,string> environment,Uri origin,int port,InstalledHomeNetwork? home,InstalledHomeName? name)
+    {
+        var loopback=$"http://127.0.0.1:{port.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+        environment["APP_ADDITIONAL_ORIGINS"]=loopback;
+        if(home is not null){environment["APP_JOIN_PAGE"]=home.JoinPage;environment["APP_HOME_CERTIFICATE_SHA256"]=home.RootSha256;}
+        if(name is null)return;
+        var address="https://"+origin.Host;
+        environment["APP_ORIGIN"]="https://"+name.Name;environment["APP_ADDITIONAL_ORIGINS"]=address+","+loopback;environment["APP_HOME_ADDRESS"]=address;
+    }
+}
 internal sealed class InstalledLaunchResolver:IServiceStartAuthorizer
 {
     // File work and taking the lease must not occupy the SCM entry/control thread.
@@ -97,13 +162,12 @@ internal sealed class InstalledLaunchResolver:IServiceStartAuthorizer
             var environment=new Dictionary<string,string>{{"HOST","127.0.0.1"},{"PORT",config.Port.ToString(System.Globalization.CultureInfo.InvariantCulture)},
                 {"APP_ORIGIN",origin.GetLeftPart(UriPartial.Authority)},{"COOKIE_SECURE",origin.Scheme=="https"?"true":"false"},{"DATA_DIR",data},{"MASTER_KEY_FILE",key},
                 {"CONNECTOR",InstalledLaunch.Connector},{"ALLOW_REAL_WHATSAPP",InstalledLaunch.ConnectorApproval},{"SETUP_CAPABILITY_FILE",Path.Combine(state,"Secrets","setup-capability.json")}};
-            // LAN HTTPS keeps Secure cookies. Only the fixed local loopback origin
-            // is added for bootstrap; remote origins are never inferred here.
             if(origin.Scheme=="https"&&NetworkPlan.IsPrivateLanV4(origin.Host))
             {
-                environment["APP_ADDITIONAL_ORIGINS"]=$"http://127.0.0.1:{config.Port}";
-                if(InstalledHomeNetworkRecord.TryRead(Path.Combine(state,InstalledHomeNetworkRecord.FileName),origin) is {} home)
-                {environment["APP_JOIN_PAGE"]=home.JoinPage;environment["APP_HOME_CERTIFICATE_SHA256"]=home.RootSha256;}
+                // The capabilities come from the app tree verified above, never from a path a record names.
+                var name=InstalledHomeNameRecord.Select(origin,()=>InstalledHomeNameRecord.TryReadFile(Path.Combine(state,InstalledHomeNameRecord.FileName),4096),
+                    ()=>InstalledHomeNameRecord.TryReadFile(Path.Combine(app,InstalledHomeNameRecord.CapabilitiesFile.Replace('/',Path.DirectorySeparatorChar)),4096));
+                InstalledLanEnvironment.Apply(environment,origin,config.Port,InstalledHomeNetworkRecord.TryRead(Path.Combine(state,InstalledHomeNetworkRecord.FileName),origin),name);
             }
             var spec=new VerifiedProcessSpec(node,["server/main.mjs"],app,temporary,
                 InstalledLayout.PlatformImage(InfrastructureRelease.Version),environment,lease);

@@ -3,5 +3,6 @@
   "localHttps": true,
   "exactAdditionalOrigins": true,
   "ownerLoopbackBootstrap": true,
+  "homeName": true,
   "publicHelpTemplate": "deploy/lan-help.html"
 }

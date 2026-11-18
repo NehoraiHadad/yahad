@@ -151,6 +151,7 @@ await Check("startup budget does not extend graceful stop budget",async()=>
     var controller=new ServiceController(new TestAuthorization(new FakeApp{StuckGraceful=true}),lifecycleDeadline:TimeSpan.FromMilliseconds(50));
     var result=await controller.RunAsync(r=>{if(r.State==ServiceState.Running)controller.Control(ServiceDefinition.Stop);}).WaitAsync(TimeSpan.FromSeconds(2));Assert(result.Failure==ServiceFailure.StopFailed);
 });
+await HomeNameServiceTests.Run(Check);
 File.WriteAllText(report,JsonSerializer.Serialize(new{kind="SCM-host-noninstalling-contracts",passed=checks.Count-failures,failed=failures,
     nativeScmInvoked=false,serviceInstalled=false,listenersOpened=false,realNativeJobTests=4,privateNodeSha256=nodeHash,tests=checks},new JsonSerializerOptions{WriteIndented=true}));
 Console.WriteLine($"{checks.Count-failures} passed; {failures} failed. No SCM calls/listeners. Fixture: {root}");return failures==0?0:1;

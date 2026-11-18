@@ -99,3 +99,18 @@ test('paused child directs the parent to access management instead of WhatsApp c
   assert.doesNotMatch(html, /href="#family-connection"/);
   assert.doesNotMatch(html, /החשבון מוכן לכניסה/);
 });
+
+test('a name is the tablet address, with the home-network address and join steps as the fallback', () => {
+  const fingerprint = 'AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB';
+  const homeNetwork = { joinPage: 'http://192.168.4.25/', certificateSha256: fingerprint, homeAddress: 'https://192.168.4.25' };
+  for (const origin of ['http://127.0.0.1:47123', 'https://home.example.test']) {
+    const html = render({ origin, siteOrigin: 'https://home.example.test', homeNetwork });
+    assert.match(html, /כתובת יחד<input readOnly="" dir="ltr" value="https:\/\/home.example.test"/, origin);
+    assert.match(html, /אם הכתובת לא נפתחת במכשיר/);
+    assert.match(html, /כתובת הרשת הביתית<input readOnly="" dir="ltr" value="https:\/\/192.168.4.25"/);
+    assert.match(html, /דף ההצטרפות<input readOnly="" dir="ltr" value="http:\/\/192.168.4.25\/"/);
+    assert.doesNotMatch(html, /הטאבלט צריך להיות מחובר לאותה רשת ביתית/);
+  }
+  const html = render({ origin: 'http://127.0.0.1:47123', siteOrigin: 'https://home.example.test' });
+  assert.doesNotMatch(html, /דף ההצטרפות|אם הכתובת לא נפתחת/);
+});

@@ -23,6 +23,7 @@ internal sealed class NativeLanInstall(InstallerState application,InstalledPair 
     private static string StateFile=>Path.Combine(LanProxyPaths.State,"owner.json");
     private static string JournalFile=>Path.Combine(LanProxyPaths.State,"web-change.json");
     private static string HomeNetworkFile=>Path.Combine(InstallLocations.State,InstalledHomeNetworkRecord.FileName);
+    private static string HomeNameFile=>Path.Combine(InstallLocations.State,InstalledHomeNameRecord.FileName);
     private static string PreparationFile=>Path.Combine(InstallLocations.State,"lan-preparation.json");
     private static string RemovalFile=>InstallLocations.Binaries+".lan-uninstall.json";
     private static string RootCertificate=>Path.Combine(LanProxyPaths.Data,"pki","authorities","local","root.crt");
@@ -62,9 +63,14 @@ internal sealed class NativeLanInstall(InstallerState application,InstalledPair 
         if(!File.Exists(StateFile)){if(preparing)return null;throw new IOException("LAN_OWNERSHIP_MISSING");}
         return NativeJson.Read(NativeInstallFiles.ReadRecord(StateFile,1048576),SetupJsonContext.Default.LanOwnedState);
     }
-    private LanDeploymentPlan Plan(LanOwnedState state)=>LanDeployment.Create(application.InstallationId,
+    private LanDeploymentPlan Plan(LanOwnedState state,LanHomeNameSite? name=null)=>LanDeployment.Create(application.InstallationId,
         [new(state.AdapterId,"selected",state.Address)],state.AdapterId,state.Address,application.Port,
-        LanProxyPaths.Caddy(pair.Infrastructure.Version),LanProxyPaths.Data,LanProxyPaths.PublicJoin,state.HttpHelp);
+        LanProxyPaths.Caddy(pair.Infrastructure.Version),LanProxyPaths.Data,LanProxyPaths.PublicJoin,state.HttpHelp,name);
+    // The home name (docs/HOME-NAME.md 3) over this LAN state: its Caddyfile, with or without the name site.
+    private HomeNameSetup Names(LanOwnedState state,Func<CancellationToken,Task>? restartRuntime=null)=>new(new HomeNameRemote(),
+        new NativeHomeNameEnvironment(RestartProxyAsync,restartRuntime??(_=>Task.FromException(new IOException("HOME_NAME_RUNTIME_UNAVAILABLE")))),
+        new(LanProxyPaths.HomeNameOwner,HomeNameFile,LanProxyPaths.Config,LanProxyPaths.Name),name=>Encoding.UTF8.GetBytes(Plan(state,name).Caddyfile));
+    private LanHomeNameSite? ActiveSite(LanOwnedState state){var names=Names(state);return names.ActiveName() is {} name?names.Site(name):null;}
     private void Save(LanOwnedState state)=>Record(StateFile,Json(state));
     // The caller has stopped the Runtime service: a pending change of the launch
     // file goes back to the bytes it replaced.
@@ -170,7 +176,7 @@ internal sealed class NativeLanInstall(InstallerState application,InstalledPair 
     internal async Task ConfigureAsync(LanSetupRequest request,Action<SetupProgress> progress,CancellationToken cancellation)
     {
         var resuming=request.Action==LanSetupAction.Enable&&PreparationMatches(request,!File.Exists(StateFile));var owned=Read(preparing:resuming);
-        if(request.Action==LanSetupAction.Disable){if(owned is not null)await DisableAsync(owned,cancellation);return;}
+        if(request.Action==LanSetupAction.Disable){if(owned is not null)await DisableAsync(owned,false,cancellation);return;}
         var template=RequirePayload(pair.App);
         if(owned is null&&!resuming&&NativeService.Exists(ServiceSpec.Lan))throw new IOException("LAN_INSTALL_COLLISION");
         if(owned is null&&!resuming)Record(PreparationFile,Json(request));
@@ -182,6 +188,8 @@ internal sealed class NativeLanInstall(InstallerState application,InstalledPair 
         MakeDirectory(LanProxyPaths.Data,NativeInstallFiles.DataAcl(sid));MakeDirectory(LanProxyPaths.Temporary,NativeInstallFiles.DataAcl(sid));MakeDirectory(LanProxyPaths.PublicJoin);
         var next=new LanOwnedState("preparing",request.AdapterId!,request.Address!,request.HttpHelp,owned?.RootSha256??"");
         var plan=Plan(next);Save(next);
+        // The app goes back to the IP origin before the Caddyfile loses the name site.
+        Names(next).Suspend();
         try
         {
             // Caddy may resume its own unpublished first initialization. Once
@@ -218,9 +226,11 @@ internal sealed class NativeLanInstall(InstallerState application,InstalledPair 
             throw;
         }
     }
-    private async Task DisableAsync(LanOwnedState owned,CancellationToken cancellation)
+    // Turning phone access off gives the name up; an uninstall that keeps the data keeps it as well.
+    private async Task DisableAsync(LanOwnedState owned,bool keepName,CancellationToken cancellation)
     {
         await StopProxyIfPresentAsync(cancellation);
+        if(!keepName)await Names(owned).RemoveAsync(true,cancellation);
         NativeLanFirewall.Remove(Plan(owned).FirewallRules);ChangeOrigin("http://127.0.0.1:"+application.Port);
         if(File.Exists(HomeNetworkFile))File.Delete(HomeNetworkFile);Save(owned with{Phase="disabled"});CompleteWebChange();RemovePreparation();
     }
@@ -246,7 +256,7 @@ internal sealed class NativeLanInstall(InstallerState application,InstalledPair 
     internal void WriteProxyConfig()
     {
         var owned=Read(removing:true,preparing:true);if(owned is not {Phase:"enabled",RootSha256:not ""})return;
-        Record(LanProxyPaths.Config,Encoding.UTF8.GetBytes(Plan(owned).Caddyfile));
+        Record(LanProxyPaths.Config,Encoding.UTF8.GetBytes(Plan(owned,ActiveSite(owned)).Caddyfile));
         // An install from before this record gets it on its next infrastructure move.
         WriteHomeNetwork(Plan(owned),owned.RootSha256);
     }
@@ -289,6 +299,40 @@ internal sealed class NativeLanInstall(InstallerState application,InstalledPair 
         await ProbeAsync(owned,root,true,cancellation);
         return new(plan.Origin,plan.HelpOrigin,root.Sha256Fingerprint,Convert.ToBase64String(root.Der));
     }
+    // The name transaction runs once the IP path is committed and served (docs/HOME-NAME.md 3). choice: the
+    // owner's option on an Enable request; null without one, which only finishes an unfinished transaction.
+    internal async Task<HomeNameOutcome?> HomeNameAsync(bool? choice,Func<CancellationToken,Task> restartRuntime,CancellationToken cancellation)
+    {
+        if(!HomeNameRelease.Configured||Read() is not {Phase:"enabled"} owned)return null;
+        var names=Names(owned,restartRuntime);
+        if(choice==false)
+        {
+            // ConfigureAsync already served the IP-only Caddyfile.
+            if(names.ReadOwner() is {Phase:not HomeNameOwnerRecord.Removed})await names.RemoveAsync(true,cancellation);
+            return null;
+        }
+        if(choice is null&&!names.Unfinished())return names.ActiveName() is {} active?new(active,null):null;
+        // The app the Runtime runs must take the name as its origin, or the name would only show the app's refusal.
+        if(!InstalledHomeNameRecord.Declared(AppBytes(pair.App,"app/deploy/lan-capabilities.json",4096)))return new(null,"HOME_NAME_APP_UNSUPPORTED");
+        MakeDirectory(LanProxyPaths.Name,NativeInstallFiles.DataAcl(InstallLocations.ServiceSidFor(LanProxyPaths.ServiceName)));
+        return await names.RunAsync(owned.Address,cancellation);
+    }
+    // The proxy reloads its Caddyfile: the confirmed stop, a start, and the IP site answering as the app.
+    private async Task RestartProxyAsync(CancellationToken cancellation)
+    {
+        var owned=Read()??throw new IOException("LAN_OWNERSHIP_MISSING");
+        using(var proxy=NativeService.Open(pair.Infrastructure.Version,ServiceSpec.Lan))
+        {await StopProxyAsync(proxy,cancellation);RequireConfirmedStop(proxy);await StartProxyAsync(proxy,cancellation);}
+        var root=LanCertificate.ExportPublicRoot(CertificateBytes());if(root.Sha256Fingerprint!=owned.RootSha256)throw new IOException("LAN_CA_CHANGED");
+        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancellation);deadline.CancelAfter(TimeSpan.FromSeconds(30));
+        while(true)
+        {
+            try{await ProbeAsync(owned,root,true,deadline.Token);return;}
+            catch(HttpRequestException)when(!deadline.IsCancellationRequested){}
+            catch(TaskCanceledException)when(!deadline.IsCancellationRequested){}
+            await Task.Delay(250,deadline.Token);
+        }
+    }
     internal async Task UninstallAsync(UninstallMode mode,CancellationToken cancellation)
     {
         var owned=Read(removing:true);if(owned is null){RemovePreparation();return;}
@@ -296,10 +340,11 @@ internal sealed class NativeLanInstall(InstallerState application,InstalledPair 
         else Record(RemovalFile,Json(new LanRemovalIntent(mode,owned)));
         // A partially removed state may no longer contain owner.json or the CA.
         // The external receipt above remains until both removable roots are gone.
-        if(Directory.Exists(LanProxyPaths.State)&&File.Exists(StateFile))await DisableAsync(owned,cancellation);
+        if(Directory.Exists(LanProxyPaths.State)&&File.Exists(StateFile))await DisableAsync(owned,mode==UninstallMode.KeepData,cancellation);
         else
         {
             await StopProxyIfPresentAsync(cancellation);
+            if(mode==UninstallMode.DeleteData)await Names(owned).RemoveAsync(false,cancellation);
             NativeLanFirewall.Remove(Plan(owned).FirewallRules);
             if(mode==UninstallMode.KeepData&&Directory.Exists(LanProxyPaths.State))Save(owned with{Phase="disabled"});
         }

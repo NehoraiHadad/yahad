@@ -13,7 +13,7 @@ if(args is ["--describe"])
 }
 if(args is ["--lan-service"])
 {
-    try{return ScmController.Dispatch(new NativeScmApi(),LanProxyPaths.ServiceName,Environment.Exit,()=>new LanProxyServiceController(new WindowsLanProxyAdmission()));}
+    try{return ScmController.Dispatch(new NativeScmApi(),LanProxyPaths.ServiceName,Environment.Exit,()=>LanProxy());}
     catch{Console.Error.WriteLine("YAHAD_LAN_DISPATCH_REFUSED");return 1;}
 }
 if(args is not ["--service"]){Console.Error.WriteLine("YAHAD_SERVICE_ARGUMENTS_REFUSED");return 2;}
@@ -22,3 +22,9 @@ try
     return InstalledLaunch.Run();
 }
 catch(Exception error){_=ServiceStartupDiagnostic.TryRecord(StartupDiagnosticRole.Runtime,error);Console.Error.WriteLine("YAHAD_SCM_DISPATCH_REFUSED");return 1;}
+
+static LanProxyServiceController LanProxy()
+{
+    var admission=new WindowsLanProxyAdmission();
+    return new(admission,renewal:HomeNameRelease.Configured?new WindowsLanHomeNameRenewal(()=>admission.Address,new HomeNameRemote()):null);
+}

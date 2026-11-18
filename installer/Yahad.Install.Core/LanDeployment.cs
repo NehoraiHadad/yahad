@@ -22,6 +22,9 @@ public sealed record LanFirewallRule(
         Matches(observed) || otherProgram is not null && this with { ApplicationName = otherProgram } == observed;
 }
 
+/// <summary>The home name's site: the name and the certificate and key files it is served with.</summary>
+public sealed record LanHomeNameSite(string Name, string CertificateFile, string KeyFile);
+
 /// <summary>No plan is consent. The caller must obtain explicit owner consent and recheck the adapter before execution.</summary>
 public sealed record LanDeploymentPlan(
     string InstallationId, string AdapterId, string Address, int AppPort,
@@ -40,7 +43,7 @@ public static class LanDeployment
 
     public static LanDeploymentPlan Create(string installationId, IReadOnlyList<LanChoice> choices,
         string selectedAdapterId, string selectedAddress, int appPort, string caddyExecutable,
-        string storageDirectory, string publicJoinDirectory, bool enableHttpHelp = true)
+        string storageDirectory, string publicJoinDirectory, bool enableHttpHelp = true, LanHomeNameSite? homeName = null)
     {
         var origin = NetworkPlan.LanOrigin(choices, selectedAdapterId, selectedAddress);
         var grouping = "Yahad.LAN." + installationId;
@@ -58,15 +61,16 @@ public static class LanDeployment
         // There is deliberately no UDP/HTTP3 listener or implicit port-80 redirect.
         config.Append("    servers {\n        protocols h1 h2\n    }\n}\n");
         config.Append(origin).Append(" {\n    bind ").Append(selectedAddress).Append("\n    tls internal\n");
-        config.Append("    @ownerOnly path /health /health/* /api/setup /api/setup/*\n");
-        // Not tied to the HTTP page: a browser that goes straight to HTTPS needs these
-        // as well. Public files on the port that is already open, with no new firewall rule.
-        config.Append("    @helpPage {\n        method GET HEAD\n        path ").Append(HelpPath).Append("\n    }\n");
-        config.Append("    @certificate {\n        method GET HEAD\n        path /certificate.crt\n    }\n");
-        config.Append("    route {\n        respond @ownerOnly 404\n");
-        AppendHelpPage(config, "@helpPage", publicJoinDirectory, PublicHeaders("            "));
-        AppendCertificate(config, "@certificate", publicJoinDirectory, PublicHeaders("            "));
-        config.Append("        reverse_proxy 127.0.0.1:").Append(appPort).Append(" {\n            flush_interval -1\n        }\n    }\n}\n");
+        AppendApplicationRoute(config, appPort, publicJoinDirectory);
+        // The home name (docs/HOME-NAME.md 3): the same address and the same route, served
+        // with the publicly trusted certificate the name path keeps in live/.
+        if (homeName is not null)
+        {
+            AcmeName.Require(homeName.Name);
+            config.Append("https://").Append(homeName.Name).Append(" {\n    bind ").Append(selectedAddress).Append('\n');
+            config.Append("    tls ").Append(Quote(homeName.CertificateFile)).Append(' ').Append(Quote(homeName.KeyFile)).Append('\n');
+            AppendApplicationRoute(config, appPort, publicJoinDirectory);
+        }
         if (enableHttpHelp)
         {
             config.Append("http://").Append(selectedAddress).Append(" {\n    bind ").Append(selectedAddress).Append('\n');
@@ -91,6 +95,20 @@ public static class LanDeployment
             throw new InvalidDataException("NETWORK_SELECTION_CHANGED");
     }
 
+    // Everything a site serves after its tls line: the owner-only guard, the public help
+    // page and certificate, then the application.
+    private static void AppendApplicationRoute(StringBuilder config, int appPort, string publicJoinDirectory)
+    {
+        config.Append("    @ownerOnly path /health /health/* /api/setup /api/setup/*\n");
+        // Not tied to the HTTP page: a browser that goes straight to HTTPS needs these
+        // as well. Public files on the port that is already open, with no new firewall rule.
+        config.Append("    @helpPage {\n        method GET HEAD\n        path ").Append(HelpPath).Append("\n    }\n");
+        config.Append("    @certificate {\n        method GET HEAD\n        path /certificate.crt\n    }\n");
+        config.Append("    route {\n        respond @ownerOnly 404\n");
+        AppendHelpPage(config, "@helpPage", publicJoinDirectory, PublicHeaders("            "));
+        AppendCertificate(config, "@certificate", publicJoinDirectory, PublicHeaders("            "));
+        config.Append("        reverse_proxy 127.0.0.1:").Append(appPort).Append(" {\n            flush_interval -1\n        }\n    }\n}\n");
+    }
     private static string PublicHeaders(string indent) =>
         indent + "header {\n" + indent + "    Cache-Control \"no-store\"\n" + indent + "    X-Content-Type-Options \"nosniff\"\n" + indent + "    Referrer-Policy \"no-referrer\"\n" +
         indent + "    Content-Security-Policy \"default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'none'; frame-ancestors 'none'; base-uri 'none'\"\n" + indent + "}\n";

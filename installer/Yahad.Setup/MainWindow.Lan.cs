@@ -29,6 +29,8 @@ public partial class MainWindow
         KeepLan.Content=existingAccess?"להשאיר את אפשרויות הגישה הקיימות":"רק במחשב הזה";
         LanKeepHint.Text=existingAccess?"הגישה שכבר הוגדרה תישמר. הבחירה הזאת אינה מכבה גישה קיימת מהטלפון.":"יחד תהיה זמינה במחשב הזה בלבד. אפשר להוסיף גישה מהטלפון בהמשך.";
         DisableLan.Visibility=DisableLanHint.Visibility=existingAccess?Visibility.Visible:Visibility.Collapsed;
+        // Offered only by a build with a name service (docs/HOME-NAME.md, Configuration).
+        LanHomeNameArea.Visibility=HomeNameRelease.Configured?Visibility.Visible:Visibility.Collapsed;
         UpdateLanUi();
     }
     private void LanAddressChanged(object sender,SelectionChangedEventArgs e)
@@ -95,13 +97,16 @@ public partial class MainWindow
         }
         return null;
     }
+    // Passed beside the request, never inside it: lan-preparation.json keeps the request as it was.
+    private bool SelectedHomeName()=>!uninstall&&HomeLan.IsChecked==true&&HomeNameRelease.Configured&&LanHomeName.IsChecked==true;
     private void ShowLanResult(LanSetupResult? lan)
     {
         LanPanel.Visibility=Visibility.Collapsed;
         if(lan is null)return;
         LanResultPanel.Visibility=Visibility.Visible;LanRootFingerprint.Text=lan.RootSha256;
         SaveLanCertificate.Visibility=lan.CertificateDerBase64 is null?Visibility.Collapsed:Visibility.Visible;
-        LanResultText.Text="כתובת יחד בבית: "+lan.Origin+"\n"+
+        LanResultText.Text=(lan.HomeName is {} name?"כתובת יחד בבית: https://"+name+"\n"+"הכתובת לפי מספר: "+lan.Origin+"\n":"כתובת יחד בבית: "+lan.Origin+"\n")+
+            (lan.HomeNameFailure is {} failure?"הכתובת הקבועה לא הוגדרה ("+failure+"). יחד פועלת בכתובת לפי מספר; הפעלה חוזרת של ההתקנה תנסה שוב.\n":"")+
             "דף ההצטרפות: "+(lan.HelpOrigin??lan.Origin+LanDeployment.HelpPath)+"\n"+
             "חיבור HTTPS מהמחשב נבדק. כניסה ממכשיר נוסף עדיין לא נבדקה.\n"+
             // The browser opens the loopback address: the owner's first sign-in happens there,

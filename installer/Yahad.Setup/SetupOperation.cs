@@ -32,9 +32,9 @@ internal static class SetupOperation
         }
         catch(Exception error) when(error is HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException or KeyNotFoundException){return null;}
     }
-    internal static Task<SetupResult> RunAsync(bool uninstall,Action<SetupProgress> progress,CancellationToken cancellation,UninstallMode mode=UninstallMode.KeepData,LanSetupRequest? lan=null,UpdateSetupChoice? update=null)
-        =>Task.Run(()=>ExecuteAsync(uninstall,progress,cancellation,mode,lan,update),CancellationToken.None);
-    private static async Task<SetupResult> ExecuteAsync(bool uninstall,Action<SetupProgress> progress,CancellationToken cancellation,UninstallMode mode,LanSetupRequest? lan,UpdateSetupChoice? update)
+    internal static Task<SetupResult> RunAsync(bool uninstall,Action<SetupProgress> progress,CancellationToken cancellation,UninstallMode mode=UninstallMode.KeepData,LanSetupRequest? lan=null,UpdateSetupChoice? update=null,bool homeName=false)
+        =>Task.Run(()=>ExecuteAsync(uninstall,progress,cancellation,mode,lan,update,homeName),CancellationToken.None);
+    private static async Task<SetupResult> ExecuteAsync(bool uninstall,Action<SetupProgress> progress,CancellationToken cancellation,UninstallMode mode,LanSetupRequest? lan,UpdateSetupChoice? update,bool homeName)
     {
         try
         {
@@ -52,7 +52,7 @@ internal static class SetupOperation
                 if(!upgrade.Result.Ok)return upgrade.Result;
             }
             using var host=new NativeSetupHost(payload,uninstall?null:update);
-            try{return await new InstallFlow(host).RunAsync(SetupOwner.Current(),uninstall,Progress,deadline.Token,mode,lan);}
+            try{return await new InstallFlow(host).RunAsync(SetupOwner.Current(),uninstall,Progress,deadline.Token,mode,lan,homeName);}
             catch(Exception failure){throw host.ReportFailure(failure);}
         }
         catch(Exception failure){return FailureResult(failure,mode);}

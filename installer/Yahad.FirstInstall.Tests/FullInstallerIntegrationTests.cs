@@ -403,7 +403,7 @@ internal static class FullInstallerIntegrationTests
         });
         await check("installer partial cleanup recognizes only exact generated record names with canonical nonces",()=>
         {
-            Assert(FullInstallerResidue.Metadata.SequenceEqual(new[]{"installer-state.json","upgrade-state.json","installed.json","home-network.json","lan-preparation.json","setup-capability.json","master-key"}));
+            Assert(FullInstallerResidue.Metadata.SequenceEqual(new[]{"installer-state.json","upgrade-state.json","installed.json","home-network.json","home-name.json","lan-preparation.json","setup-capability.json","master-key"}));
             foreach(var name in FullInstallerResidue.Metadata)
             {
                 Assert(FullInstallerResidue.IsOwnedName(name+".partial-"+new string('a',32)));

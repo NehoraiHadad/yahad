@@ -1,8 +1,8 @@
 import React from 'react';
 import { ArrowLeft, KeyRound, Tablet } from 'lucide-react';
 import type { familyProgress } from './FamilyProgress';
-import { CopyField, JoinSteps } from './HomeAddress';
-import { isLoopbackOrigin, sharedAddress, tabletAddress, type HomeNetwork } from './siteAddress';
+import { CopyField, JoinSteps, NameFallback } from './HomeAddress';
+import { isLoopbackOrigin, isNameAddress, sharedAddress, tabletAddress, type HomeNetwork } from './siteAddress';
 
 type Child = ReturnType<typeof familyProgress>['children'][number];
 export function ChildTabletSetup({ child, loaded, stale, busy, origin, siteOrigin, homeNetwork, onPassword, openChat }: {
@@ -37,8 +37,8 @@ export function ChildTabletSetup({ child, loaded, stale, busy, origin, siteOrigi
           <p>{loopback ? 'הכתובת שבדפדפן כאן פועלת רק במחשב הזה. בטאבלט פותחים בדפדפן את הכתובת הזו:'
             : 'פותחים בדפדפן בטאבלט את הכתובת הזו:'}</p>
           <CopyField label="כתובת יחד" value={address}/>
-          <p className="tablet-step-note">זו כתובת האתר, לא כתובת של הטאבלט.{home ? ' הטאבלט צריך להיות מחובר לאותה רשת ביתית.' : ''}</p>
-          {home && <JoinSteps home={home}/>}
+          <p className="tablet-step-note">זו כתובת האתר, לא כתובת של הטאבלט.{home && !isNameAddress(address) ? ' הטאבלט צריך להיות מחובר לאותה רשת ביתית.' : ''}</p>
+          {home && (isNameAddress(address) ? <NameFallback home={home}/> : <JoinSteps home={home}/>)}
         </> : <p>יחד זמינה כרגע רק במחשב שבו היא מותקנת, ולכן הטאבלט לא יכול להגיע אליה. כדי להוסיף גישה,
           מפעילים שוב במחשב הזה את התקנת יחד ובוחרים „גם בטלפון ובטאבלט שמחוברים לרשת הביתית”.</p>}
       </li>

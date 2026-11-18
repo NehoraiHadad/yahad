@@ -16,7 +16,7 @@ Whoever controls the zone's DNS (the maintainer's Cloudflare account, or the nam
 holds its token) can point any label at a server of their choosing, obtain a publicly trusted
 certificate for it, and present a fake Yahad login page to a device that opens the name. They do not
 need to be on the family's network. The IP path does not have this dependency. Mitigations: the token
-lives only as a Worker secret; the Cloudflare account uses strong 2FA; a zone CAA record allows only
+lives only as a Worker secret; the Cloudflare account uses strong 2FA; a CAA record on the zone name (not the apex) allows only
 Let's Encrypt; the name is opt-in and the parent is told what it depends on. Families other than the
 maintainer would have to trust the maintainer for this; that is a decision for later, with a dedicated
 domain on the Public Suffix List.

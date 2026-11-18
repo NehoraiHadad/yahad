@@ -15,6 +15,10 @@ internal static class LanProxyPaths
     internal static string Data => Path.Combine(State, "data");
     internal static string Temporary => Path.Combine(State, "temporary");
     internal static string PublicJoin => Path.Combine(State, "join-public");
+    // The home name (docs/HOME-NAME.md 3): the one subtree this service may write, for renewal.
+    // Setup's record of the name stays beside owner.json under the install ACL.
+    internal static string Name => Path.Combine(State, "name");
+    internal static string HomeNameOwner => Path.Combine(State, HomeNameOwnerRecord.FileName);
     // The proxy runs from its infrastructure tree, like the Runtime: Caddy and the
     // host are infrastructure, so an app update never moves its image or firewall rule.
     internal static string Caddy(string infrastructure) => InstalledLayout.Caddy(infrastructure);
@@ -67,6 +71,7 @@ internal sealed class WindowsLanProxyAdmission : ILanProxyAdmission
 {
     private LanProxyReceipt? receipt;
     public bool SelectedAddressPresent() => receipt is not null && LanProxyPolicy.AddressPresent(receipt, LanProxyPolicy.Addresses());
+    internal string? Address => receipt?.Address;
     public Task<ILanProxyProcess> StartAsync(CancellationToken cancellation) => Task.Run<ILanProxyProcess>(() =>
     {
         cancellation.ThrowIfCancellationRequested();
@@ -74,6 +79,8 @@ internal sealed class WindowsLanProxyAdmission : ILanProxyAdmission
         var candidate = NativeJson.Read(NativeInstallFiles.ReadRecord(LanProxyPaths.Receipt, 4096), ServiceHostJsonContext.Default.LanProxyReceipt);
         if (!LanProxyPolicy.AddressPresent(candidate, LanProxyPolicy.Addresses())) throw new IOException("LAN_ADDRESS_CHANGED");
         receipt = candidate;
+        // A swap that a crash interrupted is settled before Caddy reads live/.
+        if (HomeNameRelease.Configured && Directory.Exists(LanProxyPaths.Name)) new HomeNameStore(LanProxyPaths.Name).Recover();
         cancellation.ThrowIfCancellationRequested();
         var environment = LaunchEnvironment.Clean(LanProxyPaths.Temporary);
         // Storage is explicitly fixed in the Caddyfile. These paths keep incidental
@@ -95,56 +102,110 @@ internal sealed class WindowsLanProxyAdmission : ILanProxyAdmission
 }
 
 internal sealed class LanProxyServiceController(ILanProxyAdmission admission, TimeSpan? addressInterval = null,
-    TimeSpan? admissionBudget = null, TimeSpan? cleanupBudget = null) : ScmController
+    TimeSpan? admissionBudget = null, TimeSpan? cleanupBudget = null, ILanHomeNameRenewal? renewal = null,
+    TimeSpan? renewalFirst = null, TimeSpan? renewalEvery = null, TimeSpan? renewalVerifyBudget = null) : ScmController
 {
     internal override async Task<ServiceRunResult> RunAsync(Action<ServiceReport> publish)
     {
         var startBudget = admissionBudget ?? TimeSpan.FromSeconds(30);
         var stopBudget = cleanupBudget ?? TimeSpan.FromSeconds(10);
         var interval = addressInterval ?? TimeSpan.FromSeconds(5);
-        ILanProxyProcess? child = null; Task<ILanProxyProcess>? starting = null;
+        var every = renewalEvery ?? TimeSpan.FromHours(24);
+        var verifyBudget = renewalVerifyBudget ?? TimeSpan.FromSeconds(20);
+        ILanProxyProcess? child = null; Task<ILanProxyProcess>? starting = null; Task? staging = null;
         var failure = ServiceFailure.None; var quiescent = true;
-        using var startCancellation = new CancellationTokenSource(startBudget);
         using var observations = new CancellationTokenSource();
+        // A start races STOP and its own budget. A late successful start still transfers its
+        // owned process to cleanup; cancellation is not proof that no process exists.
+        async Task<bool> StartChildAsync()
+        {
+            using var startCancellation = new CancellationTokenSource(startBudget);
+            starting = admission.StartAsync(startCancellation.Token);
+            var first = await Task.WhenAny(starting, stop.Task, Task.Delay(startBudget));
+            if (first == starting) { child = await starting; return true; }
+            startCancellation.Cancel();
+            if (first != stop.Task) failure = ServiceFailure.StartFailed;
+            try { child = await starting.WaitAsync(stopBudget); }
+            catch (OperationCanceledException) when (starting.IsCanceled) { }
+            catch (TimeoutException) { quiescent = false; failure = ServiceFailure.QuiescenceUnknown; }
+            return false;
+        }
+        async Task<bool> StopChildAsync()
+        {
+            try
+            {
+                using var cleanup = new CancellationTokenSource(stopBudget);
+                await child!.StopAsync(cleanup.Token).WaitAsync(cleanup.Token); child.Dispose(); child = null; return true;
+            }
+            catch { quiescent = false; failure = ServiceFailure.QuiescenceUnknown; return false; }
+        }
+        // The planned replacement (docs/HOME-NAME.md 3): the confirmed stop, the swap, a start,
+        // and the new leaf served for the name; anything less swaps back. False leaves the loop.
+        async Task<bool> ReplaceAsync(ILanHomeNameRenewal name)
+        {
+            if (!await StopChildAsync()) return false;
+            var swapped = true;
+            try { name.Swap(); } catch { swapped = false; }
+            if (!await StartChildAsync()) return false;
+            if (!swapped || await ServedAsync(name)) return true;
+            if (stop.Task.IsCompleted || !await StopChildAsync()) return false;
+            // A failed swap back leaves its journal; the admission's recovery settles live/ first.
+            try { name.SwapBack(); } catch { }
+            return await StartChildAsync();
+        }
+        async Task<bool> ServedAsync(ILanHomeNameRenewal name)
+        {
+            using var verify = CancellationTokenSource.CreateLinkedTokenSource(observations.Token);
+            verify.CancelAfter(verifyBudget);
+            var serving = name.ServesLiveAsync(verify.Token);
+            var exited = child!.WaitForExitAsync(verify.Token);
+            await Task.WhenAny(serving, exited, stop.Task);
+            verify.Cancel();
+            return serving.IsCompletedSuccessfully && serving.Result;
+        }
         try
         {
             publish(new(ServiceState.StartPending, 0, 1, 40000, 0, 0));
-            if (!stop.Task.IsCompleted)
-            {
-            starting = admission.StartAsync(startCancellation.Token);
-            var first = await Task.WhenAny(starting, stop.Task, Task.Delay(startBudget));
-            if (first != starting)
-            {
-                startCancellation.Cancel();
-                if (first != stop.Task) failure = ServiceFailure.StartFailed;
-                // A late successful start still transfers its owned process to
-                // cleanup; cancellation is not proof that no process exists.
-                try { child = await starting.WaitAsync(stopBudget); }
-                catch (OperationCanceledException) when (starting.IsCanceled) { }
-                catch (TimeoutException) { quiescent = false; failure = ServiceFailure.QuiescenceUnknown; }
-            }
-            else child = await starting;
-            if (child is not null && failure == ServiceFailure.None && !stop.Task.IsCompleted)
+            if (!stop.Task.IsCompleted && await StartChildAsync() && !stop.Task.IsCompleted)
             {
                 if (!admission.SelectedAddressPresent()) throw new IOException("LAN_ADDRESS_CHANGED");
-                var exit = child.WaitForExitAsync(observations.Token);
+                var exit = child!.WaitForExitAsync(observations.Token);
                 // SCM RUNNING confirms owned-process startup only. Installer
                 // performs a separate pinned HTTPS check before claiming LAN ready.
                 if (exit.IsCompleted) { await exit; failure = ServiceFailure.UnexpectedExit; }
                 else
                 {
                     publish(new(ServiceState.Running, 5, 0, 0, 0, 0));
+                    var renewalAt = Environment.TickCount64 + (long)(renewalFirst ?? TimeSpan.FromMinutes(10)).TotalMilliseconds;
                     while (!stop.Task.IsCompleted)
                     {
-                        var winner = await Task.WhenAny(exit, stop.Task, Task.Delay(interval));
+                        var winner = staging is null ? await Task.WhenAny(exit, stop.Task, Task.Delay(interval)) : await Task.WhenAny(exit, stop.Task, Task.Delay(interval), staging);
                         if (winner == exit) { await exit; failure = ServiceFailure.UnexpectedExit; break; }
                         if (winner == stop.Task) break;
                         // Includes wake-up and lost/reassigned DHCP addresses.
                         // Stop; never rebind to another adapter or all interfaces.
                         if (!admission.SelectedAddressPresent()) { failure = ServiceFailure.ActivationUnavailable; break; }
+                        if (renewal is null) continue;
+                        if (staging is { IsCompleted: true })
+                        {
+                            // A failed staging leaves live/ and the running proxy as they are; the next check retries.
+                            var staged = staging.IsCompletedSuccessfully; staging = null;
+                            renewalAt = Environment.TickCount64 + (long)every.TotalMilliseconds;
+                            if (!staged) continue;
+                            if (!await ReplaceAsync(renewal) || stop.Task.IsCompleted) break;
+                            if (!admission.SelectedAddressPresent()) { failure = ServiceFailure.ActivationUnavailable; break; }
+                            exit = child!.WaitForExitAsync(observations.Token);
+                        }
+                        else if (staging is null && Environment.TickCount64 >= renewalAt)
+                        {
+                            bool due;
+                            try { due = renewal.Due(DateTimeOffset.UtcNow); } catch { due = false; }
+                            // ACME runs beside the proxy: STOP and the address check never wait for it.
+                            if (due) staging = Task.Run(() => renewal.StageAsync(observations.Token));
+                            else renewalAt = Environment.TickCount64 + (long)every.TotalMilliseconds;
+                        }
                     }
                 }
-            }
             }
         }
         catch { if (failure == ServiceFailure.None) failure = ServiceFailure.StartFailed; }
@@ -163,6 +224,9 @@ internal sealed class LanProxyServiceController(ILanProxyAdmission admission, Ti
                 catch { quiescent = false; failure = ServiceFailure.QuiescenceUnknown; }
             }
             if (starting is { IsCompleted: false }) { quiescent = false; failure = ServiceFailure.QuiescenceUnknown; }
+            // Cancelled staging writes only next/, which nothing serves; a short bound keeps it from
+            // racing Setup's use of name/ after STOPPED without making STOP wait for ACME.
+            if (staging is not null) { try { await staging.WaitAsync(stopBudget); } catch { } }
             Volatile.Write(ref terminal, 1);
         }
         // On uncertainty do not publish STOPPED: the dispatcher exits the process
