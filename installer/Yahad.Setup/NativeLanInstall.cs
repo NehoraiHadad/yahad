@@ -307,8 +307,9 @@ internal sealed class NativeLanInstall(InstallerState application,InstalledPair 
         var names=Names(owned,restartRuntime);
         if(choice==false)
         {
-            // ConfigureAsync already served the IP-only Caddyfile.
-            if(names.ReadOwner() is {Phase:not HomeNameOwnerRecord.Removed})await names.RemoveAsync(true,cancellation);
+            // ConfigureAsync already served the IP-only Caddyfile. Always removed: a credential may be on disk
+            // without any owner phase after it (a crash right after registering).
+            await names.RemoveAsync(true,cancellation);
             return null;
         }
         // Without a choice: an unfinished transaction is finished, and an active name is checked (RunAsync).

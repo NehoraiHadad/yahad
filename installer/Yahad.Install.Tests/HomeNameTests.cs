@@ -135,6 +135,11 @@ internal static class HomeNameTests
                 try{g.Swap();throw new Exception("expected the swap to fail");}catch(IOException){}catch(UnauthorizedAccessException){}
             Assert(g.Read(g.Live,Name)!.LeafSha256==Leaf(older));g.Recover();
             Assert(!File.Exists(g.JournalFile)&&g.Read(g.Live,Name)!.LeafSha256==Leaf(older)&&g.IsComplete(g.Next));
+            // A journal that cannot be removed (open elsewhere) does not keep the settled live from Caddy.
+            var h=Prepared("journal-locked");Journal(h);Directory.Move(h.Live,h.Prev);
+            using(new FileStream(h.JournalFile,FileMode.Open,FileAccess.Read,FileShare.Read))h.Recover();
+            Assert(h.Read(h.Live,Name)!.LeafSha256==Leaf(newer)&&File.Exists(h.JournalFile));
+            h.Recover();Assert(!File.Exists(h.JournalFile)&&h.Read(h.Live,Name)!.LeafSha256==Leaf(newer));
             // No journal: recovery touches nothing.
             var e=Prepared("none");Directory.Move(e.Live,e.Prev+"-aside");e.Recover();Assert(!Directory.Exists(e.Live));
             return Task.CompletedTask;

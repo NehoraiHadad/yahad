@@ -136,7 +136,7 @@ internal sealed class HomeNameStore(string root)
         if(Directory.Exists(Live))Directory.Move(Live,Prev);
         try{Directory.Move(Next,Live);}
         catch{if(!Directory.Exists(Live)&&Directory.Exists(Prev))Directory.Move(Prev,Live);throw;}
-        try{WindowsFileBoundary.DeleteNoFollow(JournalFile,false);}catch(Exception error)when(error is IOException or UnauthorizedAccessException){}
+        DropJournal();
     }
     /// <summary>Puts prev back as live after a new certificate failed: live→failed, prev→live, then failed goes.</summary>
     internal void SwapBack()
@@ -161,8 +161,16 @@ internal sealed class HomeNameStore(string root)
                 catch(Exception error)when(error is IOException or UnauthorizedAccessException){}
             if(!promoted&&Directory.Exists(Prev))Directory.Move(Prev,Live);
         }
-        WindowsFileBoundary.DeleteNoFollow(JournalFile,false);RemoveDirectory(Failed);
+        // live/ is settled; the rest is cleanup that must not keep Caddy from starting.
+        DropJournal();
+        try{RemoveDirectory(Failed);}catch(Exception error)when(Undeletable(error)){}
     }
+    /// <summary>
+    /// Removes the journal once live/ is settled. One that cannot be removed now is harmless: it only matters while
+    /// live/ is missing, and every swap writes its own before it moves anything. The next Recover retries.
+    /// </summary>
+    private void DropJournal(){try{WindowsFileBoundary.DeleteNoFollow(JournalFile,false);}catch(Exception error)when(Undeletable(error)){}}
+    private static bool Undeletable(Exception error)=>error is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception;
     /// <summary>The name is gone: credential and certificates go, the ACME account key stays.</summary>
     internal void Clear()
     {

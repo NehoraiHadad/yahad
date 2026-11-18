@@ -79,25 +79,32 @@ internal sealed class HomeNameSetup(IHomeNameRemote remote,IHomeNameEnvironment 
         var owner=ReadOwner();
         // Active means this very configuration was committed (a LAN change suspends it first); it is kept
         // only while it still holds. Otherwise the transaction runs again, which re-registers a gone label.
-        if(owner is {Phase:HomeNameOwnerRecord.Active}&&await HoldsAsync(owner,address,cancellation))return new(owner.Name,null);
+        var check=owner is {Phase:HomeNameOwnerRecord.Active}?await CheckAsync(owner,address,cancellation):NameCheck.Redo;
+        if(check==NameCheck.Holds)return new(owner!.Name,null);
         // The Runtime may run on the name until it is restarted; a failure below sends it back to the IP origin.
         var named=File.Exists(paths.NameRecord);
+        // The name is uncommitted before anything it serves from is touched.
         Suspend();RemoveNameRecord();WriteCaddyfile(null);
         string name;
-        try{name=await TransactAsync(address,cancellation);}
+        try{name=await TransactAsync(address,check==NameCheck.Gone,cancellation);}
         catch(Exception failure)when(failure is not OutOfMemoryException)
         {
             var code=Code(failure);
+            using var cleanup=new CancellationTokenSource(cleanupBudget??TimeSpan.FromSeconds(45));
+            Exception? incomplete=null;
             try
             {
-                using var cleanup=new CancellationTokenSource(cleanupBudget??TimeSpan.FromSeconds(45));
                 RemoveNameRecord();WriteCaddyfile(null);
                 string label;try{label=Store.ReadCredential()?.Label??"";}catch(IOException){label="";}
                 Save(HomeNameOwnerRecord.Failed,label,code);
                 await environment.RestartProxyAsync(cleanup.Token);
-                if(named)await environment.RestartRuntimeAsync(cleanup.Token);
             }
-            catch(Exception incomplete){throw SetupFailureDetail.Besides(failure,incomplete);}
+            catch(Exception error){incomplete=error;}
+            // Whatever the proxy did, a Runtime that ran on the name goes back to the IP origin.
+            if(named)
+                try{await environment.RestartRuntimeAsync(cleanup.Token);}
+                catch(Exception error){incomplete=incomplete is null?error:new AggregateException(incomplete,error);}
+            if(incomplete is not null)throw SetupFailureDetail.Besides(failure,incomplete);
             // The operation's own deadline or cancellation is not a name failure.
             cancellation.ThrowIfCancellationRequested();
             return new(null,code);
@@ -106,9 +113,11 @@ internal sealed class HomeNameSetup(IHomeNameRemote remote,IHomeNameEnvironment 
         await environment.RestartRuntimeAsync(cancellation);
         return new(name,null);
     }
-    private async Task<string> TransactAsync(string address,CancellationToken cancellation)
+    private async Task<string> TransactAsync(string address,bool gone,CancellationToken cancellation)
     {
         var store=Store;
+        // A label the name service called gone: its certificates name it, so they go with it.
+        if(gone)store.Clear();
         for(var attempt=0;;attempt++)
         {
             try
@@ -138,25 +147,26 @@ internal sealed class HomeNameSetup(IHomeNameRemote remote,IHomeNameEnvironment 
             catch(HomeNameGoneException)when(attempt==0){store.Clear();}
         }
     }
+    private enum NameCheck{Holds,Redo,Gone}
     /// <summary>
     /// An active name still holds when its credential and a valid live certificate are here and the name service
     /// still knows the label (the unchanged address is a no-op there that also refreshes it). Only the service's
     /// 410 says the label is gone; a service that cannot be reached says nothing about it.
     /// </summary>
-    private async Task<bool> HoldsAsync(HomeNameOwner owner,string address,CancellationToken cancellation)
+    private async Task<NameCheck> CheckAsync(HomeNameOwner owner,string address,CancellationToken cancellation)
     {
-        if(!File.Exists(paths.NameRecord))return false;
+        if(!File.Exists(paths.NameRecord))return NameCheck.Redo;
         var store=Store;HomeNameCredential? credential;
         try
         {
             credential=store.ReadCredential();
-            if(credential is null||credential.Label!=owner.Label||store.Read(store.Live,owner.Name) is not {} live||(clock??(()=>DateTimeOffset.UtcNow))()>=live.NotAfter)return false;
+            if(credential is null||credential.Label!=owner.Label||store.Read(store.Live,owner.Name) is not {} live||(clock??(()=>DateTimeOffset.UtcNow))()>=live.NotAfter)return NameCheck.Redo;
         }
-        catch(Exception error)when(error is IOException or System.Security.Cryptography.CryptographicException or ArgumentException){return false;}
-        try{await remote.SetAddressAsync(credential,address,cancellation);return true;}
-        // Gone: its certificates name it, so they go with it, and the transaction registers again.
-        catch(HomeNameGoneException){store.Clear();return false;}
-        catch(Exception error)when(error is not OutOfMemoryException&&!cancellation.IsCancellationRequested){return true;}
+        catch(Exception error)when(error is IOException or System.Security.Cryptography.CryptographicException or ArgumentException){return NameCheck.Redo;}
+        try{await remote.SetAddressAsync(credential,address,cancellation);return NameCheck.Holds;}
+        // Gone: the transaction discards its credential and certificates, after the name is uncommitted.
+        catch(HomeNameGoneException){return NameCheck.Gone;}
+        catch(Exception error)when(error is not OutOfMemoryException&&!cancellation.IsCancellationRequested){return NameCheck.Holds;}
     }
     // A live certificate for this name that is not yet due is reused: a rerun does not ask the CA again.
     private bool Current(HomeNameStore store,string name)

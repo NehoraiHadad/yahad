@@ -40,12 +40,13 @@ internal static class HomeNameSetupTests
         internal string Caddyfile=>File.ReadAllText(Paths.Caddyfile);
         internal bool Committed=>File.Exists(Paths.NameRecord);
         internal HomeNameOwner? Owner=>File.Exists(Paths.Owner)?HomeNameOwnerRecord.Parse(File.ReadAllBytes(Paths.Owner)):null;
-        // Never the reverse: a committed name is always one the Caddyfile serves.
+        // Never the reverse: a committed name is always one the Caddyfile serves, from a certificate that is there.
         internal void Ordering()
         {
             if(!Committed)return;
             var name=InstalledHomeNameRecord.Parse(File.ReadAllBytes(Paths.NameRecord)).Name;
             Assert(Caddyfile.Contains("name "+name+" ",StringComparison.Ordinal),"HOME_NAME_RECORD_BEFORE_SITE");
+            Assert(Store.Read(Store.Live,name) is not null,"HOME_NAME_RECORD_WITHOUT_CERTIFICATE");
         }
     }
     private sealed class Remote(Fixture fixture):IHomeNameRemote
@@ -196,6 +197,24 @@ internal static class HomeNameSetupTests
                 f.Now=f.Now.AddDays(91);f.Remote.IssueFailure=new AcmeException("ACME_RATE_LIMITED");f.Environment.Calls.Clear();
                 Assert(await f.Setup().RunAsync(Address,default)==new HomeNameOutcome(null,"ACME_RATE_LIMITED"));
                 Assert(f.Environment.Calls.SequenceEqual(["proxy:ip","runtime:ip"])&&!f.Committed&&f.Caddyfile=="ip\n"&&f.Owner!.Phase=="failed");
+            });
+            await check("active home name whose redo cannot restart the proxy still sends the Runtime back to the IP origin",async()=>
+            {
+                var f=new Fixture(root);await f.Setup().RunAsync(Address,default);
+                f.Now=f.Now.AddDays(91);f.Remote.IssueFailure=new AcmeException("ACME_RATE_LIMITED");f.Environment.FailProxyRestarts=1;f.Environment.Calls.Clear();
+                try{await f.Setup().RunAsync(Address,default);throw new Exception("expected failure");}
+                catch(AggregateException both){Assert(both.InnerExceptions.Count==2);}
+                Assert(f.Environment.Calls.SequenceEqual(["proxy:ip","runtime:ip"])&&!f.Committed&&f.Caddyfile=="ip\n");
+            });
+            await check("home name removal also discards a credential that no owner phase followed",async()=>
+            {
+                var f=new Fixture(root);File.WriteAllBytes(f.Paths.Owner,HomeNameOwnerRecord.Encode(new(1,"removed","","",null)));
+                f.Store.WriteCredential(new(LabelA,new string('A',43)));Assert(f.Setup().Unfinished());
+                await f.Setup().RemoveAsync(true,default);
+                Assert(f.Remote.Calls.SequenceEqual(["delete "+LabelA])&&f.Store.ReadCredential() is null&&!f.Setup().Unfinished());
+                var g=new Fixture(root);g.Store.WriteCredential(new(LabelB,new string('A',43)));
+                await g.Setup().RemoveAsync(true,default);
+                Assert(g.Remote.Calls.SequenceEqual(["delete "+LabelB])&&g.Store.ReadCredential() is null&&!g.Setup().Unfinished()&&g.Owner!.Phase=="removed");
             });
             await check("home name failure codes come from the name service, the CA or the step, never free text",async()=>
             {
