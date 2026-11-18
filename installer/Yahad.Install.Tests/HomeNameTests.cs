@@ -27,7 +27,7 @@ internal static class HomeNameTests
 
         await check("home name build inputs are the release's service and zone, and only a whole pair is accepted",()=>
         {
-            Assert(HomeNameRelease.Configured&&HomeNameRelease.Service=="https://yahad-names.nehoraihadad.com"&&HomeNameRelease.Zone=="home.nehoraihadad.com");
+            Assert(HomeNameRelease.Configured&&HomeNameRelease.Service=="https://yahad-names.nehoraihadad.com"&&HomeNameRelease.Zone=="yahad.nehoraihadad.com");
             Assert(HomeNameRelease.AcmeDirectory.AbsoluteUri=="https://acme-v02.api.letsencrypt.org/directory"&&HomeNameRelease.AcmeProfile=="classic");
             Assert(HomeNameRelease.Require("","")==("",""));
             foreach(var (service,zone) in new[]{("https://names.example.com",""),("","home.example.com"),("http://names.example.com","home.example.com"),
@@ -38,10 +38,10 @@ internal static class HomeNameTests
         });
         await check("home name labels and names are exactly one 12-character base32 label of the zone",()=>
         {
-            Assert(HomeNameRelease.IsLabel(Label)&&Name==Label+".home.nehoraihadad.com"&&HomeNameRelease.IsName(Name));
+            Assert(HomeNameRelease.IsLabel(Label)&&Name==Label+".yahad.nehoraihadad.com"&&HomeNameRelease.IsName(Name));
             foreach(var label in new[]{"","k2abcdefgh7","k2abcdefgh7jk","K2abcdefgh7j","k2abcdefgh1j","k2abcdefgh-j"})
             {Assert(!HomeNameRelease.IsLabel(label));Rejects<IOException>(()=>HomeNameRelease.NameFor(label),"HOME_NAME_INVALID");}
-            foreach(var name in new[]{Label+".home.nehoraihadad.com.",Label+".other.example.com","x."+Name,"home.nehoraihadad.com",Label.ToUpperInvariant()+".home.nehoraihadad.com"})
+            foreach(var name in new[]{Label+".yahad.nehoraihadad.com.",Label+".other.example.com","x."+Name,"yahad.nehoraihadad.com",Label.ToUpperInvariant()+".yahad.nehoraihadad.com"})
                 Assert(!HomeNameRelease.IsName(name));
             return Task.CompletedTask;
         });

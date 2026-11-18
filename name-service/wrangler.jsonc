@@ -20,7 +20,7 @@
   ],
   "vars": {
     // The maintainer fills these two before deploying; until then every call answers 503.
-    // ZONE_NAME: the DNS suffix the labels live under, e.g. "home.nehoraihadad.com".
+    // ZONE_NAME: the DNS suffix the labels live under, e.g. "yahad.nehoraihadad.com".
     "ZONE_NAME": "",
     // ZONE_ID: the Cloudflare zone id (32 hex) of the zone that contains ZONE_NAME.
     "ZONE_ID": "",

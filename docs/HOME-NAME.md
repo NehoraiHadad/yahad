@@ -23,7 +23,7 @@ domain on the Public Suffix List.
 
 ## Configuration
 Build-time, in `installer/Directory.Build.props`: `YahadHomeNameService` (HTTPS URL of the Worker) and
-`YahadHomeNameZone` (e.g. `home.nehoraihadad.com`). Empty: the option is not offered. Both are
+`YahadHomeNameZone` (e.g. `yahad.nehoraihadad.com`). Empty: the option is not offered. Both are
 infrastructure inputs.
 
 ## 1. Name service (Cloudflare Worker, `name-service/`, its own package.json)

@@ -43,14 +43,14 @@ npx tsc --noEmit
 2. **Log in** (in this directory): `npx wrangler login`.
 3. **Store the token as a secret:** `npx wrangler secret put CF_API_TOKEN` and paste it at the prompt.
 4. **Set the zone.** In `wrangler.jsonc` set `vars.ZONE_NAME` (the suffix, e.g.
-   `home.nehoraihadad.com`) and `vars.ZONE_ID` (dashboard → the zone → Overview → API → Zone ID).
+   `yahad.nehoraihadad.com`) and `vars.ZONE_ID` (dashboard → the zone → Overview → API → Zone ID).
    Until both are set, every call answers `503 not_configured`.
 5. **Deploy:** `npx wrangler deploy`. This creates the two Durable Object classes (SQLite storage),
    the daily cron and the register rate limiter.
 6. **Custom domain.** Dashboard → Workers & Pages → `yahad-name-service` → Settings → Domains &
    Routes → Add → Custom domain, `yahad-names.nehoraihadad.com` (outside `ZONE_NAME`, so the CAA below does not apply to it). The Worker has no `workers.dev` URL.
    Its HTTPS URL is the installer's `YahadHomeNameService`; `ZONE_NAME` is `YahadHomeNameZone`.
-7. **CAA.** In the zone's DNS add, on the `ZONE_NAME` host (e.g. `home`):
+7. **CAA.** In the zone's DNS add, on the `ZONE_NAME` host (e.g. `yahad`):
    - `CAA 0 issue "letsencrypt.org"`
    - `CAA 0 issuewild ";"`
 

@@ -6,7 +6,7 @@ export interface Env {
   BUDGET: DurableObjectNamespace<Budget>;
   /** Optional: absent in configurations without the rate-limiting binding. */
   REGISTER_LIMITER?: RateLimit;
-  /** DNS suffix the labels live under, e.g. home.nehoraihadad.com. */
+  /** DNS suffix the labels live under, e.g. yahad.nehoraihadad.com. */
   ZONE_NAME: string;
   /** Cloudflare zone id (32 hex) of the zone that contains ZONE_NAME. */
   ZONE_ID: string;

@@ -16,7 +16,7 @@
     <!-- The home name (docs/HOME-NAME.md): the name service Worker and the DNS zone it serves.
          Infrastructure inputs; both empty hides the option and leaves every name path inert. -->
     <YahadHomeNameService>https://yahad-names.nehoraihadad.com</YahadHomeNameService>
-    <YahadHomeNameZone>home.nehoraihadad.com</YahadHomeNameZone>
+    <YahadHomeNameZone>yahad.nehoraihadad.com</YahadHomeNameZone>
   </PropertyGroup>
   <ItemGroup>
     <AssemblyMetadata Include="YahadInfrastructureVersion" Value="$(YahadInfrastructureVersion)" />
