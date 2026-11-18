@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using Yahad.Install;
@@ -17,7 +18,18 @@ public partial class MainWindow
     private Func<string,int> readLanCategory=NativeNetworkProfile.ReadCategory;
     private LanProfile selectedProfile=LanProfile.Unknown;
     private static bool HasExistingAccess()=>new[]{InstallLocations.Binaries,InstallLocations.RemovalStateFile,LanProxyPaths.State}.Any(Path.Exists);
-    private void InitializeLan(IReadOnlyList<LanChoice>? choices=null,bool existingAccess=false,Func<string,int>? lanCategory=null)
+    // The label of the name this computer holds, for the window to show; null without one or when the record cannot be read.
+    private static string? ReadHomeNameLabel()
+    {
+        try
+        {
+            if(!HomeNameRelease.Configured||!File.Exists(LanProxyPaths.HomeNameOwner))return null;
+            var owner=HomeNameOwnerRecord.Parse(NativeInstallFiles.ReadRecord(LanProxyPaths.HomeNameOwner,4096));
+            return owner.Phase!=HomeNameOwnerRecord.Removed&&owner.Label.Length!=0?owner.Label:null;
+        }
+        catch{return null;}
+    }
+    private void InitializeLan(IReadOnlyList<LanChoice>? choices=null,bool existingAccess=false,Func<string,int>? lanCategory=null,string? homeNameLabel=null)
     {
         if(uninstall){LanPanel.Visibility=Visibility.Collapsed;return;}
         if(lanCategory is not null)readLanCategory=lanCategory;
@@ -31,6 +43,8 @@ public partial class MainWindow
         DisableLan.Visibility=DisableLanHint.Visibility=existingAccess?Visibility.Visible:Visibility.Collapsed;
         // Offered only by a build with a name service (docs/HOME-NAME.md, Configuration).
         LanHomeNameArea.Visibility=HomeNameRelease.Configured?Visibility.Visible:Visibility.Collapsed;
+        // The label this computer already holds: kept as it is unless the parent changes it.
+        LanHomeNameLabelInput.Text=homeNameLabel??"";UpdateHomeNameLabel();
         UpdateLanUi();
     }
     private void LanAddressChanged(object sender,SelectionChangedEventArgs e)
@@ -55,7 +69,7 @@ public partial class MainWindow
         LanProfileHelp.Visibility=chosen&&!ready?Visibility.Visible:Visibility.Collapsed;
         LanConsentArea.Visibility=!chosen||ready?Visibility.Visible:Visibility.Collapsed;
         if(chosen&&!ready)ShowProfileHelp(selectedProfile);
-        Primary.IsEnabled=UpdateChoiceReady()&&(!home||(ready&&LanConsent.IsChecked==true));
+        Primary.IsEnabled=UpdateChoiceReady()&&(!home||(ready&&LanConsent.IsChecked==true&&HomeNameLabelReady()));
         Primary.ToolTip=chosen&&!ready?"הרשת שנבחרה אינה מוגדרת ב-Windows כרשת פרטית. אפשר לסמן אותה כפרטית או לבחור רק במחשב הזה.":null;
     }
     private void ShowProfileHelp(LanProfile profile)
@@ -99,14 +113,44 @@ public partial class MainWindow
     }
     // Passed beside the request, never inside it: lan-preparation.json keeps the request as it was.
     private bool SelectedHomeName()=>!uninstall&&HomeLan.IsChecked==true&&HomeNameRelease.Configured&&LanHomeName.IsChecked==true;
+    // What the parent typed, lowercased: null when empty (the current label stays, or a random one is registered).
+    private string? TypedHomeNameLabel()=>LanHomeNameLabelInput.Text.Trim().ToLowerInvariant() is {Length:>0} typed?typed:null;
+    /// <summary>The chosen label, beside the request like <see cref="SelectedHomeName"/>; one that breaks the rule is refused.</summary>
+    private string? SelectedHomeNameLabel()
+    {
+        if(!SelectedHomeName()||TypedHomeNameLabel() is not {} label)return null;
+        return HomeNameLabel.IsValid(label)?label:throw new IOException(HomeNameLabelException.Invalid);
+    }
+    private void LanHomeNameChanged(object sender,RoutedEventArgs e)=>UpdateHomeNameLabel();
+    private void LanHomeNameLabelChanged(object sender,TextChangedEventArgs e)=>UpdateHomeNameLabel();
+    // The box is used only with the option on; the preview and the rule are shown as the parent types.
+    private void UpdateHomeNameLabel()
+    {
+        if(LanHomeNameLabelArea is null||LanHomeName is null||LanHomeNameLabelInput is null||LanHomeNamePreview is null||LanHomeNameLabelError is null)return;
+        LanHomeNameLabelArea.IsEnabled=LanHomeName.IsChecked==true;
+        var label=TypedHomeNameLabel();var valid=label is null||HomeNameLabel.IsValid(label);
+        LanHomeNamePreview.Text=HomeNameRelease.Configured?"https://"+(label??"…")+"."+HomeNameRelease.Zone:"";
+        LanHomeNameLabelError.Text=valid?"":HomeNameSetup.LabelRule;
+        LanHomeNameLabelError.Visibility=valid?Visibility.Collapsed:Visibility.Visible;
+        UpdateLanUi();
+    }
+    private bool HomeNameLabelReady()=>!SelectedHomeName()||TypedHomeNameLabel() is not {} label||HomeNameLabel.IsValid(label);
+    private void CopyLanAddress_Click(object sender,RoutedEventArgs e)
+    {
+        if(LanMainAddress.Text.Length==0)return;
+        try{Clipboard.SetText(LanMainAddress.Text);Status.Text="הכתובת הועתקה.";}
+        // Another program may hold the clipboard: the address stays selectable in its field.
+        catch(ExternalException){LanMainAddress.Focus();LanMainAddress.SelectAll();Status.Text="ההעתקה לא הצליחה. הכתובת מסומנת; אפשר להעתיק אותה ב-Ctrl+C.";}
+    }
     private void ShowLanResult(LanSetupResult? lan)
     {
         LanPanel.Visibility=Visibility.Collapsed;
         if(lan is null)return;
         LanResultPanel.Visibility=Visibility.Visible;LanRootFingerprint.Text=lan.RootSha256;
         SaveLanCertificate.Visibility=lan.CertificateDerBase64 is null?Visibility.Collapsed:Visibility.Visible;
-        LanResultText.Text=(lan.HomeName is {} name?"כתובת יחד בבית: https://"+name+"\n"+"הכתובת לפי מספר: "+lan.Origin+"\n":"כתובת יחד בבית: "+lan.Origin+"\n")+
-            (lan.HomeNameFailure is {} failure?"הכתובת הקבועה לא הוגדרה ("+failure+"). יחד פועלת בכתובת לפי מספר; הפעלה חוזרת של ההתקנה תנסה שוב.\n":"")+
+        LanMainAddress.Text=lan.HomeName is {} main?"https://"+main:lan.Origin;
+        LanResultText.Text=(lan.HomeName is not null?"הכתובת לפי מספר: "+lan.Origin+"\n":"")+
+            (lan.HomeNameFailure is {} failure?HomeNameSetup.FailureText(failure,lan.HomeName)+"\n":"")+
             "דף ההצטרפות: "+(lan.HelpOrigin??lan.Origin+LanDeployment.HelpPath)+"\n"+
             "חיבור HTTPS מהמחשב נבדק. כניסה ממכשיר נוסף עדיין לא נבדקה.\n"+
             // The browser opens the loopback address: the owner's first sign-in happens there,

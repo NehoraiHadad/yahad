@@ -15,16 +15,31 @@ All bodies are JSON. Errors are `{"error": "<code>"}`. Authenticated calls send
 
 | Call | Body | Success |
 | --- | --- | --- |
-| `POST /v1/register` | none | `201 {label, secret}` |
+| `POST /v1/register` | none (a random label), or `{"label": "hadad-home"}` (that label) | `201 {label, secret}` |
 | `PUT /v1/address` | `{"ipv4": "192.168.1.20"}` | `204` (A record, DNS-only, TTL 60) |
 | `PUT /v1/challenge` | `{"values": ["<43 chars>", ...]}` (1-2) | `204` (replaces earlier values) |
 | `DELETE /v1/challenge` | none | `204` |
 | `DELETE /v1/name` | none | `204` (idempotent; leaves a tombstone) |
 
-Error codes: `400 bad_request | invalid_address | invalid_challenge`, `401 unauthorized`,
-`404 not_found`, `405 method_not_allowed`, `410 gone` (tombstoned or expired: register again),
+Error codes: `400 bad_request | invalid_label | invalid_address | invalid_challenge`, `401 unauthorized`,
+`404 not_found`, `405 method_not_allowed`, `409 label_taken`, `410 gone` (tombstoned or expired: register again),
 `429 rate_limited | daily_limit | label_daily_limit` (with `Retry-After`),
 `502 upstream_error`, `503 capacity | budget_exhausted | not_configured`.
+
+Labels, random or chosen: 3-20 characters of `[a-z0-9-]`, a letter or digit at both ends, no `--`
+anywhere (so never an `xn--` punycode label), and not reserved (`www`, `api`, `mail`, `admin`, ... the
+list is `RESERVED_LABELS` in `src/format.ts`). Uppercase is refused, not folded. A random label is 12
+base32 characters. `test/label-cases.json` is the rule's table; the installer's tests read the same file.
+A register body other than none or exactly `{"label": "<string>"}` (JSON, at most 1 KiB) is
+`400 bad_request`; a label that breaks the rule is `400 invalid_label`. A chosen label the service holds
+in any status (live, being cleaned up, deleted or expired) is `409 label_taken`: a label is never handed
+out twice, so a name stays with the home that first had it, and certificates issued for it can never
+serve another home. Chosen labels share the register rate limit, the daily limit and the live-label cap
+with random ones.
+
+Every certificate name is public: Let's Encrypt logs each issued certificate in Certificate
+Transparency logs, which anyone can search. A chosen label (`hadad-home`) is therefore public and says
+something about the home; a random label reveals nothing beyond the fact that it exists.
 
 Limits: 5 new labels per UTC day, `LIVE_LABELS_CAP` live labels, `CF_WRITES_PER_DAY` Cloudflare
 writes per UTC day, and per label 10 address writes and 20 challenge writes per UTC day. Labels unseen

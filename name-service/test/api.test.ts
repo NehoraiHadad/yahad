@@ -102,6 +102,129 @@ describe("register", () => {
   });
 });
 
+describe("register with a chosen label", () => {
+  function raw(body: BodyInit | undefined, headers: Record<string, string>) {
+    return worker.fetch(
+      new Request("https://names.example.com/v1/register", {
+        method: "POST",
+        headers: { "CF-Connecting-IP": `198.51.100.${++ipCounter % 250}`, ...headers },
+        body,
+      }),
+      env,
+    );
+  }
+
+  it("registers exactly the label asked for, and its credential works", async () => {
+    const response = await call("POST", "/v1/register", { body: { label: "hadad-home" } });
+    expect(response.status).toBe(201);
+    const { label, secret } = (await response.json()) as { label: string; secret: string };
+    expect(label).toBe("hadad-home");
+    expect(secret).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect((await labelStub(label).inspect())?.secretSha256).toBe(await sha256Hex(secret));
+    expect((await budget().describe(label))?.status).toBe("live");
+    expect(await budget().usedToday("register", Date.now())).toBe(1);
+    const auth = `Bearer ${label}.${secret}`;
+    expect((await call("PUT", "/v1/address", { auth, body: { ipv4: "192.168.1.10" } })).status).toBe(204);
+    expect(fake.find("A", `hadad-home.${ZONE}`)).toEqual([expect.objectContaining({ content: "192.168.1.10" })]);
+    expect((await call("PUT", "/v1/challenge", { auth, body: { values: [D1] } })).status).toBe(204);
+    expect(fake.find("TXT", `_acme-challenge.hadad-home.${ZONE}`)).toHaveLength(1);
+  });
+
+  it("refuses every label outside the rule with 400 invalid_label, before the budget", async () => {
+    for (const label of ["ab", "Hadad", "xn--abc", "a--b", "-abc", "abc-", "ha_dad", "ha.dad", "a".repeat(21), "www", "_acme-challenge", "hadаd", 5, null, ["hadad"]]) {
+      const response = await call("POST", "/v1/register", { body: { label } });
+      expect(response.status, JSON.stringify(label)).toBe(400);
+      expect(await errorCode(response)).toBe("invalid_label");
+    }
+    expect(await budget().usedToday("register", Date.now())).toBe(0);
+  });
+
+  it("refuses a body that is not exactly {label} as JSON with 400 bad_request", async () => {
+    const json = { "Content-Type": "application/json" };
+    const cases: { body: string; headers: Record<string, string> }[] = [
+      { body: "{}", headers: json },
+      { body: '{"label":"hadad","extra":1}', headers: json },
+      { body: '["hadad"]', headers: json },
+      { body: '"hadad"', headers: json },
+      { body: '{"label":"hadad"', headers: json },
+      { body: "", headers: json },
+      { body: '{"label":"hadad"}', headers: { "Content-Type": "text/plain" } },
+      // Bytes with no Content-Type at all (a string body would get text/plain).
+      { body: '{"label":"hadad"}', headers: {} },
+      { body: JSON.stringify({ label: "x".repeat(2000) }), headers: json },
+    ];
+    for (const { body, headers } of cases) {
+      const response = await raw(new TextEncoder().encode(body), headers);
+      expect(response.status, body.slice(0, 40)).toBe(400);
+      expect(await errorCode(response)).toBe("bad_request");
+    }
+    expect(await budget().usedToday("register", Date.now())).toBe(0);
+  });
+
+  it("answers 409 label_taken for a label the Budget holds in any status, live or gone", async () => {
+    expect((await call("POST", "/v1/register", { body: { label: "hadad" } })).status).toBe(201);
+    const taken = await call("POST", "/v1/register", { body: { label: "hadad" } });
+    expect(taken.status).toBe(409);
+    expect(await errorCode(taken)).toBe("label_taken");
+
+    // A random label that was deleted (gone, nothing left at Cloudflare) never comes back as a chosen one.
+    const { label, auth } = await register();
+    expect((await call("DELETE", "/v1/name", { auth })).status).toBe(204);
+    expect((await budget().describe(label))?.status).toBe("gone");
+    const gone = await call("POST", "/v1/register", { body: { label } });
+    expect(gone.status).toBe(409);
+    expect(await errorCode(gone)).toBe("label_taken");
+
+    // Nor one still being cleaned up.
+    await budget().reserveRegistration("cleaning", Date.now() - 40 * DAY, 60);
+    await budget().setStatus("cleaning", "cleanup");
+    expect((await call("POST", "/v1/register", { body: { label: "cleaning" } })).status).toBe(409);
+    // The first registration counted; the refused ones did not.
+    expect(await budget().usedToday("register", Date.now())).toBe(2);
+  });
+
+  it("answers 409 when the label's object already holds state the Budget lost, and retires the label", async () => {
+    await labelStub("orphan").init("orphan", await sha256Hex("x"), Date.now());
+    const response = await call("POST", "/v1/register", { body: { label: "orphan" } });
+    expect(response.status).toBe(409);
+    expect(await errorCode(response)).toBe("label_taken");
+    expect((await budget().describe("orphan"))?.status).toBe("gone");
+    expect((await call("POST", "/v1/register", { body: { label: "orphan" } })).status).toBe(409);
+  });
+
+  it("keeps registration without a body random, alongside chosen labels", async () => {
+    expect((await call("POST", "/v1/register", { body: { label: "hadad" } })).status).toBe(201);
+    const { label } = await register();
+    expect(label).toMatch(/^[a-z2-7]{12}$/);
+    const empty = await raw(new Uint8Array(0), { "Content-Length": "0" });
+    expect(empty.status).toBe(201);
+    expect(((await empty.json()) as { label: string }).label).toMatch(/^[a-z2-7]{12}$/);
+  });
+
+  it("shares the per-IP rate limit and the daily budget with random registration", async () => {
+    const ip = "203.0.113.9";
+    const statuses: number[] = [];
+    for (const label of ["one-a", "one-b", "one-c", "one-d"]) statuses.push((await call("POST", "/v1/register", { ip, body: { label } })).status);
+    expect(statuses).toEqual([201, 201, 201, 429]);
+    // Two more fill the day's five.
+    await register();
+    await register();
+    const daily = await call("POST", "/v1/register", { body: { label: "one-e" } });
+    expect(daily.status).toBe(429);
+    expect(await errorCode(daily)).toBe("daily_limit");
+  });
+
+  it("shares the live-label capacity with random registration", async () => {
+    const now = Date.now();
+    for (let i = 0; i < 60; i++) {
+      await budget().reserveRegistration(`filler${String(i).padStart(6, "a")}`, now - (31 + Math.floor(i / 5)) * DAY, 60);
+    }
+    const full = await call("POST", "/v1/register", { body: { label: "hadad" } });
+    expect(full.status).toBe(503);
+    expect(await errorCode(full)).toBe("capacity");
+  });
+});
+
 describe("auth", () => {
   it("rejects missing, malformed and wrong credentials with 401", async () => {
     const { label, secret } = await register();

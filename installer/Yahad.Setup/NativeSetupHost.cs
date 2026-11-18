@@ -22,8 +22,8 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
     private InstallerState? state;private NativeService? service,updater;private string? setupToken;private int? reportedSchema;
     // resumed: the services exist and are provisioned. committed: nothing to record.
     private bool resumed,committed;
-    // The owner's home-name option on this run's Enable request; null without one.
-    private bool? homeNameChoice;
+    // The owner's home-name option on this run's Enable request, null without one; and the label they chose for it, if any.
+    private bool? homeNameChoice;private string? homeNameLabel;
     private UninstallPhase operationPhase=UninstallPhase.FullPrepare;
     // The state root and the binary root are read-only to the Runtime service and
     // everything below inherits that; data and temporary are its only writable trees.
@@ -196,9 +196,9 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
         key.SetValue("NoModify",1,RegistryValueKind.DWord);key.SetValue("NoRepair",1,RegistryValueKind.DWord);
     }
 
-    public async Task ConfigureLanAsync(LanSetupRequest request,bool homeName,Action<SetupProgress> progress,CancellationToken cancellation)
+    public async Task ConfigureLanAsync(LanSetupRequest request,bool homeName,string? label,Action<SetupProgress> progress,CancellationToken cancellation)
     {
-        operationPhase=UninstallPhase.FullNetwork;homeNameChoice=request.Action==LanSetupAction.Enable?homeName:null;
+        operationPhase=UninstallPhase.FullNetwork;homeNameChoice=request.Action==LanSetupAction.Enable?homeName:null;homeNameLabel=homeNameChoice==true?label:null;
         var network=new NativeLanInstall(state!);network.Preflight(request);
         // The launch file changes only while the Runtime is stopped.
         await service!.StopAsync(cancellation);network.RecoverWebJournal();await network.ConfigureAsync(request,progress,cancellation);
@@ -248,7 +248,7 @@ internal sealed class NativeSetupHost(InstallPackage? package,UpdateSetupChoice?
             if(!await AskAsync(client,LocalUrl+"health/ready",seen=>UpgradeRules.HealthPasses(new(seen.GetProperty("ok").GetBoolean(),seen.GetProperty("version").GetString(),seen.GetProperty("databaseSchema").GetInt32()),target.Version,target.DatabaseSchema),restart))
                 throw new IOException("SERVER_NOT_READY");
         }
-        if(lan is not null&&await network.HomeNameAsync(homeNameChoice,RestartRuntimeAsync,cancellation) is {} name)lan=lan with{HomeName=name.Name,HomeNameFailure=name.Failure};
+        if(lan is not null&&await network.HomeNameAsync(homeNameChoice,homeNameLabel,RestartRuntimeAsync,cancellation) is {} name)lan=lan with{HomeName=name.Name,HomeNameFailure=name.Failure};
         return new(true,"READY",LocalUrl,setupToken,Lan:lan);
     }
     // One question to the Runtime just started. However it fails to answer as this app

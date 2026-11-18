@@ -1,5 +1,6 @@
 using System.IO;
 using System.Security.Principal;
+using Yahad.Install;
 namespace Yahad.Setup;
 
 // The account running this elevated Setup and the hash of its image. Under
@@ -26,24 +27,27 @@ internal interface ISetupHostOperations
 {
     Task PrepareAsync(SetupOwner owner,Action<SetupProgress> progress,CancellationToken cancellation);
     Task ProvisionAsync(Action<SetupProgress> progress,CancellationToken cancellation);
-    /// <summary>homeName: the owner's home-name option, meaningful only with an Enable request; never persisted with the request.</summary>
-    Task ConfigureLanAsync(LanSetupRequest request,bool homeName,Action<SetupProgress> progress,CancellationToken cancellation);
+    /// <summary>
+    /// homeName: the owner's home-name option, meaningful only with an Enable request; homeNameLabel: the label the owner
+    /// chose for it, or null (keep the current one, or a random one). Neither is ever persisted with the request.
+    /// </summary>
+    Task ConfigureLanAsync(LanSetupRequest request,bool homeName,string? homeNameLabel,Action<SetupProgress> progress,CancellationToken cancellation);
     Task<SetupResult> StartAndObserveAsync(Action<SetupProgress> progress,CancellationToken cancellation);
     Task CommitAsync(Action<SetupProgress> progress,CancellationToken cancellation);
     Task<SetupResult> UninstallAsync(Action<SetupProgress> progress,CancellationToken cancellation,UninstallMode mode=UninstallMode.KeepData);
 }
 internal sealed class InstallFlow(ISetupHostOperations host)
 {
-    internal async Task<SetupResult> RunAsync(SetupOwner owner,bool uninstall,Action<SetupProgress> progress,CancellationToken cancellation,UninstallMode mode=UninstallMode.KeepData,LanSetupRequest? lan=null,bool homeName=false)
+    internal async Task<SetupResult> RunAsync(SetupOwner owner,bool uninstall,Action<SetupProgress> progress,CancellationToken cancellation,UninstallMode mode=UninstallMode.KeepData,LanSetupRequest? lan=null,bool homeName=false,string? homeNameLabel=null)
     {
         UninstallChoice.Require(mode);if(!uninstall&&mode!=UninstallMode.KeepData)throw new IOException("UNINSTALL_MODE_INVALID");
-        lan?.Require();if(uninstall&&lan is not null||homeName&&lan?.Action!=LanSetupAction.Enable)throw new IOException("LAN_ACTION_INVALID");
+        lan?.Require();if(uninstall&&lan is not null||homeName&&lan?.Action!=LanSetupAction.Enable||homeNameLabel is not null&&(!homeName||!HomeNameLabel.IsValid(homeNameLabel)))throw new IOException("LAN_ACTION_INVALID");
         if(!owner.Sid.StartsWith("S-1-5-21-",StringComparison.Ordinal))throw new IOException("INSTALL_OWNER_IDENTITY");
         if(uninstall)return await host.UninstallAsync(progress,cancellation,mode);
         progress(new("checking",0));await host.PrepareAsync(owner,progress,cancellation);
         cancellation.ThrowIfCancellationRequested();progress(new("installing_service",70));await host.ProvisionAsync(progress,cancellation);
         if(lan is not null)
-        {progress(new("configuring_lan",80));await host.ConfigureLanAsync(lan,homeName,progress,cancellation);}
+        {progress(new("configuring_lan",80));await host.ConfigureLanAsync(lan,homeName,homeNameLabel,progress,cancellation);}
         progress(new("starting_server",85));var result=await host.StartAndObserveAsync(progress,cancellation);
         if(!result.Ok)return result;
         cancellation.ThrowIfCancellationRequested();await host.CommitAsync(progress,cancellation);

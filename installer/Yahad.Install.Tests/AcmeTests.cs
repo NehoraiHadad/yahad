@@ -167,7 +167,7 @@ internal static class AcmeTests
                 return request.RequestUri.AbsolutePath=="/base/v1/register"?Json(201,"{\"label\":\""+credential.Label+"\",\"secret\":\""+credential.Secret+"\"}"):new HttpResponseMessage(HttpStatusCode.NoContent);
             });
             using var client=new HomeNameServiceClient(new Uri("https://names.example.test/base"),handler);
-            var registered=await client.RegisterAsync(CancellationToken.None);Assert(registered==credential&&!registered.ToString().Contains(credential.Secret,StringComparison.Ordinal));
+            var registered=await client.RegisterAsync(null,CancellationToken.None);Assert(registered==credential&&!registered.ToString().Contains(credential.Secret,StringComparison.Ordinal));
             await client.SetAddressAsync(credential,"192.168.4.5",CancellationToken.None);
             await client.SetChallengeAsync(credential,[RfcDns01],CancellationToken.None);
             await client.ClearChallengeAsync(credential,CancellationToken.None);await client.DeleteNameAsync(credential,CancellationToken.None);
@@ -179,6 +179,39 @@ internal static class AcmeTests
             Rejects<ArgumentException>(()=>client.SetChallengeAsync(credential,[],CancellationToken.None),"HOME_NAME_CHALLENGE_INVALID");
             Rejects<ArgumentException>(()=>client.SetChallengeAsync(credential,["a","b","c"],CancellationToken.None),"HOME_NAME_CHALLENGE_INVALID");
             Rejects<ArgumentException>(()=>new HomeNameServiceClient(new Uri("http://names.example.test/"),new FakeHandler(_=>throw new Exception())),"HOME_NAME_SERVICE_URL");
+        });
+        await check("name service registers a chosen label with exactly {\"label\"} and maps its refusals to distinct codes",async()=>
+        {
+            var chosen=new HomeNameCredential("hadad-home",credential.Secret);string? body=null;string? type=null;
+            HttpResponseMessage answer=Json(201,"{\"label\":\"hadad-home\",\"secret\":\""+credential.Secret+"\"}");
+            using var client=new HomeNameServiceClient(new Uri("https://names.example.test/"),new FakeHandler(async request=>
+            {body=request.Content is null?null:await request.Content.ReadAsStringAsync();type=request.Content?.Headers.ContentType?.ToString();return answer;}));
+            Assert(await client.RegisterAsync("hadad-home",CancellationToken.None)==chosen&&body=="{\"label\":\"hadad-home\"}"&&type=="application/json");
+            // A random label sends no body at all.
+            answer=Json(201,"{\"label\":\""+credential.Label+"\",\"secret\":\""+credential.Secret+"\"}");
+            Assert(await client.RegisterAsync(null,CancellationToken.None)==credential&&body is null);
+            async Task<Exception> Refused(HttpResponseMessage response,string label="hadad-home")
+            {
+                answer=response;
+                try{await client.RegisterAsync(label,CancellationToken.None);}catch(Exception error){return error;}
+                throw new Exception("expected failure");
+            }
+            Assert(await Refused(Json(409,"{\"error\":\"label_taken\"}")) is HomeNameLabelException{Code:HomeNameLabelException.Taken,Status:409});
+            Assert(await Refused(Json(400,"{\"error\":\"invalid_label\"}")) is HomeNameLabelException{Code:HomeNameLabelException.Invalid,Status:400});
+            // Any other refusal is a plain registration failure, never a label refusal.
+            Assert(await Refused(Json(400,"{\"error\":\"bad_request\"}")) is HomeNameServiceException{Code:"HOME_NAME_REGISTER",Status:400} and not HomeNameLabelException);
+            Assert(await Refused(Json(409,"{\"error\":\"label_taken\",\"x\":1}")) is HomeNameServiceException{Code:"HOME_NAME_REGISTER"} and not HomeNameLabelException);
+            Assert(await Refused(new HttpResponseMessage(HttpStatusCode.Conflict){Content=new StringContent("{\"error\":\"label_taken\"}",Encoding.UTF8,"text/plain")}) is HomeNameServiceException{Code:"HOME_NAME_REGISTER"} and not HomeNameLabelException);
+            Assert(await Refused(Json(429,"{\"error\":\"rate_limited\"}")) is HomeNameServiceException{Code:"HOME_NAME_REGISTER",Status:429});
+            // A service that answers with another label than the one asked for is not trusted.
+            Assert(await Refused(Json(201,"{\"label\":\"hadad-house\",\"secret\":\""+credential.Secret+"\"}")) is HomeNameServiceException{Code:"HOME_NAME_REGISTER_INVALID"});
+            // A label that breaks the rule is never sent.
+            body="unsent";
+            foreach(var bad in new[]{"Hadad","ab","www","a--b","xn--abc"})
+            {
+                try{await client.RegisterAsync(bad,CancellationToken.None);throw new Exception("expected refusal");}
+                catch(ArgumentException error){Assert(error.Message==HomeNameLabelException.Invalid&&body=="unsent");}
+            }
         });
         await check("name service maps 410 to a distinct gone error and never puts the secret in a message",async()=>
         {
@@ -193,9 +226,9 @@ internal static class AcmeTests
             Assert(await Fail(new HttpResponseMessage(HttpStatusCode.Unauthorized),c=>c.ClearChallengeAsync(credential,CancellationToken.None)) is HomeNameServiceException{Code:"HOME_NAME_HTTP",Status:401} and not HomeNameGoneException);
             var redirect=new HttpResponseMessage(HttpStatusCode.Found);redirect.Headers.Location=new Uri("https://elsewhere.example.test/");
             Assert(await Fail(redirect,c=>c.ClearChallengeAsync(credential,CancellationToken.None)) is HomeNameServiceException{Code:"HOME_NAME_HTTP",Status:302});
-            Assert(await Fail(Json(201,"{\"label\":\"abcdefgh2345\",\"secret\":\""+credential.Secret+"\",\"extra\":1}"),c=>c.RegisterAsync(CancellationToken.None)) is HomeNameServiceException{Code:"HOME_NAME_REGISTER_INVALID"});
-            Assert(await Fail(Json(201,"{\"label\":\"ABC\",\"secret\":\""+credential.Secret+"\"}"),c=>c.RegisterAsync(CancellationToken.None)) is HomeNameServiceException{Code:"HOME_NAME_REGISTER_INVALID"});
-            Assert(await Fail(Json(200,"{\"pad\":\""+new string('x',5000)+"\"}"),c=>c.RegisterAsync(CancellationToken.None)) is HomeNameServiceException{Code:"HOME_NAME_RESPONSE_BOUND"});
+            Assert(await Fail(Json(201,"{\"label\":\"abcdefgh2345\",\"secret\":\""+credential.Secret+"\",\"extra\":1}"),c=>c.RegisterAsync(null,CancellationToken.None)) is HomeNameServiceException{Code:"HOME_NAME_REGISTER_INVALID"});
+            Assert(await Fail(Json(201,"{\"label\":\"ABC\",\"secret\":\""+credential.Secret+"\"}"),c=>c.RegisterAsync(null,CancellationToken.None)) is HomeNameServiceException{Code:"HOME_NAME_REGISTER_INVALID"});
+            Assert(await Fail(Json(200,"{\"pad\":\""+new string('x',5000)+"\"}"),c=>c.RegisterAsync(null,CancellationToken.None)) is HomeNameServiceException{Code:"HOME_NAME_RESPONSE_BOUND"});
             Assert(await Fail(new HttpResponseMessage(HttpStatusCode.InternalServerError),c=>c.DeleteNameAsync(credential,CancellationToken.None)) is HomeNameServiceException{Status:500});
             // DELETE /v1/name is idempotent: an already-gone label is removed.
             using var gone=new HomeNameServiceClient(new Uri("https://names.example.test/"),new FakeHandler(_=>Task.FromResult(new HttpResponseMessage(HttpStatusCode.Gone))));

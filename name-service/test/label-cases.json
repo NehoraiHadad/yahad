@@ -1,0 +1,5 @@
+{
+  "reserved": ["www", "api", "mail", "admin", "root", "login", "auth", "secure", "account", "support", "help", "status", "test", "ns1", "ns2", "smtp", "imap", "ftp", "webmail", "localhost", "autodiscover", "autoconfig", "yahad"],
+  "valid": ["hadad", "abc", "a1b", "a-b", "9ab", "hadad-family", "the-hadad-home-2026", "0123456789abcdefghij", "k2abcdefgh7j", "abcdefghijk", "ab-cd-ef", "wwww", "testing", "www1"],
+  "invalid": ["", "a", "ab", "abcdefghijklmnopqrstu", "Hadad", "HADAD", "-abc", "abc-", "-", "---", "a--b", "xn--abc", "xn--80ak6aa92e", "ha_dad", "ha.dad", "ha dad", " hadad", "hadad ", "hadad\n", "ha/dad", "ha:dad", "שלום", "hadаd", "ｈadad", "_acme-challenge", "www", "api", "mail", "admin", "root", "login", "auth", "secure", "account", "support", "help", "status", "test", "ns1", "ns2", "smtp", "imap", "ftp", "webmail", "localhost", "autodiscover", "autoconfig", "yahad"]
+}

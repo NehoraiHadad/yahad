@@ -2,4 +2,6 @@
   <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
   <ItemGroup><Compile Include="../test-support/PrivateSession.cs" Link="TestSupport/PrivateSession.cs"/></ItemGroup>
   <ItemGroup><ProjectReference Include="../Yahad.Install.Core/Yahad.Install.Core.csproj" /></ItemGroup>
+  <!-- The label rule's table, shared with the name service's own tests. -->
+  <ItemGroup><EmbeddedResource Include="../../name-service/test/label-cases.json" LogicalName="label-cases.json" /></ItemGroup>
 </Project>

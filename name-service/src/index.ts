@@ -5,6 +5,7 @@ import { Budget, BUDGET_NAME } from "./budget";
 import { EXPIRY_BATCH, EXPIRY_MS, readSettings, type Env } from "./env";
 import {
   isChallengeValues,
+  isLabel,
   isRfc1918,
   newLabel,
   newSecret,
@@ -65,14 +66,26 @@ async function readCapped(body: ReadableStream<Uint8Array> | null, limit: number
   return bytes;
 }
 
-/** Reads a JSON object whose keys are exactly `keys`. Null for anything else. */
-async function readBody(request: Request, keys: string[]): Promise<Record<string, unknown> | null> {
-  const type = request.headers.get("Content-Type") ?? "";
-  if (!/^application\/json(\s*;.*)?$/i.test(type)) return null;
+/** The body's bytes, up to MAX_BODY_BYTES. Null when it is larger. */
+async function readBytes(request: Request): Promise<Uint8Array | null> {
   const declared = request.headers.get("Content-Length");
   if (declared !== null && Number(declared) > MAX_BODY_BYTES) return null;
-  const bytes = await readCapped(request.body, MAX_BODY_BYTES);
-  if (bytes === null) return null;
+  return readCapped(request.body, MAX_BODY_BYTES);
+}
+
+function isJson(request: Request): boolean {
+  return /^application\/json(\s*;.*)?$/i.test(request.headers.get("Content-Type") ?? "");
+}
+
+/** Reads a JSON object whose keys are exactly `keys`. Null for anything else. */
+async function readBody(request: Request, keys: string[]): Promise<Record<string, unknown> | null> {
+  if (!isJson(request)) return null;
+  const bytes = await readBytes(request);
+  return bytes === null ? null : parseObject(bytes, keys);
+}
+
+/** Strict UTF-8 JSON: an object whose keys are exactly `keys`. Null for anything else. */
+function parseObject(bytes: Uint8Array, keys: string[]): Record<string, unknown> | null {
   let value: unknown;
   try {
     value = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes));
@@ -94,16 +107,37 @@ function labelObject(env: Env, label: string) {
   return env.LABELS.get(env.LABELS.idFromName(label));
 }
 
+/**
+ * The label a registration asks for: null (no body and no Content-Type) for a random one, or the label of
+ * a JSON body that is exactly `{"label": "<label>"}`. A Response for anything else.
+ */
+async function requestedLabel(request: Request): Promise<string | null | Response> {
+  const bytes = await readBytes(request);
+  if (bytes === null) return failure(400, "bad_request");
+  if (request.headers.get("Content-Type") === null && bytes.byteLength === 0) return null;
+  const body = isJson(request) ? parseObject(bytes, ["label"]) : null;
+  if (body === null) return failure(400, "bad_request");
+  if (typeof body.label !== "string" || !isLabel(body.label)) return failure(400, "invalid_label");
+  return body.label;
+}
+
 async function register(request: Request, env: Env, liveLabelsCap: number, now: number): Promise<Response> {
   if (env.REGISTER_LIMITER !== undefined) {
     const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
     const { success } = await env.REGISTER_LIMITER.limit({ key: `register:${ip}` });
     if (!success) return failure(429, "rate_limited", 60);
   }
-  for (let attempt = 0; attempt < REGISTER_ATTEMPTS; attempt++) {
-    const label = newLabel();
+  const chosen = await requestedLabel(request);
+  if (chosen instanceof Response) return chosen;
+  // A chosen label gets one attempt. The Budget keeps every label it ever admitted, in any status, so a
+  // name once used is never handed out again (certificates issued for it may still be valid).
+  for (let attempt = 0; attempt < (chosen === null ? REGISTER_ATTEMPTS : 1); attempt++) {
+    const label = chosen ?? newLabel();
     const admitted = await budget(env).reserveRegistration(label, now, liveLabelsCap);
-    if (admitted === "collision") continue;
+    if (admitted === "collision") {
+      if (chosen !== null) return failure(409, "label_taken");
+      continue;
+    }
     if (admitted === "capacity") return failure(503, "capacity");
     if (admitted === "daily_limit") return failure(429, "daily_limit", secondsUntilNextUtcDay(now));
     const secret = newSecret();
@@ -117,6 +151,7 @@ async function register(request: Request, env: Env, liveLabelsCap: number, now: 
     }
     if (stored === "exists") {
       await budget(env).setStatus(label, "gone");
+      if (chosen !== null) return failure(409, "label_taken");
       continue;
     }
     return json(201, { label, secret });

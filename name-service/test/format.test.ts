@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   digestsEqual,
   isChallengeValues,
@@ -9,8 +9,10 @@ import {
   newSecret,
   parseBearer,
   parseIpv4,
+  RESERVED_LABELS,
   sha256Hex,
 } from "../src/format";
+import labelCases from "./label-cases.json";
 
 const DIGEST = "ungWv48Bz-pBQUDeXa4iI7ADYaOWF3qctBD_YfIAFa0"; // base64url(SHA-256("abc"))
 
@@ -26,10 +28,25 @@ describe("labels and secrets", () => {
     expect(seen.size).toBe(200);
   });
 
-  it("rejects labels of the wrong length or alphabet", () => {
-    for (const bad of ["abcdefghijk", "abcdefghijklm", "ABCDEFGHIJKL", "abcdefghijk0", "abcdefghijk1", "abcdefghijk8", "abcdef-hijkl"]) {
-      expect(isLabel(bad)).toBe(false);
-    }
+  // label-cases.json is shared with the installer's tests (HomeNameTests), so both sides apply one rule.
+  it("applies the shared label rule: 3-20 of [a-z0-9-], letter or digit at both ends, no --, not reserved", () => {
+    expect([...RESERVED_LABELS].sort()).toEqual([...labelCases.reserved].sort());
+    for (const good of labelCases.valid) expect(isLabel(good), JSON.stringify(good)).toBe(true);
+    for (const bad of labelCases.invalid) expect(isLabel(bad), JSON.stringify(bad)).toBe(false);
+  });
+
+  it("never generates a reserved label", () => {
+    // "autodiscover" is 12 base32 characters: a draw that spells it is drawn again.
+    const spelled = new Uint8Array([..."autodiscover"].map((c) => "abcdefghijklmnopqrstuvwxyz234567".indexOf(c)));
+    const spy = vi.spyOn(crypto, "getRandomValues").mockImplementationOnce(<T extends ArrayBufferView | null>(array: T): T => {
+      (array as unknown as Uint8Array).set(spelled);
+      return array;
+    });
+    const label = newLabel();
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(label).not.toBe("autodiscover");
+    expect(isLabel(label)).toBe(true);
+    spy.mockRestore();
   });
 
   it("generates 256-bit secrets as canonical 43-char base64url", () => {
@@ -63,6 +80,7 @@ describe("bearer credentials", () => {
   const label = "abcdefgh2345";
   it("parses Bearer <label>.<secret>", () => {
     expect(parseBearer(`Bearer ${label}.${DIGEST}`)).toEqual({ label, secret: DIGEST });
+    expect(parseBearer(`Bearer hadad-home.${DIGEST}`)).toEqual({ label: "hadad-home", secret: DIGEST });
   });
   it("rejects every other shape", () => {
     for (const bad of [
@@ -76,6 +94,11 @@ describe("bearer credentials", () => {
       `Bearer ${label}.${DIGEST}.x`,
       `Bearer ${label}.${DIGEST.slice(1)}`,
       `Basic ${label}.${DIGEST}`,
+      `Bearer ab.${DIGEST}`,
+      `Bearer xn--abc.${DIGEST}`,
+      `Bearer -abc.${DIGEST}`,
+      `Bearer www.${DIGEST}`,
+      `Bearer ${"a".repeat(21)}.${DIGEST}`,
     ]) {
       expect(parseBearer(bad)).toBeNull();
     }

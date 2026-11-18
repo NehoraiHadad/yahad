@@ -21,6 +21,11 @@ Let's Encrypt; the name is opt-in and the parent is told what it depends on. Fam
 maintainer would have to trust the maintainer for this; that is a decision for later, with a dedicated
 domain on the Public Suffix List.
 
+Every name the home holds is public: each certificate Let's Encrypt issues is logged in Certificate
+Transparency logs, which anyone can search for the zone. A random label reveals nothing beyond the
+fact that some home uses the service; a chosen label (`hadad-home`) is public too, and Setup says so
+next to the box where it is typed.
+
 ## Configuration
 Build-time, in `installer/Directory.Build.props`: `YahadHomeNameService` (HTTPS URL of the Worker) and
 `YahadHomeNameZone` (e.g. `yahad.nehoraihadad.com`). Empty: the option is not offered. Both are
@@ -39,7 +44,15 @@ Small and DNS-only: it never runs ACME, never sees a CSR, key or certificate.
   constant time; never logged.
 
 Endpoints (JSON):
-- `POST /v1/register` → `{label, secret}`. Label: 12 chars base32 from the CSPRNG.
+- `POST /v1/register` → `{label, secret}`. With no body, a random label: 12 chars base32 from the
+  CSPRNG. With a body of exactly `{"label": "<label>"}`, that label (the owner's choice in Setup).
+  Every label, random or chosen, follows one rule: 3-20 characters of `[a-z0-9-]`, a letter or digit at
+  both ends, no `--` anywhere (so never an `xn--` label), not reserved (`www`, `api`, `mail`, `admin`,
+  ...). The Worker (`isLabel`) and the installer (`HomeNameLabel`) both test it against
+  `name-service/test/label-cases.json`. Uppercase is refused; Setup lowercases what the parent types.
+  Refusals: `400 invalid_label`, and `409 label_taken` when the Budget holds the label in any status
+  (live, cleanup, gone), so a label is never handed out twice. Chosen labels share the register rate
+  limit, the daily limit and the live-label cap with random ones.
 - `PUT /v1/address` `{ipv4}` → the label's A record (DNS-only). Only RFC1918 IPv4.
 - `PUT /v1/challenge` `{values: [..]}` → `_acme-challenge.<label>` TXT, 1-2 base64url values of
   43 chars (dns-01 digests); replaces earlier values.
@@ -70,7 +83,9 @@ would reject it on rollback):
   `{Format:1, Phase: registered|active|failed|removed, Label, Name, Failure?}`.
 - `LanProxyPaths.State/name/` — the only subtree the LAN service may write (data ACL):
   `credential.json` (label, secret; written by Setup), `account.json` (ACME account key),
-  `live/{cert.pem,key.pem}`, `next/` for renewal staging.
+  `live/{cert.pem,key.pem}`, `next/` for renewal staging; and, written only by Setup during a rename,
+  `rename.json` and `rename/` (the claimed label's credential and certificate) and `retired/<label>.json`
+  (credentials of labels given up, until the name service deleted them).
 
 Name lifecycle: LAN off (the owner turns phone access off) deletes the name at the Worker
 (best effort) and discards the local credential. Uninstall with keep-data does not touch the name or the
@@ -100,6 +115,41 @@ Setup (option „כתובת קבועה בלי תעודה במכשירים”, sh
 3. Any failure: the Caddyfile is written without the name site, `home-name.json` does not exist, the
    owner record says `failed` with a code, the proxy is restarted on the IP site. The IP path stays
    committed. Running Setup again resumes.
+
+Chosen label (the optional box „שם לכתובת (לא חובה)” under the option, prefilled with the current
+label, with a live preview of `https://<label>.<zone>` and the rule checked as the parent types). The label
+travels beside the LAN request, like the option itself, and is never stored in `lan-preparation.json`.
+An empty box keeps the current label, or registers a random one when there is none. A run without the
+owner's choice (repair, resume, infrastructure move) always keeps the current label. A label other than
+the current one is a rename:
+1. Prepare beside the active name, touching nothing it serves from: register the label (body
+   `{"label"}`) and persist its credential in `name/rename.json` before any other call, set its A record,
+   and issue its certificate into `name/rename/`. A claim already on disk is reused, never registered again.
+   A label this home gave up and has not deleted yet (below) is taken back without registering. When an
+   active name holds, a taken label, an invalid one, or any failure here returns the code with the active
+   name: the home stays exactly as it was („השם כבר תפוס. אפשר לבחור שם אחר ולהריץ את ההתקנה שוב.”).
+   With no active name to keep, the current label (if any) is redone instead, and the code is still shown.
+2. Switch: uncommit the name as any redo does, then promote the claim (`HomeNameStore.Promote`, each step
+   idempotent): the current credential is copied to `name/retired/<label>.json`, `credential.json` becomes
+   the claim (the commit point of the rename: from here a resumed run continues on the new label), its
+   certificate moves to `next/` and is swapped into `live/`, and `rename.json` goes. The transaction then runs
+   on the new label as usual.
+3. Only after the new name is committed (`home-name.json` written, the probe passed) are the retired labels
+   deleted at the name service, each best effort on a short budget; one that cannot be deleted is kept for
+   the next run, and the Worker's 150-day expiry is the backstop. Removal (LAN off, delete-data) deletes
+   the current label, a claim and every retired label.
+A failure after the switch started (proxy, resolve, probe of the new name) falls back to the IP path with
+its code, like any failure, rather than back to the old name: going back would need a second, reverse
+transaction whose own failure would also have to land somewhere, and the old label's certificate and
+credential are kept (retired) anyway. The owner record is `failed` with the new label, so a rerun resumes
+toward the new name; choosing the old label again takes it back. A crash between the Worker's register
+answer and `rename.json` being written loses that label (the Worker holds it, the home has no credential
+for it): choosing it again answers `label_taken`, and the Worker's expiry removes the record.
+
+Rollback: an older release reads only `credential.json`, the owner record and `home-name.json`, whose
+formats are unchanged. Its stricter label check refuses a chosen label, and every path that reads them
+already falls back: the host to the IP origin (`InstalledHomeNameRecord.Select`), the LAN service to no
+renewal. An older Setup does not run over a newer install (`INSTALL_DOWNGRADE_REFUSED`).
 
 Caddyfile: `LanDeployment.Create` takes an optional name; the name site binds the same address, uses
 `tls <live/cert.pem> <live/key.pem>`, and has the same route as the IP site (the `/health` and

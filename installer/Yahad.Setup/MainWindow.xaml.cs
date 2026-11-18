@@ -14,9 +14,9 @@ public partial class MainWindow:Window
     // The failure on screen: what "copy details" copies and the action button takes.
     private SetupFailureReport? failureReport;private string? failureLog;private SetupErrorAction failureAction;
     private readonly Func<SetupFailureReport,string?> writeFailureLog=SetupFailureLog.Write;
-    internal MainWindow(bool uninstall=false,IReadOnlyList<LanChoice>? lanChoices=null,bool? existingAccess=null,bool? existingUpdate=null,Func<string,int>? lanCategory=null,Func<SetupFailureReport,string?>? failureLog=null)
+    internal MainWindow(bool uninstall=false,IReadOnlyList<LanChoice>? lanChoices=null,bool? existingAccess=null,bool? existingUpdate=null,Func<string,int>? lanCategory=null,Func<SetupFailureReport,string?>? failureLog=null,string? homeNameLabel=null)
     {
-        InitializeComponent();VersionBadge.Text=(SetupOperation.DisplayVersion() is {} version?version+" · ":"")+"Windows";this.uninstall=uninstall;Closing+=OnClosing;InitializeLan(lanChoices,existingAccess??(lanChoices is null&&HasExistingAccess()),lanCategory);
+        InitializeComponent();VersionBadge.Text=(SetupOperation.DisplayVersion() is {} version?version+" · ":"")+"Windows";this.uninstall=uninstall;Closing+=OnClosing;InitializeLan(lanChoices,existingAccess??(lanChoices is null&&HasExistingAccess()),lanCategory,homeNameLabel??(lanChoices is null?ReadHomeNameLabel():null));
         if(failureLog is not null)writeFailureLog=failureLog;
         InitializeUpdate(existingUpdate??ExistingInstallation.Present());
         if(!uninstall&&existingUpdateProfile)RemovalEntry.Visibility=Visibility.Visible;
@@ -56,12 +56,12 @@ public partial class MainWindow:Window
         {
             // A refused choice (consent, confirmation) reaches the same failure screen as
             // the operation; nothing is thrown out of this async void.
-            var mode=uninstall?choice.Confirmed():UninstallMode.KeepData;var network=SelectedLanRequest();var homeName=network is not null&&SelectedHomeName();var update=SelectedUpdateRequest();
+            var mode=uninstall?choice.Confirmed():UninstallMode.KeepData;var network=SelectedLanRequest();var homeName=network is not null&&SelectedHomeName();var homeNameLabel=homeName?SelectedHomeNameLabel():null;var update=SelectedUpdateRequest();
             running=true;UpdatePanel.IsEnabled=false;Primary.IsEnabled=false;Secondary.IsEnabled=false;UninstallChoices.IsEnabled=false;LanPanel.IsEnabled=false;ProgressBar.Visibility=Visibility.Visible;ProgressBar.IsIndeterminate=true;
             ClearFailure();Status.Text="בודקים מקום פנוי והרשאות.";
             Heading.Text=uninstall?(mode==UninstallMode.DeleteData?"מסירים את יחד\nואת הנתונים.":"מסירים את התוכנה.\nהנתונים יישמרו."):"מתקינים את יחד.\nעוד רגע בבית.";
             Description.Text=uninstall?"אל תכבו את המחשב במהלך הפעולה.":"מכינים את הרכיבים, מפעילים את השירות ובודקים שיחד זמינה.";
-            result=await SetupOperation.RunAsync(uninstall,p=>Dispatcher.Invoke(()=>ShowProgress(p)),CancellationToken.None,mode,network,update:update,homeName:homeName);
+            result=await SetupOperation.RunAsync(uninstall,p=>Dispatcher.Invoke(()=>ShowProgress(p)),CancellationToken.None,mode,network,update:update,homeName:homeName,homeNameLabel:homeNameLabel);
             if(!result.Ok){Failure(result.Code,result.Failure);return;}
             completed=true;ProgressBar.IsIndeterminate=false;ProgressBar.Value=100;
             Heading.Text=uninstall?(result.DataPreserved?"יחד הוסרה.\nהנתונים נשמרו.":"יחד והנתונים\nהוסרו מהמחשב."):"הכול מוכן.\nממשיכים ליחד.";
