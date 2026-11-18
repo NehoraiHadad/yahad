@@ -103,7 +103,8 @@ test('paused child directs the parent to access management instead of WhatsApp c
 test('a name is the tablet address, with the home-network address and join steps as the fallback', () => {
   const fingerprint = 'AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB';
   const homeNetwork = { joinPage: 'http://192.168.4.25/', certificateSha256: fingerprint, homeAddress: 'https://192.168.4.25' };
-  for (const origin of ['http://127.0.0.1:47123', 'https://home.example.test']) {
+  // From this computer, on the name, or on the home-network address behind it: the tablet gets the name.
+  for (const origin of ['http://127.0.0.1:47123', 'https://home.example.test', 'https://192.168.4.25']) {
     const html = render({ origin, siteOrigin: 'https://home.example.test', homeNetwork });
     assert.match(html, /כתובת יחד<input readOnly="" dir="ltr" value="https:\/\/home.example.test"/, origin);
     assert.match(html, /אם הכתובת לא נפתחת במכשיר/);

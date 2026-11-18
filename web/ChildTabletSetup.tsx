@@ -12,7 +12,7 @@ export function ChildTabletSetup({ child, loaded, stale, busy, origin, siteOrigi
   // This computer's loopback entry is not reachable from another device; the
   // server's own address is, unless the server is reachable from its computer only.
   const loopback = isLoopbackOrigin(origin);
-  const address = tabletAddress(origin, siteOrigin);
+  const address = tabletAddress(origin, siteOrigin, homeNetwork?.homeAddress);
   const home = address && address === sharedAddress(siteOrigin) ? homeNetwork : undefined;
   const ready = loaded && !stale && !!child?.ready;
   const status = !loaded ? 'טוענים את מצב ההכנה…' : stale ? 'ממתינים לאימות מצב ההכנה מול השרת.'

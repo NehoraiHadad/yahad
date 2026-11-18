@@ -29,7 +29,10 @@ export function sharedAddress(siteOrigin?: string): string | null {
 
 /** The address a tablet opens: the one this browser is on, which already works from
  * another device (a Tailscale or home address), unless it is this computer's own
- * loopback entry; then the server's address. */
-export function tabletAddress(currentOrigin: string, siteOrigin?: string): string | null {
-  return isLoopbackOrigin(currentOrigin) ? sharedAddress(siteOrigin) : new URL(currentOrigin).origin;
+ * loopback entry, or the home-network address that stands behind the site's name
+ * (homeAddress); then the server's address. */
+export function tabletAddress(currentOrigin: string, siteOrigin?: string, homeAddress?: string): string | null {
+  const current = new URL(currentOrigin).origin;
+  return isLoopbackOrigin(currentOrigin) || (homeAddress !== undefined && current === homeAddress)
+    ? sharedAddress(siteOrigin) : current;
 }
