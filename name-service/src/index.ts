@@ -13,6 +13,7 @@ import {
   sha256Hex,
 } from "./format";
 import { LabelObject, type Outcome } from "./label";
+import { homePage } from "./page";
 
 export { Budget, LabelObject };
 
@@ -28,6 +29,10 @@ function json(status: number, body: unknown, headers: Record<string, string> = {
 
 function failure(status: number, code: string, retryAfter?: number): Response {
   return json(status, { error: code }, retryAfter === undefined ? {} : { "Retry-After": String(retryAfter) });
+}
+
+function methodNotAllowed(allowed: readonly string[]): Response {
+  return json(405, { error: "method_not_allowed" }, { Allow: allowed.join(", ") });
 }
 
 function fromOutcome(outcome: Outcome): Response {
@@ -122,6 +127,11 @@ async function register(request: Request, env: Env, liveLabelsCap: number, now: 
 async function handle(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const route = `${request.method} ${url.pathname}`;
+  // The page for a person who opens the address in a browser; it needs no configuration.
+  if (url.pathname === "/") {
+    if (request.method === "GET" || request.method === "HEAD") return homePage(request.method);
+    return methodNotAllowed(["GET", "HEAD"]);
+  }
   const known = ["/v1/register", "/v1/address", "/v1/challenge", "/v1/name"];
   if (!known.includes(url.pathname)) return failure(404, "not_found");
   const allowed: Record<string, string[]> = {
@@ -130,7 +140,7 @@ async function handle(request: Request, env: Env): Promise<Response> {
     "/v1/challenge": ["PUT", "DELETE"],
     "/v1/name": ["DELETE"],
   };
-  if (!allowed[url.pathname].includes(request.method)) return failure(405, "method_not_allowed");
+  if (!allowed[url.pathname].includes(request.method)) return methodNotAllowed(allowed[url.pathname]);
 
   const settings = readSettings(env);
   if (settings === null) return failure(503, "not_configured");

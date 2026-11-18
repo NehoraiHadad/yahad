@@ -7,6 +7,9 @@ key or a certificate. Design: `docs/HOME-NAME.md`, section "1. Name service".
 
 ## API
 
+`GET /` (and `HEAD /`) serves a short Hebrew page explaining the service, linking to Yahad's landing
+page and its developer (the logo is the landing page's published asset). Everything else is the API.
+
 All bodies are JSON. Errors are `{"error": "<code>"}`. Authenticated calls send
 `Authorization: Bearer <label>.<secret>`.
 
