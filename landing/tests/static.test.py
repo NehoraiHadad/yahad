@@ -59,7 +59,7 @@ visible=re.sub(r'<!--.*?-->','',s,flags=re.S)
 assert 'המחשה' not in visible,'No illustration disclaimer wording on the visible page'
 section=visible.split('id="how-it-works"',1)[1].split('</section>',1)[0]
 beats=re.findall(r'<li class="beat" data-at="[\d.]+" data-still="[\d.]+"><h3>(.*?)</h3><p>.+?</p></li>',section)
-assert [re.sub(r'<[^>]+>','',h) for h in beats]==['נועה רוצה לכתוב לסבתא','אתם בוחרים מה היא רואה','לנועה יש כניסה משלה','סבתא נשארת ב־WhatsApp'],'story: the wish, the choice, her own sign-in, grandma stays on WhatsApp'
+assert [re.sub(r'<[^>]+>','',h) for h in beats]==['נועה רוצה לכתוב לחברות','אתם בוחרים מה היא רואה','לנועה יש כניסה משלה','החברות נשארות ב־WhatsApp'],'story: the wish, the choice, her own sign-in, her friends stay on WhatsApp'
 assert '<div class="film-frame" aria-hidden="true">' in section,'the film is decoration, hidden from assistive tech'
 assert '<div class="film" hidden>' in section,'without JS the film area stays out'
 assert section.index('class="film"')<section.index('class="beats"')
@@ -99,9 +99,9 @@ assert not missing,f'characters outside the bundled fonts: {[hex(ord(c)) for c i
 # One-time entrance animations were removed on purpose: content never depends on motion to appear.
 assert 'reveal.js' not in s and 'hero-rise' not in css
 assert '0.5.3' not in s and 'room.png' not in css and 'sun.png' not in s
-art=[a for a in d.images if 'family-moment' in a['src']][0]
+art=[a for a in d.images if 'friends-at-the-park' in a['src']][0]
 assert art['width']=='1536' and art['height']=='1024'
-assert (ROOT/'dist/assets/family-moment.webp').stat().st_size<250000
+assert (ROOT/'dist/assets/friends-at-the-park.webp').stat().st_size<250000
 # Per-platform download readiness. pending = disabled button, no link.
 # ready = exactly one download-action link to a release asset of this repo.
 def download_cards(src):

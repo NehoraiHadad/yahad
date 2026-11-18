@@ -4,7 +4,8 @@
    The isometric helpers below come from the Anatomy kit the film was drawn with. */
 (() => {
 'use strict';
-const FM = 'assets/family-moment-768.webp'; // the landing illustration (1536x1024 layout units)
+const FRIENDS_ART = 'assets/friends-at-the-park-768.webp'; // 1536x1024 layout units
+const MIA_PORTRAIT = 'assets/mia.webp';
 
 const AZIMUTH = 45;
 const ELEVATION = 30;
@@ -272,7 +273,7 @@ const shadowOn = (cx, cy, z, w, d, r, op) => { // a soft shadow on the floor (z=
 // ---------- data
 const ROWS = [
   { id: 'work', name: 'עבודה', group: true, prev: 'מי שולח את המצגת?', time: '09:12', badge: 23, L: 'ע', col: '#cdd8e0' },
-  { id: 'family', name: 'המשפחה', group: true, prev: 'סבתא: מתי באים?', time: '09:05', badge: 3, L: 'מ', col: '#f0d8c3', pick: 6.0 },
+  { id: 'family', name: 'המשפחה', group: true, prev: 'מתי כולם באים?', time: '09:05', badge: 3, L: 'מ', col: '#f0d8c3', pick: 6.0 },
   { id: 'house', name: 'ועד הבית', group: true, prev: 'מחר אין מים בבוקר', time: '08:58', badge: 41, L: 'ו', col: '#ddd6e8' },
   { id: 'class', name: 'הכיתה של נועה', group: true, prev: 'מחר מביאים כובע!', time: '08:41', badge: 12, L: 'כ', col: '#cfe3d0', pick: 6.5 },
   { id: 'cpa', name: 'דני, רואה חשבון', group: false, prev: 'שלחתי לך את הדוח', time: '08:30', badge: 1, L: 'ד', col: '#e6dcc9' },
@@ -372,32 +373,38 @@ const noaHeaderFace = (w, h) => {
 const tabletBase = (w, h) => rrect(0, 0, w, h, 24, '#f6f4ee') + tx(w / 2, h - 52, 'יחד', { size: 40, weight: 800, color: C.mint2, anchor: 'c' });
 
 // chat view on Noa's tablet (local, w × h)
-const NOA_MSG = 'סבתא, סיימתי את הציור!';
+const FRIENDS = ROWS.find((row) => row.id === 'friends');
+const EXCHANGE = {
+  sender: 'מיה',
+  question: 'נפגשות בפארק בארבע?',
+  answer: 'כן! אני מביאה כדור',
+  reply: 'מעולה, נתראה שם!',
+};
 const chatFace = (t, w, h) => {
   let s = rrect(0, 0, w, h, 24, '#f3f0e8');
   s += rrect(0, 0, w, 150, 24, '#ffffff') + `<rect x="0" y="120" width="${w}" height="30" fill="#ffffff"/>` + `<line x1="0" y1="150" x2="${w}" y2="150" stroke="${C.line}" stroke-width="3"/>`;
-  s += avatar(w - 92, 76, 46, 'מ', '#f0d8c3', 44);
-  s += tx(w - 162, 58, 'המשפחה', { size: 46, weight: 800 });
+  s += avatar(w - 92, 76, 46, FRIENDS.L, FRIENDS.col, 44);
+  s += tx(w - 162, 58, FRIENDS.name, { size: 46, weight: 800 });
   s += tx(w - 162, 106, 'קבוצה', { size: 26, color: C.muted });
   s += `<path d="M44 76 l22 -22 M44 76 l22 22" stroke="${C.ink}" stroke-width="6" stroke-linecap="round" fill="none"/>`;
-  // grandma's message (incoming, right side)
-  const g = backOut(clamp((t - 16.0) / .3));
-  s += `<g transform="translate(${w - 40} 230) scale(${f1(g)}) translate(${-(w - 40)} -230)" opacity="${f1(clamp(g * 2))}">` + rrect(w - 40 - 520, 180, 520, 170, 30, '#ffffff', `stroke="${C.line}" stroke-width="2"`) + tx(w - 72, 226, 'סבתא', { size: 32, weight: 800, color: '#b0623d' }) + tx(w - 72, 294, 'נועה, איך יצא הציור?', { size: 46 }) + '</g>';
+  // Mia's message (incoming, right side)
+  const incoming = backOut(clamp((t - 16.0) / .3));
+  s += `<g transform="translate(${w - 40} 230) scale(${f1(incoming)}) translate(${-(w - 40)} -230)" opacity="${f1(clamp(incoming * 2))}">` + rrect(w - 40 - 520, 180, 520, 170, 30, '#ffffff', `stroke="${C.line}" stroke-width="2"`) + tx(w - 72, 226, EXCHANGE.sender, { size: 32, weight: 800, color: '#b0623d' }) + tx(w - 72, 294, EXCHANGE.question, { size: 46 }) + '</g>';
   // Noa's sent message (outgoing, left side)
   const sent = clamp((t - 18.0) / .25);
   if (sent > 0) {
     const sc = backOut(sent);
-    s += `<g transform="translate(40 420) scale(${f1(sc)}) translate(-40 -420)" opacity="${f1(clamp(sent * 2))}">` + rrect(40, 390, 600, 130, 30, '#d7ebd4', 'stroke="#bcd9b8" stroke-width="2"') + tx(606, 456, NOA_MSG, { size: 46, weight: 700 }) + '</g>';
+    s += `<g transform="translate(40 420) scale(${f1(sc)}) translate(-40 -420)" opacity="${f1(clamp(sent * 2))}">` + rrect(40, 390, 600, 130, 30, '#d7ebd4', 'stroke="#bcd9b8" stroke-width="2"') + tx(606, 456, EXCHANGE.answer, { size: 46, weight: 700 }) + '</g>';
     const rh = backOut(clamp((t - 20.25) / .3));
     if (rh > 0) s += `<g transform="translate(100 528) scale(${f1(rh * 1.2)})">${rrect(-42, -26, 84, 52, 26, '#ffffff', `stroke="${C.line}" stroke-width="2"`)}<path d="${heartPath(0, 4, 40)}" fill="${C.red}"/></g>`;
   }
-  // grandma's reply
+  // Mia's reply
   const r2 = backOut(clamp((t - 21.0) / .3));
-  if (r2 > 0) s += `<g transform="translate(${w - 40} 660) scale(${f1(r2)}) translate(${-(w - 40)} -660)" opacity="${f1(clamp(r2 * 2))}">` + rrect(w - 40 - 680, 610, 680, 170, 30, '#ffffff', `stroke="${C.line}" stroke-width="2"`) + tx(w - 72, 656, 'סבתא', { size: 32, weight: 800, color: '#b0623d' }) + tx(w - 72, 724, 'איזה יופי, מחכה לשמוע עליו', { size: 46 }) + '</g>';
+  if (r2 > 0) s += `<g transform="translate(${w - 40} 660) scale(${f1(r2)}) translate(${-(w - 40)} -660)" opacity="${f1(clamp(r2 * 2))}">` + rrect(w - 40 - 680, 610, 680, 170, 30, '#ffffff', `stroke="${C.line}" stroke-width="2"`) + tx(w - 72, 656, EXCHANGE.sender, { size: 32, weight: 800, color: '#b0623d' }) + tx(w - 72, 724, EXCHANGE.reply, { size: 46 }) + '</g>';
   // composer
   s += rrect(30, h - 150, w - 160, 100, 50, '#ffffff', `stroke="${C.line}" stroke-width="3"`);
-  const nType = Math.floor(clamp((t - 17.05) / .85) * NOA_MSG.length);
-  const typed = t < 18.0 ? NOA_MSG.slice(0, nType) : '';
+  const nType = Math.floor(clamp((t - 17.05) / .85) * EXCHANGE.answer.length);
+  const typed = t < 18.0 ? EXCHANGE.answer.slice(0, nType) : '';
   if (typed) s += tx(w - 165, h - 100, typed, { size: 42 });
   else s += tx(w - 165, h - 100, 'משהו קטן לשתף…', { size: 34, color: '#9aa69e' });
   const sp = clamp((t - 17.92) / .08) * (1 - clamp((t - 18.05) / .1));
@@ -405,8 +412,8 @@ const chatFace = (t, w, h) => {
   return s;
 };
 
-// ---------- grandma's phone (flat overlay)
-const grandmaPhone = (t) => {
+// ---------- Mia's phone (flat overlay)
+const friendPhone = (t) => {
   const u = backOut(clamp((t - 18.35) / .45));
   if (u <= 0) return '';
   const X = 596, Y = 832, w = 430, h = 760;
@@ -417,15 +424,15 @@ const grandmaPhone = (t) => {
   s += `<clipPath id="film-gp"><rect x="${sx}" y="${sy}" width="${sw}" height="${sh}" rx="44"/></clipPath><g clip-path="url(#film-gp)">`;
   s += rrect(sx, sy, sw, sh, 0, C.waBg);
   s += rrect(sx, sy, sw, 118, 0, C.waTeal);
-  s += circ(sx + sw - 62, sy + 66, 34, '#f0d8c3') + tx(sx + sw - 62, sy + 68, 'מ', { size: 34, weight: 700, anchor: 'c' });
-  s += tx(sx + sw - 112, sy + 56, 'המשפחה', { size: 34, weight: 700, color: '#fff' });
+  s += circ(sx + sw - 62, sy + 66, 34, FRIENDS.col) + tx(sx + sw - 62, sy + 68, FRIENDS.L, { size: 34, weight: 700, anchor: 'c' });
+  s += tx(sx + sw - 112, sy + 56, FRIENDS.name, { size: 31, weight: 700, color: '#fff' });
   s += tx(sx + sw - 112, sy + 92, 'WhatsApp', { size: 21, color: '#cfe9e2', ltr: true, anchor: 'r' });
   const m = backOut(clamp((t - 19.0) / .3));
   if (m > 0) {
     s += `<g transform="translate(${sx + sw - 18} 300) scale(${f1(m)}) translate(${-(sx + sw - 18)} -300)">`;
     s += rrect(sx + 18, sy + 168, sw - 36, 150, 20, '#ffffff');
-    s += tx(sx + sw - 40, sy + 212, 'נועה: סבתא, סיימתי', { size: 31 });
-    s += tx(sx + sw - 40, sy + 256, 'את הציור!', { size: 31 });
+    s += tx(sx + sw - 40, sy + 212, 'נועה:', { size: 30, weight: 700, color: C.waTeal });
+    s += tx(sx + sw - 40, sy + 256, EXCHANGE.answer, { size: 32 });
     s += tx(sx + 40, sy + 292, '10:24', { size: 19, color: '#8a948f', anchor: 'l', ltr: true });
     s += '</g>';
   }
@@ -442,24 +449,29 @@ const grandmaPhone = (t) => {
   }
   s += tx(sx + sw / 2, sy + sh - 66, 'הקלדת הודעה', { size: 24, color: '#9aa69e', anchor: 'c' });
   s += '</g>';
-  // grandma's face, above her phone
+  // Mia's portrait above her phone
   const FX = X + w / 2, FY = Y - 150;
-  s += `<g><circle cx="${FX}" cy="${FY}" r="86" fill="#fff" filter="url(#film-soft2)"/><clipPath id="film-gface"><circle cx="${FX}" cy="${FY}" r="80"/></clipPath><g clip-path="url(#film-gface)"><rect x="${FX - 90}" y="${FY - 90}" width="180" height="180" fill="#f6efe4"/><image href="${FM}" x="${FX - 615 * .52}" y="${FY - 310 * .52}" width="${1536 * .52}" height="${1024 * .52}"/></g>`;
-  s += tx(FX, FY + 116, 'סבתא', { size: 34, weight: 800, anchor: 'c' }) + '</g>';
+  s += circ(FX, FY, 86, '#fff', 'filter="url(#film-soft2)"');
+  s += `<clipPath id="film-friend-face"><circle cx="${FX}" cy="${FY}" r="80"/></clipPath>
+    <g clip-path="url(#film-friend-face)">
+      ${circ(FX, FY, 80, FRIENDS.col)}
+      <image href="${MIA_PORTRAIT}" x="${FX - 80}" y="${FY - 80}" width="160" height="160"/>
+    </g>`;
+  s += tx(FX, FY + 116, EXCHANGE.sender, { size: 34, weight: 800, anchor: 'c' });
   return s + '</g>';
 };
 
 // ---------- captions (screen space)
 const CAPS = [
-  [0.25, 3.35, 'נועה רוצה לכתוב לסבתא.', 305],
+  [0.25, 3.35, 'נועה רוצה לכתוב לחברות.', 305],
   [1.7, 3.35, '״לתת לה את כל הווטסאפ שלי?״', 400, 54, 700],
   [4.15, 5.85, 'כל השיחות שלכם, אחת אחת.', 305],
   [5.9, 7.95, 'אתם בוחרים.', 305],
   [7.95, 9.9, 'רק מה שסימנתם עובר לנועה.', 305],
   [10.25, 12.0, 'בטאבלט של הבית, נועה נכנסת.', 305],
   [12.05, 15.95, 'היא רואה רק את מה שבחרתם.', 305],
-  [16.0, 18.3, 'סבתא כותבת. נועה עונה.', 305],
-  [18.35, 21.85, 'וסבתא מקבלת בווטסאפ.', 305],
+  [16.0, 18.3, 'החברות כותבות. נועה עונה.', 305],
+  [18.35, 21.85, 'החברות נשארות בווטסאפ.', 305],
 ];
 // Text width for the caption pills. A rough estimate by default; the page swaps in
 // a real measurement with the page font (setMeasure), so every pill fits its words.
@@ -479,13 +491,13 @@ const noaAsk = (t) => {
   const cx = 196, cy = 1452;
   let s = `<g opacity="${f1(out)}" transform="translate(${cx} ${cy}) scale(${f1(u)}) translate(${-cx} ${-cy})">`;
   s += circ(cx, cy, 98, '#ffffff', 'filter="url(#film-soft2)"');
-  s += `<clipPath id="film-nface"><circle cx="${cx}" cy="${cy}" r="90"/></clipPath><g clip-path="url(#film-nface)"><rect x="${cx - 100}" y="${cy - 100}" width="200" height="200" fill="#f6efe4"/><image href="${FM}" x="${cx - 1060 * .55}" y="${cy - 350 * .55}" width="${1536 * .55}" height="${1024 * .55}"/></g>`;
+  s += `<clipPath id="film-nface"><circle cx="${cx}" cy="${cy}" r="90"/></clipPath><g clip-path="url(#film-nface)"><rect x="${cx - 100}" y="${cy - 100}" width="200" height="200" fill="#f6efe4"/><image href="${FRIENDS_ART}" x="${cx - 1014 * .55}" y="${cy - 267 * .55}" width="${1536 * .55}" height="${1024 * .55}"/></g>`;
   s += tx(cx, cy + 128, 'נועה', { size: 32, weight: 800, anchor: 'c', extra: 'paint-order="stroke" stroke="${C.paper}" stroke-width="8"' });
   const bu = backOut(clamp((t - 0.8) / .3));
   s += `<g transform="translate(${cx + 100} ${cy - 120}) scale(${f1(bu)}) translate(${-(cx + 100)} ${-(cy - 120)})">`;
   s += rrect(cx + 90, cy - 190, 560, 116, 40, '#ffffff', 'filter="url(#film-soft2)" stroke="#183e35" stroke-width="3"');
   s += `<path d="M${cx + 112} ${cy - 76} L${cx + 70} ${cy - 50} L${cx + 160} ${cy - 76}Z" fill="#fff" stroke="#183e35" stroke-width="3" stroke-linejoin="round"/><rect x="${cx + 108}" y="${cy - 82}" width="58" height="6" fill="#fff"/>`;
-  s += tx(cx + 370, cy - 132, 'אפשר לכתוב לסבתא?', { size: 46, weight: 700, anchor: 'c' });
+  s += tx(cx + 370, cy - 132, 'אפשר לכתוב לחברות שלי?', { size: 46, weight: 700, anchor: 'c' });
   s += '</g></g>';
   return s;
 };
@@ -496,7 +508,7 @@ const endCard = (t) => {
   const wipe = eout(l / .45);
   let s = `<circle cx="540" cy="1000" r="${f1(wipe * 1300)}" fill="${C.paper}"/>`;
   const a = (d, dur = .4) => ease((l - d) / dur);
-  s += `<g opacity="${f1(a(.35))}"><image href="${FM}" x="${540 - 470}" y="${1000}" width="940" height="${940 * 1024 / 1536}"/></g>`;
+  s += `<g opacity="${f1(a(.35))}"><image href="${FRIENDS_ART}" x="${540 - 470}" y="${1000}" width="940" height="${940 * 1024 / 1536}"/></g>`;
   const ls = backOut(clamp((l - .15) / .4));
   s += `<g transform="translate(540 560) scale(${f1(ls)})">${tx(0, 0, 'יחד', { size: 250, weight: 800, color: C.green, anchor: 'c', extra: 'letter-spacing="-6"' })}</g>`;
   const sw = a(.45, .45);
@@ -590,10 +602,10 @@ const world = (t) => {
       const cx = lerp(hx, 0, mu), cy = lerp(hy, TY + slotY(k), mu), z = lerp(hz, sz, ein(mu)) + bob + land;
       const w = lerp(ROW_W, SLOT_W, mu), d = lerp(ROW_H, SLOT_H, mu);
       const noa = ease((t - tLand) / .3);
-      const fam = row.id === 'family';
-      const prev = fam && t >= 16.0 ? 'סבתא: נועה, איך יצא הציור?' : null;
-      const dot = fam ? clamp((t - 16.0) / .25) : 0;
-      const tap = fam && t > 16.55 && t < 17.0 ? clamp((t - 16.55) / .45) : 0;
+      const active = row === FRIENDS;
+      const prev = active && t >= 16.0 ? `${EXCHANGE.sender}: ${EXCHANGE.question}` : null;
+      const dot = active ? clamp((t - 16.0) / .25) : 0;
+      const tap = active && t > 16.55 && t < 17.0 ? clamp((t - 16.55) / .45) : 0;
       slab({ cx, cy, z, w, d, h: lerp(8, 4, noa), r: 18, top: '#fff', side: mix(C.mint2, '#dfe5df', noa), op: 1,
         face: rowFace(row, w, d, { picked: 1 - noa, noa, prev, prevBold: !!prev, dot: t < 16.6 ? dot : 0, tap }), bias: 2500 });
     });
@@ -615,7 +627,7 @@ function render(t) {
   s += `<rect width="${W}" height="${H}" fill="${C.paper}"/>`;
   s += parts.map((p) => p.svg).join('');
   s += noaAsk(t);
-  s += grandmaPhone(t);
+  s += friendPhone(t);
   for (const c of CAPS) s += caption(t, c);
   s += endCard(t);
   return s + '</svg>';

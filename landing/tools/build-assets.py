@@ -73,9 +73,9 @@ def rtl(text):
 
 
 def build_images(hebrew_source):
-    art = Image.open(ASSETS / 'family-moment.webp').convert('RGBA')
+    art = Image.open(ASSETS / 'friends-at-the-park.webp').convert('RGBA')
     small = art.resize((768, 512), Image.LANCZOS)
-    small.save(ASSETS / 'family-moment-768.webp', 'WEBP', quality=82, method=6)
+    small.save(ASSETS / 'friends-at-the-park-768.webp', 'WEBP', quality=82, method=6)
 
     def face(weight, size):
         f = ImageFont.truetype(hebrew_source, size, layout_engine=ImageFont.Layout.BASIC)
@@ -94,8 +94,8 @@ def build_images(hebrew_source):
     right(96, 'יחד', face(900, 132), INK)
     right(300, 'הילדים מדברים.', face(800, 54), INK)
     right(370, 'אתם בוחרים.', face(800, 54), INK)
-    right(472, 'קבוצות המשפחה, בדרך שלהם.', face(400, 32), MUTED)
-    og.save(ASSETS / 'og-image.jpg', 'JPEG', quality=86, optimize=True, progressive=True)
+    right(472, 'מתכתבים בשיחות שאישרתם.', face(400, 32), MUTED)
+    og.save(ASSETS / 'og-friends.jpg', 'JPEG', quality=86, optimize=True, progressive=True)
 
     icon = Image.new('RGB', (180, 180), PASS)
     di = ImageDraw.Draw(icon)
@@ -103,7 +103,7 @@ def build_images(hebrew_source):
     box = di.textbbox((0, 0), t, font=f)
     di.text(((180 - (box[2] - box[0])) / 2 - box[0], (180 - (box[3] - box[1])) / 2 - box[1]), t, font=f, fill=(255, 255, 255))
     icon.save(ASSETS / 'apple-touch-icon.png', optimize=True)
-    for name in ('family-moment-768.webp', 'og-image.jpg', 'apple-touch-icon.png'):
+    for name in ('friends-at-the-park-768.webp', 'og-friends.jpg', 'apple-touch-icon.png'):
         print(f'{name}: {(ASSETS / name).stat().st_size} bytes')
 
 

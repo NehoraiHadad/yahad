@@ -33,8 +33,8 @@ child, and `--held` (amber) is what stays with the parent.
 ## How it works (film)
 
 - **The content is the four beats.** `<ol class="beats">` holds real `h3` and `p`
-  text: Noa wants to write to grandma, you choose what she sees, she signs in on
-  her own, grandma stays on WhatsApp. Without JavaScript or
+  text: Noa wants to write to her friends, you choose what she sees, she signs in on
+  her own, her friends stay on WhatsApp. Without JavaScript or
   `IntersectionObserver` it renders as a plain numbered list and the film is
   hidden. Setup details (the home computer, the QR) belong in the home setup
   section, not here; `tests/static.test.py` enforces this.
@@ -96,7 +96,7 @@ in `tests/static.test.py` together. Keep the per-platform validator and fixtures
 ## Assets
 
 `tools/build-assets.py` regenerates `hebrew.woff2`, `latin.woff2`,
-`family-moment-768.webp`, `og-image.jpg` and `apple-touch-icon.png`. It needs
+`friends-at-the-park-768.webp`, `og-friends.jpg` and `apple-touch-icon.png`. It needs
 `fonttools`, `brotli` and `pillow`, plus the variable Noto Sans Hebrew and
 Noto Sans fonts from google/fonts:
 
@@ -108,6 +108,6 @@ The two font files form one family, `Yahad`, split by `unicode-range`. The
 ranges in the tool and in `style.css` must match. Licenses are in
 `dist/assets/FONT-LICENSE.txt` (SIL OFL 1.1) and `dist/assets/ICON-LICENSE.txt`
 (Lucide).
-`family-moment-768.webp` is also drawn inside the film (the faces and the end card).
+`friends-at-the-park-768.webp` is also drawn inside the film (Noa’s portrait and the end card). The film uses a separate crop, `mia.webp`, for Mia’s portrait.
 `dist/assets/nehorai.svg` is the author's own logo, used for the footer credit
 (a link to `https://maklikim.co.il/l/me`, which redirects to nehoraihadad.com).
