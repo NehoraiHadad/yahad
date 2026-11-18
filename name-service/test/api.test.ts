@@ -466,9 +466,33 @@ describe("expiry", () => {
 
 describe("routing and configuration", () => {
   it("answers unknown paths and methods with short codes", async () => {
-    expect((await call("GET", "/")).status).toBe(404);
-    expect((await call("GET", "/v1/register")).status).toBe(405);
-    expect((await call("POST", "/v1/name")).status).toBe(405);
+    expect((await call("GET", "/favicon.ico")).status).toBe(404);
+    for (const [method, path, allow] of [
+      ["GET", "/v1/register", "POST"],
+      ["POST", "/v1/name", "DELETE"],
+      ["GET", "/v1/challenge", "PUT, DELETE"],
+      ["POST", "/", "GET, HEAD"],
+    ]) {
+      const response = await call(method, path);
+      expect(response.status).toBe(405);
+      expect(response.headers.get("Allow")).toBe(allow);
+    }
+  });
+
+  it("serves the explanation page at the root, configured or not", async () => {
+    const page = await call("GET", "/");
+    expect(page.status).toBe(200);
+    expect(page.headers.get("Content-Type")).toBe("text/html; charset=utf-8");
+    expect(page.headers.get("Content-Security-Policy")).toContain("default-src 'none'");
+    const html = await page.text();
+    expect(html).toContain('<html lang="he" dir="rtl">');
+    expect(html).toContain("https://nehoraihadad.github.io/yahad/assets/nehorai.svg");
+    const head = await call("HEAD", "/");
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe("");
+    const unconfigured = await worker.fetch(new Request("https://names.example.com/"), { ...env, ZONE_ID: "" });
+    expect(unconfigured.status).toBe(200);
+    expect(fake.calls).toHaveLength(0);
   });
 
   it("answers 503 not_configured until the zone is set", async () => {
