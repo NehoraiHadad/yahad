@@ -90,19 +90,19 @@ internal sealed class HomeNameSetup(IHomeNameRemote remote,IHomeNameEnvironment 
         catch(Exception failure)when(failure is not OutOfMemoryException)
         {
             var code=Code(failure);
-            using var cleanup=new CancellationTokenSource(cleanupBudget??TimeSpan.FromSeconds(45));
             Exception? incomplete=null;
             try
             {
+                using var cleanup=new CancellationTokenSource(cleanupBudget??TimeSpan.FromSeconds(45));
                 RemoveNameRecord();WriteCaddyfile(null);
                 string label;try{label=Store.ReadCredential()?.Label??"";}catch(IOException){label="";}
                 Save(HomeNameOwnerRecord.Failed,label,code);
                 await environment.RestartProxyAsync(cleanup.Token);
             }
             catch(Exception error){incomplete=error;}
-            // Whatever the proxy did, a Runtime that ran on the name goes back to the IP origin.
+            // Whatever the proxy did, a Runtime that ran on the name goes back to the IP origin, on a budget of its own.
             if(named)
-                try{await environment.RestartRuntimeAsync(cleanup.Token);}
+                try{using var recovery=new CancellationTokenSource(cleanupBudget??TimeSpan.FromSeconds(45));await environment.RestartRuntimeAsync(recovery.Token);}
                 catch(Exception error){incomplete=incomplete is null?error:new AggregateException(incomplete,error);}
             if(incomplete is not null)throw SetupFailureDetail.Besides(failure,incomplete);
             // The operation's own deadline or cancellation is not a name failure.

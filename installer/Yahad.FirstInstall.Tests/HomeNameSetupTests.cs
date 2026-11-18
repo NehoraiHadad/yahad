@@ -76,7 +76,7 @@ internal static class HomeNameSetupTests
     }
     private sealed class Environment(Fixture fixture):IHomeNameEnvironment
     {
-        internal readonly List<string> Calls=[];internal IReadOnlyList<string> Resolved=[Address];internal Exception? ProbeFailure;internal int FailProxyRestarts;
+        internal readonly List<string> Calls=[];internal IReadOnlyList<string> Resolved=[Address];internal Exception? ProbeFailure;internal int FailProxyRestarts,HangProxyRestarts;
         public Task<IReadOnlyList<string>> ResolveAsync(string name,CancellationToken cancellation){fixture.Ordering();Calls.Add("resolve");return Task.FromResult(Resolved);}
         public Task ProbeAsync(string name,CancellationToken cancellation)
         {
@@ -89,11 +89,14 @@ internal static class HomeNameSetupTests
         {
             fixture.Ordering();Calls.Add("proxy:"+(fixture.Caddyfile.Contains("name ",StringComparison.Ordinal)?"name":"ip"));
             if(FailProxyRestarts>0){FailProxyRestarts--;return Task.FromException(new IOException("SERVICE_START_FAILED"));}
+            // A restart that does not finish until its budget is spent.
+            if(HangProxyRestarts>0){HangProxyRestarts--;return Task.Delay(Timeout.Infinite,cancellation);}
             return Task.CompletedTask;
         }
         public Task RestartRuntimeAsync(CancellationToken cancellation)
         {
             // The Runtime is restarted onto a committed, active name, or back to the IP origin after a failure.
+            cancellation.ThrowIfCancellationRequested();
             fixture.Ordering();Calls.Add("runtime:"+(fixture.Committed?"name":"ip"));
             Assert(fixture.Committed?fixture.Owner?.Phase=="active":fixture.Owner?.Phase=="failed");return Task.CompletedTask;
         }
@@ -205,6 +208,14 @@ internal static class HomeNameSetupTests
                 try{await f.Setup().RunAsync(Address,default);throw new Exception("expected failure");}
                 catch(AggregateException both){Assert(both.InnerExceptions.Count==2);}
                 Assert(f.Environment.Calls.SequenceEqual(["proxy:ip","runtime:ip"])&&!f.Committed&&f.Caddyfile=="ip\n");
+            });
+            await check("active home name whose redo spends the proxy's cleanup budget still restarts the Runtime on its own budget",async()=>
+            {
+                var f=new Fixture(root);await f.Setup().RunAsync(Address,default);
+                f.Now=f.Now.AddDays(91);f.Remote.IssueFailure=new AcmeException("ACME_RATE_LIMITED");f.Environment.HangProxyRestarts=1;f.Environment.Calls.Clear();
+                try{await f.Setup().RunAsync(Address,default);throw new Exception("expected failure");}
+                catch(AggregateException both){Assert(both.InnerExceptions.Count==2&&both.InnerExceptions[1] is OperationCanceledException);}
+                Assert(f.Environment.Calls.SequenceEqual(["proxy:ip","runtime:ip"])&&!f.Committed);
             });
             await check("home name removal also discards a credential that no owner phase followed",async()=>
             {
