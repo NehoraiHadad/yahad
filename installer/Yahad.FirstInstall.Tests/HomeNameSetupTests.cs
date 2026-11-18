@@ -342,6 +342,12 @@ internal static class HomeNameSetupTests
                 k.Remote.Calls.Clear();
                 Assert(await k.Setup().RunAsync(Address,Other,default)==new HomeNameOutcome(nameO,null));
                 Assert(k.Remote.Deletes.Select(d=>d.Label).Order(StringComparer.Ordinal).SequenceEqual(new[]{Chosen,LabelA}.Order(StringComparer.Ordinal))&&k.Remote.Deletes.All(d=>d.Committed==nameO));
+                // A first chosen label (no current one) stored as a claim, then a crash: unfinished, and a run without the
+                // owner's choice finishes it on that label instead of registering a random one beside it.
+                var h=new Fixture(root);h.Store.WriteClaim(Credential(Chosen));h.Remote.Held.Add(Chosen);
+                Assert(h.Owner is null&&h.Setup().Unfinished());
+                Assert(await h.Setup().RunAsync(Address,null,default)==new HomeNameOutcome(nameC,null)&&!h.Remote.Calls.Any(c=>c.StartsWith("register",StringComparison.Ordinal)));
+                Assert(h.Owner==new HomeNameOwner(1,"active",Chosen,nameC,null)&&h.Store.ReadClaim() is null&&h.Store.ReadRetired().Count==0&&h.Remote.Deletes.Count==0);
                 // 2. Uncommitted, the claim certified, the old label retired and credential.json already the claim (Promote's commit point).
                 // 3. The same with the claim's certificate already moved to next/.
                 foreach(var moved in new[]{false,true})

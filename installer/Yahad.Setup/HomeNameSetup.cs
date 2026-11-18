@@ -52,7 +52,8 @@ internal sealed class HomeNameSetup(IHomeNameRemote remote,IHomeNameEnvironment 
         return ReadOwner()?.Phase switch
         {
             HomeNameOwnerRecord.Registered or HomeNameOwnerRecord.Issued or HomeNameOwnerRecord.Configured or HomeNameOwnerRecord.Failed=>true,
-            null or HomeNameOwnerRecord.Removed=>File.Exists(Store.CredentialFile),
+            // A claim with no label beside it is a first, chosen registration that stopped before its commit point.
+            null or HomeNameOwnerRecord.Removed=>File.Exists(Store.CredentialFile)||File.Exists(Store.ClaimFile),
             _=>false
         };
     }
@@ -77,6 +78,8 @@ internal sealed class HomeNameSetup(IHomeNameRemote remote,IHomeNameEnvironment 
     /// than the current one is a rename: the new label is claimed, pointed and certified beside the active name, which
     /// stays committed and served meanwhile, so a name that is taken or cannot be prepared leaves the home exactly as it
     /// was. Only then is the name switched; the old label is deleted at the name service once the new one is committed.
+    /// A window run reaches here with the name already suspended by the LAN step, so there the current label is redone
+    /// instead when the new one cannot be prepared (docs/HOME-NAME.md, "Chosen label").
     /// </summary>
     internal async Task<HomeNameOutcome> RunAsync(string address,string? desired,CancellationToken cancellation)
     {
@@ -89,6 +92,9 @@ internal sealed class HomeNameSetup(IHomeNameRemote remote,IHomeNameEnvironment 
         var current=CurrentLabel(store);var claim=Claim(store);
         // A claim credential.json already holds stopped past its commit point: it is the current label, finished below.
         var pending=claim is not null&&claim.Label==current;
+        // A claim with no current label to keep is a first, chosen registration that stopped before its commit point:
+        // a run without the owner's choice finishes it, rather than registering a random label beside it.
+        if(desired is null&&claim is not null&&!File.Exists(store.CredentialFile))desired=claim.Label;
         // A claim for another label than the one asked for now is given up, and retired so the name service deletes it.
         if(desired is not null&&claim is not null&&!pending&&claim.Label!=desired){store.Retire(claim);store.DiscardClaim();}
         var rename=desired is not null&&desired!=current;

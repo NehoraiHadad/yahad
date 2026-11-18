@@ -145,12 +145,13 @@ async function register(request: Request, env: Env, liveLabelsCap: number, now: 
     try {
       stored = await labelObject(env, label).init(label, await sha256Hex(secret), now);
     } catch (error) {
-      // Nothing was created at Cloudflare; release the label so it does not hold capacity.
-      await budget(env).setStatus(label, "gone");
+      // Nothing was created at Cloudflare; release the label so it holds neither capacity nor the day's budget.
+      await budget(env).refuseRegistration(label, now);
       throw error;
     }
     if (stored === "exists") {
-      await budget(env).setStatus(label, "gone");
+      // A Label Object the Budget did not know of: the registration is refused and consumes nothing.
+      await budget(env).refuseRegistration(label, now);
       if (chosen !== null) return failure(409, "label_taken");
       continue;
     }

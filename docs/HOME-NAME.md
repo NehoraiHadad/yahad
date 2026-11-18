@@ -129,6 +129,11 @@ the current one is a rename:
    active name holds, a taken label, an invalid one, or any failure here returns the code with the active
    name: the home stays exactly as it was („השם כבר תפוס. אפשר לבחור שם אחר ולהריץ את ההתקנה שוב.”).
    With no active name to keep, the current label (if any) is redone instead, and the code is still shown.
+   A Setup window run always reconfigures the IP path first, and that suspends the name (above), so from
+   the window it is this second case: the old label is redone, and the old name comes back as on any rerun
+   of the window, which needs the name service and the HTTPS probe; without them the home is on the IP
+   path, as any window run would leave it. Keeping the name served across a window run would mean
+   not reconfiguring an unchanged IP path, which is a change to the LAN step, not to the rename.
 2. Switch: uncommit the name as any redo does, then promote the claim (`HomeNameStore.Promote`, each step
    idempotent): the current credential is copied to `name/retired/<label>.json`, `credential.json` becomes
    the claim (the commit point of the rename: from here a resumed run continues on the new label), its
@@ -144,7 +149,9 @@ transaction whose own failure would also have to land somewhere, and the old lab
 credential are kept (retired) anyway. The owner record is `failed` with the new label, so a rerun resumes
 toward the new name; choosing the old label again takes it back. A crash between the Worker's register
 answer and `rename.json` being written loses that label (the Worker holds it, the home has no credential
-for it): choosing it again answers `label_taken`, and the Worker's expiry removes the record.
+for it): choosing it again answers `label_taken`, and the Worker's expiry removes the record. A first
+chosen label (no current label yet) that stopped after `rename.json` was written is an unfinished
+transaction: a run without the owner's choice finishes it on that label rather than registering a random one.
 
 Rollback: an older release reads only `credential.json`, the owner record and `home-name.json`, whose
 formats are unchanged. Its stricter label check refuses a chosen label, and every path that reads them

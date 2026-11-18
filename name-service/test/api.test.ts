@@ -190,6 +190,19 @@ describe("register with a chosen label", () => {
     expect(await errorCode(response)).toBe("label_taken");
     expect((await budget().describe("orphan"))?.status).toBe("gone");
     expect((await call("POST", "/v1/register", { body: { label: "orphan" } })).status).toBe(409);
+    // Refused, so it took nothing from the day's registrations.
+    expect(await budget().usedToday("register", Date.now())).toBe(0);
+  });
+
+  it("gives a refused reservation back once, and only while its label is live", async () => {
+    const now = Date.now();
+    expect(await budget().reserveRegistration("given-back", now, 100)).toBe("reserved");
+    expect(await budget().usedToday("register", now)).toBe(1);
+    await budget().refuseRegistration("given-back", now);
+    await budget().refuseRegistration("given-back", now);
+    expect(await budget().usedToday("register", now)).toBe(0);
+    expect((await budget().describe("given-back"))?.status).toBe("gone");
+    expect(await budget().reserveRegistration("given-back", now, 100)).toBe("collision");
   });
 
   it("keeps registration without a body random, alongside chosen labels", async () => {
