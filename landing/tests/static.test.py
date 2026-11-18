@@ -53,6 +53,10 @@ for stylesheet in [css,film_css]:
  for asset in re.findall(r'url\([\'"]?([^\)\'"]+)',stylesheet):
   assert (ROOT/'dist'/asset).is_file(),asset
 assets={asset.split('?',1)[0] for asset in d.assets}
+# Header links reach the film, both technical subsections, and the installer.
+nav_links=[a['href'] for tag,a,parents in d.elements if tag=='a' and any(parent_tag=='nav' for parent_tag,_ in parents)]
+assert nav_links==['#how-it-works','#home','#faq','#download']
+assert 'navigation.js' in assets
 # The opening and film are visible, with the supporting information in a single closed disclosure.
 assert {'film-scene.js','film.js','film.css'}.issubset(assets)
 assert d.assets.index(next(a for a in d.assets if a.startswith('film-scene.js')))<d.assets.index(next(a for a in d.assets if a.startswith('film.js'))),'scene loads before the player'

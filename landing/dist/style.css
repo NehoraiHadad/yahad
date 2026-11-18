@@ -23,6 +23,39 @@ a { color:inherit }
 :focus-visible { outline:3px solid var(--pass); outline-offset:4px; border-radius:4px }
 
 .shell { width:min(100% - 2 * var(--gutter), 45rem); margin-inline:auto }
+.skip {
+  position:absolute;
+  z-index:1;
+  inset-inline-start:var(--gutter);
+  top:0;
+  transform:translateY(-120%);
+  padding:8px 12px;
+  border-radius:var(--radius-control);
+  background:var(--surface);
+}
+.skip:focus { top:8px; transform:none }
+.masthead {
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  justify-content:space-between;
+  gap:0 16px;
+  min-height:64px;
+  padding-block:8px;
+  border-bottom:1px solid var(--line);
+}
+.masthead nav { display:flex; flex-wrap:wrap; align-items:center; gap:0 clamp(8px,2.4vw,24px) }
+.masthead nav a {
+  display:inline-flex;
+  align-items:center;
+  min-height:44px;
+  color:var(--muted);
+  font-size:clamp(14px,2.4vw,16px);
+  white-space:nowrap;
+  text-decoration:none;
+}
+.masthead nav a:hover { color:var(--ink); text-decoration:underline; text-underline-offset:4px }
+.masthead nav .nav-download { color:var(--pass); font-weight:700 }
 .opening {
   display:flex;
   flex-direction:column;
