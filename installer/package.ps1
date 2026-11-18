@@ -46,7 +46,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 Push-Location -LiteralPath $repo
-$names = @('DOTNET_ROOT','DOTNET_CLI_HOME','NUGET_PACKAGES','DOTNET_CLI_TELEMETRY_OPTOUT','DOTNET_NOLOGO','PYTHONDONTWRITEBYTECODE')
+$names = @('DOTNET_ROOT','DOTNET_CLI_HOME','NUGET_PACKAGES','DOTNET_CLI_TELEMETRY_OPTOUT','DOTNET_NOLOGO','DOTNET_ADD_GLOBAL_TOOLS_TO_PATH','PYTHONDONTWRITEBYTECODE')
 $previous = @{}
 foreach ($name in $names) { $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 try {
@@ -121,6 +121,8 @@ try {
     $env:NUGET_PACKAGES = if ($PackageCache) { [IO.Path]::GetFullPath($PackageCache) } else { Join-Path $PSScriptRoot '.scratch/nuget' }
     $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
     $env:DOTNET_NOLOGO = '1'
+    # A fresh DOTNET_CLI_HOME's first run would add its tools folder to the user PATH.
+    $env:DOTNET_ADD_GLOBAL_TOOLS_TO_PATH = 'false'
     function RunStep([string]$Name, [string]$Program, [string[]]$Arguments) {
         RequireFrozenSource
         Write-Host "BUILDING $Name"

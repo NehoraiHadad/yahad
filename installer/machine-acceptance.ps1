@@ -406,14 +406,23 @@ function NewLanDirectory([string]$Path, [string]$Descriptor) {
 # The Caddyfile is LanDeployment's own, as enable writes it (HTTPS only, as placed).
 function WriteLanCaddyfile($Installation, $Choice, [string]$Infra) {
     $dotnetExe = (Resolve-Path -LiteralPath $DotNet).Path
-    $env:DOTNET_ROOT = Split-Path $dotnetExe
-    $env:DOTNET_CLI_HOME = Join-Path $out 'dotnet-home'
-    $env:NUGET_PACKAGES = (Resolve-Path -LiteralPath $PackageCache).Path
-    $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'; $env:DOTNET_NOLOGO = '1'
-    & $dotnetExe run (Join-Path $PSScriptRoot 'lan-caddyfile.cs') ('-p:RestoreConfigFile=' + (Join-Path $PSScriptRoot 'NuGet.Config')) -- `
-        (Join-Path $lanRoot 'Caddyfile') $Installation.InstallationId $Choice.Id $Choice.Address ([string]$Installation.Port) (LanCaddy $Infra) `
-        (Join-Path $lanRoot 'data') (Join-Path $lanRoot 'join-public') 'false' *> (Join-Path $out 'lan-caddyfile.log')
-    if ($LASTEXITCODE -ne 0) { throw "lan-caddyfile ended $LASTEXITCODE; see lan-caddyfile.log" }
+    $names = @('DOTNET_ROOT','DOTNET_CLI_HOME','NUGET_PACKAGES','DOTNET_CLI_TELEMETRY_OPTOUT','DOTNET_NOLOGO','DOTNET_ADD_GLOBAL_TOOLS_TO_PATH')
+    $previous = @{}
+    foreach ($name in $names) { $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
+    try {
+        $env:DOTNET_ROOT = Split-Path $dotnetExe
+        $env:DOTNET_CLI_HOME = Join-Path $out 'dotnet-home'
+        $env:NUGET_PACKAGES = (Resolve-Path -LiteralPath $PackageCache).Path
+        $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'; $env:DOTNET_NOLOGO = '1'
+        # A fresh DOTNET_CLI_HOME's first run would add its tools folder to the user PATH.
+        $env:DOTNET_ADD_GLOBAL_TOOLS_TO_PATH = 'false'
+        & $dotnetExe run (Join-Path $PSScriptRoot 'lan-caddyfile.cs') ('-p:RestoreConfigFile=' + (Join-Path $PSScriptRoot 'NuGet.Config')) -- `
+            (Join-Path $lanRoot 'Caddyfile') $Installation.InstallationId $Choice.Id $Choice.Address ([string]$Installation.Port) (LanCaddy $Infra) `
+            (Join-Path $lanRoot 'data') (Join-Path $lanRoot 'join-public') 'false' *> (Join-Path $out 'lan-caddyfile.log')
+        if ($LASTEXITCODE -ne 0) { throw "lan-caddyfile ended $LASTEXITCODE; see lan-caddyfile.log" }
+    } finally {
+        foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process') }
+    }
 }
 # What a finished home-network enable leaves: the two ACLs of NativeLanInstall, its
 # records, LanDeployment's Caddyfile and firewall rule, and the service. A machine
